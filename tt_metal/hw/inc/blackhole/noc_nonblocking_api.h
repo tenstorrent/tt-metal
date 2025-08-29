@@ -1035,11 +1035,11 @@ inline __attribute__((always_inline)) void ncrisc_noc_read_any_len_with_state(
  * | dst_noc_addr                    | Encoding of the destination NOC location (x,y)+address   | uint64_t  | Results of \a get_noc_addr calls | True     |
  * | len_bytes                       | Size of the transaction in bytes.                        | uint32_t  | 0..1 MB                          | False    |
  * | vc                              | Which VC to use for the transaction                      | uint32_t  | 0 - 3                            | False    |
- * | non_posted (template parameter) | Whether the transaction is nonposted (i.e. requires ack) | bool      | true or false                    | False    |
+ * | posted (template parameter)     | Whether the transaction is posted (i.e. no ack required) | bool      | true or false                    | False    |
  * | one_packet (template parameter) | Whether transaction size is <= NOC_MAX_BURST_SIZE        | bool      | true or false                    | False    |
  */
 // clang-format on
-template <bool non_posted = true, bool one_packet = false>
+template <bool posted = false, bool one_packet = false>
 inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
     uint32_t noc, uint32_t cmd_buf, uint64_t dst_noc_addr, uint32_t len_bytes = 0, const uint32_t vc = 0) {
     while (!noc_cmd_buf_ready(noc, cmd_buf));
@@ -1047,7 +1047,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
     uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
                              0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
                              0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
-                             (non_posted ? NOC_CMD_RESP_MARKED : 0x0);
+                             (!posted ? NOC_CMD_RESP_MARKED : 0x0);
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
     // Handles writing to PCIe
@@ -1079,24 +1079,20 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
  * | dst_local_addr                      | Address in local L1 memory on destination core           | uint32_t  | 0..1 MB                                                  | True     |
  * | len_bytes                           | Size of transaction in bytes                             | uint32_t  | 0..1 MB                                                  | False    |
  * | noc_mode (template parameter)       | NOC mode for the transaction                             | uint8_t   | DM_DEDICATED_NOC, DM_DYNAMIC_NOC or DM_INVALID_NOC (0-2) | False    |
- * | non_posted (template parameter)     | Whether the transaction is nonposted (i.e. requires ack) | bool      | true or false                                            | False    |
+ * | posted (template parameter)         | Whether the transaction is posted (i.e. no ack required) | bool      | true or false                                            | False    |
  * | update_counter (template parameter) | Whether to increment write counters                      | bool      | true or false                                            | False    |
  * | one_packet (template parameter)     | Whether transaction size is <= NOC_MAX_BURST_SIZE        | bool      | true or false                                            | False    |
  */
 // clang-format on
-template <
-    uint8_t noc_mode = DM_DEDICATED_NOC,
-    bool non_posted = true,
-    bool update_counter = true,
-    bool one_packet = false>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool posted = false, bool update_counter = true, bool one_packet = false>
 inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
     if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
-        if constexpr (non_posted) {
+        if constexpr (posted) {
+            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+        } else {
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
-        } else {
-            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
         }
     }
 
@@ -1110,11 +1106,11 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 
     if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
-        if constexpr (non_posted) {
+        if constexpr (posted) {
+            noc_posted_writes_num_issued[noc] += 1;
+        } else {
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += 1;
-        } else {
-            noc_posted_writes_num_issued[noc] += 1;
         }
     }
 }
@@ -1134,11 +1130,11 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
  * | dst_local_addr                      | Address in local L1 memory on destination core           | uint32_t  | 0..1 MB                                                  | True     |
  * | len_bytes                           | Size of transaction in bytes                             | uint32_t  | 0..1 MB                                                  | True     |
  * | noc_mode (template parameter)       | NOC mode for the transaction                             | uint8_t   | DM_DEDICATED_NOC, DM_DYNAMIC_NOC or DM_INVALID_NOC (0-2) | False    |
- * | non_posted (template parameter)     | Whether the transaction is nonposted (i.e. requires ack) | bool      | true or false                                            | False    |
+ * | posted (template parameter)         | Whether the transaction is posted (i.e. no ack required) | bool      | true or false                                            | False    |
  * | update_counter (template parameter) | Whether to increment write counters                      | bool      | true or false                                            | False    |
  */
 // clang-format on
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool non_posted = true, bool update_counter = true>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool posted = false, bool update_counter = true>
 inline __attribute__((always_inline)) void ncrisc_noc_write_any_len_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes) {
     if (len_bytes > NOC_MAX_BURST_SIZE) {
@@ -1146,7 +1142,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_any_len_with_state(
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
 
         while (len_bytes > NOC_MAX_BURST_SIZE) {
-            ncrisc_noc_write_with_state<noc_mode, non_posted, update_counter, true /* one_packet */>(
+            ncrisc_noc_write_with_state<noc_mode, posted, update_counter, true /* one_packet */>(
                 noc, cmd_buf, src_local_addr, dst_local_addr);
 
             len_bytes -= NOC_MAX_BURST_SIZE;
@@ -1156,7 +1152,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_any_len_with_state(
     }
 
     // left-over packet
-    ncrisc_noc_write_with_state<noc_mode, non_posted, update_counter>(
+    ncrisc_noc_write_with_state<noc_mode, posted, update_counter>(
         noc, cmd_buf, src_local_addr, dst_local_addr, len_bytes);
 }
 
