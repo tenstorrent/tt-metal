@@ -2261,14 +2261,14 @@ static const uint8_t SINGLE_ROUTE_SIZE_1D = 4; // 4 bytes
 
 // Calculate routing information from src_chip_id to all other chips and store in fixed 64-byte blocks
 void ControlPlane::calculate_chip_to_all_routing_fields_1D(
-    uint16_t src_chip_id, uint8_t num_chips, uint8_t* route_info) const {
+    uint16_t src_chip_id, uint8_t num_chips) const {
+    uint8_t route_info[MAX_CHIPS_LOWLAT_1D * SINGLE_ROUTE_SIZE_1D] = {}; // 64
     const uint32_t FIELD_WIDTH = 2;
     const uint32_t WRITE_ONLY = 0b01;
     const uint32_t FORWARD_ONLY = 0b10;
     const uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;
     const uint32_t WR_ONLY_FIELD = 0x55555555;
 
-    uint32_t base_offset = src_chip_id * (MAX_CHIPS_LOWLAT_1D * SINGLE_ROUTE_SIZE_1D);
     for (uint8_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
         uint32_t routing_field_value = 0;
 
@@ -2290,26 +2290,29 @@ void ControlPlane::calculate_chip_to_all_routing_fields_1D(
         }
 
         // Store the 4-byte routing field value directly as uint32_t
-        uint32_t field_offset = base_offset + (dst_chip_id * SINGLE_ROUTE_SIZE_1D);
+        uint32_t field_offset = dst_chip_id * SINGLE_ROUTE_SIZE_1D;
         uint32_t* route_ptr = reinterpret_cast<uint32_t*>(&route_info[field_offset]);
         *route_ptr = routing_field_value;
     }
+    // TODO: copy route_info
 }
 
 void ControlPlane::write_all_to_all_routing_fields_1D(uint8_t num_chips) const {
-    uint8_t route_info[MAX_CHIPS_LOWLAT_1D * MAX_CHIPS_LOWLAT_1D * SINGLE_ROUTE_SIZE_1D] = {}; // 1024
     for (uint8_t src_chip_id = 0; src_chip_id < num_chips; ++src_chip_id) {
-        ControlPlane::calculate_chip_to_all_routing_fields_1D(src_chip_id, num_chips, route_info);
+        ControlPlane::calculate_chip_to_all_routing_fields_1D(src_chip_id, num_chips);
     }
-    // copy
 }
 
-static const uint16_t MAX_CHIPS_LOWLAT_2D = 64;  // Maximum 64 chips for 2D mesh
-static const uint16_t SINGLE_ROUTE_SIZE_2D = 32;    // 32 bytes per route_buffer
+static const uint16_t MAX_CHIPS_LOWLAT_2D = 64;  // Maximum 64 chips for 2D mesh (8x8)
+static const uint16_t SINGLE_ROUTE_SIZE_2D = 16; // 16 bytes per route_buffer
+// Note: Theoretical minimum for 8x8 mesh is 7 bytes (14 hops × 4 bits = 56 bits ≈ 7 bytes)
+// but using 16 bytes for alignment and compatibility with LowLatencyMeshPacketHeader
+// (uses 32 bytes, but using 1 byte for each 4 bit command)
 
 // Calculate routing information from src_chip_id to all other chips in 2D mesh and store in route_buffer format
 void ControlPlane::calculate_chip_to_all_routing_fields_2D(
-    uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim, uint8_t* route_info) const {
+    uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) const {
+    uint8_t route_info[MAX_CHIPS_LOWLAT_2D * SINGLE_ROUTE_SIZE_2D] = {}; // 64 * 16 = 1024
     const uint8_t NOOP = 0b0000;
     const uint8_t FORWARD_EAST = 0b0001;
     const uint8_t FORWARD_WEST = 0b0010;
@@ -2319,9 +2322,7 @@ void ControlPlane::calculate_chip_to_all_routing_fields_2D(
     const uint8_t WRITE_AND_FORWARD_WEST = 0b0010;
     const uint8_t WRITE_AND_FORWARD_NORTH = 0b0100;
     const uint8_t WRITE_AND_FORWARD_SOUTH = 0b1000;
-   
-    uint32_t base_offset = src_chip_id * (MAX_CHIPS_LOWLAT_2D * SINGLE_ROUTE_SIZE_2D);
-   
+
     for (uint16_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
         uint16_t src_col = src_chip_id / ew_dim;
         uint16_t src_row = src_chip_id % ew_dim;
@@ -2369,7 +2370,7 @@ void ControlPlane::calculate_chip_to_all_routing_fields_2D(
             }
         }
 
-        uint32_t field_offset = base_offset + (dst_chip_id * SINGLE_ROUTE_SIZE_2D);
+        uint32_t field_offset = dst_chip_id * SINGLE_ROUTE_SIZE_2D;
         uint8_t* route_buffer = &route_info[field_offset];
 
         uint16_t hop_index = 0;
@@ -2402,17 +2403,15 @@ void ControlPlane::calculate_chip_to_all_routing_fields_2D(
                 }
             }
         }
-
         // remaining entries are NOOP
     }
+    // TODO: Copy route_info
 }
 
 void ControlPlane::write_all_to_all_routing_fields_2D(uint16_t num_chips, uint16_t ew_dim) const {
-    uint8_t route_info[MAX_CHIPS_LOWLAT_2D * MAX_CHIPS_LOWLAT_2D * SINGLE_ROUTE_SIZE_2D] = {}; // 64 * 64 * 32 = 131072
     for (uint16_t src_chip_id = 0; src_chip_id < num_chips; ++src_chip_id) {
-        ControlPlane::calculate_chip_to_all_routing_fields_2D(src_chip_id, num_chips, ew_dim, route_info);
+        ControlPlane::calculate_chip_to_all_routing_fields_2D(src_chip_id, num_chips, ew_dim);
     }
-    // TODO: Copy route_info to appropriate destination (e.g., L1 memory, DRAM, etc.)
 }
 
 ControlPlane::~ControlPlane() = default;
