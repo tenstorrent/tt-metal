@@ -554,7 +554,6 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
 
     // reader
 
-    uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     uint32_t num_tiles_2d = a.padded_shape()[-1] * a.padded_shape()[-2] / TILE_HW;
 
     auto log_shape = output.logical_shape();
@@ -941,17 +940,11 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     // TODO : currently multi_core parallelization on column only works for single tile height tensors.
     // Need to debug this to work on wide tensors that are higher than a single tile
-
-    // If the input is interleaved and an entire row of tiles can't fit in a CB at once
-    if (!input_is_sharded && num_tiles_per_row > max_tiles_per_cb) {
-        // If the output is also interleaved and the tensor is only a single tile high, we can
-        // parellize the work column wise. Otherwise we have to resort to the single core implementation,
-        // as the current default multi core implementation processes an entire row of tiles at once.
-        if (!output_is_sharded && num_tiles_per_col == 1) {
-            return untilize_multi_core_parallelize_column(a, output, use_pack_untilize, fp32_dest_acc_en);
-        } else {
-            return untilize_single_core(a, output, use_pack_untilize, fp32_dest_acc_en);
-        }
+    auto pf_option = ttnn::operations::data_movement::get_pf_type(output_is_sharded, a);
+    if (pf_option == 0) {
+        return untilize_multi_core_parallelize_column(a, output, use_pack_untilize, fp32_dest_acc_en);
+    } else if (pf_option == 1) {
+        return untilize_single_core(a, output, use_pack_untilize, fp32_dest_acc_en);
     }
 
     // Default values are for interleaved input.
@@ -1047,7 +1040,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
     }
 
     // Writer compile-time args
-    bool output_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     uint32_t output_num_blocks_across_width = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
         output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
@@ -1055,9 +1047,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
         output_num_blocks_across_width = tensor_width / output_shard_width;
     }
     uint32_t output_stick_size = tensor_width * output.element_size() / output_num_blocks_across_width;
-    bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_stick_size);
-    uint32_t output_log_base_2_of_page_size =
-        output_stick_size_is_power_of_two ? (std::bit_width(output_stick_size) - 1) : 0;
     uint32_t output_element_size = output.element_size();
     uint32_t num_cols_per_input_block = num_tiles_per_input_block * tile_width;
     uint32_t num_cols_per_output_block = tensor_width / output_num_blocks_across_width;

@@ -115,21 +115,8 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
         ),
-        (
-            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts.json",  # real multi-user prompts
-            True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users with the same prompt
-            4096,  # max_seq_len, allow for image tokens
-            4,  # batch_size -- samples to load from the prompt JSON
-            200,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
-            False,  # ci_only
-        ),
-        (
-            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",  # real multi-user prompts
+        (  # Batch-32 run (Throughput) - 32 users, small prompts
+            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -141,21 +128,8 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
         ),
-        (  # Batch-2 run with single decoder layer (CI only) - two users
-            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts.json",  # real multi-user prompts
-            True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users with the same prompt
-            4096,  # max_seq_len, allow for image tokens
-            2,  # batch_size -- samples to load from the prompt JSON
-            200,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            True,  # ci_only
-        ),
-        (  # Batch-2 run with single decoder layer (CI only) - single user repeated batch
-            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts.json",  # real multi-user prompts
+        (  # Batch-1 run with single decoder layer in vision model (CI only) - single user repeated batch
+            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts.json",
             True,  # instruct mode
             4,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -167,8 +141,8 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # ci_only
         ),
-        (  # Batch-32 run with single decoder layer (CI only) - 32 users
-            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",  # real multi-user prompts
+        (  # Batch-32 run with single decoder layer in vision model (CI only) - 32 users
+            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -180,12 +154,25 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # ci_only
         ),
-        (  # Batch-32 run with single decoder layer (CI only) - 32 users
-            "models/demos/qwen25_vl/demo/sample_prompts/test_bleu_score.json",  # real multi-user prompts
+        (  # Batch-1 run with full model for more stable BLEU checks (CI only)
+            "models/demos/qwen25_vl/demo/sample_prompts/test_bleu_score.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
-            32,  # batch_size -- samples to load from the prompt JSON
+            1,  # batch_size -- samples to load from the prompt JSON
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 4096},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+        ),
+        (  # Batch-1 run with single decoder layer in vision model (CI only)
+            "models/demos/qwen25_vl/demo/sample_prompts/text_only.json",
+            True,  # instruct mode
+            1,  # repeat_batches to simulate multiple users with the same prompt
+            4096,  # max_seq_len, allow for image tokens
+            1,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 4096},  # page_params
@@ -196,23 +183,20 @@ def create_tt_model(
     ],
     ids=[
         "batch-1",  # latency
-        "batch-4",  # multi-user
         "batch-32",  # 32 users (special because it fills tile size)
-        "ci-only-two-users",  # ci_only batch-2 for faster testing coverage in CI pipelines
         "ci-only-repeated-batch",  # ci_only repeated batch for faster testing coverage in CI pipelines
         "ci-only-32-users",  # ci_only batch-32 for faster testing coverage in CI pipelines
         "ci-only-bleu-score",  # ci_only batch-bleu-score for faster testing coverage in CI pipelines
+        "ci-only-text-only",  # ci_only batch-text-only for faster testing coverage in CI pipelines
     ],
 )
 @pytest.mark.parametrize(
     "optimizations",
     [
         lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
-        # lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
     ids=[
         "performance",
-        # "accuracy",
     ],
 )
 @pytest.mark.parametrize(
@@ -356,7 +340,8 @@ def test_demo(
     ref_model_name = model_args.CKPT_DIR  # allows for local model loading as well
     transformers_logging.set_verbosity_error()
     config = Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
-    if ci_only:
+    if ci_only and "bleu-score" not in test_id:
+        # [INFO] use single decoder layer for faster CI runs; bleu-score test uses full model for stable text output
         config.vision_config.depth = 1
     reference_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         ref_model_name, config=config, torch_dtype="auto", device_map="auto"
@@ -395,9 +380,13 @@ def test_demo(
             padding=True,
             return_tensors="pt",
         )
-        merge_length = processor.image_processor.merge_size**2
-        num_image_tokens.append([inputs.image_grid_thw[i].prod().item() // merge_length for i in range(batch_size)])
-        logger.info(f"num_image_tokens: {num_image_tokens[-1]}")
+        if image_inputs:
+            merge_length = processor.image_processor.merge_size**2
+            num_image_tokens.append([inputs.image_grid_thw[i].prod().item() // merge_length for i in range(batch_size)])
+            logger.info(f"num_image_tokens: {num_image_tokens[-1]}")
+        else:
+            # text-only
+            num_image_tokens.append([0] * batch_size)
 
         # Vision prefill
         logger.info(f"Vision model prefill batch {batch_idx}")
@@ -430,13 +419,14 @@ def test_demo(
         )
         # Get user-specific rotary position embeddings
         cos, sin = multimodal_rope_from_hf(inputs, input_embeds, reference_model, model_args, pad_token_id=pad_token_id)
-        model.rope_setup.set_cos_sin(cos, sin)
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         logger.info("Starting prefill warmup...")
         profiler.start(f"compile_prefill", iteration=batch_idx)
+        # [INFO] prefill_forward_text is read-only of the cos/sin matrices
         logits = generator.prefill_forward_text(
             input_prefill_pt[0].unsqueeze(0),  # Just warmup prefill for 1 user
+            rot_mats=(cos, sin),
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
@@ -448,10 +438,13 @@ def test_demo(
         profiler.start(f"inference_prefill", iteration=batch_idx)
         logits = generator.prefill_forward_text(
             input_prefill_pt,
+            rot_mats=(cos, sin),
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
         )
+        # [INFO] update the cos/sin matrices in the rope_setup to get ready for decode
+        generator.update_cos_sin(cos_matrix_pt=cos, sin_matrix_pt=sin)
         # torch.save(logits, f"ttnn_logits.pt")
         prefilled_token = torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
@@ -626,7 +619,8 @@ def test_demo(
             reference = [word_tokenize(expected_output.lower())]
             candidate = word_tokenize(output_text.lower())
             bleu_score = sentence_bleu(reference, candidate)
-            assert bleu_score > 0.5, f"BLEU score for batch {i} is {bleu_score:.3f}"
+            logger.info(f"BLEU score for batch {i} is {bleu_score:.3f}")
+            assert bleu_score > 0.5, f"BLEU score for batch {i} is lower than expected"
 
     # Prepare profile benchmark metrics for the first repeat batch only
     compile_prefill_time = profiler.get_duration("compile_prefill")

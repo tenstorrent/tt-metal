@@ -30,15 +30,18 @@
 namespace tt::tt_metal::tensor_ops {
 
 Tensor tensor_to_device(
-    const Tensor& input_tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id) {
+    const Tensor& input_tensor,
+    distributed::MeshDevice* mesh_device,
+    ttsl::optional_reference<const MemoryConfig> mem_config,
+    QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, mesh_device, mem_config);
     if (input_tensor.storage_type() == StorageType::DEVICE) {
-        TT_ASSERT(input_tensor.mesh_device() == mesh_device, "Currently do not support moving between devices");
+        TT_ASSERT(input_tensor.device() == mesh_device, "Currently do not support moving between devices");
         GraphTracker::instance().track_function_end(input_tensor);
         return input_tensor;
     }
-    auto device_tensor = tensor_impl::to_device_mesh_tensor_wrapper(input_tensor, mesh_device, mem_config, cq_id);
+    auto device_tensor = tensor_impl::to_device_wrapper(input_tensor, mesh_device, mem_config, cq_id);
     GraphTracker::instance().track_function_end(device_tensor);
     return device_tensor;
 }
@@ -51,17 +54,10 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
 
-    if (input_tensor.mesh_device_.has_value()) {
-        auto output = tensor_impl::to_host_mesh_tensor_wrapper(input_tensor, blocking, cq_id);
-        output = tt::tt_metal::set_tensor_id(output);
-        GraphTracker::instance().track_function_end(output);
-        return output;
-    }
-
-    Tensor host_tensor = tensor_impl::to_host_wrapper(input_tensor, blocking, cq_id);
-    host_tensor = tt::tt_metal::set_tensor_id(host_tensor);
-    GraphTracker::instance().track_function_end(host_tensor);
-    return host_tensor;
+    auto output = tensor_impl::to_host_wrapper(input_tensor, blocking, cq_id);
+    output = tt::tt_metal::set_tensor_id(output);
+    GraphTracker::instance().track_function_end(output);
+    return output;
 }
 
 Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout) {

@@ -59,7 +59,7 @@ Program create_simple_unary_program(Buffer& input, Buffer& output) {
         worker,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    auto sfpu_kernel = CreateKernel(
+    CreateKernel(
         program,
         "tt_metal/kernels/compute/eltwise_sfpu.cpp",
         worker,
@@ -339,7 +339,8 @@ TEST_F(UnitMeshCQTraceFixture, TensixInstantiateTraceSanity) {
 
     // Frontdoor read the trace buffer
     data_fd.resize(device_buffer->size() / sizeof(uint32_t));
-    EnqueueReadBuffer(mesh_device->get_devices()[0]->command_queue(), *device_buffer, data_fd.data(), kBlocking);
+    distributed::ReadShard(
+        mesh_command_queue, data_fd, trace_inst->mesh_buffer, distributed::MeshCoordinate{0, 0}, kBlocking);
     EXPECT_EQ(data_fd, data_bd);
 
     log_trace(LogTest, "Trace buffer content: {}", data_fd);

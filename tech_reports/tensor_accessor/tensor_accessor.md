@@ -98,21 +98,21 @@ Address Calculation
 
 ```c++
 // Get the NOC address for a given page
-uint32_t noc_addr = tensor_accessor.get_noc_addr(page_id);
+uint64_t noc_addr = tensor_accessor.get_noc_addr(page_id);
 
 // Get bank ID and offset for a given page
 auto [bank_id, bank_offset] = tensor_accessor.get_bank_and_offset(page_id);
 
 // You can also address pages by nd coordinate (such address calculation is a little bit cheaper)
 std::array<uint32_t, 4> page_coord{0, 1, 2, 3};
-uint32_t noc_addr = tensor_accessor.get_noc_addr(page_coord);   // <- Anything with operator[] should work
+uint64_t noc_addr = tensor_accessor.get_noc_addr(page_coord);   // <- Anything with operator[] should work
 
 // For sharded tensor, you can get address of shards:
 static_assert(args::is_sharded, "Sharded API requires sharded tensor");
-uint32_t noc_addr = tensor_accessor.get_shard_noc_addr(shard_id);
+uint64_t noc_addr = tensor_accessor.get_shard_noc_addr(shard_id);
 
 std::array<uint32_t, 4> shard_coord{0, 1, 2, 3};
-uint32_t noc_addr = tensor_accessor.get_shard_noc_addr(shard_coord); // <- Anything with operator[] should work
+uint64_t noc_addr = tensor_accessor.get_shard_noc_addr(shard_coord); // <- Anything with operator[] should work
 ```
 
 Data Transfer
@@ -199,7 +199,7 @@ Or this sharded tensor copy, which should be more efficient, since it uses an it
 ```c++
 for (uint32_t i = 0; i < num_shards; ++i) {
     uint32_t shard_id = first_shard_id + i * num_cores;
-    auto shard_pages_src = tensor_accessor_src.shard_pages(shard_id);
+    auto shard_pages_src = tensor_accessor_src.shard_pages(shard_id, /*start_page_offset=*/0);
     auto shard_pages_dst = tensor_accessor_dst.shard_pages(shard_id);
     auto page_dst = shard_pages_dst.begin();
     for (const auto& page_src : shard_pages_src) {
@@ -207,6 +207,23 @@ for (uint32_t i = 0; i < num_shards; ++i) {
         noc_async_writes_flushed();
         ++page_dst;
     }
+}
+
+```
+
+**Pages iterator**
+
+Similar to *Shard pages iterator*, but iterates over all pages in the tensor. Also, it works only for sharded tensor right now.
+
+Similar example of using the page iterator
+```c++
+auto pages_src = tensor_accessor_src.pages(/*start_page_id=*/0);
+auto pages_dst = tensor_accessor_dst.pages();
+auto page_dst = shard_pages_dst.begin();
+for (const auto& page_src : shard_pages_src) {
+    noc_async_read(page_src.get_noc_addr(), page_dst->get_noc_addr(), page_size);
+    noc_async_writes_flushed();
+    ++page_dst;
 }
 
 ```

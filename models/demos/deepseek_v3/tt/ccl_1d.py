@@ -16,11 +16,28 @@ class CCL1D:
         self.num_cores = self.grid.x * self.grid.y
         self.core_range_set = ttnn.num_cores_to_corerangeset(self.num_cores, self.grid, row_wise=True)
 
-        self.sems = []
+        self.gather_sems = []
+        self.from_sems = []
+        self.to_sems = []
+        self.point_to_point_sems = []
         for _ in range(len(list(mesh_device.shape))):
-            self.sems.append([])
+            self.gather_sems.append([])
+            self.from_sems.append([])
+            self.to_sems.append([])
+            self.point_to_point_sems.append([])
             for _ in range(2):
-                self.sems[-1].append(ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0))
+                self.gather_sems[-1].append(
+                    [
+                        ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
+                        ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
+                    ]
+                )  # use two semaphores to use minimal version of all_gather_async
+                self.from_sems[-1].append(ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0))
+                self.to_sems[-1].append(ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0))
+                self.point_to_point_sems[-1].append(
+                    ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0)
+                )
+
         self.sem_cnt = [0, 0]
 
     def get_max_links(self, axis):
@@ -37,11 +54,27 @@ class CCL1D:
         else:
             raise ValueError("Axis must be 0 or 1.")
 
-    def get_semaphore(self, axis):
+    def get_gather_sem(self, axis):
         """
         Get a semaphore for the given axis.
         """
-        sem = self.sems[axis][self.sem_cnt[axis]]
+        sem = self.gather_sems[axis][self.sem_cnt[axis]]
+        self.sem_cnt[axis] = (self.sem_cnt[axis] + 1) % 2
+        return sem
+
+    def get_from_sem(self, axis):
+        """
+        Get a semaphore for the given axis.
+        """
+        sem = self.from_sems[axis][self.sem_cnt[axis]]
+        self.sem_cnt[axis] = (self.sem_cnt[axis] + 1) % 2
+        return sem
+
+    def get_to_sem(self, axis):
+        """
+        Get a semaphore for the given axis.
+        """
+        sem = self.to_sems[axis][self.sem_cnt[axis]]
         self.sem_cnt[axis] = (self.sem_cnt[axis] + 1) % 2
         return sem
 
@@ -52,3 +85,11 @@ class CCL1D:
         buffer = None
 
         return buffer
+
+    def get_point_to_point_sem(self, axis):
+        """
+        Get a semaphore for the given axis.
+        """
+        sem = self.point_to_point_sems[axis][self.sem_cnt[axis]]
+        self.sem_cnt[axis] = (self.sem_cnt[axis] + 1) % 2
+        return sem

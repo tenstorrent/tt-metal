@@ -99,10 +99,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
 
-    bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-
     bool output_sharded = is_sharded(output.buffer()->buffer_layout());
 
     uint32_t input_element_size_bytes = a.element_size();
@@ -391,10 +387,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
 
-    bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-
     bool output_sharded = is_sharded(output.buffer()->buffer_layout());
 
     uint32_t input_element_size_bytes = a.element_size();
@@ -519,10 +511,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
         all_cores,
         tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
-    bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_page_size);
-    uint32_t output_log2_stick_size =
-        output_stick_size_is_power_of_two ? (std::uint32_t)std::log2(output_page_size) : 0;
-
     // Tilized writer
     KernelHandle writer_kernel_id = 0;
     if (!output_sharded) {
@@ -635,10 +623,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
 
-    bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-
     uint32_t input_element_size_bytes = a.element_size();
     uint32_t weights_element_size_bytes = weights.element_size();
     uint32_t output_element_size_bytes = output.element_size();
@@ -739,9 +723,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
         all_cores,
         tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
-    bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_page_size);
-    uint32_t output_log2_stick_size =
-        output_stick_size_is_power_of_two ? (std::uint32_t)std::log2(output_page_size) : 0;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)output_page_size};
     TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 

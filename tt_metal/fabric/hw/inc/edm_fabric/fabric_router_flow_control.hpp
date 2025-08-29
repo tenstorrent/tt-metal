@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 #include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 
@@ -211,4 +211,15 @@ constexpr FORCE_INLINE auto init_sender_channel_from_receiver_credits_flow_contr
     -> std::enable_if_t<multi_txq_enabled, std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>> {
     return init_sender_channel_from_receiver_credits_flow_controllers_impl<
         SenderChannelFromReceiverCounterBasedCreditsReceiver>::template init<NUM_SENDER_CHANNELS>();
+}
+
+// MUST CHECK !is_eth_txq_busy() before calling
+template <bool CHECK_BUSY>
+FORCE_INLINE void receiver_send_completion_ack(
+    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender, uint8_t src_id) {
+    if constexpr (CHECK_BUSY) {
+        while (internal_::eth_txq_is_busy(receiver_txq_id)) {
+        };
+    }
+    receiver_channel_response_credit_sender.send_completion_credit(src_id);
 }

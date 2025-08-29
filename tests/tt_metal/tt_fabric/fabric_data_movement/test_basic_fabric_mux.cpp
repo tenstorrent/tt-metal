@@ -19,7 +19,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "fabric_fixture.hpp"
-#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
@@ -437,7 +437,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     uint8_t num_senders_per_chip = num_senders / (num_devices - 1);
     uint8_t num_receivers_per_chip = num_receivers / (num_devices - 1);
 
-    // if the sender-reciever split is uniform, i.e., same number of senders and receivers on a device,
+    // if the sender-receiver split is uniform, i.e., same number of senders and receivers on a device,
     // the number of full size and header only channels
     // will be the same across devices, else the deivces (following the 1st one
     // in the sequence) will have unequal number of full size and header only channels

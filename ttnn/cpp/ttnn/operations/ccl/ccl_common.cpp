@@ -8,11 +8,10 @@
 #include <cmath>
 
 #include "ccl_host_datastructures.hpp"
-#include <tt-metalium/erisc_datamover_builder.hpp>
-#include <tt-metalium/fabric.hpp>
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
+#include <tt-metalium/fabric.hpp>
 #include "tt-metalium/hal.hpp"
 #include "ttnn/types.hpp"
 
@@ -80,11 +79,11 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_pro
     return workload_with_callbacks;
 }
 
-SenderRecieverConfig get_device_sender_receiver_config(
+SenderReceiverConfig get_device_sender_receiver_config(
     const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology) {
     uint32_t num_devices = devices.size();
     bool is_linear = topology == ttnn::ccl::Topology::Linear;
-    SenderRecieverConfig config;
+    SenderReceiverConfig config;
     for (uint32_t i = 0; i < num_devices; ++i) {
         if (devices.at(i) == target_device) {
             config.device_index = i;
@@ -105,12 +104,12 @@ SenderRecieverConfig get_device_sender_receiver_config(
     return config;
 }
 
-SenderRecieverConfig get_device_sender_receiver_config_in_ring(
+SenderReceiverConfig get_device_sender_receiver_config_in_ring(
     const MeshCoordinate& mesh_coord,
     const distributed::MeshDevice* mesh_device,
     uint32_t cluster_axis,
     int ring_size) {
-    SenderRecieverConfig config;
+    SenderReceiverConfig config;
     const auto& mesh_view = mesh_device->get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(),
@@ -140,7 +139,7 @@ SenderRecieverConfig get_device_sender_receiver_config_in_ring(
 }
 
 std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor) {
-    auto mesh_device = tensor.mesh_device();
+    auto mesh_device = tensor.device();
     std::vector<IDevice*> devices = {};
     devices.reserve(tensor.device_storage().coords.size());
     for (const auto& coord : tensor.device_storage().coords) {
@@ -154,9 +153,9 @@ std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& ten
     devices.reserve(tensor_shards.size());
     for (const auto& tensor : tensor_shards) {
         TT_FATAL(
-            tensor.mesh_device()->shape().mesh_size() == 1,
+            tensor.device()->shape().mesh_size() == 1,
             "Running a CCL over individual tensor shards requires the shards to be allocated on unit-meshes.");
-        devices.push_back(tensor.mesh_device()->get_device(MeshCoordinate(0, 0)));
+        devices.push_back(tensor.device()->get_device(MeshCoordinate(0, 0)));
     }
     return devices;
 }
@@ -367,7 +366,7 @@ static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
     const std::vector<uint32_t> eth_sender_ct_args = edm_builder.get_compile_time_args((uint32_t)risc_id);
     log_trace(tt::LogOp, "EDM core (x={},y={}):", eth_core.x, eth_core.y);
     log_trace(tt::LogOp, "CT ARGS:");
-    for (auto const& s : eth_sender_ct_args) {
+    for ([[maybe_unused]] const auto& s : eth_sender_ct_args) {
         log_trace(tt::LogOp, "\t{}", s);
     }
 
@@ -393,8 +392,6 @@ static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
 
     return eth_sender_kernel;
 }
-
-
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
     Program& program,
@@ -1535,7 +1532,6 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
     if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
         TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
-        auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_device->id());
         if (forward_device) {
             auto forward_device_fabric_node_id =
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id((*forward_device)->id());

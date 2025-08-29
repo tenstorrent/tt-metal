@@ -141,6 +141,17 @@ class ReduceScatterAsyncConfig(OpConfigBase):
 
 
 @dataclass
+class PointToPointConfig(OpConfigBase):
+    """Common parameters for a ttnn.point_to_point op"""
+
+    receiver_coord: ttnn.MeshCoordinate | None = None
+    sender_coord: ttnn.MeshCoordinate | None = None
+    topology: ttnn.Topology = ttnn.Topology.Linear
+    semaphore: ttnn._ttnn.global_semaphore.global_sempahore | None = None
+    optional_output_tensor: ttnn.Tensor | None = None
+
+
+@dataclass
 class AllGatherConfig(OpConfigBase):
     dim: int
     mesh_device: ConfigDevice | None = None
@@ -253,7 +264,6 @@ class AllToAllDispatchConfig(OpConfigBase):
     cluster_axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    global_semaphore: object | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
     subdevice_id: int | None = None
 
@@ -265,7 +275,6 @@ class AllToAllCombineConfig(OpConfigBase):
     axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    global_semaphore: object | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
 
 

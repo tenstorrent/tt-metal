@@ -82,12 +82,15 @@ OPS_CSV_HEADER = [
     "COMPUTE KERNEL HASH",
     "DATA MOVEMENT KERNEL SOURCE",
     "DATA MOVEMENT KERNEL HASH",
-    "BRISC MAX KERNEL SIZE [B]",
-    "NCRISC MAX KERNEL SIZE [B]",
-    "TRISC 0 MAX KERNEL SIZE [B]",
-    "TRISC 1 MAX KERNEL SIZE [B]",
-    "TRISC 2 MAX KERNEL SIZE [B]",
-    "ERISC MAX KERNEL SIZE [B]",
+    "TENSIX DM 0 MAX KERNEL SIZE [B]",
+    "TENSIX DM 1 MAX KERNEL SIZE [B]",
+    "TENSIX COMPUTE 0 MAX KERNEL SIZE [B]",
+    "TENSIX COMPUTE 1 MAX KERNEL SIZE [B]",
+    "TENSIX COMPUTE 2 MAX KERNEL SIZE [B]",
+    "ACTIVE ETH DM 0 MAX KERNEL SIZE [B]",
+    "ACTIVE ETH DM 1 MAX KERNEL SIZE [B]",
+    "IDLE ETH DM 0 MAX KERNEL SIZE [B]",
+    "IDLE ETH DM 1 MAX KERNEL SIZE [B]",
     "PM IDEAL [ns]",
     "PM COMPUTE [ns]",
     "PM BANDWIDTH [ns]",
@@ -924,7 +927,7 @@ def analyzeNoCTraces(logFolder):
         logger.warning("Could not import tt-npe module. Ensure tt-npe is built, then source 'tt-npe/ENV_SETUP'")
         return None
     except Exception as e:
-        logger.error("Unexpected error occured when analyzing noc traces, aborting ... ")
+        logger.error("Unexpected error occurred when analyzing noc traces, aborting ... ")
         logger.error(" ↳ " + repr(e))
         return None
 

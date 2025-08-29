@@ -298,6 +298,10 @@ struct debug_stack_usage_t {
     } cpu[DebugNumUniqueRiscs];
 };
 
+struct debug_eth_link_t {
+    uint8_t link_down;
+};
+
 enum watcher_enable_msg_t {
     WatcherDisabled = 2,
     WatcherEnabled = 3,
@@ -311,7 +315,8 @@ struct watcher_msg_t {
     struct debug_waypoint_msg_t debug_waypoint[MAX_RISCV_PER_CORE];
     struct debug_sanitize_noc_addr_msg_t sanitize_noc[MAX_NUM_NOCS_PER_CORE];
     std::atomic<bool> noc_linked_status[MAX_NUM_NOCS_PER_CORE];
-    uint8_t pad_0[2];
+    struct debug_eth_link_t eth_status;
+    uint8_t pad0;
     struct debug_assert_msg_t assert_status;
     struct debug_pause_msg_t pause_status;
     struct debug_stack_usage_t stack_usage;
@@ -395,7 +400,7 @@ struct mailboxes_t {
     profiler_msg_t profiler;
 };
 
-// Watcher struct needs to be 32b-divisible, since we need to write it from host using write_hex_vec_to_core().
+// Watcher struct needs to be 32b-divisible, since we need to write it from host using write_core().
 static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(core_info_msg_t) % sizeof(uint32_t) == 0);

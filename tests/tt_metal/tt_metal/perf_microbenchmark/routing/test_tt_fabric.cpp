@@ -26,6 +26,17 @@ const std::unordered_map<std::pair<Topology, RoutingType>, FabricConfig, tt::tt_
         {{Topology::Mesh, RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC},
 };
 
+const std::
+    unordered_map<std::tuple<Topology, std::string, RoutingType>, FabricConfig, tt::tt_fabric::fabric_tests::tuple_hash>
+        TestFixture::torus_topology_to_fabric_config_map = {
+            {{Topology::Torus, "X", RoutingType::LowLatency}, FabricConfig::FABRIC_2D_TORUS_X},
+            {{Topology::Torus, "X", RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X},
+            {{Topology::Torus, "Y", RoutingType::LowLatency}, FabricConfig::FABRIC_2D_TORUS_Y},
+            {{Topology::Torus, "Y", RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y},
+            {{Topology::Torus, "XY", RoutingType::LowLatency}, FabricConfig::FABRIC_2D_TORUS_XY},
+            {{Topology::Torus, "XY", RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY},
+};
+
 int main(int argc, char** argv) {
     log_info(tt::LogTest, "Starting Test");
     std::vector<std::string> input_args(argv, argv + argc);
@@ -39,7 +50,6 @@ int main(int argc, char** argv) {
         cmdline_parser.print_help();
         return 0;
     }
-
     std::vector<ParsedTestConfig> raw_test_configs;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies;
     std::optional<tt::tt_fabric::fabric_tests::PhysicalMeshConfig> physical_mesh_config = std::nullopt;
@@ -111,16 +121,28 @@ int main(int argc, char** argv) {
         YamlTestConfigSerializer::dump(allocation_policies, output_stream);
     }
 
+    bool device_opened = false;
     for (auto& test_config : raw_test_configs) {
+        if (!cmdline_parser.check_filter(test_config, true)) {
+            log_info(tt::LogTest, "Skipping Test Group: {} due to filter policy", test_config.name);
+            continue;
+        }
         log_info(tt::LogTest, "Running Test Group: {}", test_config.name);
 
         const auto& topology = test_config.fabric_setup.topology;
         const auto& routing_type = test_config.fabric_setup.routing_type.value();
-        log_info(tt::LogTest, "Opening devices with topology: {} and routing type: {}", topology, routing_type);
-        test_context.open_devices(topology, routing_type);
+        const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
+        log_info(
+            tt::LogTest,
+            "Opening devices with topology: {}, routing type: {}, and fabric_tensix_config: {}",
+            topology,
+            routing_type,
+            fabric_tensix_config);
+        test_context.open_devices(test_config.fabric_setup);
+        device_opened = true;
 
         log_info(tt::LogTest, "Building tests");
-        auto built_tests = builder.build_tests({test_config});
+        auto built_tests = builder.build_tests({test_config}, cmdline_parser);
 
         // Set benchmark mode and line sync for this test group
         test_context.set_benchmark_mode(test_config.benchmark_mode);
@@ -176,6 +198,10 @@ int main(int argc, char** argv) {
         TT_THROW("Some tests failed golden comparison validation. See summary above.");
     }
 
-    log_info(tt::LogTest, "All tests completed successfully");
+    if (device_opened) {
+        log_info(tt::LogTest, "All tests completed successfully");
+    } else {
+        log_info(tt::LogTest, "No tests found for provided filter");
+    }
     return 0;
 }

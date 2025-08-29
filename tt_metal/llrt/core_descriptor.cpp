@@ -30,15 +30,17 @@
 
 namespace tt {
 
+// Convert "x,y" to YAML::Node sequence [x, y]
+inline YAML::Node string_to_yaml_node(const std::string& input) {
+    // Format as YAML sequence: "[x, y]"
+    std::string yaml_seq = "[" + input + "]";
+    return YAML::Load(yaml_seq);
+}
+
 inline std::string get_core_descriptor_file(
     const tt::ARCH& arch, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
-    std::string core_desc_dir;
-    if (getenv("TT_METAL_HOME")) {
-        core_desc_dir = getenv("TT_METAL_HOME");
-    } else {
-        core_desc_dir = "./";
-    }
+    std::string core_desc_dir = tt_metal::MetalContext::instance().rtoptions().get_root_dir();
     if (core_desc_dir.back() != '/') {
         core_desc_dir += "/";
     }
@@ -58,22 +60,35 @@ inline std::string get_core_descriptor_file(
                     "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
             case tt::ARCH::WORMHOLE_B0: return core_desc_dir + "wormhole_b0_versim_1x1_arch.yaml";
             case tt::ARCH::BLACKHOLE: return core_desc_dir + "blackhole_simulation_1x2_arch.yaml";
-            case tt::ARCH::QUASAR: TT_THROW("No core descriptor for Quasar"); break;
+            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_1x3_arch.yaml";
         };
     } else {
+        // Check if fabric tensix is enabled based on fabric tensix config
+        tt_fabric::FabricTensixConfig fabric_tensix_config =
+            tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+        bool use_fabric_tensix = (fabric_tensix_config == tt_fabric::FabricTensixConfig::MUX);
+
         switch (arch) {
             default:
                 throw std::runtime_error(
                     "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
             case tt::ARCH::WORMHOLE_B0:
-                return core_desc_dir + (dispatch_core_config.get_core_type() == CoreType::ETH
-                                            ? "wormhole_b0_80_arch_eth_dispatch.yaml"
-                                            : "wormhole_b0_80_arch.yaml");
+                if (dispatch_core_config.get_core_type() == CoreType::ETH) {
+                    return core_desc_dir + "wormhole_b0_80_arch_eth_dispatch.yaml";
+                } else if (use_fabric_tensix) {
+                    return core_desc_dir + "wormhole_b0_80_arch_fabric_mux.yaml";
+                } else {
+                    return core_desc_dir + "wormhole_b0_80_arch.yaml";
+                }
             case tt::ARCH::BLACKHOLE:
-                return core_desc_dir + (dispatch_core_config.get_core_type() == CoreType::ETH
-                                            ? "blackhole_140_arch_eth_dispatch.yaml"
-                                            : "blackhole_140_arch.yaml");
-            case tt::ARCH::QUASAR: TT_THROW("No core descriptor for Quasar"); break;
+                if (dispatch_core_config.get_core_type() == CoreType::ETH) {
+                    return core_desc_dir + "blackhole_140_arch_eth_dispatch.yaml";
+                } else if (use_fabric_tensix) {
+                    return core_desc_dir + "blackhole_140_arch_fabric_mux.yaml";
+                } else {
+                    return core_desc_dir + "blackhole_140_arch.yaml";
+                }
+            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_1x3_arch.yaml";
         };
     }
     return "";
@@ -81,12 +96,14 @@ inline std::string get_core_descriptor_file(
 
 const core_descriptor_t& get_core_descriptor_config(
     chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    // {arch : {product : {dispatch core axis: {num hardware command queues : config}}}}
+    // {arch : {product : {dispatch core axis: {fabric tensix config: {num hardware command queues : config}}}}}
     static std::unordered_map<
         ARCH,
         std::unordered_map<
             std::string,
-            std::unordered_map<tt_metal::DispatchCoreConfig, std::unordered_map<uint8_t, core_descriptor_t>>>>
+            std::unordered_map<
+                tt_metal::DispatchCoreConfig,
+                std::unordered_map<tt_fabric::FabricTensixConfig, std::unordered_map<uint8_t, core_descriptor_t>>>>>
         config_by_arch;
 
     ARCH arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
@@ -112,8 +129,10 @@ const core_descriptor_t& get_core_descriptor_config(
         }
     }
 
+    tt_fabric::FabricTensixConfig fabric_tensix_config =
+        tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     std::unordered_map<uint8_t, core_descriptor_t>& config_by_num_cqs =
-        config_by_arch[arch][product_name][dispatch_core_config];
+        config_by_arch[arch][product_name][dispatch_core_config][fabric_tensix_config];
     if (config_by_num_cqs.count(num_hw_cqs)) {
         return config_by_num_cqs.at(num_hw_cqs);
     }
@@ -158,6 +177,40 @@ const core_descriptor_t& get_core_descriptor_config(
     TT_ASSERT(compute_with_storage_start.IsSequence() and compute_with_storage_end.IsSequence());
     TT_ASSERT(compute_with_storage_end[0].as<size_t>() >= compute_with_storage_start[0].as<size_t>());
     TT_ASSERT(compute_with_storage_end[1].as<size_t>() >= compute_with_storage_start[1].as<size_t>());
+    // // Adjusts the core grid configuration based on the value of the environment variable
+    if (tt_metal::MetalContext::instance().rtoptions().is_core_grid_override_todeprecate()) {
+        auto compute_with_storage_end_override =
+            string_to_yaml_node(tt_metal::MetalContext::instance().rtoptions().get_core_grid_override_todeprecate());
+        TT_FATAL(
+            compute_with_storage_end_override.IsSequence(),
+            "compute_with_storage_end_override must be a YAML sequence");
+        TT_FATAL(
+            (compute_with_storage_end[0].as<int>() >= compute_with_storage_end_override[0].as<int>()),
+            "compute_with_storage_end[0]= {} should be >= compute_with_storage_end_override[0]= {}",
+            compute_with_storage_end[0].as<int>(),
+            compute_with_storage_end_override[0].as<int>());
+        TT_FATAL(
+            compute_with_storage_end[1].as<int>() >= compute_with_storage_end_override[1].as<int>(),
+            "compute_with_storage_end[1]= {} should be >= compute_with_storage_end_override[1]= {}",
+            compute_with_storage_end[1].as<int>(),
+            compute_with_storage_end_override[1].as<size_t>());
+        TT_FATAL(
+            compute_with_storage_end_override[0].as<int>() >= compute_with_storage_start[0].as<int>(),
+            "compute_with_storage_end_override[0]= {} should be >= compute_with_storage_start[0]= {}",
+            compute_with_storage_end_override[0].as<int>(),
+            compute_with_storage_start[0].as<int>());
+        TT_FATAL(
+            compute_with_storage_end_override[1].as<int>() >= compute_with_storage_start[1].as<int>(),
+            "compute_with_storage_end_override[1]= {} should be >= compute_with_storage_start[1]= {}",
+            compute_with_storage_end_override[1].as<int>(),
+            compute_with_storage_start[1].as<int>());
+        compute_with_storage_end = compute_with_storage_end_override;
+        log_warning(
+            tt::LogDevice,
+            "Overrided compute_with_storage_end [x, y]=[{}, {}]",
+            compute_with_storage_end[0].as<std::string>(),
+            compute_with_storage_end[1].as<std::string>());
+    }
     CoreCoord compute_grid_size(
         (compute_with_storage_end[0].as<size_t>() - compute_with_storage_start[0].as<size_t>()) + 1,
         (compute_with_storage_end[1].as<size_t>() - compute_with_storage_start[1].as<size_t>()) + 1);
@@ -201,6 +254,20 @@ const core_descriptor_t& get_core_descriptor_config(
         dispatch_cores.size() || tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled(),
         "Dispatch cores size must be positive");
 
+    // Parse fabric_mux_cores
+    std::vector<RelativeCoreCoord> fabric_mux_cores;
+    if (desc_yaml["fabric_mux_cores"]) {
+        for (const auto& core_node : desc_yaml["fabric_mux_cores"]) {
+            RelativeCoreCoord coord = {};
+            if (core_node.IsSequence()) {
+                coord = RelativeCoreCoord({.x = core_node[0].as<int>(), .y = core_node[1].as<int>()});
+            } else {
+                TT_THROW("Only logical relative coords supported for fabric_mux_cores");
+            }
+            fabric_mux_cores.push_back(coord);
+        }
+    }
+
     std::vector<CoreCoord> logical_compute_cores;
     logical_compute_cores.reserve(compute_cores.size());
     std::transform(
@@ -225,6 +292,15 @@ const core_descriptor_t& get_core_descriptor_config(
         std::back_inserter(logical_dispatch_cores),
         [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
 
+    // Convert fabric mux cores to logical coordinates
+    std::vector<CoreCoord> logical_fabric_mux_cores;
+    logical_fabric_mux_cores.reserve(fabric_mux_cores.size());
+    std::transform(
+        fabric_mux_cores.cbegin(),
+        fabric_mux_cores.cend(),
+        std::back_inserter(logical_fabric_mux_cores),
+        [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
+
     auto [it, _] = config_by_num_cqs.emplace(std::make_pair(
         num_hw_cqs,
         core_descriptor_t{
@@ -233,9 +309,11 @@ const core_descriptor_t& get_core_descriptor_config(
             .relative_storage_cores = std::move(storage_cores),
             .storage_core_bank_size = std::move(storage_core_bank_size),
             .relative_dispatch_cores = std::move(dispatch_cores),
+            .relative_fabric_mux_cores = std::move(fabric_mux_cores),
             .logical_compute_cores = std::move(logical_compute_cores),
             .logical_storage_cores = std::move(logical_storage_cores),
             .logical_dispatch_cores = std::move(logical_dispatch_cores),
+            .logical_fabric_mux_cores = std::move(logical_fabric_mux_cores),
         }));
     return it->second;
 }

@@ -25,14 +25,14 @@ namespace tt::tt_fabric {
 class FabricContext;
 
 // This struct provides information for how a process binds to a particular
-// mesh and local mesh rank (HostRankId rename - #24178) in the mesh graph
+// mesh and local mesh rank (MeshHostRankId rename - #24178) in the mesh graph
 // descriptor.
 struct LocalMeshBinding {
     // Can bind multiple meshes to a single host. Most use-cases
     // only require a 1:1 host to mesh mapping. At least one mesh_id
     // is guaranteed to be present in this vector.
     std::vector<MeshId> mesh_ids;
-    HostRankId host_rank;
+    MeshHostRankId host_rank;
 };
 
 // In multi-host context, APIs parameterized with MeshScope, can return
@@ -68,15 +68,18 @@ public:
 
     std::vector<MeshId> get_user_physical_mesh_ids() const;
 
-    // Queries for the MeshId(s) and HostRankId owned by the local rank. A vector of MeshIds allows
+    // Queries for the MeshId(s) and MeshHostRankId owned by the local rank. A vector of MeshIds allows
     // a single host to bind to multiple meshes.
     std::vector<MeshId> get_local_mesh_id_bindings() const;
-    HostRankId get_local_host_rank_id_binding() const;
+    MeshHostRankId get_local_host_rank_id_binding() const;
     MeshCoordinate get_local_mesh_offset() const;
 
     // Queries that are MeshScope-aware (i.e. return results for local mesh or global mesh)
     MeshShape get_physical_mesh_shape(MeshId mesh_id, MeshScope scope = MeshScope::GLOBAL) const;
     MeshCoordinateRange get_coord_range(MeshId mesh_id, MeshScope scope = MeshScope::GLOBAL) const;
+
+    // Initializes distributed contexts for each mesh; for host-to-host communication.
+    void initialize_distributed_contexts();
 
     // Returns distributed context for `mesh_id`.
     // Throws if `mesh_id` is unknown.
@@ -147,6 +150,9 @@ public:
 
     void clear_fabric_context();
 
+    // Initialize fabric tensix config (call after routing tables are configured)
+    void initialize_fabric_tensix_datamover_config();
+
     // Check if ANY managed chip supports intermesh links
     bool system_has_intermesh_links() const;
 
@@ -164,9 +170,6 @@ public:
 
     // Check if a specific ethernet core is an intermesh link
     bool is_intermesh_eth_link(chip_id_t chip_id, CoreCoord eth_core) const;
-
-    // If the ethernet core is an intermesh link, probe to see if it is trained
-    bool is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord eth_core) const;
 
     // Returns set of logical active ethernet coordinates on chip
     // If skip_reserved_cores is true, will return cores that dispatch is not using,
@@ -200,25 +203,32 @@ private:
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
 
     std::map<FabricNodeId, chip_id_t> logical_mesh_chip_id_to_physical_chip_id_mapping_;
+
     // map[mesh_fabric_id][direction] has a vector of ethernet channels in that direction
     std::map<FabricNodeId, std::unordered_map<RoutingDirection, std::vector<chan_id_t>>>
         router_port_directions_to_physical_eth_chan_map_;
+
     // map[mesh_fabric_id][direction] has the number of live routing planes in that direction
     std::map<FabricNodeId, std::unordered_map<RoutingDirection, size_t>>
         router_port_directions_to_num_routing_planes_map_;
+
     // tables[mesh_fabric_id][eth_chan]
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
         intra_mesh_routing_tables_;  // table that will be written to each ethernet core
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
+
     // map[phys_chip_id] has a vector of (eth_core, channel) pairs used for intermesh routing
     // TODO: remove once UMD can provide all intermesh links
     std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>> intermesh_eth_links_;
+
     // Stores a table of all local intermesh links (board_id, chan_id) and the corresponding remote intermesh links
     IntermeshLinkTable intermesh_link_table_;
-
-    std::unordered_map<MeshId, std::unordered_map<HostRankId, std::map<EthChanDescriptor, EthChanDescriptor>>>
+    std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, std::map<EthChanDescriptor, EthChanDescriptor>>>
         peer_intermesh_link_tables_;
+
+    // Mapping from MeshId, MeshHostRankId to MPI rank
+    std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, tt_metal::distributed::multihost::Rank>> mpi_ranks_;
 
     // TODO: remove once UMD can provide all intermesh links
     std::unordered_map<chip_id_t, uint64_t> chip_id_to_asic_id_;
@@ -265,6 +275,14 @@ private:
     void write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
     void write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
 
+    // Helper to populate fabric connection info for both router and mux configurations
+    void populate_fabric_connection_info(
+        tt::tt_fabric::fabric_connection_info_t& connection_info,
+        tt::tt_fabric::fabric_connection_info_t& tensix_connection_info,
+        chip_id_t physical_chip_id,
+        chan_id_t eth_channel_id,
+        eth_chan_directions router_direction) const;
+
     // TODO: remove once UMD can provide all intermesh links
     // Populate the local intermesh link to remote intermesh link table
     void generate_local_intermesh_link_table();
@@ -275,10 +293,6 @@ private:
     // TODO: remove once UMD can provide all intermesh links
     // Initialize internal map of physical chip_id to intermesh ethernet links
     void initialize_intermesh_eth_links();
-
-    // TODO: remove once UMD can provide all intermesh links
-    // Check if intermesh links are available by reading SPI ROM config from first chip
-    bool is_intermesh_enabled() const;
 
     void assign_direction_to_fabric_eth_core(
         const FabricNodeId& fabric_node_id, const CoreCoord& eth_core, RoutingDirection direction);

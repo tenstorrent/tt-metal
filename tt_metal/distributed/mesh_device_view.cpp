@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/move/utility_core.hpp>
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
 #include <cstddef>

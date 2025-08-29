@@ -92,11 +92,12 @@ def input_processor_for_qwen25_vl(ctx: InputContext, inputs: Union[DecoderOnlyIn
         # [INFO] with current version of vLLM, in server mode, inputs["prompt"] gives KeyError; only inputs['prompt_token_ids'] is available
         assert "prompt_token_ids" in inputs, "prompt_token_ids must be available in server mode"
         prompt_text = input_processor.decode(inputs["prompt_token_ids"], skip_special_tokens=False)
-    images = inputs["multi_modal_data"]["image"]
+
+    multi_modal_data = inputs.get("multi_modal_data", None)
 
     processed_inputs = input_processor(
         text=prompt_text,  # [INFO] Qwen2VLProcessor handles the case where text is a string or a list of strings
-        images=images,
+        images=multi_modal_data["image"] if multi_modal_data is not None else None,
         videos=None,  # [INFO] videos are not supported yet
         return_tensors="pt",
     )
@@ -194,7 +195,6 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         # reconstruct the inputs that Qwen2.5-VL expects
         inputs = CustomNamespace()
         inputs.input_ids = tokens.to(images[0].attention_mask.dtype)
-        inputs.pixel_values = torch.concat([im.pixel_values for im in images], dim=0)
         inputs.attention_mask = torch.concat(
             [
                 torch.nn.functional.pad(im.attention_mask, (0, padded_seq_len - im.attention_mask.shape[-1]), value=0)
@@ -202,10 +202,15 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             ],
             dim=0,
         )
-        inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in images], dim=0)
-
-        # Vision prefill
-        image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+        if "pixel_values" in images[0]:
+            # we currently do not support mixed inputs of text-only users and text-image users; hence checking images[0] is enough
+            inputs.pixel_values = torch.concat([im.pixel_values for im in images], dim=0)
+            inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in images], dim=0)
+            # Vision prefill
+            image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+        else:
+            # text-only users
+            image_embeds = torch.tensor([], dtype=torch.bfloat16)
 
         # Prepare text + vision inputs for decoder model
         text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
@@ -224,16 +229,22 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         cos, sin = multimodal_rope_from_hf(
             inputs, input_embeds, self.reference_model, self.model_args, pad_token_id=pad_token_id
         )
-        self.model.rope_setup.set_cos_sin(cos, sin)
+        rot_mats = (cos, sin)
 
         logits = self.prefill_forward_text(
             input_prefill_pt,
+            rot_mats=rot_mats,
             page_table=page_table,
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
         )
 
-        return logits
+        return logits, rot_mats
 
     def decode_forward(self, *args, **kwargs):
+        rot_mats_list: list = kwargs.pop("rot_mats_all_users", None)
+        assert rot_mats_list is not None, "rot_mats_all_users must be provided for Qwen2.5-VL"
+        # [INFO] update the cos/sin matrices for the current users in the batch
+        super().update_cos_sin_rows(rot_mats_list)
+
         return super().decode_forward_text(*args, **kwargs)

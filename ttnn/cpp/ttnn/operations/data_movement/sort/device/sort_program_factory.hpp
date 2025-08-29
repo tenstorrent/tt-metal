@@ -19,9 +19,9 @@ using namespace tt::tt_metal;
 // Single row - single core
 struct SortProgramFactorySingleRowSingleCore {
     struct shared_variables_t {
-        KernelHandle reader_kernel_id;
-        KernelHandle compute_kernel_id;
-        KernelHandle writer_kernel_id;
+        KernelHandle reader_kernel_id{};
+        KernelHandle compute_kernel_id{};
+        KernelHandle writer_kernel_id{};
         CoreCoord storage_grid_size;
     };
 
@@ -36,9 +36,9 @@ struct SortProgramFactorySingleRowSingleCore {
 // cross core data exchange
 struct SortProgramFactoryCrossCoreDataExchange {
     struct shared_variables_t {
-        KernelHandle reader_kernel_id;
-        KernelHandle compute_kernel_id;
-        KernelHandle writer_kernel_id;
+        KernelHandle reader_kernel_id{};
+        KernelHandle compute_kernel_id{};
+        KernelHandle writer_kernel_id{};
         CoreRangeSet core_range_set;
     };
 
@@ -69,10 +69,10 @@ struct SortProgramFactoryCrossCoreDataExchange {
 // Single row - multi core
 struct SortProgramFactorySingleRowMultiCore {
     struct shared_variables_t {
-        KernelHandle coordinator_kernel_id;
-        KernelHandle reader_kernel_id;
-        KernelHandle compute_kernel_id;
-        KernelHandle writer_kernel_id;
+        KernelHandle coordinator_kernel_id{};
+        KernelHandle reader_kernel_id{};
+        KernelHandle compute_kernel_id{};
+        KernelHandle writer_kernel_id{};
         CoreCoord coordinator_core;
         CoreRangeSet worker_core_range;
     };

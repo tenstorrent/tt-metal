@@ -25,7 +25,7 @@ run_qwen25_vl_func() {
   fail=0
 
   # install qwen25_vl requirements
-  pip install -r models/demos/qwen25_vl/reference/requirements.txt
+  pip install -r models/demos/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
@@ -65,7 +65,7 @@ run_sentencebert_func() {
   pytest --disable-warnings models/demos/sentence_bert/demo/demo.py --timeout 600; fail+=$?
 
   #SentenceBERT eval
-  # comment out SentenceBERT eval from CI tests for now unitl dataset_evaluation test is available in CIv2 (issue: #25866)
+  # comment out SentenceBERT eval from CI tests for now until dataset_evaluation test is available in CIv2 (issue: #25866)
 
   #pytest --disable-warnings models/demos/sentence_bert/demo/dataset_evaluation.py--timeout 600; fail+=$?
 
@@ -101,15 +101,11 @@ run_llama3_func() {
 
 }
 
-## comment out ufld_v2 from CI tests for now unitl dataset_evaluation test failure is debugged.
 run_ufld_v2_func() {
-  #ufld_v2
-  pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
-  #ufld_v2 eval
-  ## Commenting out UFLDv2 eval since CIv2 does not support dataset download from Kaggle
-  # Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
-  #pytest -n auto models/demos/ufld_v2/demo/dataset_evaluation.py --timeout 1500
+  #ufld_v2 demo
+  pytest models/demos/ufld_v2/demo/demo.py
 }
+
 run_vgg_func() {
 
   #VGG11/VGG16
@@ -293,10 +289,9 @@ run_yolov8s_world_perf() {
 
 }
 
-
 run_vanilla_unet_demo() {
  # vanilla_unet demo
- pytest -n auto models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image
+ pytest models/demos/vanilla_unet/demo/demo.py
 }
 
 # Commenting out the test from CI due to HF issue. TODO demo will be enabled with CIv2 dataset .

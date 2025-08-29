@@ -104,12 +104,12 @@ bool RunWriteBWTest(
 
     // Initialize L1s:
     std::vector<uint32_t> zeros = std::vector<uint32_t>(32, 0);
-    llrt::write_hex_vec_to_core(
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         sender_device->id(),
         sender_device->ethernet_core_from_logical_core(eth_sender_core),
         zeros,
         src_eth_l1_byte_address);
-    llrt::write_hex_vec_to_core(
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         receiver_device->id(),
         receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
         zeros,
@@ -117,7 +117,7 @@ bool RunWriteBWTest(
 
     // Generate inputs
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, size_in_bytes / sizeof(uint32_t));
-    llrt::write_hex_vec_to_core(
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         sender_device->id(),
         sender_device->ethernet_core_from_logical_core(eth_sender_core),
         inputs,
@@ -125,7 +125,7 @@ bool RunWriteBWTest(
 
     // Clear expected value at ethernet L1 address
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
-    llrt::write_hex_vec_to_core(
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         receiver_device->id(),
         receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
         all_zeros,
@@ -198,7 +198,7 @@ bool RunWriteBWTest(
     th1.join();
     std::cout << "sender done" << std::endl;
 
-    auto readback_vec = llrt::read_hex_vec_from_core(
+    auto readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         receiver_device->id(),
         receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
         dst_eth_l1_byte_address,

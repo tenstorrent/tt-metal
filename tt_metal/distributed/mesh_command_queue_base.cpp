@@ -176,8 +176,10 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
             this->write_shard_to_device(buffer, coord, host_data, region);
         };
         for (const auto& coord : device_range) {
-            dispatch_thread_pool_->enqueue(
-                [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->get_device(coord)->id());
+            if (mesh_device_->is_local(coord)) {
+                dispatch_thread_pool_->enqueue(
+                    [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->get_device(coord)->id());
+            }
         }
         dispatch_thread_pool_->wait();
     } else {
@@ -218,9 +220,12 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
     };
 
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
-        dispatch_thread_pool_->enqueue(
-            [&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); },
-            mesh_device_->get_device(shard_data_transfers[shard_idx].shard_coord)->id());
+        auto shard_coord = shard_data_transfers[shard_idx].shard_coord;
+        if (mesh_device_->is_local(shard_coord)) {
+            dispatch_thread_pool_->enqueue(
+                [&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); },
+                mesh_device_->get_device(shard_coord)->id());
+        }
     }
     dispatch_thread_pool_->wait();
 
@@ -263,12 +268,14 @@ void MeshCommandQueueBase::enqueue_read_shards_nolock(
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
     std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
     for (const auto& shard_data_transfer : shard_data_transfers) {
-        this->read_shard_from_device(
-            *buffer,
-            shard_data_transfer.shard_coord,
-            shard_data_transfer.host_data,
-            shard_data_transfer.region,
-            num_txns_per_device);
+        if (mesh_device_->is_local(shard_data_transfer.shard_coord)) {
+            this->read_shard_from_device(
+                *buffer,
+                shard_data_transfer.shard_coord,
+                shard_data_transfer.host_data,
+                shard_data_transfer.region,
+                num_txns_per_device);
+        }
     }
     this->submit_memcpy_request(num_txns_per_device, blocking);
 }

@@ -4,6 +4,7 @@
 
 #include "unary_op_utils.hpp"
 
+#include <optional>
 #include <tt-metalium/assert.hpp>
 #include "ttnn/tensor/types.hpp"
 
@@ -80,10 +81,12 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::GEZ:
         case UnaryOpType::NEZ: return "SFPU_OP_UNARY_COMP_INCLUDE";
         case UnaryOpType::WHERE_TSS: return "SFPU_OP_WHERE_INCLUDE";
+        case UnaryOpType::CLAMP_TSS: return "SFPU_OP_CLAMP_INCLUDE";
         case UnaryOpType::SOFTSHRINK:
         case UnaryOpType::SOFTSIGN:
         case UnaryOpType::HARDSIGMOID:
         case UnaryOpType::CELU: return "SFPU_OP_ACTIVATIONS_INCLUDE";
+        case UnaryOpType::THRESHOLD: return "SFPU_OP_THRESHOLD_INCLUDE";
         case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
@@ -99,7 +102,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     float param0 = params[0];
     switch (op_type) {
         case UnaryOpType::FILL:
-            if (input_dtype == DataType::INT32) {
+            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 op_init_and_name = {"fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)param0)};
             } else {
                 // Note: bit casted to int float is used to properly pass nan/+-inf
@@ -112,14 +115,29 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             op_init_and_name = {"rounding_op_tile_init();", fmt::format("round_tile({}, {});", idst, (int)param0)};
             break;
         case UnaryOpType::RELU_MAX:
-            op_init_and_name = {
-                "relu_max_tile_init();",
-                fmt::format("relu_max_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {
+                    "relu_max_tile_init();",
+                    fmt::format("relu_max_tile_int32({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            } else {
+                op_init_and_name = {
+                    "relu_max_tile_init();",
+                    fmt::format("relu_max_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            }
             break;
         case UnaryOpType::RELU_MIN:
-            op_init_and_name = {
-                "relu_min_tile_init();",
-                fmt::format("relu_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {
+                    "relu_min_tile_init();", fmt::format("relu_min_tile_int32({}, {}u);", idst, (uint)param0)};
+            } else {
+                op_init_and_name = {
+                    "relu_min_tile_init();",
+                    fmt::format("relu_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            }
             break;
         case UnaryOpType::POWER:
             op_init_and_name = {"power_tile_init();", fmt::format("power_tile({}, {}u);", idst, (uint32_t)param0)};
@@ -142,6 +160,28 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             op_init_and_name = {
                 fmt::format("rsqrt_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("rsqrt_tile<{1}u>({0});", idst, (uint32_t)param0)};
+            break;
+        case UnaryOpType::LOG:
+            op_init_and_name = {
+                fmt::format("log_tile_init<{}u>();", (uint32_t)param0),
+                fmt::format("log_tile<{1}u>({0});", idst, (uint32_t)param0)};
+            break;
+        case UnaryOpType::LOG10:
+            // log10[x] = log[x]/log[10] = log[x]*0.4342944819032518; FP32@U32 0x3ede5bd9; FP16@U16 0x36f3;
+            op_init_and_name = {
+                fmt::format("log_with_base_tile_init<{}u>();", (uint32_t)param0),
+                fmt::format("log_with_base_tile<{1}u>({0}, 0x36f3u);", idst, (uint32_t)param0)};
+            break;
+
+        case UnaryOpType::LOG2:  // log2[x] = log[x]*1.4426950408889634f; FP32@U32 0x3fb8aa3b; FP16@U16 0x3dc5;
+            op_init_and_name = {
+                fmt::format("log_with_base_tile_init<{}u>();", (uint32_t)param0),
+                fmt::format("log_with_base_tile<{1}u>({0}, 0x3dc5u);", idst, (uint32_t)param0)};
+            break;
+        case UnaryOpType::LOG1P:
+            op_init_and_name = {
+                fmt::format("log1p_tile_init<{}u>();", (uint32_t)param0),
+                fmt::format("log1p_tile<{1}u>({0});", idst, (uint32_t)param0)};
             break;
         case UnaryOpType::HEAVISIDE:
             op_init_and_name = {
@@ -380,13 +420,21 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::WHERE_TSS: {
             std::string where_call;
             if (input_dtype == DataType::INT32) {
-                where_call = fmt::format("where_int32_tile({}, {}, {});", idst, 1, 2);
+                where_call = fmt::format("where_int32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
             } else if (input_dtype == DataType::FLOAT32) {
-                where_call = fmt::format("where_fp32_tile({}, {}, {});", idst, 1, 2);
+                where_call = fmt::format("where_fp32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
             } else {
-                where_call = fmt::format("where_tile({}, {}, {});", idst, 1, 2);
+                where_call = fmt::format("where_tile({0}, {1}, {2}, {0});", idst, 1, 2);
             }
             op_init_and_name = std::make_pair("where_tile_init();", where_call);
+            break;
+        }
+        case UnaryOpType::CLAMP_TSS: {
+            float param1 = params[1];
+            op_init_and_name = {
+                "clamp_tile_init();",
+                fmt::format(
+                    "clamp_tile({}, {}, {});", idst, std::bit_cast<uint32_t>(param0), std::bit_cast<uint32_t>(param1))};
             break;
         }
         case UnaryOpType::HARDTANH: {
@@ -395,6 +443,17 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "hardtanh_tile_init();",
                 fmt::format(
                     "hardtanh_tile({}, {:#x}u, {:#x}u);",
+                    idst,
+                    std::bit_cast<uint32_t>(param0),
+                    std::bit_cast<uint32_t>(param1))};
+            break;
+        }
+        case UnaryOpType::THRESHOLD: {
+            float param1 = params[1];
+            op_init_and_name = {
+                "threshold_tile_init();",
+                fmt::format(
+                    "threshold_tile({}, {:#x}u, {:#x}u);",
                     idst,
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(param1))};
@@ -415,11 +474,19 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::RECIP: op_init_and_name = {"recip_tile_init();", fmt::format("recip_tile({});", idst)}; break;
         case UnaryOpType::GELU: op_init_and_name = {"gelu_tile_init();", fmt::format("gelu_tile({});", idst)}; break;
         case UnaryOpType::RSQRT: op_init_and_name = {"rsqrt_tile_init();", fmt::format("rsqrt_tile({});", idst)}; break;
-        case UnaryOpType::RELU: op_init_and_name = {"relu_tile_init();", fmt::format("relu_tile({});", idst)}; break;
         case UnaryOpType::SQRT: op_init_and_name = {"sqrt_tile_init();", fmt::format("sqrt_tile({});", idst)}; break;
         case UnaryOpType::LOG: op_init_and_name = {"log_tile_init();", fmt::format("log_tile({});", idst)}; break;
         case UnaryOpType::LOG1P: op_init_and_name = {"log1p_tile_init();", fmt::format("log1p_tile({});", idst)}; break;
         case UnaryOpType::TANH: op_init_and_name = {"tanh_tile_init();", fmt::format("tanh_tile({});", idst)}; break;
+        case UnaryOpType::RELU:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {"relu_tile_init();", fmt::format("relu_tile_int32({});", idst)};
+            } else {
+                op_init_and_name = {"relu_tile_init();", fmt::format("relu_tile({});", idst)};
+            }
+            break;
         case UnaryOpType::SIGNBIT:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
@@ -482,7 +549,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype.value() == DataType::INT32) {
-                op_init_and_name = {"mul_int32_tile_init();", fmt::format("mul_int32_tile({0}, {0});", idst)};
+                op_init_and_name = {"mul_int32_tile_init();", fmt::format("mul_int32_tile({0}, {0}, {0});", idst)};
             } else {
                 op_init_and_name = {"square_tile_init();", fmt::format("square_tile({});", idst)};
             }
@@ -665,15 +732,15 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     } else if (name == "recip") {
         return UnaryWithParam(UnaryOpType::RECIP);
     } else if (name == "log") {
-        return UnaryWithParam(UnaryOpType::LOG);
+        return UnaryWithParam(UnaryOpType::LOG, static_cast<float>(true));
     } else if (name == "log1p") {
-        return UnaryWithParam(UnaryOpType::LOG1P);
+        return UnaryWithParam(UnaryOpType::LOG1P, static_cast<float>(true));
     } else if (name == "tanh") {
         return UnaryWithParam(UnaryOpType::TANH);
     } else if (name == "log2") {
-        return UnaryWithParam(UnaryOpType::LOG2);
+        return UnaryWithParam(UnaryOpType::LOG2, static_cast<float>(true));
     } else if (name == "log10") {
-        return UnaryWithParam(UnaryOpType::LOG10);
+        return UnaryWithParam(UnaryOpType::LOG10, static_cast<float>(true));
     } else if (name == "sin") {
         return UnaryWithParam(UnaryOpType::SIN);
     } else if (name == "cos") {
@@ -762,7 +829,7 @@ std::string get_compute_kernel_path(
 }
 
 uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype) {
-    if (dtype == DataType::INT32) {
+    if (dtype == DataType::INT32 || dtype == DataType::UINT32) {
         return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
     }
     return std::bit_cast<uint32_t>(scalar);

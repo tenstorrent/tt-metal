@@ -25,6 +25,7 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -37,6 +38,7 @@ using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
+using namespace tt::tt_metal;
 
 namespace unit_tests::dram::direct {
 /// @brief Does Dram --> Reader --> L1 on a single core
@@ -44,12 +46,22 @@ namespace unit_tests::dram::direct {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool reader_only(
-    tt_metal::IDevice* device, const size_t& byte_size, const size_t& l1_byte_address, const CoreCoord& reader_core) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const size_t& byte_size,
+    const size_t& l1_byte_address,
+    const CoreCoord& reader_core) {
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -62,7 +74,7 @@ bool reader_only(
     //     CreateBuffer(device, byte_size, l1_byte_address, byte_size, tt_metal::BufferType::L1);
 
     auto reader_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_dram_to_l1.cpp",
         reader_core,
         tt_metal::DataMovementConfig{
@@ -76,7 +88,7 @@ bool reader_only(
     tt_metal::detail::WriteToBuffer(input_dram_buffer, inputs);
 
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         reader_kernel,
         reader_core,
         {
@@ -86,7 +98,7 @@ bool reader_only(
             (uint32_t)byte_size,
         });
 
-    tt_metal::detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> dest_core_data;
     // tt_metal::detail::ReadFromBuffer(l1_buffer, dest_core_data);
@@ -103,12 +115,22 @@ bool reader_only(
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool writer_only(
-    tt_metal::IDevice* device, const size_t& byte_size, const size_t& l1_byte_address, const CoreCoord& writer_core) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const size_t& byte_size,
+    const size_t& l1_byte_address,
+    const CoreCoord& writer_core) {
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     tt_metal::InterleavedBufferConfig dram_config{
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt_metal::BufferType::DRAM};
@@ -121,7 +143,7 @@ bool writer_only(
     //     CreateBuffer(device, byte_size, l1_byte_address, byte_size, tt_metal::BufferType::L1);
 
     auto writer_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_l1_to_dram.cpp",
         writer_core,
         tt_metal::DataMovementConfig{
@@ -136,7 +158,7 @@ bool writer_only(
     // tt_metal::detail::WriteToBuffer(l1_buffer, inputs);
 
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         writer_kernel,
         writer_core,
         {
@@ -146,7 +168,7 @@ bool writer_only(
             (uint32_t)byte_size,
         });
 
-    tt_metal::detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
@@ -167,7 +189,7 @@ struct ReaderWriterConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_writer(tt_metal::IDevice* device, const ReaderWriterConfig& test_config) {
+bool reader_writer(std::shared_ptr<distributed::MeshDevice> mesh_device, const ReaderWriterConfig& test_config) {
     bool pass = true;
 
     const uint32_t cb_index = 0;
@@ -175,7 +197,14 @@ bool reader_writer(tt_metal::IDevice* device, const ReaderWriterConfig& test_con
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -188,10 +217,10 @@ bool reader_writer(tt_metal::IDevice* device, const ReaderWriterConfig& test_con
     tt_metal::CircularBufferConfig l1_cb_config =
         tt_metal::CircularBufferConfig(byte_size, {{cb_index, test_config.l1_data_format}})
             .set_page_size(cb_index, test_config.tile_byte_size);
-    auto l1_cb = tt_metal::CreateCircularBuffer(program, test_config.core, l1_cb_config);
+    tt_metal::CreateCircularBuffer(program_, test_config.core, l1_cb_config);
 
     auto reader_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
         test_config.core,
         tt_metal::DataMovementConfig{
@@ -200,7 +229,7 @@ bool reader_writer(tt_metal::IDevice* device, const ReaderWriterConfig& test_con
             .compile_args = {cb_index}});
 
     auto writer_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         test_config.core,
         tt_metal::DataMovementConfig{
@@ -220,7 +249,7 @@ bool reader_writer(tt_metal::IDevice* device, const ReaderWriterConfig& test_con
     tt_metal::detail::WriteToBuffer(input_dram_buffer, inputs);
 
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         reader_kernel,
         test_config.core,
         {
@@ -229,7 +258,7 @@ bool reader_writer(tt_metal::IDevice* device, const ReaderWriterConfig& test_con
             (uint32_t)test_config.num_tiles,
         });
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         writer_kernel,
         test_config.core,
         {
@@ -238,7 +267,7 @@ bool reader_writer(tt_metal::IDevice* device, const ReaderWriterConfig& test_con
             (uint32_t)test_config.num_tiles,
         });
 
-    tt_metal::detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
@@ -256,7 +285,8 @@ struct ReaderDatacopyWriterConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_datacopy_writer(tt_metal::IDevice* device, const ReaderDatacopyWriterConfig& test_config) {
+bool reader_datacopy_writer(
+    std::shared_ptr<distributed::MeshDevice> mesh_device, const ReaderDatacopyWriterConfig& test_config) {
     bool pass = true;
 
     const uint32_t input0_cb_index = 0;
@@ -265,8 +295,14 @@ bool reader_datacopy_writer(tt_metal::IDevice* device, const ReaderDatacopyWrite
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
-
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
     tt::tt_metal::InterleavedBufferConfig dram_config{
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
     auto input_dram_buffer = tt_metal::CreateBuffer(dram_config);
@@ -277,15 +313,15 @@ bool reader_datacopy_writer(tt_metal::IDevice* device, const ReaderDatacopyWrite
     tt_metal::CircularBufferConfig l1_input_cb_config =
         tt_metal::CircularBufferConfig(byte_size, {{input0_cb_index, test_config.l1_input_data_format}})
             .set_page_size(input0_cb_index, test_config.tile_byte_size);
-    auto l1_input_cb = tt_metal::CreateCircularBuffer(program, test_config.core, l1_input_cb_config);
+    tt_metal::CreateCircularBuffer(program_, test_config.core, l1_input_cb_config);
 
     tt_metal::CircularBufferConfig l1_output_cb_config =
         tt_metal::CircularBufferConfig(byte_size, {{output_cb_index, test_config.l1_output_data_format}})
             .set_page_size(output_cb_index, test_config.tile_byte_size);
-    auto l1_output_cb = tt_metal::CreateCircularBuffer(program, test_config.core, l1_output_cb_config);
+    tt_metal::CreateCircularBuffer(program_, test_config.core, l1_output_cb_config);
 
     auto reader_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
         test_config.core,
         tt_metal::DataMovementConfig{
@@ -294,7 +330,7 @@ bool reader_datacopy_writer(tt_metal::IDevice* device, const ReaderDatacopyWrite
             .compile_args = {input0_cb_index}});
 
     auto writer_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         test_config.core,
         tt_metal::DataMovementConfig{
@@ -305,8 +341,8 @@ bool reader_datacopy_writer(tt_metal::IDevice* device, const ReaderDatacopyWrite
     vector<uint32_t> compute_kernel_args = {
         uint(test_config.num_tiles)  // per_core_tile_cnt
     };
-    auto datacopy_kernel = tt_metal::CreateKernel(
-        program,
+    tt_metal::CreateKernel(
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         test_config.core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
@@ -323,7 +359,7 @@ bool reader_datacopy_writer(tt_metal::IDevice* device, const ReaderDatacopyWrite
     tt_metal::detail::WriteToBuffer(input_dram_buffer, inputs);
 
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         reader_kernel,
         test_config.core,
         {
@@ -332,7 +368,7 @@ bool reader_datacopy_writer(tt_metal::IDevice* device, const ReaderDatacopyWrite
             (uint32_t)test_config.num_tiles,
         });
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         writer_kernel,
         test_config.core,
         {
@@ -341,7 +377,7 @@ bool reader_datacopy_writer(tt_metal::IDevice* device, const ReaderDatacopyWrite
             (uint32_t)test_config.num_tiles,
         });
 
-    tt_metal::detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
@@ -352,7 +388,7 @@ bool reader_datacopy_writer(tt_metal::IDevice* device, const ReaderDatacopyWrite
 
 namespace tt::tt_metal {
 
-TEST_F(DeviceFixture, TensixSingleCoreDirectDramReaderOnly) {
+TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         uint32_t l1_unreserved_base = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
         ASSERT_TRUE(
@@ -363,7 +399,7 @@ TEST_F(DeviceFixture, TensixSingleCoreDirectDramReaderOnly) {
             unit_tests::dram::direct::reader_only(devices_.at(id), 16 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
     }
 }
-TEST_F(DeviceFixture, TensixSingleCoreDirectDramWriterOnly) {
+TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramWriterOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         uint32_t l1_unreserved_base = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
         ASSERT_TRUE(
@@ -374,7 +410,7 @@ TEST_F(DeviceFixture, TensixSingleCoreDirectDramWriterOnly) {
             unit_tests::dram::direct::writer_only(devices_.at(id), 16 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
     }
 }
-TEST_F(DeviceFixture, TensixSingleCoreDirectDramReaderWriter) {
+TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderWriter) {
     unit_tests::dram::direct::ReaderWriterConfig test_config = {
         .num_tiles = 1,
         .tile_byte_size = 2 * 32 * 32,
@@ -389,7 +425,7 @@ TEST_F(DeviceFixture, TensixSingleCoreDirectDramReaderWriter) {
         ASSERT_TRUE(unit_tests::dram::direct::reader_writer(devices_.at(id), test_config));
     }
 }
-TEST_F(DeviceFixture, TensixSingleCoreDirectDramReaderDatacopyWriter) {
+TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderDatacopyWriter) {
     unit_tests::dram::direct::ReaderDatacopyWriterConfig test_config = {
         .num_tiles = 1,
         .tile_byte_size = 2 * 32 * 32,

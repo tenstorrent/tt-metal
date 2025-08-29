@@ -30,7 +30,7 @@ constexpr uint8_t DEBUG_SANITIZE_NOC_SENTINEL_OK_8 = 0xda;
 struct stack_usage_info_t {
     CoreDescriptor core;
     uint16_t stack_free = uint16_t(~0);
-    uint16_t kernel_id;
+    uint16_t kernel_id{};
 };
 
 class WatcherDeviceReader {
@@ -48,6 +48,7 @@ private:
     void DumpAssertStatus(CoreDescriptor& core, const std::string& core_str, const mailboxes_t* mbox_data);
     void DumpAssertTrippedDetails(CoreDescriptor& core, const std::string& error_msg, const mailboxes_t* mbox_data);
     void DumpPauseStatus(CoreDescriptor& core, const std::string& core_str, const mailboxes_t* mbox_data);
+    void DumpEthLinkStatus(CoreDescriptor& core, const std::string& core_str, const mailboxes_t* mbox_data);
     void DumpRingBuffer(CoreDescriptor& core, const mailboxes_t* mbox_data, bool to_stdout);
     void DumpRunState(CoreDescriptor& core, const launch_msg_t* launch_msg, uint32_t state);
     void DumpLaunchMessage(CoreDescriptor& core, const mailboxes_t* mbox_data);

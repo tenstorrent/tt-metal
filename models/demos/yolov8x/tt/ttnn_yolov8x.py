@@ -354,7 +354,8 @@ class TtSppf:
                 padding=[2, 2],
                 dilation=[1, 1],
             )
-            y.append(output)
+            output_interleaved = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
+            y.append(output_interleaved)
 
         x = sharded_concat(y)
         for i in range(len(y)):

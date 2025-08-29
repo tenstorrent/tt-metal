@@ -22,6 +22,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/fabric.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
@@ -86,7 +87,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    ttnn::MeshDevice* mesh_device = a.mesh_device();
+    ttnn::MeshDevice* mesh_device = a.device();
     tt::tt_metal::Program program{};
     uint32_t output_page_size = 0;
     uint32_t stats_page_size;
@@ -668,7 +669,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         num_targets_backward,             // num_targets_backward_direction
         num_links,
         (std::uint32_t)gamma.has_value(),
-        (std::uint32_t)is_dram(gamma),
         (std::uint32_t)block_wt,
         output_reshard_cb_index,
         output_cb_index,
@@ -692,6 +692,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     writer_compile_time_args.push_back(stats_filled_semaphore);
     writer_compile_time_args.push_back(signaling_cb);
     writer_compile_time_args.push_back(num_blocks);
+    tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(writer_compile_time_args);
 
     tt::tt_metal::NOC reader_noc = NOC::NOC_1;
     tt::tt_metal::NOC writer_noc = NOC::NOC_1;
@@ -741,7 +742,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
     std::string sender_reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/rms_sender_reader.cpp";
-    std::string reciever_reader_kernel_file =
+    std::string receiver_reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/rms_receiver_reader.cpp";
 
     std::map<std::string, std::string> writer_defines;
@@ -765,7 +766,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     if (use_mcast) {
         reader_mcast_receiver_kernels_id_all_to_all = CreateKernel(
             program,
-            reciever_reader_kernel_file,
+            receiver_reader_kernel_file,
             all_to_all_workers_except_sender,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -778,7 +779,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     if (num_none_all_to_all_workers > 0) {
         reader_mcast_receiver_kernels_id = CreateKernel(
             program,
-            reciever_reader_kernel_file,
+            receiver_reader_kernel_file,
             not_all_to_all_workers,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -868,7 +869,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     union {
         float f;
         uint32_t u;
-    } e;
+    } e{};
     e.f = eps;
 
     std::vector<uint32_t> in0_mcast_noc_x;

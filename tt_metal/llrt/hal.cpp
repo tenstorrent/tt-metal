@@ -6,6 +6,9 @@
 
 #include <assert.hpp>
 
+#include <cstdint>
+#include <enchantum/iostream.hpp>
+
 #include "hal_types.hpp"
 #include <umd/device/types/arch.h>
 
@@ -13,15 +16,29 @@ namespace tt {
 
 namespace tt_metal {
 
+std::ostream& operator<<(std::ostream& os, const HalProcessorIdentifier& processor) {
+    using enchantum::iostream_operators::operator<<;
+    return os << processor.core_type << "_" << processor.processor_class << "_" << processor.processor_type;
+}
+
+bool operator<(const HalProcessorIdentifier& lhs, const HalProcessorIdentifier& rhs) {
+    return std::tie(lhs.core_type, lhs.processor_class, lhs.processor_type) <
+           std::tie(rhs.core_type, rhs.processor_class, rhs.processor_type);
+}
+
+bool operator==(const HalProcessorIdentifier& lhs, const HalProcessorIdentifier& rhs) {
+    return std::tie(lhs.core_type, lhs.processor_class, lhs.processor_type) ==
+           std::tie(rhs.core_type, rhs.processor_class, rhs.processor_type);
+}
+
 // Hal Constructor determines the platform architecture by using UMD
 // Once it knows the architecture it can self initialize architecture specific memory maps
 Hal::Hal(tt::ARCH arch, bool is_base_routing_fw_enabled) : arch_(arch) {
     switch (this->arch_) {
         case tt::ARCH::WORMHOLE_B0: initialize_wh(is_base_routing_fw_enabled); break;
 
+        case tt::ARCH::QUASAR:  // TODO create quasar hal
         case tt::ARCH::BLACKHOLE: initialize_bh(); break;
-
-        case tt::ARCH::QUASAR: TT_THROW("HAL doesn't support Quasar"); break;
 
         default: /*TT_THROW("Unsupported arch for HAL")*/; break;
     }
@@ -96,3 +113,13 @@ uint32_t generate_risc_startup_addr(uint32_t firmware_base) {
 
 }  // namespace tt_metal
 }  // namespace tt
+
+std::size_t std::hash<tt::tt_metal::HalProcessorIdentifier>::operator()(
+    const tt::tt_metal::HalProcessorIdentifier& processor) const {
+    auto hasher = std::hash<int>();
+    std::size_t hash = 0;
+    hash ^= hasher(static_cast<int>(processor.core_type));
+    hash ^= hasher(static_cast<int>(processor.processor_class)) << 1;
+    hash ^= hasher(processor.processor_type) << 2;
+    return hash;
+}

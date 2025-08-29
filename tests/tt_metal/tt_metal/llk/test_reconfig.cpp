@@ -22,6 +22,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -77,7 +78,7 @@ using VariantVectorType = std::variant<std::vector<float>, std::vector<bfloat16>
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool single_core_reconfig(tt_metal::IDevice* device, const ReconfigConfig& test_config) {
+bool single_core_reconfig(std::shared_ptr<distributed::MeshDevice> mesh_device, const ReconfigConfig& test_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -103,7 +104,15 @@ bool single_core_reconfig(tt_metal::IDevice* device, const ReconfigConfig& test_
     const size_t dram_buffer_size_out0 = test_config.num_tiles * single_tile_size_out0;
 
     CoreCoord core = {0, 0};
+
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     tt::tt_metal::InterleavedBufferConfig dram_config_bfp16b{
         .device = device,
@@ -146,29 +155,29 @@ bool single_core_reconfig(tt_metal::IDevice* device, const ReconfigConfig& test_
     tt_metal::CircularBufferConfig l1_input0_cb_config =
         tt_metal::CircularBufferConfig(dram_buffer_size_bfp8b, {{in0_id, tt::DataFormat::Bfp8_b}})
             .set_page_size(in0_id, single_tile_size_bfp8b);
-    auto l1_input0_cb = tt_metal::CreateCircularBuffer(program, core, l1_input0_cb_config);
+    tt_metal::CreateCircularBuffer(program_, core, l1_input0_cb_config);
 
     tt_metal::CircularBufferConfig l1_input1_cb_config =
         tt_metal::CircularBufferConfig(dram_buffer_size_bfp16b, {{in1_id, tt::DataFormat::Float16_b}})
             .set_page_size(in1_id, single_tile_size_bfp16b);
-    auto l1_input1_cb = tt_metal::CreateCircularBuffer(program, core, l1_input1_cb_config);
+    tt_metal::CreateCircularBuffer(program_, core, l1_input1_cb_config);
 
     tt_metal::CircularBufferConfig l1_input2_cb_config =
         tt_metal::CircularBufferConfig(dram_buffer_size_bfp16b, {{in2_id, tt::DataFormat::Float16_b}})
             .set_page_size(in2_id, single_tile_size_bfp16b);
-    auto l1_input2_cb = tt_metal::CreateCircularBuffer(program, core, l1_input2_cb_config);
+    tt_metal::CreateCircularBuffer(program_, core, l1_input2_cb_config);
 
     tt_metal::CircularBufferConfig l1_output0_cb_config =
         tt_metal::CircularBufferConfig(
             dram_buffer_size_out0,
             {{out0_id, (test_config.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)}})
             .set_page_size(out0_id, single_tile_size_out0);
-    auto l1_output0_cb = tt_metal::CreateCircularBuffer(program, core, l1_output0_cb_config);
+    tt_metal::CreateCircularBuffer(program_, core, l1_output0_cb_config);
 
     tt_metal::CircularBufferConfig l1_output1_cb_config =
         tt_metal::CircularBufferConfig(dram_buffer_size_bfp8b, {{out1_id, tt::DataFormat::Bfp8_b}})
             .set_page_size(out1_id, single_tile_size_bfp8b);
-    auto l1_output1_cb = tt_metal::CreateCircularBuffer(program, core, l1_output1_cb_config);
+    tt_metal::CreateCircularBuffer(program_, core, l1_output1_cb_config);
 
     vector<uint32_t> compute_kernel_args = {};
     std::map<std::string, std::string> defines;
@@ -180,7 +189,7 @@ bool single_core_reconfig(tt_metal::IDevice* device, const ReconfigConfig& test_
     defines["L1_ACC"] = test_config.l1_acc ? "1" : "0";
 
     auto reader_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
         core,
         tt_metal::DataMovementConfig{
@@ -189,14 +198,14 @@ bool single_core_reconfig(tt_metal::IDevice* device, const ReconfigConfig& test_
             .defines = defines});
 
     auto writer_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_binary.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     auto compute_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/reconfig.cpp",
         core,
         tt_metal::ComputeConfig{
@@ -206,7 +215,7 @@ bool single_core_reconfig(tt_metal::IDevice* device, const ReconfigConfig& test_
             .defines = defines});
 
     SetRuntimeArgs(
-        program,
+        program_,
         compute_kernel,
         core,
         {
@@ -291,7 +300,7 @@ bool single_core_reconfig(tt_metal::IDevice* device, const ReconfigConfig& test_
     static constexpr uint32_t k_output1_dram_bank_id = 0;
 
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         reader_kernel,
         core,
         {
@@ -304,7 +313,7 @@ bool single_core_reconfig(tt_metal::IDevice* device, const ReconfigConfig& test_
             k_input2_dram_bank_id,
         });
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         writer_kernel,
         core,
         {
@@ -318,7 +327,7 @@ bool single_core_reconfig(tt_metal::IDevice* device, const ReconfigConfig& test_
             (uint32_t)test_config.ublock_size_tiles,
         });
 
-    tt_metal::detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     // ////////////////////////////////////////////////////////////////////////////
     // //                      Comparison Checking
@@ -354,7 +363,7 @@ bool single_core_reconfig(tt_metal::IDevice* device, const ReconfigConfig& test_
 // - pack_reconfig_l1_acc
 ////////////////////////////////////////////////////////////////////////////
 
-TEST_F(DeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
+TEST_F(MeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
     auto arch = this->arch_;
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
@@ -395,7 +404,7 @@ TEST_F(DeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
     }
 }
 
-TEST_F(DeviceFixture, TensixTileCopyReconfigL1Acc) {
+TEST_F(MeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
     auto arch = this->arch_;
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();

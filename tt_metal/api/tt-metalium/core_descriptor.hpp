@@ -25,16 +25,20 @@ struct core_descriptor_t {
     std::vector<RelativeCoreCoord> relative_storage_cores;
     std::optional<uint32_t> storage_core_bank_size = std::nullopt;
     std::vector<RelativeCoreCoord> relative_dispatch_cores;
+    std::vector<RelativeCoreCoord> relative_fabric_mux_cores;
+
     std::vector<CoreCoord> logical_compute_cores;
     std::vector<CoreCoord> logical_storage_cores;
     std::vector<CoreCoord> logical_dispatch_cores;
+    std::vector<CoreCoord> logical_fabric_mux_cores;
 };
 
 inline const std::string& get_product_name(tt::ARCH arch, uint32_t num_harvested_on_axis) {
     const static std::map<tt::ARCH, std::map<uint32_t, std::string>> product_name = {
         {tt::ARCH::GRAYSKULL, {{0, "E150"}, {2, "E75"}}},
         {tt::ARCH::WORMHOLE_B0, {{0, "galaxy"}, {1, "nebula_x1"}, {2, "nebula_x2"}}},
-        {tt::ARCH::BLACKHOLE, {{0, "unharvested"}, {1, "1xharvested"}, {2, "2xharvested"}}}};
+        {tt::ARCH::BLACKHOLE, {{0, "unharvested"}, {1, "1xharvested"}, {2, "2xharvested"}}},
+        {tt::ARCH::QUASAR, {{0, "unharvested"}}}};
 
     return product_name.at(arch).at(num_harvested_on_axis);
 }
@@ -70,6 +74,12 @@ inline const std::vector<CoreCoord>& get_logical_dispatch_cores(
     chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
     const core_descriptor_t& core_desc = get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
     return core_desc.logical_dispatch_cores;
+}
+
+inline const std::vector<CoreCoord>& get_logical_fabric_mux_cores(
+    chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
+    const core_descriptor_t& core_desc = get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
+    return core_desc.logical_fabric_mux_cores;
 }
 
 }  // namespace tt
