@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 void kernel_main() {
     // Compile-time arguments - same as stateful version for direct comparison
@@ -48,7 +47,6 @@ void kernel_main() {
             for (uint32_t i = 0; i < num_writes; i++) {
                 uint32_t current_local_addr = dest_l1_addr + (i * addr_stride);
                 uint64_t dest_noc_addr = get_noc_addr(receiver_x, receiver_y, current_local_addr);
-
                 if (use_posted_writes) {
                     noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
                         dest_noc_addr, write_value_base + i, 0xF, noc_id);
