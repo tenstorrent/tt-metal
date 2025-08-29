@@ -1452,9 +1452,9 @@ std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_channels_in_direction
 }
 
 void write_to_worker_or_fabric_tensix_cores(
-    const void* fabric_worker_data,
+    const void* worker_data,
     const void* dispatcher_data,
-    const void* tensix_data,
+    const void* tensix_extension_data,
     size_t size,
     tt::tt_metal::HalL1MemAddrType addr_type,
     chip_id_t physical_chip_id) {
@@ -1483,33 +1483,35 @@ void write_to_worker_or_fabric_tensix_cores(
         dispatch_mux_cores_translated = tensix_config.get_translated_dispatch_mux_cores();
     }
 
-    size_t mux_cores_written = 0;
-    size_t worker_cores_written = 0;
-    for (const auto& tensix_core : all_tensix_cores) {
-        CoreCoord core_coord(tensix_core.x, tensix_core.y);
-        bool is_fabric_mux_core = fabric_mux_cores_translated.find(core_coord) != fabric_mux_cores_translated.end();
-        bool is_dispatcher_mux_core =
-            dispatch_mux_cores_translated.find(core_coord) != dispatch_mux_cores_translated.end();
-        bool write_fabric_worker_data = false;
-        bool write_dispatcher_data = false;
+    enum class CoreType { Worker, FabricTensixExtension, DispatcherMux };
+
+    auto get_core_type = [&](const CoreCoord& core_coord) -> CoreType {
+        if (fabric_mux_cores_translated.find(core_coord) != fabric_mux_cores_translated.end()) {
+            return CoreType::FabricTensixExtension;
+        }
+        if (dispatch_mux_cores_translated.find(core_coord) != dispatch_mux_cores_translated.end()) {
+            return CoreType::DispatcherMux;
+        }
+        return CoreType::Worker;
+    };
+
+    auto select_data = [&](CoreType core_type) -> const void* {
         if (tensix_config_enabled) {
-            if (is_fabric_mux_core) {
-                write_fabric_worker_data = true;
-            } else if (is_dispatcher_mux_core) {
-                write_dispatcher_data = true;
+            switch (core_type) {
+                case CoreType::FabricTensixExtension: return worker_data;
+                case CoreType::DispatcherMux: return dispatcher_data;
+                case CoreType::Worker: return tensix_extension_data;
+                default: TT_THROW("unknown core type: {}", core_type);
             }
         } else {
-            write_fabric_worker_data = true;
+            return worker_data;
         }
+    };
 
-        const void* data_to_write;
-        if (write_fabric_worker_data) {
-            data_to_write = fabric_worker_data;
-        } else if (write_dispatcher_data) {
-            data_to_write = dispatcher_data;
-        } else {
-            data_to_write = tensix_data;
-        }
+    for (const auto& tensix_core : all_tensix_cores) {
+        CoreCoord core_coord(tensix_core.x, tensix_core.y);
+        CoreType core_type = get_core_type(core_coord);
+        const void* data_to_write = select_data(core_type);
 
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             data_to_write,
@@ -1679,9 +1681,9 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
     // Write fabric connections (fabric router config) to mux cores and tensix connections (tensix config) to worker
     // cores
     write_to_worker_or_fabric_tensix_cores(
-        &fabric_worker_connections,      // fabric_worker_data - goes to mux cores
+        &fabric_worker_connections,      // worker_data - goes to mux cores
         &fabric_dispatcher_connections,  // dispatcher_data - goes to dispatcher cores
-        &fabric_tensix_connections,      // tensix_data - goes to worker cores
+        &fabric_tensix_connections,      // tensix_extension_data - goes to worker cores
         sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t),
         tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS,
         physical_chip_id);

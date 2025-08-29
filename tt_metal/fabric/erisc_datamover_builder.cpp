@@ -781,7 +781,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     bool is_dateline = options.edm_type == FabricEriscDatamoverType::Dateline;
     bool is_dateline_upstream = options.edm_type == FabricEriscDatamoverType::DatelineUpstream;
     bool is_dateline_upstream_adj_dev = options.edm_type == FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
-    bool has_mux_config = options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX;
+    bool has_tensix_extension = options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED;
 
     configure_buffer_slots_helper(
         topology,
@@ -875,7 +875,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         return (idx == get_dateline_sender_channel_skip_idx(is_2D_routing) && is_dateline) ||
                (idx == this->dateline_upstream_sender_channel_skip_idx && is_dateline_upstream) ||
                (idx == this->dateline_upstream_adjcent_sender_channel_skip_idx && is_dateline_upstream_adj_dev) ||
-               (idx != target_channel && idx != vc1_target_channel && has_mux_config);
+               (idx != target_channel && idx != vc1_target_channel && has_tensix_extension);
     };
 
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {

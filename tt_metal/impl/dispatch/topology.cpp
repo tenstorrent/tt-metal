@@ -1008,6 +1008,11 @@ void build_tt_fabric_program(
         return (tunnels_from_mmio.size() - 1) > 0;
     }();
 
+    auto is_dispatch_link = [&](auto eth_chan, uint32_t dispatch_link_idx) {
+        auto link_idx = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
+        return device_has_dispatch_tunnel && link_idx == dispatch_link_idx;
+    };
+
     for (const auto& direction : tt::tt_fabric::FabricContext::routing_directions) {
         auto active_eth_chans =
             control_plane.get_active_fabric_eth_routing_planes_in_direction(fabric_node_id, direction);
@@ -1074,32 +1079,31 @@ void build_tt_fabric_program(
             remote_fabric_node_id.chip_id,
             wrap_around_mesh);
 
-        log_info(
-            tt::LogTest,
-            "fabric_node_id {}, direction {}, fabric_edm_type {}",
-            fabric_node_id,
-            direction,
-            fabric_edm_type);
-
         // Create fabric tensix builder for this ethernet channel
         // Skip the link used by dispatch using relay mux API
         uint32_t dispatch_link_idx = RelayMux::get_dispatch_link_index(fabric_node_id, remote_fabric_node_id, device);
+
+        auto get_fabric_router_config =
+            [&](bool fabric_tensix_extension_enabled, bool is_dispatch_link, auto eth_direction) {
+                auto fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED;
+                // if not the link used by dispatch, get the fabric router config with tensix extension.
+                if (fabric_tensix_extension_enabled && !is_dispatch_link) {
+                    fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::MUX;
+                }
+                return fabric_context.get_fabric_router_config(
+                    fabric_edm_type, fabric_edm_axis, fabric_tensix_config, eth_direction);
+            };
 
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
             auto eth_direction = control_plane.routing_direction_to_eth_direction(direction);
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
 
-            auto link_idx = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
-            bool is_dispatch_link = device_has_dispatch_tunnel && link_idx == dispatch_link_idx;
-            auto fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED;
-            // if not the link used by dispatch, get the fabric router config with tensix extension.
-            if (fabric_tensix_extension_enabled && !is_dispatch_link) {
-                fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::MUX;
-            }
-            const auto& curr_edm_config = fabric_context.get_fabric_router_config(
-                fabric_edm_type, fabric_edm_axis, fabric_tensix_config, eth_direction);
+            bool dispatch_link = is_dispatch_link(eth_chan, dispatch_link_idx);
+            const auto& curr_edm_config =
+                get_fabric_router_config(fabric_tensix_extension_enabled, dispatch_link, eth_direction);
+
             bool has_tensix_extension = false;
-            if (fabric_tensix_extension_enabled && !is_dispatch_link) {
+            if (fabric_tensix_extension_enabled && !dispatch_link) {
                 has_tensix_extension = true;
             }
 
@@ -1118,7 +1122,7 @@ void build_tt_fabric_program(
 
             if (fabric_tensix_extension_enabled) {
                 // Only create tensix builder if this channel is not used by dispatch
-                if (!is_dispatch_link) {
+                if (!dispatch_link) {
                     auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
                         device, *fabric_program_ptr, fabric_node_id, remote_fabric_node_id, eth_chan, eth_direction);
                     tensix_builders.insert({eth_chan, tensix_builder});
