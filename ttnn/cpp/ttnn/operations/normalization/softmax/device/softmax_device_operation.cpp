@@ -13,6 +13,96 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::normalization::softmax {
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+/**
+ * @brief L1 memory threshold for small tensor optimizations (512KB)
+ *
+ * Tensors that require less than this amount of L1 memory can use
+ * the "small" optimized implementations which keep all data in L1.
+ */
+#define L1_512KB (512 * 1024)
+
+/**
+ * @brief Check if small-width softmax optimization is available
+ *
+ * This function calculates the total L1 memory requirement for the small-width
+ * implementation and compares it against available device L1 memory.
+ *
+ * @param tensor Input tensor to analyze
+ * @param compute_kernel_config Compute configuration affecting memory usage
+ * @return true if tensor fits in L1 memory for small-width optimization
+ */
+bool is_softmax_general_w_small_available(
+    const Tensor& tensor, const DeviceComputeKernelConfig& compute_kernel_config) {
+    auto w = tensor.logical_shape()[-1];
+    int32_t Wt = (w + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
+
+    auto arch = tensor.device()->arch();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(arch, compute_kernel_config);
+
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+    auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+
+    auto tile_size = tt::tt_metal::detail::TileSize(data_format);
+    auto intermed_tile_size = tt::tt_metal::detail::TileSize(intermed_data_format);
+
+    // Calculate total circular buffer memory requirements
+    int32_t cb_usage = 0;        // bytes
+    cb_usage += Wt * tile_size;  // input buffer
+    cb_usage += 1 * tile_size;   // mask buffer
+    cb_usage += 1 * tile_size;   // scaler buffer
+
+    cb_usage += Wt * tile_size;  // output buffer
+
+    cb_usage += Wt * intermed_tile_size;  // exp(x) intermediate buffer
+    cb_usage += 1 * intermed_tile_size;   // reduce intermediate buffer
+    cb_usage += 1 * intermed_tile_size;   // max intermediate buffer
+    cb_usage += Wt * intermed_tile_size;  // x - max intermediate buffer
+    cb_usage += 1 * intermed_tile_size;   // tmp intermediate buffer
+
+    return (tensor.device()->allocator()->get_base_allocator_addr(HalMemType::L1) + cb_usage <= L1_512KB);
+}
+
+/**
+ * @brief Check if small-height softmax optimization is available
+ *
+ * Similar to small-width check but for height dimension operations.
+ */
+bool is_softmax_general_h_small_available(
+    const Tensor& tensor, const DeviceComputeKernelConfig& compute_kernel_config) {
+    auto h = tensor.logical_shape()[-2];
+    int32_t Ht = (h + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+
+    auto arch = tensor.device()->arch();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(arch, compute_kernel_config);
+
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+    auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+
+    auto tile_size = tt::tt_metal::detail::TileSize(data_format);
+    auto intermed_tile_size = tt::tt_metal::detail::TileSize(intermed_data_format);
+
+    int32_t cb_usage = 0;        // bytes
+    cb_usage += Ht * tile_size;  // input;
+    cb_usage += 1 * tile_size;   // mask;
+    cb_usage += 1 * tile_size;   // scaler;
+
+    cb_usage += Ht * tile_size;  // output;
+
+    cb_usage += Ht * intermed_tile_size;  // exp(x);
+    cb_usage += 1 * intermed_tile_size;   // reduce;
+    cb_usage += 1 * intermed_tile_size;   // max;
+    cb_usage += Ht * intermed_tile_size;  // x - max;
+    cb_usage += 1 * intermed_tile_size;   // tmp;
+
+    return (tensor.device()->allocator()->get_base_allocator_addr(HalMemType::L1) + cb_usage <= L1_512KB);
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Determine if we should use sharded multi-core program factory
@@ -40,7 +130,21 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
             operation_attributes.program_config);
         return program::SoftmaxProgramFactoryAttentionOptimized{};
     }
-    return program::SoftmaxProgramFactoryGeneral{};
+    if (rank - 1 == operation_attributes.dim) {
+        if (CMAKE_UNIQUE_NAMESPACE::is_softmax_general_w_small_available(
+                tensor_args.input_tensor, operation_attributes.compute_kernel_config)) {
+            return program::SoftmaxProgramFactoryGeneralWSmall{};
+        }
+        return program::SoftmaxProgramFactoryGeneralWLarge{};
+    }
+    if (rank - 2 == operation_attributes.dim) {
+        if (CMAKE_UNIQUE_NAMESPACE::is_softmax_general_h_small_available(
+                tensor_args.input_tensor, operation_attributes.compute_kernel_config)) {
+            return program::SoftmaxProgramFactoryGeneralHSmall{};
+        }
+        return program::SoftmaxProgramFactoryGeneralHLarge{};
+    }
+    return program::SoftmaxProgramFactoryGeneralCLarge{};
 }
 
 void SoftmaxDeviceOperation::validate_on_program_cache_hit(

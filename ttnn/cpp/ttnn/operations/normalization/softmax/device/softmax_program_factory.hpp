@@ -20,8 +20,36 @@ namespace ttnn::operations::normalization::softmax::program {
 //
 //
 struct SoftmaxProgramFactoryGeneral {
-    struct shared_variables_t {};
+    struct shared_variables_t {
+        tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+        tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+        std::size_t num_cores{};
+        std::size_t num_cores_y{};
+    };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+};
+
+struct SoftmaxProgramFactoryGeneralWSmall : SoftmaxProgramFactoryGeneral {
+    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static void override_runtime_arguments(
+        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+};
+struct SoftmaxProgramFactoryGeneralWLarge : SoftmaxProgramFactoryGeneral {
+    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static void override_runtime_arguments(
+        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+};
+struct SoftmaxProgramFactoryGeneralHSmall : SoftmaxProgramFactoryGeneral {
+    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static void override_runtime_arguments(
+        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+};
+struct SoftmaxProgramFactoryGeneralHLarge : SoftmaxProgramFactoryGeneral {
+    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static void override_runtime_arguments(
+        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+};
+struct SoftmaxProgramFactoryGeneralCLarge : SoftmaxProgramFactoryGeneral {
     static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
     static void override_runtime_arguments(
         cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
