@@ -190,22 +190,22 @@ run_t3000_llama3-small_tests() {
   echo "LOG_METAL: Running run_t3000_llama3-small_tests"
 
   # Llama3.2-1B
-  llama1b=meta-llama/Llama-3.2-1B-Instruct
+  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
   # Llama3.2-3B
-  llama3b=meta-llama/Llama-3.2-3B-Instruct
+  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
   # Llama3.1-8B
-  llama8b=meta-llama/Llama-3.1-8B-Instruct
+  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
 
   # Run all Llama3 tests for 1B, 3B and 8B weights
-  for hf_model in "$llama1b" "$llama3b" "$llama8b"; do
-    HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
-    HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
-    HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
-    HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
-    HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
-    HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
-    HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
-    echo "LOG_METAL: Llama3 tests for $hf_model completed"
+  for llama_dir in "$llama1b" "$llama3b" "$llama8b"; do
+    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
+    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
+    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
+    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
+    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
+    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
+    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
+    echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
   # Record the end time
@@ -225,15 +225,15 @@ run_t3000_llama3.2-11b_tests() {
   echo "LOG_METAL: Running run_t3000_llama3.2-11b_tests"
 
   # Llama3.2-11B weights
-  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
-  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
-  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
-  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
-  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
-  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
-  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
-  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
+  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
+  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
+  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
+  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
+  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
+  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
+  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -252,15 +252,15 @@ run_t3000_llama3.1-70b_tests() {
   echo "LOG_METAL: Running run_t3000_llama3.1-70b_tests"
 
   # Llama3.1-70B weights
-  llama70b=meta-llama/Llama-3.1-70B-Instruct
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
 
-  HF_MODEL=$llama70b pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
-  HF_MODEL=$llama70b pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
-  HF_MODEL=$llama70b pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
-  HF_MODEL=$llama70b pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
-  HF_MODEL=$llama70b pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
-  HF_MODEL=$llama70b pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
-  HF_MODEL=$llama70b pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
+  LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
+  LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
+  LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
+  LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
+  LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
+  LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
+  LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -280,15 +280,15 @@ run_t3000_llama3.2-90b_tests() {
 
   # Llama3.2-90B weights
   # use repacked weights to shorten unit test time by loading only the necessary weights
-  llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
+  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/repacked/
 
-  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
-  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
-  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
-  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
-  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
-  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
-  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
+  LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
+  LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
+  LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
+  LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
+  LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
+  LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
+  LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -305,7 +305,7 @@ run_t3000_mistral_tests() {
   echo "LOG_METAL: Running run_t3000_mistral_unit_tests"
 
   tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
-  hf_model="mistralai/Mistral-7B-Instruct-v0.3"
+  hf_model="/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db"
 
   TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_attention.py
   TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_attention_prefill.py
@@ -325,17 +325,17 @@ run_t3000_llama3.2-11b-vision_unit_tests() {
   echo "LOG_METAL: Running run_t3000_llama3.2-11b-vision_unit_tests"
 
   # Llama3.2-11B
-  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
-  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
-  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_attention.py ; fail+=$?
-  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_block.py ; fail+=$?
-  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention.py -k "batch_1" ; fail+=$?
-  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_block.py -k "batch_1" ; fail+=$?
-  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_conv2d_patch.py ; fail+=$?
-  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_class_embedding.py ; fail+=$?
-  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py ; fail+=$?
-  HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py ; fail+=$?
+  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
+  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_attention.py ; fail+=$?
+  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_block.py ; fail+=$?
+  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention.py -k "batch_1" ; fail+=$?
+  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_block.py -k "batch_1" ; fail+=$?
+  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_conv2d_patch.py ; fail+=$?
+  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_class_embedding.py ; fail+=$?
+  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py ; fail+=$?
+  LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -354,19 +354,19 @@ run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests() {
   echo "LOG_METAL: Running run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests"
 
   # Llama3.2-11B
-  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
   # Use MESH_DEVICE env variable to run on an N300 mesh
   mesh_device=N300
 
-  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
-  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_attention.py ; fail+=$?
-  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_block.py ; fail+=$?
-  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention.py -k "batch_1" ; fail+=$?
-  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_block.py -k "batch_1" ; fail+=$?
-  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_conv2d_patch.py ; fail+=$?
-  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_class_embedding.py ; fail+=$?
-  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py ; fail+=$?
-  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py ; fail+=$?
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_attention.py ; fail+=$?
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_block.py ; fail+=$?
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention.py -k "batch_1" ; fail+=$?
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_block.py -k "batch_1" ; fail+=$?
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_conv2d_patch.py ; fail+=$?
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_class_embedding.py ; fail+=$?
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py ; fail+=$?
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -385,17 +385,17 @@ run_t3000_llama3.2-90b-vision_unit_tests() {
   echo "LOG_METAL: Running run_t3000_llama3.2-90b-vision_unit_tests"
 
   # use repacked weights to shorten unit test time by loading only the necessary weights
-  llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
+  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/repacked/
 
-  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
-  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_attention.py ; fail+=$?
-  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_block.py ; fail+=$?
-  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention.py -k "batch_1" ; fail+=$?
-  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_block.py -k "batch_1" ; fail+=$?
-  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_conv2d_patch.py ; fail+=$?
-  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_class_embedding.py ; fail+=$?
-  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py ; fail+=$?
-  HF_MODEL=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py ; fail+=$?
+  LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
+  LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_attention.py ; fail+=$?
+  LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_block.py ; fail+=$?
+  LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention.py -k "batch_1" ; fail+=$?
+  LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_block.py -k "batch_1" ; fail+=$?
+  LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_conv2d_patch.py ; fail+=$?
+  LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_class_embedding.py ; fail+=$?
+  LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py ; fail+=$?
+  LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

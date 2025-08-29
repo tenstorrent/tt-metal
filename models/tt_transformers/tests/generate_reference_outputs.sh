@@ -27,15 +27,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Define model directories from environment variables with fallbacks
-HF_MODELS=(
-    "${LLAMA_32_1B_DIR:-meta-llama/Llama-3.2-1B-Instruct}"
-    "${LLAMA_32_3B_DIR:-meta-llama/Llama-3.2-3B-Instruct}"
-    "${LLAMA_31_8B_DIR:-meta-llama/Llama-3.1-8B-Instruct}"
-    "${LLAMA_32_11B_DIR:-meta-llama/Llama-3.2-11B-Vision-Instruct}"
-    "${LLAMA_31_70B_DIR:-meta-llama/Llama-3.1-70B-Instruct}"
-    "${LLAMA_32_90B_DIR:-meta-llama/Llama-3.2-90B-Vision-Instruct}"
-    "${QWEN_25_7B_DIR:-Qwen/Qwen2.5-7B-Instruct}"
-    "${QWEN_25_72B_DIR:-Qwen/Qwen2.5-72B-Instruct}"
+LLAMA_DIRS=(
+    "${LLAMA_32_1B_DIR:-/proj_sw/user_dev/llama32-data/Llama3.2-1B-Instruct}"
+    "${LLAMA_32_3B_DIR:-/proj_sw/user_dev/llama32-data/Llama3.2-3B-Instruct}"
+    "${LLAMA_31_8B_DIR:-/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct}"
+    "${LLAMA_32_11B_DIR:-/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision-Instruct}"
+    "${LLAMA_31_70B_DIR:-/proj_sw/llama3_1-weights/Meta-Llama-3.1-70B-Instruct/repacked}"
+    "${LLAMA_32_90B_DIR:-/proj_sw/user_dev/llama32-data/Llama3.2-90B-Vision-Instruct}"
+    "${QWEN_25_7B_DIR:-/proj_sw/user_dev/Qwen/Qwen2.5-7B-Instruct}"
+    "${QWEN_25_72B_DIR:-/proj_sw/user_dev/Qwen/Qwen2.5-72B-Instruct}"
 )
 
 # Create reference_outputs directory if it doesn't exist
@@ -54,12 +54,11 @@ get_model_name() {
 }
 
 # Loop through each LLAMA directory
-for DIR in "${HF_MODELS[@]}"; do
-    # TBD: do check using HF_HOME
-    # if [ ! -d "$DIR" ]; then
-    #     echo "Warning: Directory $DIR does not exist, skipping..."
-    #     continue
-    # fi
+for DIR in "${LLAMA_DIRS[@]}"; do
+    if [ ! -d "$DIR" ]; then
+        echo "Warning: Directory $DIR does not exist, skipping..."
+        continue
+    fi
 
     # Get model size for output filename
     MODEL_NAME=$(get_model_name "$DIR")
@@ -69,8 +68,8 @@ for DIR in "${HF_MODELS[@]}"; do
     echo "Using weights from: ${DIR}"
     echo "Output will be saved to: ${OUTPUT_FILE}"
 
-    # Set HF_MODEL environment variable and run the Python script
-    HF_MODEL="$DIR" python3 "${SCRIPT_DIR}/generate_reference_outputs.py" \
+    # Set LLAMA_DIR environment variable and run the Python script
+    LLAMA_DIR="$DIR" python3 "${SCRIPT_DIR}/generate_reference_outputs.py" \
         --total_length "$TOTAL_LENGTH" \
         --output_file "$OUTPUT_FILE"
 done

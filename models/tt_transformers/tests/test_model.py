@@ -85,10 +85,6 @@ def test_model_inference(
         pytest.skip(
             "Skipping Mistral-7B full model test for now. See issue https://github.com/tenstorrent/tt-metal/issues/19806"
         )
-    if model_name_env and ("Llama" in model_name_env) and ("Vision" in model_name_env) and (weights == "instruct"):
-        pytest.skip(
-            "Skipping Llama Vision full model test for now. See issue TBD: create issue about CrossAttn functionality"
-        )
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     dtype = ttnn.bfloat8_b
@@ -120,14 +116,17 @@ def test_model_inference(
 
     model_name = model_args.base_model_name
     if layers == 1:  # quick mode has tight PCC checks for known models
-        model_name = {
-            (16, False): "llama32_1b",
-            (28, False): "llama32_3b",
-            (32, False): "llama31_8b",
-            (32, True): "llama32_11b",
-            (80, False): "llama31_70b",
-            (80, True): "llama32_90b",
-        }[(model_args.n_layers, model_args.is_vision())]
+        if model_args.checkpoint_type == CheckpointType.HuggingFace:
+            model_name = model_args.base_model_name
+        else:
+            model_name = {
+                (16, False): "llama32_1b",
+                (28, False): "llama32_3b",
+                (32, False): "llama31_8b",
+                (32, True): "llama32_11b",
+                (80, False): "llama31_70b",
+                (80, True): "llama32_90b",
+            }[(model_args.n_layers, model_args.is_vision())]
 
         # Define tight final PCC thresholds for quick mode
         final_model_pcc = {

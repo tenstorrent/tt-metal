@@ -86,7 +86,6 @@ jobs:
         GITHUB_ACTIONS: true
         # TODO: Revisit the addition of this env var https://github.com/tenstorrent/tt-metal/issues/20161
         TRACY_NO_INVARIANT_CHECK: 1
-        HF_HOME: /mnt/MLPerf/huggingface
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G

@@ -110,7 +110,6 @@ jobs:
             -e ARCH_NAME=${{ inputs.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
-            -e HF_HOME=/mnt/MLPerf/huggingface
           run_args: |
             pip3 install pytest-repeat
             ${{ inputs.command }}

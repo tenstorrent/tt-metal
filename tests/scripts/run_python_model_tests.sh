@@ -64,18 +64,18 @@ run_python_model_tests_wormhole_b0() {
 
 
     # Llama3.1-8B
-    llama8b=meta-llama/Llama-3.1-8B-Instruct
+    llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
     # Llama3.2-1B
-    llama1b=meta-llama/Llama-3.2-1B-Instruct
+    llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
     # Llama3.2-3B
-    llama3b=meta-llama/Llama-3.2-3B-Instruct
+    llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
     # Llama3.2-11B
-    llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
+    llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
     # Run all Llama3 tests for 8B, 1B, and 3B weights - dummy weights with tight PCC check
-    for hf_model in  "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-        HF_MODEL=$hf_model pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
-        echo "LOG_METAL: Llama3 tests for $hf_model completed"
+    for llama_dir in  "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+        LLAMA_DIR=$llama_dir pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+        echo "LOG_METAL: Llama3 tests for $llama_dir completed"
     done
 
     # Mistral-7B-v0.3
@@ -98,11 +98,11 @@ run_python_model_tests_blackhole() {
     pytest models/demos/blackhole/stable_diffusion/tests
 
     # Llama3.1-8B
-    llama8b=meta-llama/Llama-3.1-8B-Instruct
+    llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
     # Run all Llama3 tests for 8B - dummy weights with tight PCC check
-    for hf_model in "$llama8b"; do
-        HF_MODEL=$hf_model pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
-        echo "LOG_METAL: Llama3 tests for $hf_model completed"
+    for llama_dir in "$llama8b"; do
+        LLAMA_DIR=$llama_dir pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+        echo "LOG_METAL: Llama3 tests for $llama_dir completed"
     done
 
     pytest models/demos/wormhole/resnet50/tests/test_resnet50_functional.py

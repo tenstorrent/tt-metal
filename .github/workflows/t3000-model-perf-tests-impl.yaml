@@ -40,7 +40,6 @@ jobs:
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-      HF_HOME: /mnt/MLPerf/huggingface
     runs-on:
       - arch-wormhole_b0
       - config-t3000
@@ -79,7 +78,6 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e HF_HOME=/mnt/MLPerf/huggingface
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: |
@@ -133,7 +131,6 @@ jobs:
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-      HF_HOME: /mnt/MLPerf/huggingface
     runs-on:
       - arch-wormhole_b0
       - config-t3000
@@ -172,7 +169,6 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e HF_HOME=/mnt/MLPerf/huggingface
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: |

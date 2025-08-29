@@ -14,11 +14,11 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "model_weights",
     [
-        "meta-llama/Llama-3.2-1B-Instruct",
-        "meta-llama/Llama-3.2-3B-Instruct",
-        "meta-llama/Llama-3.1-8B-Instruct",
-        "meta-llama/Llama-3.2-11B-Vision-Instruct",
-        "mistralai/Mistral-7B-Instruct-v0.3",
+        "/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/",
+        "/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/",
+        "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/",
+        "/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/",
+        "/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db",
     ],
     ids=[
         "ttt-llama3.2-1B",
@@ -28,12 +28,19 @@ from models.utility_functions import skip_for_grayskull
         "ttt-mistral-7B-v0.3",
     ],
 )
-def test_ci_dispatch(model_weights, get_tt_cache_path):
+def test_ci_dispatch(model_weights):
     logger.info(f"Running fast dispatch tests for {model_weights}")
-    if os.getenv("LLAMA_DIR"):
-        del os.environ["LLAMA_DIR"]
-    os.environ["HF_MODEL"] = model_weights
-    os.environ["TT_CACHE_PATH"] = str(get_tt_cache_path(model_weights))
+    if "llama" in model_weights.lower():
+        if os.getenv("HF_MODEL"):
+            del os.environ["HF_MODEL"]
+            del os.environ["TT_CACHE_PATH"]
+        os.environ["LLAMA_DIR"] = model_weights
+    # Mistral uses HF Weights, so we need to setup the correct env vars
+    elif "mistral" in model_weights.lower():
+        if os.getenv("LLAMA_DIR"):
+            del os.environ["LLAMA_DIR"]
+        os.environ["HF_MODEL"] = model_weights
+        os.environ["TT_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
 
     # Pass the exit code of pytest to proper keep track of failures during runtime
     exit_code = pytest.main(

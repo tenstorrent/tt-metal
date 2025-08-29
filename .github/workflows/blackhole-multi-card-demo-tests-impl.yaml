@@ -33,11 +33,11 @@ jobs:
         test-group:
           - name: "llama3.1-8b ${{ inputs.runner-label }} data-parallel=${{ inputs.num_devices }} performance"
             arch: blackhole
-            cmd: HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel ${{ inputs.num_devices }}
+            cmd: LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel ${{ inputs.num_devices }}
             owner_id: U05RWH3QUPM # Salar Hosseini
           - name: "llama3.1-8b ${{ inputs.runner-label }} data-parallel=${{ inputs.num_devices }} stress"
             arch: blackhole
-            cmd: HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel ${{ inputs.num_devices }} --max_generated_tokens 22000
+            cmd: LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel ${{ inputs.num_devices }} --max_generated_tokens 22000
             owner_id: U03PUAKE719 # Miguel Tairum
     name: ${{ matrix.test-group.name }}
     runs-on:
@@ -95,7 +95,7 @@ jobs:
         test-group:
           - name: "llama3.3-70b ${{ inputs.runner-label }} batch-32 performance"
             arch: blackhole
-            cmd: HF_MODEL=meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32"
+            cmd: LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32"
             owner_id: U03PUAKE719 # Miguel Tairum
     name: ${{ matrix.test-group.name }}
     runs-on:

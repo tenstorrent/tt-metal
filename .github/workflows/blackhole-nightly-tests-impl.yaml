@@ -32,7 +32,7 @@ jobs:
       matrix:
         test-group: [
             { model: whisper, owner_id: U05RWH3QUPM , cmd: pytest tests/nightly/single_card/whisper },  #Salar Hosseini
-            { model: llama3.1-8b, owner_id: U03PUAKE719, cmd: HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1 }, # Miguel Tairum
+            { model: llama3.1-8b, owner_id: U03PUAKE719, cmd: LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1 }, # Miguel Tairum
           ]
     name: Nightly ${{ inputs.runner-label }} ${{ matrix.test-group.model }}
     runs-on: ["cloud-virtual-machine", "in-service", "${{ inputs.runner-label }}", "pipeline-functional"]
@@ -43,7 +43,6 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch_name }}
         LOGURU_LEVEL: INFO
-        HF_HOME: /mnt/MLPerf/huggingface
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G

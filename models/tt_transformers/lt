@@ -18,7 +18,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import psutil
-from huggingface_hub import HFValidationError, LocalEntryNotFoundError, snapshot_download
 
 from models.tt_transformers.tt.model_config import parse_optimizations
 
@@ -913,7 +912,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         dir_env = "HF_MODEL"
         model_dir = model_dir.split("hf:", 1)[1]
     else:
-        dir_env = "HF_MODEL"
+        dir_env = "LLAMA_DIR"
     env[dir_env] = model_dir
 
     # Open log file
@@ -1145,46 +1144,34 @@ def get_dir(model):
     if model.startswith("hf:"):
         return model
 
-    try:
-        hf_model_dir = snapshot_download(model, local_files_only=True)
-        return hf_model_dir
-    except (LocalEntryNotFoundError, HFValidationError):
-        pass
-
-    model_dir = {
-        "1b": os.environ.get("LLAMA_32_1B_DIR", "meta-llama/Llama-3.2-1B-Instruct"),
-        "3b": os.environ.get("LLAMA_32_3B_DIR", "meta-llama/Llama-3.2-3B-Instruct"),
-        "8b": os.environ.get("LLAMA_31_8B_DIR", "meta-llama/Llama-3.1-8B-Instruct"),
-        "11b": os.environ.get("LLAMA_32_11B_DIR", "meta-llama/Llama-3.2-11B-Vision-Instruct"),
-        "11b-b": os.environ.get("LLAMA_32_11B_BASE_DIR", "meta-llama/Llama-3.2-11B-Vision"),
-        "70b": os.environ.get("LLAMA_31_70B_DIR", "meta-llama/Llama-3.1-70B-Instruct"),
-        "70b-r1": os.environ.get("DEEPSEEK_R1_LLAMA_70B_DIR", "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"),
-        "q2-7b": os.environ.get("QWEN_7B_DIR", "Qwen/Qwen2.5-7B-Instruct"),
-        "q2-72b": os.environ.get("QWEN_72B_DIR", "Qwen/Qwen2.5-72B-Instruct"),
-        "q2-coder-32b": os.environ.get("QWEN_CODER_32B_DIR", "Qwen/Qwen2.5-Coder-32B"),
-        "q3-32b": os.environ.get("QWEN_32B_DIR", "Qwen/Qwen3-32B"),
+    llama_dir = {
+        "1b": os.environ.get("LLAMA_32_1B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-1B-Instruct"),
+        "3b": os.environ.get("LLAMA_32_3B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-3B-Instruct"),
+        "8b": os.environ.get("LLAMA_31_8B_DIR", "/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct"),
+        "11b": os.environ.get("LLAMA_32_11B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision-Instruct"),
+        "11b-b": os.environ.get("LLAMA_32_11B_BASE_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision"),
+        "70b": os.environ.get("LLAMA_31_70B_DIR", "/proj_sw/llama3_1-weights/Meta-Llama-3.1-70B-Instruct/repacked"),
+        "70b-r1": os.environ.get("DEEPSEEK_R1_LLAMA_70B_DIR", "/proj_sw/deepseek/DeepSeek-R1-Distill-Llama-70B"),
+        "q2-7b": os.environ.get("QWEN_7B_DIR", "/proj_sw/user_dev/Qwen/Qwen2.5-7B-Instruct"),
+        "q2-72b": os.environ.get("QWEN_72B_DIR", "/proj_sw/user_dev/Qwen/Qwen2.5-72B-Instruct"),
+        "q2-coder-32b": os.environ.get("QWEN_CODER_32B_DIR", "/proj_sw/user_dev/Qwen/Qwen2.5-Coder-32B"),
+        "q3-32b": os.environ.get("QWEN_32B_DIR", "/proj_sw/user_dev/Qwen/Qwen3-32B"),
     }.get(model.lower(), "")
 
-    if model_dir and os.path.exists(model_dir):
-        return model_dir
+    if not llama_dir or not os.path.exists(llama_dir):
+        print(f"Error: The directory for the {model} model does not exist: {llama_dir}")
+        print("You can set the following environment variables to specify the correct directory path:")
+        print("  - LLAMA_32_1B_DIR for 1b model")
+        print("  - LLAMA_32_3B_DIR for 3b model")
+        print("  - LLAMA_31_8B_DIR for 8b model")
+        print("  - LLAMA_32_11B_DIR for 11b model")
+        print("  - LLAMA_31_70B_DIR for 70b model")
+        print("  - DEEPSEEK_R1_LLAMA_70B_DIR for DeepSeek R1 Llama 70b distill model")
+        print("  - QWEN_7B_DIR for 7b Qwen2.5 model")
+        print("  - QWEN_72B_DIR for 72b Qwen2.5 model")
+        sys.exit(1)
 
-    try:
-        model_dir = snapshot_download(model_dir, local_files_only=True)
-        return model_dir
-    except (LocalEntryNotFoundError, HFValidationError):
-        pass
-
-    print(f"Error: The directory for the {model} model does not exist: {model_dir}")
-    print("You can set the following environment variables to specify the correct directory path:")
-    print("  - LLAMA_32_1B_DIR for 1b model")
-    print("  - LLAMA_32_3B_DIR for 3b model")
-    print("  - LLAMA_31_8B_DIR for 8b model")
-    print("  - LLAMA_32_11B_DIR for 11b model")
-    print("  - LLAMA_31_70B_DIR for 70b model")
-    print("  - DEEPSEEK_R1_LLAMA_70B_DIR for DeepSeek R1 Llama 70b distill model")
-    print("  - QWEN_7B_DIR for 7b Qwen2.5 model")
-    print("  - QWEN_72B_DIR for 72b Qwen2.5 model")
-    sys.exit(1)
+    return llama_dir
 
 
 def get_command_name(command_input):

@@ -27,7 +27,7 @@ run_t3000_mistral7b_perf_tests() {
   echo "LOG_METAL: Running run_t3000_mistral7b_perf_tests"
 
   tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
-  hf_model="mistralai/Mistral-7B-Instruct-v0.3"
+  hf_model="/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db"
   TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" ; fail+=$?
 
   # Record the end time

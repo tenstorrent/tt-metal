@@ -196,9 +196,9 @@ jobs:
       - name: Run image
         timeout-minutes: 45
         env:
-          HF_HOME: /mnt/MLPerf/huggingface
-          HF_MODEL: meta-llama/Llama-3.3-70B-Instruct
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro -e HF_HOME -e HF_MODEL ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+          SOURCE_LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
+          LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
       - name: Run profiler image
         timeout-minutes: 10
         run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
@@ -224,8 +224,8 @@ jobs:
       - name: Run image
         timeout-minutes: 30
         env:
-          HF_MODEL: meta-llama/Llama-3.1-8B-Instruct
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL ${{ matrix.bh-config.image-name }}
+          LLAMA_DIR: ${{ contains(runner.name, 'tt-metal-ci') && !contains(runner.name, 'qb') && '/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct' || '/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct' }}
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ matrix.bh-config.image-name }}
   test-bh-multicard-image-ignore-status:
     needs:
       - get-image-tags
@@ -246,9 +246,8 @@ jobs:
       - name: Run image
         timeout-minutes: 30
         env:
-          HF_HOME: /mnt/MLPerf/huggingface
-          HF_MODEL: meta-llama/Llama-3.1-8B-Instruct
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro -e HF_HOME -e HF_MODEL ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
+          LLAMA_DIR: ${{ contains(runner.name, 'tt-metal-ci') && !contains(runner.name, 'qb') && '/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct' || '/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct' }}
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ matrix.bh-config.image-name }}
   test-bh-image:
     needs:
       - get-image-tags
@@ -271,9 +270,8 @@ jobs:
         timeout-minutes: 30
         env:
           # For different environments, yyz BH VLAN vs. cloud
-          HF_HOME: /mnt/MLPerf/huggingface
-          HF_MODEL: meta-llama/Llama-3.1-8B-Instruct
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro -e HF_HOME -e HF_MODEL ${{ needs.get-image-tags.outputs.bh-image-tag }}
+          LLAMA_DIR: ${{ contains(runner.name, 'gh') && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
+        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-image-tag }}
       - name: Run profiler image
         timeout-minutes: 10
         run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}

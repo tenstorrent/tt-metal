@@ -30,7 +30,7 @@ run_t3000_llama3_70b_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama3_70b_tests"
 
-  HF_MODEL=meta-llama/Llama-3.1-70B-Instruct pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 1800 -k "not performance-ci-stress-1"; fail+=$?
+  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 1800 -k "not performance-ci-stress-1"; fail+=$?
 
 
   # Record the end time
@@ -50,18 +50,18 @@ run_t3000_llama3_tests() {
   echo "LOG_METAL: Running run_t3000_llama3_tests"
 
   # Llama3.1-8B
-  llama8b=meta-llama/Llama-3.1-8B-Instruct
+  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct
   # Llama3.2-1B
-  llama1b=meta-llama/Llama-3.2-1B-Instruct
+  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct
   # Llama3.2-3B
-  llama3b=meta-llama/Llama-3.2-3B-Instruct
+  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct
   # Llama3.2-11B
-  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct
 
   # Run all Llama3 tests for 8B, 1B, and 3B weights
-  for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    HF_MODEL=$hf_model pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
-    echo "LOG_METAL: Llama3 tests for $hf_model completed"
+  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
+    echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
   # Record the end time
@@ -79,9 +79,9 @@ run_t3000_qwen25_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_qwen25_tests"
-  qwen25_7b=Qwen/Qwen2.5-7B-Instruct
-  qwen25_72b=Qwen/Qwen2.5-72B-Instruct
-  qwen25_coder_32b=Qwen/Qwen2.5-Coder-32B
+  qwen25_7b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-7B-Instruct
+  qwen25_72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-72B-Instruct
+  qwen25_coder_32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-Coder-32B
 
   MESH_DEVICE=N300 HF_MODEL=$qwen25_7b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 600; fail+=$?
   HF_MODEL=$qwen25_72b pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800; fail+=$?
@@ -134,7 +134,7 @@ run_t3000_qwen3_tests() {
   pip install -r models/tt_transformers/requirements.txt
 
   echo "LOG_METAL: Running run_t3000_qwen3_tests"
-  qwen32b=Qwen/Qwen3-32B
+  qwen32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-32B
 
   HF_MODEL=$qwen32b pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1800; fail+=$?
 
@@ -155,12 +155,12 @@ run_t3000_llama3_vision_tests() {
   echo "LOG_METAL: Running run_t3000_llama3_vision_tests"
 
   # Llama3.2-11B
-  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct
   n300=N300
   t3k=T3K
 
   for mesh_device in "$n300" "$t3k"; do
-    MESH_DEVICE=$mesh_device HF_MODEL=$llama11b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace or batch4-trace-with-text-prompts" --timeout 600; fail+=$?
+    MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace or batch4-trace-with-text-prompts" --timeout 600; fail+=$?
     echo "LOG_METAL: Llama3 vision tests for $mesh_device completed"
   done
 
@@ -181,10 +181,10 @@ run_t3000_llama3_90b_vision_tests() {
   echo "LOG_METAL: Running run_t3000_llama3_90b_vision_tests"
 
   # Llama3.2-90B
-  llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
+  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct
   mesh_device=T3K
 
-  MESH_DEVICE=$mesh_device HF_MODEL=$llama90b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-notrace" --timeout 1200; fail+=$?
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama90b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-notrace" --timeout 1200; fail+=$?
   echo "LOG_METAL: Llama3.2-90B vision tests for $mesh_device completed"
 
   # Record the end time
@@ -220,7 +220,7 @@ run_t3000_mistral_tests() {
   echo "LOG_METAL: Running run_t3000_mistral_demo_tests"
 
   tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
-  hf_model="mistralai/Mistral-7B-Instruct-v0.3"
+  hf_model="/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db"
   TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py --timeout 10800 -k "not performance-ci-stress-1"
 
 }
