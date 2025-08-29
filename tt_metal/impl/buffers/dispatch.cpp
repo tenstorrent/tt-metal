@@ -817,7 +817,13 @@ void issue_read_buffer_dispatch_command_sequence(
         calculator.add_dispatch_wait();
     }
     calculator.add_prefetch_stall();
-    calculator.add_dispatch_write_linear_host();
+    const bool use_pinned = (dispatch_params.dst != nullptr && dispatch_params.pinned_memory != nullptr);
+    uint32_t xfer_bytes_calculator = dispatch_params.pages_per_txn * dispatch_params.padded_page_size;
+    if (use_pinned) {
+        calculator.add_dispatch_write_linear<false, false>(xfer_bytes_calculator);
+    } else {
+        calculator.add_dispatch_write_linear_host();
+    }
     calculator.add_prefetch_relay_paged();
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
@@ -841,25 +847,74 @@ void issue_read_buffer_dispatch_command_sequence(
         MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
         dispatch_params.expected_num_workers_completed[offset_index]);
 
-    bool flush_prefetch = false;
-    command_sequence.add_dispatch_write_host(
-        flush_prefetch, dispatch_params.pages_per_txn * dispatch_params.padded_page_size, false);
+    const bool try_pinned = (dispatch_params.dst != nullptr && dispatch_params.pinned_memory != nullptr);
+    uint32_t xfer_bytes = dispatch_params.pages_per_txn * dispatch_params.padded_page_size;
+    bool pinned_used = false;
+    if (try_pinned) {
+        const chip_id_t mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(
+                dispatch_params.device->id());
+        auto noc_addr_pair_opt = dispatch_params.pinned_memory->get_noc_addr(dispatch_params.device->id());
+        if (noc_addr_pair_opt.has_value() && noc_addr_pair_opt->second == mmio_device_id) {
+            const uint64_t pinned_noc_base = noc_addr_pair_opt->first;
+            const uint8_t* pinned_host_base = static_cast<const uint8_t*>(dispatch_params.pinned_memory->get_host_ptr());
+            const uint8_t* dst_ptr = static_cast<const uint8_t*>(dispatch_params.dst);
+            const uint64_t dst_offset_base =
+                static_cast<uint64_t>(dst_ptr - pinned_host_base) + dispatch_params.unpadded_dst_offset;
+            const uint64_t pinned_size = dispatch_params.pinned_memory->get_buffer_size();
+            if (dst_offset_base + xfer_bytes <= pinned_size) {
+                const auto& cluster = MetalContext::instance().get_cluster();
+                const uint64_t pcie_base = cluster.get_pcie_base_addr_from_device(mmio_device_id);
+                const uint64_t dst_noc_addr = pinned_noc_base + dst_offset_base;
+                const uint32_t addr_lo = static_cast<uint32_t>(dst_noc_addr - pcie_base);
+                const auto& soc = cluster.get_soc_desc(mmio_device_id);
+                const auto& pcie_cores = soc.get_cores(CoreType::PCIE, soc.get_umd_coord_system());
+                TT_FATAL(!pcie_cores.empty(), "No PCIE core found on MMIO device {}", mmio_device_id);
+                const uint32_t dst_noc_xy = MetalContext::instance().hal().noc_xy_encoding(
+                    pcie_cores.front().x, pcie_cores.front().y);
 
-    // Buffer layout specific logic
-    if constexpr (std::is_same_v<T, ShardedBufferReadDispatchParams>) {
-        const CoreCoord virtual_core =
-            buffer.device()->virtual_core_from_logical_core(dispatch_params.core, buffer.core_type());
-        command_sequence.add_prefetch_relay_linear(
-            dispatch_params.device->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core),
-            dispatch_params.padded_page_size * dispatch_params.pages_per_txn,
-            dispatch_params.address);
-    } else {
-        command_sequence.add_prefetch_relay_paged(
-            buffer.is_dram(),
-            dispatch_params.src_page_index,
-            dispatch_params.address,
-            dispatch_params.padded_page_size,
-            dispatch_params.pages_per_txn);
+                command_sequence.add_dispatch_write_linear_h<false, false>(0, dst_noc_xy, addr_lo, xfer_bytes);
+
+                // Relay from device memory
+                if constexpr (std::is_same_v<T, ShardedBufferReadDispatchParams>) {
+                    const CoreCoord virtual_core =
+                        buffer.device()->virtual_core_from_logical_core(dispatch_params.core, buffer.core_type());
+                    command_sequence.add_prefetch_relay_linear(
+                        dispatch_params.device->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core),
+                        xfer_bytes,
+                        dispatch_params.address);
+                } else {
+                    command_sequence.add_prefetch_relay_paged(
+                        buffer.is_dram(),
+                        dispatch_params.src_page_index,
+                        dispatch_params.address,
+                        dispatch_params.padded_page_size,
+                        dispatch_params.pages_per_txn);
+                }
+                pinned_used = true;
+                dispatch_params.requires_completion_read = false;
+            }
+        }
+    }
+    if (!pinned_used) {
+        // Fallback to host completion path
+        bool flush_prefetch = false;
+        command_sequence.add_dispatch_write_host(flush_prefetch, xfer_bytes, false);
+        if constexpr (std::is_same_v<T, ShardedBufferReadDispatchParams>) {
+            const CoreCoord virtual_core =
+                buffer.device()->virtual_core_from_logical_core(dispatch_params.core, buffer.core_type());
+            command_sequence.add_prefetch_relay_linear(
+                dispatch_params.device->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core),
+                xfer_bytes,
+                dispatch_params.address);
+        } else {
+            command_sequence.add_prefetch_relay_paged(
+                buffer.is_dram(),
+                dispatch_params.src_page_index,
+                dispatch_params.address,
+                dispatch_params.padded_page_size,
+                dispatch_params.pages_per_txn);
+        }
     }
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
@@ -911,100 +966,10 @@ void copy_interleaved_buffer_to_completion_queue(
             dispatch_params.update_params_to_be_within_bounds(buffer);
         }
 
+        dispatch_params.dst = dst;
+        dispatch_params.pinned_memory = pinned_memory;
         dispatch_params.calculate_num_pages_for_read_transaction();
-
-        bool attempted_pinned_direct = false;
-        // Try direct NOC write to pinned memory when feasible (no padding; region fully within pinned mapping)
-        if (pinned_memory && dst != nullptr) {
-            const uint32_t page_size = buffer.page_size();
-            const uint32_t padded_page_size = dispatch_params.padded_page_size;
-            if (page_size == padded_page_size) {
-                // Validate MMIO chip compatibility
-                const chip_id_t mmio_device_id =
-                    tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(
-                        dispatch_params.device->id());
-                auto noc_addr_pair_opt = pinned_memory->get_noc_addr(dispatch_params.device->id());
-                if (noc_addr_pair_opt.has_value() && noc_addr_pair_opt->second == mmio_device_id) {
-                    const uint64_t pinned_noc_base = noc_addr_pair_opt->first;
-                    const uint8_t* pinned_host_base = static_cast<const uint8_t*>(pinned_memory->get_host_ptr());
-                    const uint8_t* dst_ptr = static_cast<const uint8_t*>(dst);
-                    // Compute destination host offset for this txn
-                    const uint64_t dst_offset_base =
-                        static_cast<uint64_t>(dst_ptr - pinned_host_base) + dispatch_params.unpadded_dst_offset;
-                    const uint64_t txn_bytes = static_cast<uint64_t>(dispatch_params.pages_per_txn) * page_size;
-                    const uint64_t pinned_size = pinned_memory->get_buffer_size();
-                    if (dst_offset_base + txn_bytes <= pinned_size) {
-                        // Build and issue command sequence: waits + prefetch stall + WRITE_LINEAR_H + prefetch relay paged
-                        SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
-                        const uint32_t num_worker_counters = sub_device_ids.size();
-
-                        tt::tt_metal::DeviceCommandCalculator calculator;
-                        for (uint32_t i = 0; i < num_worker_counters - 1; ++i) {
-                            calculator.add_dispatch_wait();
-                        }
-                        calculator.add_dispatch_wait_with_prefetch_stall();
-                        // same payload sizing as linear write (we will emit WRITE_LINEAR_H when writing)
-                        calculator.add_dispatch_write_linear<false, false>(txn_bytes);
-                        calculator.add_prefetch_relay_paged();
-
-                        const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
-                        void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
-                        HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-
-                        // waits (last with stall + barrier)
-                        const uint32_t last_index = num_worker_counters - 1;
-                        for (uint32_t i = 0; i < last_index; ++i) {
-                            const uint8_t offset_index = *sub_device_ids[i];
-                            command_sequence.add_dispatch_wait(
-                                CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
-                                0,
-                                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                                dispatch_params.expected_num_workers_completed[offset_index]);
-                        }
-                        const uint8_t offset_index = *sub_device_ids[last_index];
-                        command_sequence.add_dispatch_wait_with_prefetch_stall(
-                            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER,
-                            0,
-                            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                            dispatch_params.expected_num_workers_completed[offset_index]);
-
-                        const uint64_t dst_noc_addr = pinned_noc_base + dst_offset_base;
-                        const auto& cluster = MetalContext::instance().get_cluster();
-                        const uint64_t pcie_base = cluster.get_pcie_base_addr_from_device(mmio_device_id);
-                        const uint32_t dst_addr_lo = static_cast<uint32_t>(dst_noc_addr - pcie_base);
-                        // Choose the first PCIE core on the MMIO device to derive XY encoding
-                        const auto& soc = cluster.get_soc_desc(mmio_device_id);
-                        const auto& pcie_cores = soc.get_cores(CoreType::PCIE, soc.get_umd_coord_system());
-                        TT_FATAL(!pcie_cores.empty(), "No PCIE core found on MMIO device {}", mmio_device_id);
-                        const uint32_t dst_noc_xy = MetalContext::instance().hal().noc_xy_encoding(
-                            pcie_cores.front().x, pcie_cores.front().y);
-
-                        // No flush here; data will arrive via prefetch relay next
-                        command_sequence.add_dispatch_write_linear_h<false, false>(
-                            0, dst_noc_xy, dst_addr_lo, static_cast<uint32_t>(txn_bytes));
-
-                        // Relay from device memory
-                        command_sequence.add_prefetch_relay_paged(
-                            buffer.is_dram(),
-                            dispatch_params.src_page_index,
-                            dispatch_params.address,
-                            padded_page_size,
-                            dispatch_params.pages_per_txn);
-
-                        sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
-                        sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
-                        sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
-
-                        attempted_pinned_direct = true;
-                        dispatch_params.requires_completion_read = false;
-                    }
-                }
-            }
-        }
-
-        if (!attempted_pinned_direct) {
-            issue_read_buffer_dispatch_command_sequence(buffer, dispatch_params, sub_device_ids, dispatch_core_type);
-        }
+        issue_read_buffer_dispatch_command_sequence(buffer, dispatch_params, sub_device_ids, dispatch_core_type);
 
         dispatch_params.update_params_after_read_transaction();
     }
