@@ -51,7 +51,12 @@ function(GENERATE_PROTO_FILES PROTO_FILE)
     # Add to all_generated_files target if it exists
     if(TARGET all_generated_files)
         # Use local variables for outputs; parent-scoped PROTO_SRCS is not visible here
-        add_custom_target(${PROTO_FILE_NAME} DEPENDS ${GENERATED_CC} ${GENERATED_H})
+        add_custom_target(
+            ${PROTO_FILE_NAME}
+            DEPENDS
+                ${GENERATED_CC}
+                ${GENERATED_H}
+        )
         add_dependencies(all_generated_files ${PROTO_FILE_NAME})
     endif()
 endfunction()
