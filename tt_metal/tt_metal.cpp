@@ -1305,7 +1305,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
 void DeallocateBuffer(Buffer& buffer) { buffer.deallocate(); }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
-    detail::DispatchStateCheck(not buffer->device()->using_slow_dispatch());
+    detail::DispatchStateCheck(tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
     program.add_buffer(buffer);
 }
 
@@ -1356,7 +1356,7 @@ void SetRuntimeArgs(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::shared_ptr<RuntimeArgs>& runtime_args) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    detail::DispatchStateCheck(not device->using_slow_dispatch());
+    detail::DispatchStateCheck(tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgs, device, kernel, core_spec, runtime_args);
     SetRuntimeArgsImpl(kernel, core_spec, std::move(runtime_args), false);
 }
@@ -1371,7 +1371,7 @@ void SetRuntimeArgs(
         "Mismatch between number of cores {} and number of runtime args {} getting updated",
         core_spec.size(),
         runtime_args.size());
-    detail::DispatchStateCheck(not device->using_slow_dispatch());
+    detail::DispatchStateCheck(tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
     SetRuntimeArgsImpl(kernel, core_spec, runtime_args, false);
 }
 

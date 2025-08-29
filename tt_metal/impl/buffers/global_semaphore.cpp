@@ -65,7 +65,7 @@ void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
     // Only block for the slow dispatch case
 
     std::vector<uint32_t> host_buffer(cores_.num_cores(), reset_value);
-    if (device_->using_slow_dispatch()) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         detail::WriteToBuffer(*buffer_.get_buffer(), host_buffer);
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_->id());
     } else {
