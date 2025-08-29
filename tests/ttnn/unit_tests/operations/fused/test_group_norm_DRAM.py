@@ -21,6 +21,7 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
         (1, 32, 1, 32, 1, 1, 1, 1),  # test case
         (8, 768, 1, 512, 32, 2, 8, 8),  # base case
         (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
+        (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
         (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
         (1, 480, 1, 64, 8, 1, 1, 1),  # test last group ends less than max tile span
         (1, 2560, 1, 512, 32, 2, 8, 8),  # test mcast num_out_blocks 2
