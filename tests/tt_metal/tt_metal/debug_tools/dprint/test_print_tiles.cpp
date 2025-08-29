@@ -294,12 +294,7 @@ static void RunTest(
     // Check against expected prints
     std::string expected = GenerateGoldenOutput(data_format, u32_vec);
     // log_info(tt::LogTest, "Expected output:\n{}", expected);
-    EXPECT_TRUE(
-        FilesMatchesString(
-            DPrintFixture::dprint_file_name,
-            expected
-        )
-    );
+    EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, expected));
 }
 
 TEST_F(DPrintMeshFixture, TestPrintTilesFloat32) {
