@@ -122,8 +122,6 @@ private:
     // Track allocations per state: base address -> size_per_bank
     std::vector<std::unordered_map<DeviceAddr, DeviceAddr>> allocated_buffers_{};
     std::vector<std::unique_ptr<allocator::Algorithm>> allocators_{};
-    // Remember allocator offsets per state
-    std::vector<DeviceAddr> allocator_offsets_{};
     // Per-source reservations: for each state, map of source_state -> disjoint interval set
     struct IntervalSet {
         // Stored as sorted, disjoint intervals [start, end)

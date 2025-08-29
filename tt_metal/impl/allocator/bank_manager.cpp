@@ -217,13 +217,11 @@ void BankManager::init_allocators_across_states(DeviceAddr size_bytes, uint32_t 
     allocators_.resize(n);
     allocated_buffers_.resize(n);
     reservations_by_source_.resize(n);
-    allocator_offsets_.resize(n);
 
     // Reverse edges now built inside StateDependencies
     for (uint32_t state = 0; state < n; ++state) {
         allocators_[state] = std::make_unique<allocator::FreeListOpt>(
             size_bytes, offset, alignment_bytes, alignment_bytes, allocator::FreeListOpt::SearchPolicy::FIRST);
-        allocator_offsets_[state] = offset;
     }
 }
 
@@ -351,18 +349,13 @@ uint64_t BankManager::allocate_buffer(
     TT_ASSERT(bool(allocators_[state.value]), "Allocator not initialized!");
 
     // Compute candidate ranges from allocator and subtract overlay
-    auto free_local = allocators_[state.value]->available_addresses(size_per_bank);
     std::vector<std::pair<DeviceAddr, DeviceAddr>> free_abs;
-    free_abs.reserve(free_local.size());
-    DeviceAddr base_off = allocator_offsets_[state.value];
-    for (auto r : free_local) {
-        DeviceAddr s = r.first + base_off;
-        DeviceAddr e = r.second + base_off;
-        if (address_limit > 0 && s < address_limit) {
-            s = address_limit;
+    for (auto r : allocators_[state.value]->available_addresses(size_per_bank)) {
+        if (address_limit > 0 && r.first < address_limit) {
+            r.first = address_limit;
         }
-        if (e > s) {
-            free_abs.emplace_back(s, e);
+        if (r.second > r.first) {
+            free_abs.emplace_back(r.first, r.second);
         }
     }
     auto occ = union_all_sources(reservations_by_source_[state.value]);
