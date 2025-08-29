@@ -2,7 +2,7 @@
 
 Note: This model is currently functional with vLLM integration on branch pending merging PRs in tt-metal and vLLM. The branches are:
 - [tt-metal:handrews/gemma3-27b-demo-PR](https://github.com/tenstorrent/tt-metal/tree/handrews/gemma3-27b-demo-PR)
-- [vllm:rdraskic/gemma3-vllm-support](https://github.com/tenstorrent/vllm/tree/rdraskic/gemma3-vllm-support)
+- [vllm:03cb300](https://github.com/tenstorrent/vllm/commit/03cb30064575c7dbda6f62f18d7889758531bcfd)
 
 ## Platforms:
     Wormhole (n150, n300, t3k)
@@ -31,8 +31,10 @@ HF_MODEL=google/gemma-3-27b-it pytest models/demos/gemma3/demo/text_demo.py -k â
 ```
 
 ### vLLM offline
+Tested with [vllm:03cb300](https://github.com/tenstorrent/vllm/commit/03cb30064575c7dbda6f62f18d7889758531bcfd)
+
 ```
-MESH_DEVICE=T3K python examples/offline_inference_tt.py --model "google/gemma-3-27b-it" --multi_modal --max_seqs_in_batch 32 --override_tt_config "{\"l1_small_size\": 768, \"fabric_config\": \"FABRIC_1D\"}"
+HF_MODEL=google/gemma-3-27b-it MESH_DEVICE=T3K python examples/offline_inference_tt.py --model "google/gemma-3-27b-it" --multi_modal --max_seqs_in_batch 32 --override_tt_config "{\"l1_small_size\": 768, \"fabric_config\": \"FABRIC_1D\"}"
 ```
 
 ## Details
