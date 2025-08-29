@@ -32,9 +32,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
-// Access to internal API: ProgramImpl::get_kernel
-#include "impl/program/program_impl.hpp"
-
 namespace tt::tt_metal {
 
 using std::vector;
@@ -284,15 +281,13 @@ bool flatten_stress(
 
         std::vector<uint32_t> golden = gold_standard_flatten(*src_vec, {num_tiles_r * 32, num_tiles_c * 32});
         // Set the runtime args asynchronously
-        std::shared_ptr<tt_metal::RuntimeArgs> writer_runtime_args = std::make_shared<tt_metal::RuntimeArgs>();
-        std::shared_ptr<tt_metal::RuntimeArgs> compute_runtime_args = std::make_shared<tt_metal::RuntimeArgs>();
-        *compute_runtime_args = {
-            src_dram_buffer.get(), (uint32_t)0, num_tiles_r, num_tiles_c, num_bytes_per_tensor_row};
-        *writer_runtime_args = {dst_dram_buffer.get(), (uint32_t)0, num_tiles * 32};
+        auto compute_runtime_args = {
+            src_dram_buffer->address(), uint32_t{0}, num_tiles_r, num_tiles_c, num_bytes_per_tensor_row};
+        auto writer_runtime_args = {dst_dram_buffer->address(), uint32_t{0}, num_tiles * 32};
 
-        SetRuntimeArgs(device, program_.impl().get_kernel(flatten_kernel), core, compute_runtime_args);
+        SetRuntimeArgs(program_, flatten_kernel, core, compute_runtime_args);
+        SetRuntimeArgs(program_, unary_writer_kernel, core, writer_runtime_args);
 
-        SetRuntimeArgs(device, program_.impl().get_kernel(unary_writer_kernel), core, writer_runtime_args);
         // Async write input
         EnqueueWriteBuffer(device->command_queue(), src_dram_buffer, src_vec, false);
         // Share ownership of buffer with program
