@@ -8,6 +8,7 @@ import ttnn
 from typing import Tuple
 
 from loguru import logger
+from ..parallel.config import vae_neighbor_pad
 
 
 def get_conv3d_config(in_channels, out_channels, kernel_size, stride, padding, padding_mode, grid_size):
@@ -136,7 +137,8 @@ class ContextParallelConv3d:
         input_shape=None,
         context_parallel: bool = True,
         groups: int = 1,
-        parallel_manager=None,
+        parallel_config=None,
+        ccl_manager=None,
         torch_ref=None,
         **kwargs,
     ):
@@ -155,7 +157,8 @@ class ContextParallelConv3d:
         self.out_channels = out_channels or torch_ref.out_channels
         self.causal = causal
         self.context_parallel = context_parallel
-        self.parallel_manager = parallel_manager
+        self.parallel_config = parallel_config
+        self.ccl_manager = ccl_manager
 
         # Conv3d parameters
         self.kernel_size = kernel_size or torch_ref.kernel_size
@@ -205,10 +208,11 @@ class ContextParallelConv3d:
         self.mask, self.proj = prepare_conv3d_mask_proj(self.mesh_device, self.kernel_size[0] - 1, N, C, T, H, W)
 
     @classmethod
-    def from_torch(cls, torch_ref, mesh_device, parallel_manager):
+    def from_torch(cls, torch_ref, mesh_device, parallel_config, ccl_manager):
         layer = cls(
             mesh_device=mesh_device,
-            parallel_manager=parallel_manager,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
             torch_ref=torch_ref,
         )
         return layer
@@ -256,23 +260,9 @@ class ContextParallelConv3d:
             # Multi-device padding. Input is fractured on dim=1 (T) and must pass frames between devices
             # Pad on first device
             halo_tensor = ttnn.squeeze(x_NTHWC, 0)
-            ttnn.synchronize_device(self.mesh_device)
-            halo_tensor = ttnn.experimental.neighbor_pad_async(
-                halo_tensor,
-                dim=0,
-                padding=context_size,
-                padding_mode="replicate",
-                direction=0,
-                cluster_axis=1,
-                final_semaphore=self.parallel_manager.gather_semaphores[self.parallel_manager.ping_pong_idx * 2],
-                barrier_semaphore=self.parallel_manager.gather_semaphores[
-                    (self.parallel_manager.ping_pong_idx * 2) + 1
-                ],
-                num_links=1,
-                mesh_device=self.mesh_device,
-                topology=ttnn.Topology.Linear,
+            halo_tensor = vae_neighbor_pad(
+                self.ccl_manager, halo_tensor, cluster_axis=1, dim=0, context_size=2, direction=0
             )
-            self.parallel_manager.ping_pong_idx = 1 - self.parallel_manager.ping_pong_idx
             x_pad_NTHWC = ttnn.unsqueeze(halo_tensor, 0)
 
         out_NTHWC = ttnn.experimental.conv3d(

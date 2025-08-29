@@ -16,7 +16,7 @@ from ...models.vae.vae_mochi import (
     Decoder as TtDecoder,
 )
 from ...parallel.manager import CCLManager
-from ...parallel.config import create_vae_parallel_manager
+from ...parallel.config import VAEParallelConfig, ParallelFactor
 from loguru import logger
 from genmo.mochi_preview.vae.models import Decoder as RefDecoder
 from genmo.mochi_preview.vae.models import ResBlock as RefResBlock
@@ -174,7 +174,7 @@ resblock_args = {
 }
 
 
-def create_random_resblock_models(mesh_device, mesh_axis, input_shape, parallel_manager, **model_args):
+def create_random_resblock_models(mesh_device, mesh_axis, input_shape, parallel_config, ccl_manager, **model_args):
     """Initialize both reference and TT models."""
     # Create reference model
     reference_model = RefResBlock(**model_args)
@@ -184,7 +184,8 @@ def create_random_resblock_models(mesh_device, mesh_axis, input_shape, parallel_
         mesh_device=mesh_device,
         mesh_axis=mesh_axis,
         input_shape=input_shape,
-        parallel_manager=parallel_manager,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
         torch_ref=reference_model,
     )
 
@@ -210,12 +211,16 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, divide_T):
     block_args = resblock_args.copy()
     block_args["channels"] = C
 
-    vae_parallel_manager = create_vae_parallel_manager(
-        mesh_device, CCLManager(mesh_device, topology=ttnn.Topology.Linear), vae_shapes=vae_shapes
-    )
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=1)
+    vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=8, mesh_axis=1))
 
     reference_model, tt_model = create_random_resblock_models(
-        mesh_device, mesh_axis=None, input_shape=[N, C, T, H, W], parallel_manager=vae_parallel_manager, **block_args
+        mesh_device,
+        mesh_axis=None,
+        input_shape=[N, C, T, H, W],
+        parallel_config=vae_parallel_config,
+        ccl_manager=ccl_manager,
+        **block_args,
     )
 
     # Create input tensor

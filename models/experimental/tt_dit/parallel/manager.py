@@ -33,10 +33,11 @@ class CCLManager:
         # Setup semaphores
         self._init_subdevice()
 
-        # Initialize semaphores for reduce scatter and all gather
+        # Initialize semaphores for reduce scatter and all gather and neighbor pad
         self._init_semaphores()
         self.rs_ping_pong_idx = [0, 0]
         self.ag_ping_pong_idx = [0, 0]
+        self.np_ping_pong_idx = [0, 0]
         self.barrier_idx = [0, 0]
 
     def _init_subdevice(self):
@@ -65,6 +66,13 @@ class CCLManager:
         self.ag_ping_pong_semaphores = {
             0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)],
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)],
+        }
+
+        # Initialize neighbor pad semaphores
+        np_n_sems = 1 * 2
+        self.np_ping_pong_semaphores = {
+            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(np_n_sems)],
+            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(np_n_sems)],
         }
 
         # Initialize barrier semaphore
@@ -182,6 +190,15 @@ class CCLManager:
         self.ag_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.ag_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
 
+    def get_np_ping_pong_semaphore(self, mesh_axis):
+        """
+        Get semaphores for neighbor pad operations.
+        """
+        cur_idx = self.np_ping_pong_idx[mesh_axis]
+        n_sems = 1
+        self.np_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
+        return self.np_ping_pong_semaphores[mesh_axis][cur_idx]
+
     def get_barrier_semaphore(self, mesh_axis):
         """
         Get semaphore for barrier operations.
@@ -194,6 +211,8 @@ class CCLManager:
     def reset_global_semaphores(self):
         """Reset all global semaphores to 0"""
         for axis in [0, 1]:
+            for sem in self.np_ping_pong_semaphores[axis]:
+                ttnn.reset_global_semaphore_value(sem, 0)
             for sem in self.rs_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
             for sem in self.ag_ping_pong_semaphores[axis]:
