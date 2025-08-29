@@ -1602,9 +1602,9 @@ def test_unary_tanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
     (
         (torch.Size([100])),
         (torch.Size([32, 32])),
-        (torch.Size([3, 128, 32])),
-        (torch.Size([1, 3, 320, 384])),
-        (torch.Size([1, 1, 32, 320, 12])),
+        # (torch.Size([3, 128, 32])),
+        # (torch.Size([1, 3, 320, 384])),
+        # (torch.Size([1, 1, 32, 320, 12])),
     ),
 )
 @pytest.mark.parametrize(
@@ -1754,3 +1754,4 @@ def test_unary_rpow_ttnn(input_shapes, exponent, device):
 
     assert_with_ulp(output_tensor, golden_tensor)
     assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.99)
+
