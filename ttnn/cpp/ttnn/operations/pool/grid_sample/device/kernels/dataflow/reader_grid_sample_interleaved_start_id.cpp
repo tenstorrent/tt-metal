@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/height_sharded_reader_common.hpp"
+#include "debug/dprint.h"
 
 #define ALWI inline __attribute__((always_inline))
 
