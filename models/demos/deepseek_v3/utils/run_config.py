@@ -16,9 +16,9 @@ from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, Me
 MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 
 WeightConfig = (
-    dict[str, "WeightConfig | SavedTensor | None"]
-    | list["WeightConfig | SavedTensor | None"]
-    | tuple["WeightConfig | SavedTensor | None"]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+    dict[str, "WeightConfig | SavedWeight | None"]
+    | list["WeightConfig | SavedWeight | None"]
+    | tuple["WeightConfig | SavedWeight | None"]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
 )
 
 _PRIMITIVE_COPYABLE_TYPES = bool | int | float | complex | str | bytes | None | Enum
