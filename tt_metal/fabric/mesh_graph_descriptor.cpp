@@ -555,8 +555,6 @@ std::unique_ptr<MeshGraphDescriptor::NodeInstance> MeshGraphDescriptor::construc
 
         auto it = graph_descriptors_.find(node_ref.graph().graph_descriptor());
 
-        auto it2 = graph_descriptors_.find("G2");
-
         TT_FATAL(it != graph_descriptors_.end(),
             "Graph descriptor {} not found", 
             node_ref.graph().graph_descriptor());
