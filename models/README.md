@@ -114,7 +114,7 @@
 | [0.57.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.57.0) | Apr 15, 2025 |
 | [0.56.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.56.0) | Mar 7, 2025 |
 
-Visit the [releases](https://github.com/tenstorrent/tt-metal/tree/main/releases) folder for information on releases, release notes, and estimated release dates.
+Visit the [releases](https://github.com/tenstorrent/tt-metal/tree/main/releases) folder for details on releases, release notes, and estimated release dates.
 
 ## Release methodology
 
