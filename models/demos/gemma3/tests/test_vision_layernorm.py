@@ -45,7 +45,6 @@ def test_layernorm_inference(mesh_device, reset_seeds, layer_name):
     model_args.WEIGHTS_DTYPE = dtype
     # Reference HF MLP (from Gemma3 vision tower)
     reference_model = model_args.reference_vision_layernorm(layer_name)
-    # reference_model.load_state_dict(partial_state_dict)
     reference_model.eval()
 
     # Initialize the custom LayerNorm model
@@ -77,27 +76,15 @@ def test_layernorm_inference(mesh_device, reset_seeds, layer_name):
 
     logger.info("Compilation pass for LayerNorm")
     tt_output = tt_model(tt_input)
-    print("tt_outputs ", tt_output)
 
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
     )  # Adjusted dim for LayerNorm
-    print("tt_output_torch shape ", tt_output_torch, tt_output_torch.shape)
     tt_outputs = torch.chunk(tt_output_torch, model_args.num_devices, dim=-1)
-    # print("tt_outputs shape ", tt_outputs)
-    print("reference_output ", reference_output.shape)
     # Compare outputs
     pcc_required = 0.99
     for idx, tt_output_torch in enumerate(tt_outputs):
-        print("tt_output_torch ", tt_output_torch, tt_output_torch.shape)
-        print("reference_output ", reference_output.shape)
-
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
-
-        # non_zero_indices = tt_output_torch.ne(0).nonzero(as_tuple=True)
-        # tt_output_torch = tt_output_torch[non_zero_indices]
-        # reference_output = reference_output[non_zero_indices]
-
         logger.info(comp_allclose(reference_output, tt_output_torch))
         logger.info(f"PCC: {pcc_message}")
         assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

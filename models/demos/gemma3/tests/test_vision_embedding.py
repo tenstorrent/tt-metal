@@ -37,9 +37,6 @@ def test_vision_embedding_integration(
     state_dict = model_args.load_state_dict()
 
     first_layer_prefix = "model.vision_tower.vision_model.embeddings."
-    # partial_state_dict = {
-    #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    # }
 
     image_size = model_args.vision_chunk_size
     patch_size = model_args.vision_patch_size
@@ -50,7 +47,6 @@ def test_vision_embedding_integration(
     input_tensor = torch.randn((bsz, in_channels, image_size, image_size))
 
     reference_model = model_args.reference_vision_embedding()
-    # reference_model.load_state_dict(partial_state_dict)
     reference_output = reference_model(input_tensor)
 
     vision_embed = TtSiglipVisionEmbeddings(

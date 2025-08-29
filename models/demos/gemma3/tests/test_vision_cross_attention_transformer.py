@@ -74,16 +74,11 @@ def test_gemma_vision(
     logger.info("Checking outputs")
     out = ttnn.from_device(test_output)
 
-    print("out shape: ", out)
-    print("reference_output ", reference_output)
-
     tt_output_torch = ttnn.to_torch(
         out,
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
     )[0, :, :, :]
 
-    print("reference_output ", reference_output.shape)
-    print(f"TT output shape: {tt_output_torch.shape}")
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))

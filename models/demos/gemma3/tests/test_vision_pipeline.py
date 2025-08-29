@@ -38,9 +38,6 @@ def test_gemma_vision(
     state_dict = model_args.load_state_dict()
 
     first_layer_prefix = "model.vision_tower.vision_model."
-    # partial_state_dict = {
-    #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    # }
 
     image_size = model_args.vision_chunk_size
     in_channels = model_args.vision_in_channels
@@ -48,7 +45,6 @@ def test_gemma_vision(
     input_tensor = torch.rand((bsz, in_channels, image_size, image_size))
 
     reference_model = model_args.reference_vision_model()
-    # reference_model.load_state_dict(partial_state_dict)
     reference_output = reference_model(input_tensor).last_hidden_state
 
     test_gemma_vision = TtSiglipGemmaVisionModel(
@@ -65,8 +61,6 @@ def test_gemma_vision(
     logger.info("Checking outputs")
     out = ttnn.from_device(test_output)
     tt_output_torch = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
-    print("reference_output ", reference_output.shape)
-    print("tt_output_torch ", tt_output_torch.shape)
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
@@ -101,9 +95,6 @@ def test_gemma_vision_piecewise(
     state_dict = model_args.load_state_dict()
 
     first_layer_prefix = "model.vision_tower.vision_model."
-    # partial_state_dict = {
-    #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    # }
 
     image_size = model_args.vision_chunk_size
     in_channels = model_args.vision_in_channels
@@ -111,7 +102,6 @@ def test_gemma_vision_piecewise(
     input_tensor = torch.rand((bsz, in_channels, image_size, image_size))
 
     reference_model = model_args.reference_vision_model()
-    # reference_model.load_state_dict(partial_state_dict)
     reference_output = reference_model(input_tensor).last_hidden_state
     tt_ccl = TT_CCL(mesh_device)
     test_gemma_vision = TtSiglipGemmaVisionModel(
@@ -167,7 +157,6 @@ def test_gemma_vision_piecewise(
         dim=model_args.vision_dim,
         state_dict=state_dict,
         state_dict_prefix=f"{first_layer_prefix}ln_post.",
-        # weight_cache_path=model_args.weight_cache_path(dtype),
         weight_dtype=dtype,
         eps=model_args.norm_eps,
     )
@@ -179,8 +168,6 @@ def test_gemma_vision_piecewise(
     def compare_outputs(reference_output, test_output, test_name):
         out = ttnn.from_device(test_output)
         tt_output_torch = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0]
-        print("reference_output ", reference_output.shape)
-        print("tt_output_torch ", tt_output_torch.shape)
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
         logger.info(comp_allclose(reference_output, tt_output_torch))
         logger.info(f"{test_name} PCC: {pcc_message}")

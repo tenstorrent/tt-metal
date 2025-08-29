@@ -35,7 +35,6 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device):
-    print("device:", device)
     dtype = ttnn.bfloat16
     mode = "decode" if seq_len <= 32 else "prefill"
 
@@ -49,13 +48,6 @@ def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device):
     state_dict = tt_model_args.load_state_dict()
 
     reference_model = tt_model_args.reference_vision_multi_modal()
-    # first_layer_prefix = "multi_modal_projector."
-
-    # partial_state_dict = {
-    #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    # }
-
-    # reference_model.load_state_dict(partial_state_dict)
 
     # create input tensor for multi_modal_projector layer
     patches_per_image = 64
@@ -70,9 +62,6 @@ def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device):
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, -1), mesh_shape=tt_model_args.cluster_shape),
-        # memory_config=(
-        #     tt_model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
-        # ),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -92,8 +81,6 @@ def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device):
     tt_output = tt_model(tt_input)
 
     tt_output_torch = ttnn.to_torch(tt_output).squeeze(0)
-    print("reference_output ", reference_output.shape)
-    print("tt_output_torch ", tt_output_torch.shape)
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     pcc_required = 0.9999

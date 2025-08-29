@@ -42,17 +42,10 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
     n_layers = model_args.vision_n_layers
     first_layer_prefix = "model.vision_tower.vision_model.encoder."
 
-    # gated = True
-
-    # partial_state_dict = {
-    #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    # }
-
     dim = model_args.vision_dim
     seq_len = model_args.vision_chunk_ntok - 1
 
     reference_model = model_args.reference_vision_encoder()
-    # reference_model.load_state_dict(partial_state_dict)
     reference_model.eval()
 
     all_tests_pass = True

@@ -38,14 +38,10 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = "model.vision_tower.vision_model.encoder.layers.0.attn."
-    # partial_state_dict = {
-    #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    # }
 
     dim = model_args.vision_dim
 
     reference_model = model_args.reference_vision_attention()
-    # reference_model.load_state_dict(partial_state_dict)
     reference_model.eval()
 
     hidden_size = model_args.vision_dim
@@ -54,12 +50,10 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
     seq_len = model_args.vision_chunk_ntok
 
     tt_model = TtGemmaImageAttention(
-        # tt_model = TtLlamaImageAttention(
         mesh_device=mesh_device,
         tt_ccl=TT_CCL(mesh_device),
         state_dict=state_dict,
         state_dict_prefix=first_layer_prefix,
-        # weight_cache_path=model_args.weight_cache_path(dtype),
         weight_cache_path=None,
         dtype=dtype,
         configuration=model_args,
@@ -67,10 +61,6 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
 
     pt_attention_input = torch.randn(batch, seq_len, dim)
 
-    # attention_input = model_args.prepare_residual_tensor_prefill(
-    #     pt_attention_input,
-    #     force_replicated=True,
-    # )
     attention_input = ttnn.from_torch(
         pt_attention_input.unsqueeze(0),
         device=mesh_device,
@@ -82,16 +72,13 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
 
     tt_out = tt_model(attention_input)
 
-    print("TT output :", tt_out)
     # Doing contract in tt is correct!!
     tt_output_torch = ttnn.to_torch(
         tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1), device=mesh_device
     )[0, :, :, :]
 
     reference_output = reference_model(pt_attention_input)[0]
-    print("Reference output shape:", reference_output.shape)
     tt_output_torch = tt_output_torch[:, :4097, :]
-    print("TT output shape:", tt_output_torch.shape)
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
