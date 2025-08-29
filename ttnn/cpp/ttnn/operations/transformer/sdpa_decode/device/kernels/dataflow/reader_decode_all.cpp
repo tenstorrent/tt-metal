@@ -223,11 +223,10 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* page_table_ptr;
     if constexpr (is_paged_attention) {
         constexpr uint32_t cb_id_page_table = tt::CBIndex::c_9;
-        const InterleavedAddrGen<true> page_table_gen = {
-            .bank_base_address = page_table_addr, .page_size = page_table_page_size};
+        const auto page_table_gen = TensorAccessor(page_table_args, page_table_addr, page_table_page_size);
         cb_reserve_back(cb_id_page_table, 1);
         uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
-        uint64_t page_table_noc_addr = get_noc_addr((cur_batch / q_heads_parallel_factor), page_table_gen);
+        uint64_t page_table_noc_addr = page_table_gen.get_noc_addr((cur_batch / q_heads_parallel_factor));
         noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_page_size);
         noc_async_read_barrier();
         cb_push_back(cb_id_page_table, 1);
