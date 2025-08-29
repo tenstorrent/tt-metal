@@ -1229,7 +1229,9 @@ private:
                     failed_tests_.push_back(
                         config.name + " (" + ftype_str + "," + ntype_str + "," + topology_str + "," + num_devices_str +
                         ") - diff: " + std::to_string(comp_result.difference_percent) +
-                        "%, tolerance: " + std::to_string(test_tolerance) + "%");
+                        "%, tolerance: " + std::to_string(test_tolerance) + "%" +
+                        ", expected: " + std::to_string(golden_it->bandwidth_gb_s) +
+                        " GB/s, measured: " + std::to_string(comp_result.current_bandwidth_gb_s) + " GB/s");
                 }
             } else {
                 comp_result.golden_bandwidth_gb_s = 0.0;

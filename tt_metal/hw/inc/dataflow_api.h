@@ -1784,7 +1784,12 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
 // clang-format on
 template <InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool posted = false>
 FORCE_INLINE void noc_inline_dw_write(
-    uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
+    uint64_t addr,
+    uint32_t val,
+    uint8_t be = 0xF,
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_UNICAST_WRITE_VC,
+    uint8_t cmd_buf = write_at_cmd_buf) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
     DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
@@ -1797,7 +1802,7 @@ FORCE_INLINE void noc_inline_dw_write(
 
     noc_fast_write_dw_inline<noc_mode, dst_type>(
         noc,
-        write_at_cmd_buf,
+        cmd_buf,
         val,
         addr,
         be,  // byte-enable
