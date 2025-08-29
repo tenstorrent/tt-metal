@@ -6,6 +6,7 @@ from itertools import takewhile
 from typing import Any, Sequence
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
