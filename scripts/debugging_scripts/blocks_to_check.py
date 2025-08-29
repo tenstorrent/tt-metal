@@ -8,7 +8,8 @@ Usage:
     blocks_to_check --type=<block_type>
 
 Arguments:
-    --type=<block_type> Specify the block type. options: tensix, idle_eth, active_eth, eth, arc, pcie, dram, router_only, security, l2cpu, functional_workers, harvested_workers, harvested_eth, harvested_dram
+    --type=<block_type> Specify the block type. options: tensix, idle_eth, active_eth, eth, arc, pcie, dram, router_only, security,
+                                                         l2cpu, functional_workers, harvested_workers, harvested_eth, harvested_dram
 
 Description:
     Provides list of block locations that should be checked for other scripts.
@@ -25,7 +26,22 @@ script_config = ScriptConfig(
     depends=["devices_to_check"],
 )
 
-VALID_BLOCK_TYPES = {"idle_eth", "active_eth", "tensix"}
+VALID_BLOCK_TYPES = {
+    "idle_eth",
+    "active_eth",
+    "tensix",
+    "eth",
+    "arc",
+    "pcie",
+    "dram",
+    "router_only",
+    "security",
+    "l2cpu",
+    "functional_workers",
+    "harvested_workers",
+    "harvested_eth",
+    "harvested_dram",
+}
 
 
 def is_galaxy(device: Device) -> str:
