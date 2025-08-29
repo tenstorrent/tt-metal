@@ -12,6 +12,8 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/tilize_utils.hpp>
 #include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

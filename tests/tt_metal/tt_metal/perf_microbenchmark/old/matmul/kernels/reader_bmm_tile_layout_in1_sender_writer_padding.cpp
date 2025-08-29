@@ -33,8 +33,8 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    constexpr bool in1_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool out_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr auto in1_args = TensorAccessorArgs<0>();
+    constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
 
     // READER
     // in1 tensor args
@@ -106,9 +106,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_out0 = 16;
 
     const uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
-    const DataFormat in1_data_format = get_dataformat(cb_id_in1);
     const uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
-    const DataFormat output_data_format = get_dataformat(cb_id_out0);
 
     uint32_t l1_write_addr_in1;
 
@@ -122,19 +120,13 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in1_mcast_sender_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_sender_semaphore_addr);
 #endif
-    const InterleavedAddrGenFast<in1_is_dram> s1 = {
-        .bank_base_address = in1_tensor_addr, .page_size = in1_single_tile_size_bytes, .data_format = in1_data_format};
+    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr, in1_single_tile_size_bytes);
 #ifdef FUSE_BIAS
-    const InterleavedAddrGenFast<in3_is_dram> s3 = {
-        .bank_base_address = in3_tensor_addr,
-        .page_size = bias_single_tile_size_bytes,
-        .data_format = bias_data_format};
+    constexpr auto in3_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    const auto s3 = TensorAccessor(in3_args, in3_tensor_addr, bias_single_tile_size_bytes);
 #endif
     // WRITER
-    const InterleavedAddrGenFast<out_is_dram> s = {
-        .bank_base_address = out_tensor_addr,
-        .page_size = output_single_tile_size_bytes,
-        .data_format = output_data_format};
+    const auto s = TensorAccessor(out_args, out_tensor_addr, output_single_tile_size_bytes);
 
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
