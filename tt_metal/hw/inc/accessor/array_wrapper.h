@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "helpers.h"
+#include "compile_time_args.h"
 
 namespace tensor_accessor {
 template <typename T, T... Elements>
