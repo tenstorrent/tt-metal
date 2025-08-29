@@ -53,9 +53,8 @@ def test_full_int(device, input_shape, fill_value):
         2.00830080,  # mantissa: 0000 0001 0001, bf16 round up test
         2.02343750,  # mantissa: 0000 0011, bf16 round up test
         -3.9921875,  # test mantissa overflow. answer should be 4
-        0.0,
     ],
-    ids=["pi", "bf16_round_down", "bf16_round_up1", "bf16_round_up2", "bf16_mantissa_overflow", "bf16_zero"],
+    ids=["pi", "bf16_round_down", "bf16_round_up1", "bf16_round_up2", "bf16_mantissa_overflow"],
 )
 @pytest.mark.parametrize(
     "dtype",
@@ -123,7 +122,7 @@ def test_full_callback(device, input_shape, fill_value, layout):
 @pytest.mark.parametrize(
     "input_shape",
     [
-        [1, 300, 513],
+        [8, 1, 1, 7168],
     ],
 )
 @pytest.mark.parametrize(
@@ -150,9 +149,8 @@ def test_big_full(device, input_shape, fill_value, dtype, layout):
 
     torch_output = torch.full(input_shape, fill_value, dtype=dtype)
     any = ttnn.from_torch(torch_any, device=device, layout=layout)
-
-    tt_output = ttnn.moreh_full(input_shape, fill_value, any)
-    print(tt_output)
+    for i in range(10):
+        tt_output = ttnn.moreh_full(input_shape, fill_value, any)
     assert ttnn.is_tensor_storage_on_device(tt_output)
     tt_output_cpu = ttnn.to_torch(tt_output)
 

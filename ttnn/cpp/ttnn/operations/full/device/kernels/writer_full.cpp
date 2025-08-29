@@ -74,7 +74,8 @@ void kernel_main() {
     for (std::uint32_t i = start_id; i < end_id; i++) {
         const auto cb_value_addr = get_read_ptr(cb_value);
         noc_async_write_tile(i, s, cb_value_addr);
-        noc_async_write_barrier();
     }
+    noc_async_writes_flushed();
     cb_pop_front(cb_value, 1);
+    noc_async_write_barrier();
 }
