@@ -219,14 +219,25 @@ def test_full_buffer():
         assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
+def wildcard_match(pattern, words):
+    if not pattern.endswith("*"):
+        return [word for word in words if pattern == word]
+    else:
+        prefix = pattern[:-1]
+        return [word for word in words if word.startswith(prefix)]
+
+
 def verify_stats(devicesData, statTypes, allowedRange, refCountDict):
     verifiedStat = []
     for _, deviceData in devicesData["data"]["devices"].items():
         for ref, counts in refCountDict.items():
-            if ref in deviceData["cores"]["DEVICE"]["analysis"].keys():
-                verifiedStat.append(ref)
-                res = False
-                readCount = deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"]
+            matching_refs = wildcard_match(ref, deviceData["cores"]["DEVICE"]["analysis"].keys())
+            if matching_refs:
+                readCount = 0
+                for matching_ref in matching_refs:
+                    verifiedStat.append(matching_ref)
+                    res = False
+                    readCount += deviceData["cores"]["DEVICE"]["analysis"][matching_ref]["stats"]["Count"]
                 for count in counts:
                     if count - allowedRange <= readCount <= count + allowedRange:
                         res = True
@@ -277,7 +288,7 @@ def test_device_trace_run():
 @skip_for_blackhole()
 def test_dispatch_cores():
     REF_COUNT_DICT = {
-        "Tensix CQ Dispatch": [600, 760, 1310, 2330],
+        "Tensix CQ Dispatch*": [600, 760, 1310, 2330],
         "Tensix CQ Prefetch": [900, 1440, 3870, 5000],
         "dispatch_total_cq_cmd_op_time": [206],
         "dispatch_go_send_wait_time": [206],
