@@ -79,13 +79,11 @@ void kernel_main() {
     // Outer loop: iterate over spatial positions (output sticks)
     for (uint32_t spatial_pos = start_page_id; spatial_pos < end_id; ++spatial_pos) {
         // Read the grid stick for this spatial position (contains num_grids sets of coordinates)
-        cb_reserve_back(grid_cb_index, 1);
         uint32_t l1_write_grid_addr = get_write_ptr(grid_cb_index);
         uint64_t grid_noc_addr = s0.get_noc_addr(spatial_pos);
 
         noc_async_read(grid_noc_addr, l1_write_grid_addr, grid_stick_nbytes);
         noc_async_read_barrier();
-        cb_push_back(grid_cb_index, 1);
 
         volatile tt_l1_ptr uint16_t* grid_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_grid_addr);
 
