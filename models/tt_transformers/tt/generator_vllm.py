@@ -13,7 +13,7 @@ from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs,
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 
 import ttnn
-from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
+from models.demos.gemma3.demo.vision_demo import create_multimodal_model
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
@@ -199,11 +199,12 @@ def input_processor_for_multimodal(ctx: InputContext, inputs: Union[DecoderOnlyI
         # [INFO] with current version of vLLM, in server mode, inputs["prompt"] gives KeyError; only inputs['prompt_token_ids'] is available
         assert "prompt_token_ids" in inputs, "prompt_token_ids must be available in server mode"
         prompt_text = input_processor.decode(inputs["prompt_token_ids"], skip_special_tokens=False)
-    images = inputs["multi_modal_data"]["image"]
+
+    multi_modal_data = inputs.get("multi_modal_data", None)
 
     processed_inputs = input_processor(
         text=prompt_text,  # [INFO] Qwen2VLProcessor handles the case where text is a string or a list of strings
-        images=images,
+        images=multi_modal_data["image"] if multi_modal_data is not None else None,
         videos=None,  # [INFO] videos are not supported yet
         return_tensors="pt",
     )
@@ -435,13 +436,10 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
 
     def prefill_forward(self, *args, **kwargs):
         data = kwargs.get("images", None)
-        pixel_values = None
-        if hasattr(data[0], "pixel_values"):
-            # If inputs is a list of objects with .pixel_values, concatenate them
-            pixel_values = torch.concat([im.pixel_values for im in data if hasattr(im, "pixel_values")], dim=0)
+        pixel_values = [im.pixel_values if hasattr(im, "pixel_values") else None for im in data] if data else None
 
         return super().prefill_forward_text(
-            pixel_values=[pixel_values] if pixel_values is not None else None,
+            pixel_values=pixel_values,
             **kwargs,
         )
 
