@@ -8,6 +8,7 @@
 #include <variant>
 #include "helpers.h"
 #include "array_wrapper.h"
+#include "compile_time_args.h"
 #include <cstring>
 
 // Forward declared from dataflow_api.h
@@ -171,31 +172,35 @@ struct DistributionSpec {
             return arr;
         };
 
+        if constexpr (!tensor_shape_static) {
+            ASSERT(rank == 0 || tensor_shape_ptr != nullptr);
+        }
+        if constexpr (!shard_shape_static) {
+            ASSERT(rank == 0 || shard_shape_ptr != nullptr);
+        }
+
         if constexpr (has_static_rank) {
             if constexpr (!tensor_shape_static) {
-                ASSERT(tensor_shape_ptr != nullptr);
                 array_from_pointer(tensor_shape_rt, tensor_shape_ptr, RankCT);
             }
             if constexpr (!shard_shape_static) {
-                ASSERT(shard_shape_ptr != nullptr);
                 array_from_pointer(shard_shape_rt, shard_shape_ptr, RankCT);
             }
         } else {
             if constexpr (!tensor_shape_static) {
-                ASSERT(tensor_shape_ptr != nullptr);
                 span_from_pointer(tensor_shape_rt, tensor_shape_ptr, rank_rt);
             }
             if constexpr (!shard_shape_static) {
-                ASSERT(shard_shape_ptr != nullptr);
                 span_from_pointer(shard_shape_rt, shard_shape_ptr, rank_rt);
             }
         }
 
         if constexpr (!bank_coords_static) {
-            ASSERT(bank_coords_ptr != nullptr);
             if constexpr (has_static_num_banks) {
+                ASSERT(NumBanksCT == 0 || bank_coords_ptr != nullptr);
                 array_from_pointer(bank_coords_rt, bank_coords_ptr, NumBanksCT);
             } else {
+                ASSERT(num_banks_rt == 0 || bank_coords_ptr != nullptr);
                 span_from_pointer(bank_coords_rt, bank_coords_ptr, num_banks_rt);
             }
         }
@@ -347,8 +352,6 @@ private:
             shard_grid_strides_rt[i] = stride;
             stride *= shard_grid_rt[i];
         }
-        // Check that the number of shards is greater than or equal to the number of banks
-        ASSERT(shard_grid_rt[0] * shard_grid_strides_rt[0] >= num_banks());
     }
 
     constexpr void update_spans_pointers() {
@@ -461,6 +464,23 @@ auto make_dspec_from_args(const Args& args) {
         Args::tensor_shape_is_crta ? (uint32_t*)get_common_arg_addr(args.tensor_shape_crta_offset()) : nullptr,
         Args::shard_shape_is_crta ? (uint32_t*)get_common_arg_addr(args.shard_shape_crta_offset()) : nullptr,
         Args::bank_coords_is_crta ? (uint16_t*)get_common_arg_addr(args.bank_coords_crta_offset()) : nullptr);
+}
+
+template <bool IsDram>
+auto make_interleaved_dspec() {
+    return DistributionSpec<
+        /*RankCT=*/0,
+        /*NumBanksCT=*/0,
+        /*TensorShapeWrapper=*/ArrayStaticWrapper<uint32_t>,
+        /*ShardShapeWrapper=*/ArrayStaticWrapper<uint32_t>,
+        /*BankCoordsWrapper=*/ArrayStaticWrapper<uint16_t>,
+        /*IsInterleaved=*/true,
+        IsDram>(
+        /* rank_rt */ 0,
+        /* num_banks_rt */ 0,
+        /* tensor_shape_ptr */ nullptr,
+        /* shard_shape_ptr */ nullptr,
+        /* bank_coords_ptr */ nullptr);
 }
 
 }  // namespace tensor_accessor

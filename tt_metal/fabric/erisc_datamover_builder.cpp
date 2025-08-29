@@ -8,8 +8,8 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
-#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include "erisc_datamover_builder.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
@@ -906,7 +906,6 @@ void append_worker_to_fabric_edm_sender_rt_args(
     connection_info.edm_noc_y = connection.edm_noc_y;
     connection_info.edm_buffer_base_addr = connection.edm_buffer_base_addr;
     connection_info.num_buffers_per_channel = connection.num_buffers_per_channel;
-    connection_info.edm_l1_sem_addr = connection.edm_l1_sem_addr;
     connection_info.edm_connection_handshake_addr = connection.edm_connection_handshake_addr;
     connection_info.edm_worker_location_info_addr = connection.edm_worker_location_info_addr;
     connection_info.buffer_size_bytes = connection.buffer_size_bytes;
@@ -1313,7 +1312,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         this->downstream_edm_vcs_buffer_base_address[1].value_or(0),
         this->downstream_edm_vcs_noc_x[1].value_or(0),
         this->downstream_edm_vcs_noc_y[1].value_or(0),
-        this->downstream_edm_vcs_semaphore_address[1].value_or(-1),
         this->downstream_edm_vcs_worker_registration_address[1].value_or(0),
         this->downstream_edm_vcs_worker_location_info_address[1].value_or(0),
         this->receiver_channels_local_buffer_index_address[0],  // extend the following 3 for 2D. need 3 each for 2D.
@@ -1322,16 +1320,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         this->downstream_edm_vcs_buffer_base_address[2].value_or(0),
         this->downstream_edm_vcs_noc_x[2].value_or(0),
         this->downstream_edm_vcs_noc_y[2].value_or(0),
-        this->downstream_edm_vcs_semaphore_address[2].value_or(-1),
         this->downstream_edm_vcs_worker_registration_address[2].value_or(0),
         this->downstream_edm_vcs_worker_location_info_address[2].value_or(0),
         this->receiver_channels_local_buffer_index_address[1],
-        // this is the receiver channel's local sem for flow controlling with downstream fabric sender
-        this->receiver_channels_downstream_flow_control_semaphore_id[0].value_or(-1),
-        this->receiver_channels_downstream_flow_control_semaphore_id[1].value_or(-1),
-        this->receiver_channels_downstream_flow_control_semaphore_id[2].value_or(-1),
-        this->receiver_channels_downstream_flow_control_semaphore_id[3].value_or(-1),
-        this->receiver_channels_downstream_flow_control_semaphore_id[4].value_or(-1),
+
         this->receiver_channels_downstream_teardown_semaphore_id[0].value_or(-1),
         this->receiver_channels_downstream_teardown_semaphore_id[1].value_or(-1),
         this->receiver_channels_downstream_teardown_semaphore_id[2].value_or(-1),
@@ -1532,7 +1524,7 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricDatamoverBuild
             // Setup VC0 connection
             constexpr uint32_t ds_vc0_index = 1;
             auto ds_vc0_send_chan = get_downstream_edm_sender_channel(is_2D_routing, this->direction);
-            setup_downstream_vc_connection(builder, ds_vc0_index, ds_vc0_send_chan);
+            setup_downstream_vc_connection(builder, ds_vc0_index, ds_vc0_send_chan, false);
 
             if (!fabric_context.need_deadlock_avoidance_support(this->direction)) {
                 return;
@@ -1553,14 +1545,14 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricDatamoverBuild
             // Setup VC1 connection if needed
             constexpr uint32_t ds_index = 2;
             auto vc1_send_chan = get_sender_channel_count(is_2D_routing) - 1;
-            setup_downstream_vc_connection(builder, ds_index, vc1_send_chan);
+            setup_downstream_vc_connection(builder, ds_index, vc1_send_chan, true);
         },
         downstream_builder);
 }
 
 template <typename BuilderType>
 void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
-    BuilderType& downstream_builder, uint32_t vc_idx, uint32_t channel_id) {
+    BuilderType& downstream_builder, uint32_t vc_idx, uint32_t channel_id, bool is_vc1) {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
     const auto ds_noc_x = downstream_builder.get_noc_x();
@@ -1570,15 +1562,21 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     auto adapter_spec = downstream_builder.build_connection_to_fabric_channel(channel_id);
 
     if (is_2D_routing) {
-        uint32_t val = this->downstream_edm_vcs_noc_x[vc_idx].value_or(0);
-        val |= (ds_noc_x << (ds_dir * 8));
-        this->downstream_edm_vcs_noc_x[vc_idx] = val;
+        // TODO: unify vc0 and vc1?
+        if (is_vc1) {
+            this->downstream_edm_vcs_noc_x[vc_idx] = ds_noc_x;
+            this->downstream_edm_vcs_noc_y[vc_idx] = ds_noc_y;
+        } else {
+            uint32_t val = this->downstream_edm_vcs_noc_x[vc_idx].value_or(0);
+            val |= (ds_noc_x << (ds_dir * 8));
+            this->downstream_edm_vcs_noc_x[vc_idx] = val;
 
-        val = this->downstream_edm_vcs_noc_y[vc_idx].value_or(0);
-        val |= (ds_noc_y << (ds_dir * 8));
-        this->downstream_edm_vcs_noc_y[vc_idx] = val;
+            val = this->downstream_edm_vcs_noc_y[vc_idx].value_or(0);
+            val |= (ds_noc_y << (ds_dir * 8));
+            this->downstream_edm_vcs_noc_y[vc_idx] = val;
 
-        this->downstream_edms_connected |= 0x1 << ds_dir;
+            this->downstream_edms_connected |= 0x1 << ds_dir;
+        }
     } else {
         this->downstream_edm_vcs_noc_x[vc_idx] = ds_noc_x;
         this->downstream_edm_vcs_noc_y[vc_idx] = ds_noc_y;
@@ -1587,7 +1585,6 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     }
 
     this->downstream_edm_vcs_buffer_base_address[vc_idx] = adapter_spec.edm_buffer_base_addr;
-    this->downstream_edm_vcs_semaphore_address[vc_idx] = adapter_spec.edm_l1_sem_addr;
     this->downstream_edm_vcs_worker_registration_address[vc_idx] = adapter_spec.edm_connection_handshake_addr;
     this->downstream_edm_vcs_worker_location_info_address[vc_idx] = adapter_spec.edm_worker_location_info_addr;
     this->downstream_sender_channels_num_buffers.fill(adapter_spec.num_buffers_per_channel);

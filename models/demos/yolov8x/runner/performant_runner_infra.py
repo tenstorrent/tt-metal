@@ -46,7 +46,7 @@ class YOLOv8xPerformanceRunnerInfra:
         self.ttnn_yolov8_model = load_ttnn_model(
             device=self.device, torch_model=torch_model, weights_mesh_mapper=self.weights_mesh_mapper
         )
-        input_shape = (batch_size, 3, 640, 640)
+        input_shape = (self.batch_size, 3, 640, 640)
         self.torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
         self.tt_input_tensor = ttnn.from_torch(
             self.torch_input_tensor, ttnn.bfloat16, mesh_mapper=self.inputs_mesh_mapper
@@ -78,11 +78,7 @@ class YOLOv8xPerformanceRunnerInfra:
         )
 
         assert torch_input_tensor.ndim == 4, "Expected input tensor to have shape (BS, C, H, W)"
-
-        input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
-        tt_inputs_host = ttnn.from_host_shards(
-            [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
-        )
+        tt_inputs_host = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, mesh_mapper=self.inputs_mesh_mapper)
 
         return tt_inputs_host, input_mem_config
 
@@ -106,8 +102,13 @@ class YOLOv8xPerformanceRunnerInfra:
         return tt_inputs_host, sharded_mem_config_DRAM, input_mem_config
 
     def validate(self, output_tensor=None):
-        output_tensor = self.output_tensor if output_tensor is None else output_tensor
-        output_tensor = ttnn.to_torch(self.output_tensor, mesh_composer=self.outputs_mesh_composer)
+        if output_tensor is None:
+            output_tensor = self.output_tensor
+        else:
+            if isinstance(output_tensor, (list, tuple)):
+                output_tensor = output_tensor[0]
+
+        output_tensor = ttnn.to_torch(output_tensor, mesh_composer=self.outputs_mesh_composer)
 
         valid_pcc = 0.978
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=valid_pcc)
@@ -115,4 +116,5 @@ class YOLOv8xPerformanceRunnerInfra:
         logger.info(f"Yolov8x batch_size={self.batch_size}, PCC={self.pcc_message}")
 
     def dealloc_output(self):
-        ttnn.deallocate(self.output_tensor)
+        if hasattr(self, "output_tensor") and self.output_tensor is not None:
+            ttnn.deallocate(self.output_tensor)

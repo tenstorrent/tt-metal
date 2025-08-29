@@ -250,7 +250,7 @@ For example, to compute the element-wise sum of two tiles:
 
         // Add Dst tiles 0 and 1 together. Store the result back into Dst tile 0.
         // Pseudocode: dst_tile[0] = dst_tile[0] + dst_tile[1]
-        add_binary_tile(/*dst_idx_a*/0, /*dst_idx_b*/1);
+        add_binary_tile(/*dst_idx_a*/0, /*dst_idx_b*/1, /*dst_idx_out*/0);
         // More operations can be chained here, e.g., applying sigmoid.
         // sigmoid_tile(0);
 

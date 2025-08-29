@@ -18,6 +18,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
@@ -35,10 +36,18 @@ class IDevice;
 
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
 
 namespace unit_tests::initialize_semaphores {
 
-void initialize_program(tt_metal::IDevice* device, tt_metal::Program& program, const CoreRange& core_range) {
+void initialize_program(
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    distributed::MeshWorkload& workload,
+    const CoreRange& core_range) {
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    auto& program = workload.get_programs().at(device_range);
+
     uint32_t single_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
     uint32_t num_tiles = 2048;
 
@@ -83,7 +92,14 @@ void initialize_program(tt_metal::IDevice* device, tt_metal::Program& program, c
 }
 
 void create_and_read_max_num_semaphores(
-    tt_metal::IDevice* device, tt_metal::Program& program, const CoreRange& core_range) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    distributed::MeshWorkload& workload,
+    const CoreRange& core_range) {
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    auto& program = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
     std::vector<uint32_t> golden;
     for (uint32_t i = 0; i < tt::tt_metal::NUM_SEMAPHORES; i++) {
         uint32_t initial_value = i;
@@ -91,11 +107,14 @@ void create_and_read_max_num_semaphores(
         golden.push_back(initial_value);
         ASSERT_TRUE(semaphore_id == i);
     }
+    tt_metal::CreateKernel(
+        program,
+        "tt_metal/kernels/dataflow/blank.cpp",
+        core_range,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-    tt_metal::detail::CompileProgram(device, program);
-    program.finalize_offsets(device);
-
-    ASSERT_TRUE(tt_metal::detail::ConfigureDeviceWithProgram(device, program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -104,7 +123,7 @@ void create_and_read_max_num_semaphores(
             for (uint32_t i = 0; i < tt::tt_metal::NUM_SEMAPHORES; i++) {
                 std::vector<uint32_t> single_val;
                 uint32_t semaphore_addr =
-                    program.get_sem_base_addr(device, logical_core, CoreType::WORKER) +
+                    workload.get_sem_base_addr(mesh_device, logical_core, CoreType::WORKER) +
                     (tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1) * i);
                 uint32_t semaphore_size = sizeof(uint32_t);
                 tt_metal::detail::ReadFromDeviceL1(device, logical_core, semaphore_addr, semaphore_size, single_val);
@@ -117,9 +136,15 @@ void create_and_read_max_num_semaphores(
 }
 
 void try_creating_more_than_max_num_semaphores(
-    tt_metal::IDevice* device, tt_metal::Program& program, const CoreRange& core_range) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    distributed::MeshWorkload& workload,
+    const CoreRange& core_range) {
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    auto& program = workload.get_programs().at(device_range);
     ASSERT_TRUE(program.num_semaphores() == 0);
-    create_and_read_max_num_semaphores(device, program, core_range);
+    create_and_read_max_num_semaphores(mesh_device, workload, core_range);
+    std::cout << "created max num semaphores" << std::endl;
     constexpr static uint32_t val = 5;
     ASSERT_ANY_THROW(tt_metal::CreateSemaphore(program, core_range, val));
 }
@@ -128,33 +153,45 @@ void try_creating_more_than_max_num_semaphores(
 
 namespace tt::tt_metal {
 
-TEST_F(DeviceFixture, TensixInitializeLegalSemaphores) {
+TEST_F(MeshDeviceFixture, TensixInitializeLegalSemaphores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = tt_metal::CreateProgram();
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
         CoreRange core_range({0, 0}, {1, 1});
-        unit_tests::initialize_semaphores::initialize_program(devices_.at(id), program, core_range);
-        unit_tests::initialize_semaphores::create_and_read_max_num_semaphores(devices_.at(id), program, core_range);
+        unit_tests::initialize_semaphores::create_and_read_max_num_semaphores(devices_.at(id), workload, core_range);
     }
 }
 
-TEST_F(DeviceFixture, TensixInitializeIllegalSemaphores) {
+TEST_F(MeshDeviceFixture, TensixInitializeIllegalSemaphores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = tt_metal::CreateProgram();
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
         CoreRange core_range({0, 0}, {1, 1});
-        unit_tests::initialize_semaphores::initialize_program(devices_.at(id), program, core_range);
         unit_tests::initialize_semaphores::try_creating_more_than_max_num_semaphores(
-            devices_.at(id), program, core_range);
+            devices_.at(id), workload, core_range);
     }
 }
 
-TEST_F(DeviceFixture, TensixCreateMultipleSemaphoresOnSameCore) {
+TEST_F(MeshDeviceFixture, TensixCreateMultipleSemaphoresOnSameCore) {
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
 
     CoreCoord core0(0, 0);
-    uint32_t sem0_id = tt_metal::CreateSemaphore(program, core0, 0);
+    uint32_t sem0_id = tt_metal::CreateSemaphore(program_, core0, 0);
 
     CoreCoord core1(4, 0);
-    uint32_t sem1_id = tt_metal::CreateSemaphore(program, core1, 1);
+    uint32_t sem1_id = tt_metal::CreateSemaphore(program_, core1, 1);
 
     CoreRange core_range({1, 0}, {3, 0});
     CoreRangeSet core_range_set({core_range});
@@ -163,11 +200,11 @@ TEST_F(DeviceFixture, TensixCreateMultipleSemaphoresOnSameCore) {
     CoreRangeSet core_range_set3(set_of_cores);
     CoreRangeSet core_range_set4({CoreRange({5, 0}, {6, 0})});
 
-    uint32_t sem2_id = tt_metal::CreateSemaphore(program, core_range_set, 2);
-    uint32_t sem3_id = tt_metal::CreateSemaphore(program, core_range_set2, 3);
-    uint32_t sem4_id = tt_metal::CreateSemaphore(program, core_range_set2, 4);
-    uint32_t sem5_id = tt_metal::CreateSemaphore(program, core_range_set3, 5);
-    uint32_t sem6_id = tt_metal::CreateSemaphore(program, core_range_set4, 6);
+    uint32_t sem2_id = tt_metal::CreateSemaphore(program_, core_range_set, 2);
+    uint32_t sem3_id = tt_metal::CreateSemaphore(program_, core_range_set2, 3);
+    uint32_t sem4_id = tt_metal::CreateSemaphore(program_, core_range_set2, 4);
+    uint32_t sem5_id = tt_metal::CreateSemaphore(program_, core_range_set3, 5);
+    uint32_t sem6_id = tt_metal::CreateSemaphore(program_, core_range_set4, 6);
 
     EXPECT_EQ(sem0_id, 0);
     EXPECT_EQ(sem1_id, 0);

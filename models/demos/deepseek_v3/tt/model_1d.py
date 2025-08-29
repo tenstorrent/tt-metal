@@ -197,7 +197,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
                 for _ in range(cls.NUM_MLP_META_LAYERS)
             ],
             "transfer_row": {
-                "semaphore": ccl.get_gather_sem(0),
+                "semaphore": ccl.get_point_to_point_sem(0),
             },
             "norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
         }
