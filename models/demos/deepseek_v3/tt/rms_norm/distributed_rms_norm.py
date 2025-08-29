@@ -197,6 +197,6 @@ class DistributedRMSNorm(RMSNormBase):
             program_config=program_config,
             **cfg["rms_norm_post_all_gather"],
         )
-        ttnn.deallocate(tt_stats)
+        ttnn.deallocate(tt_gathered_stats)
 
         return tt_out
