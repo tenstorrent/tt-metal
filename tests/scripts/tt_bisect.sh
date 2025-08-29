@@ -112,6 +112,7 @@ while [[ "$found" == "false" ]]; do
   echo "PYTHONPATH: $PYTHONPATH"
   echo "ARCH_NAME: ${ARCH_NAME:-}"
   echo "pwd: $(pwd)"
+  echo "ls: $(ls -la)"
 
   # Find all ttnn*.so files
   echo "Searching for ttnn*.so files:"
