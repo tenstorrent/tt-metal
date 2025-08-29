@@ -234,7 +234,7 @@ void build_and_run_roundtrip_latency_test(
 
     for (std::size_t i = 0; i < n_hops; i++) {
         auto previous_hop = i == 0 ? n_hops - 1 : i - 1;
-        std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device = mesh_devices.at(i);
+        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device = mesh_devices.at(i);
         auto& program = *device_program_map.at(device);
         auto const& eth_sender_core = hop_eth_sockets.at(i).sender_core;
         auto const& eth_receiver_core = hop_eth_sockets.at(previous_hop).receiver_core;
