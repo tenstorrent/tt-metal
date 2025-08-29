@@ -48,13 +48,13 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
     switch (fabric_config) {
         case tt::tt_fabric::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D: return tt::tt_fabric::Topology::Mesh;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X: return tt::tt_fabric::Topology::Torus;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y: return tt::tt_fabric::Topology::Torus;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return tt::tt_fabric::Topology::Torus;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D:
         case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC: return tt::tt_fabric::Topology::Mesh;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X: return tt::tt_fabric::Topology::Torus;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y: return tt::tt_fabric::Topology::Torus;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X:
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y:
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY:
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X:
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y:
         case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY: return tt::tt_fabric::Topology::Torus;
         case tt::tt_fabric::FabricConfig::DISABLED:
         case tt::tt_fabric::FabricConfig::CUSTOM:
@@ -188,18 +188,16 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
     } else if (topology_ == Topology::Torus) {
         const auto fabric_type = get_fabric_type(fabric_config_);
         // if we are not torused along a dimension, we dont need deadlock avoidance for that direction
-        if (fabric_type == FabricType::TORUS_X &&
-            (direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH)) {
-            // torused along X dimension, but connecting along N/S (Y dim)
+        const bool is_north_south =
+            (direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH);
+        const bool is_east_west = (direction == eth_chan_directions::EAST || direction == eth_chan_directions::WEST);
+
+        if ((fabric_type == FabricType::TORUS_X && is_north_south) ||
+            (fabric_type == FabricType::TORUS_Y && is_east_west)) {
+            // torused along one dimension, but connecting along the other dimension
             return false;
-        } else if (
-            fabric_type == FabricType::TORUS_Y &&
-            (direction == eth_chan_directions::EAST || direction == eth_chan_directions::WEST)) {
-            // torused along Y dimension, but connecting along E/W (X dim)
-            return false;
-        } else {
-            return true;
         }
+        return true;
     }
 
     return false;
