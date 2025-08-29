@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/height_sharded_reader_common.hpp"
+#include "debug/dprint.h"
 
 #define ALWI inline __attribute__((always_inline))
 
@@ -78,11 +79,13 @@ void kernel_main() {
     // Outer loop: iterate over spatial positions (output sticks)
     for (uint32_t spatial_pos = start_page_id; spatial_pos < end_id; ++spatial_pos) {
         // Read the grid stick for this spatial position (contains num_grids sets of coordinates)
+        cb_reserve_back(grid_cb_index, 1);
         uint32_t l1_write_grid_addr = get_write_ptr(grid_cb_index);
         uint64_t grid_noc_addr = s0.get_noc_addr(spatial_pos);
 
         noc_async_read(grid_noc_addr, l1_write_grid_addr, grid_stick_nbytes);
         noc_async_read_barrier();
+        cb_push_back(grid_cb_index, 1);
 
         volatile tt_l1_ptr uint16_t* grid_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_grid_addr);
 
@@ -128,11 +131,6 @@ void kernel_main() {
             w1 = w0 + 1;
 
             // Calculate bilinear interpolation weights
-            bool h0_valid = (h0 >= 0) && (h0 < static_cast<int32_t>(input_height));
-            bool h1_valid = (h1 >= 0) && (h1 < static_cast<int32_t>(input_height));
-            bool w0_valid = (w0 >= 0) && (w0 < static_cast<int32_t>(input_width));
-            bool w1_valid = (w1 >= 0) && (w1 < static_cast<int32_t>(input_width));
-
             float h0_f = static_cast<float>(h0);
             float w0_f = static_cast<float>(w0);
 
@@ -140,6 +138,12 @@ void kernel_main() {
             float w_frac = w_coord_image - w0_f;
             float h_frac_inv = 1.0f - h_frac;
             float w_frac_inv = 1.0f - w_frac;
+
+            // Need to declare boundary checks before using them
+            bool h0_valid = (h0 >= 0) && (h0 < static_cast<int32_t>(input_height));
+            bool h1_valid = (h1 >= 0) && (h1 < static_cast<int32_t>(input_height));
+            bool w0_valid = (w0 >= 0) && (w0 < static_cast<int32_t>(input_width));
+            bool w1_valid = (w1 >= 0) && (w1 < static_cast<int32_t>(input_width));
 
             float weight_nw = (h0_valid && w0_valid) ? (h_frac_inv * w_frac_inv) : 0.0f;  // North-West
             float weight_ne = (h0_valid && w1_valid) ? (h_frac_inv * w_frac) : 0.0f;      // North-East
@@ -152,11 +156,14 @@ void kernel_main() {
             weight_se_bf = float_to_bfloat16(weight_se);
 #endif
 
-            // Boundary checks (needed for both modes for reading input sticks)
+            // For precomputed grid, we need to compute boundary checks here
+            // since they weren't computed in the #ifdef section above
+#ifdef USE_PRECOMPUTED_GRID
             bool h0_valid = (h0 >= 0) && (h0 < static_cast<int32_t>(input_height));
             bool h1_valid = (h1 >= 0) && (h1 < static_cast<int32_t>(input_height));
             bool w0_valid = (w0 >= 0) && (w0 < static_cast<int32_t>(input_width));
             bool w1_valid = (w1 >= 0) && (w1 < static_cast<int32_t>(input_width));
+#endif
 
             // Reserve CB space for 4 corner input sticks for this grid
             cb_reserve_back(input_cb_index, 1);
