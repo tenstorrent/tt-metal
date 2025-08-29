@@ -11,13 +11,16 @@
 #include <iomanip>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
 #include "assert.hpp"
 
 #include "protobuf/mesh_graph_descriptor.pb.h"
 #include "tt-metalium/mesh_graph_descriptor.hpp"
+#include "tt-metalium/mesh_graph_new.hpp"
 
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
+#include <unistd.h>
 
 namespace tt::tt_fabric {
 
@@ -77,6 +80,8 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto) {
     TT_FATAL(errors.empty(), "Failed to validate MeshGraphDescriptor textproto: \n{}", get_validation_report(errors));
 
     proto_ = std::make_unique<proto::MeshGraphDescriptor>(temp_proto);
+
+    populate();
 }
 
 MeshGraphDescriptor::MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path) :
@@ -149,8 +154,23 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshG
         if (!all_errors.empty()) return all_errors;
     }
 
+    {
+        auto errs = validate_legacy_requirements(proto);
+        all_errors.insert(all_errors.end(), errs.begin(), errs.end());
+        if (!all_errors.empty()) return all_errors;
+    }
+
     return all_errors;
 }
+
+void MeshGraphDescriptor::populate() {
+
+    populate_descriptors();
+    populate_instances(proto_->top_level_instance());
+
+    // Set the top level instance
+}
+
 
 std::vector<std::string> MeshGraphDescriptor::validate_basic_structure(const proto::MeshGraphDescriptor& proto) {
     std::vector<std::string> errors;
@@ -478,6 +498,109 @@ std::vector<std::string> MeshGraphDescriptor::validate_graph_topology_and_connec
 
     return error_messages;
 }
+
+std::vector<std::string> MeshGraphDescriptor::validate_legacy_requirements(const proto::MeshGraphDescriptor& proto) {
+    std::vector<std::string> error_messages;
+
+    // Validate that channels count must all be exactly the same
+    uint32_t first_channels_count = proto.mesh_descriptors(0).channels().count();
+    for (const auto& mesh : proto.mesh_descriptors()) {
+        if (mesh.channels().count() != first_channels_count) {
+            error_messages.push_back( 
+                fmt::format( "Channel count must all be exactly the same (Mesh: {})", mesh.name()
+            ));
+        }
+    }
+
+    // Validate that device topology must all be exactly the same
+    
+
+    return error_messages;
+}
+
+void MeshGraphDescriptor::populate_descriptors() {
+    // Save the mesh descriptors
+    for (const auto& mesh : proto_->mesh_descriptors()) {
+        mesh_descriptors_by_name_[mesh.name()] = &mesh;
+    }
+    // Save the graph descriptors
+    for (const auto& graph : proto_->graph_descriptors()) {
+        graph_descriptors_by_name_[graph.name()] = &graph;
+        graph_descriptors_by_type_[graph.type()].insert(&graph);
+    }
+}
+
+void MeshGraphDescriptor::populate_instances(const proto::NodeRef& node_ref) {
+    auto node_instance = construct_node_instance(node_ref);
+    all_instances_.insert(node_instance);
+
+    if (auto graph_descriptor = std::get_if<const proto::GraphDescriptor*>(&node_instance->descriptor)) {
+        for (const auto& instance : (*graph_descriptor)->instances()) {
+            populate_instances(instance);
+        }
+    }
+}
+
+
+std::shared_ptr<MeshGraphDescriptor::NodeInstance> MeshGraphDescriptor::construct_node_instance(const proto::NodeRef& node_ref) {
+    std::string descriptor_name;
+    uint32_t instance_id;
+
+    std::shared_ptr<NodeInstance> node_instance;
+
+    if (node_ref.has_mesh()) {
+        descriptor_name = node_ref.mesh().mesh_descriptor();
+        instance_id = node_ref.mesh().mesh_id();
+
+        // Check that the descriptor name exists
+        auto it = mesh_descriptors_by_name_.find(descriptor_name);
+        TT_FATAL(it != mesh_descriptors_by_name_.end(), "Mesh descriptor {} not found in instance", descriptor_name);
+
+        auto mesh_descriptor = it->second;
+
+        // Check that it doesn't have a sub_ref
+        MeshInstance mesh_instance{
+            {instance_id, 
+             descriptor_name, 
+             mesh_descriptor, 
+             &node_ref.mesh(),
+            }
+        };
+
+        node_instance = std::make_shared<MeshInstance>(mesh_instance);
+
+    } else if (node_ref.has_graph()) {
+        descriptor_name = node_ref.graph().graph_descriptor();
+        instance_id = node_ref.graph().graph_id();
+
+        // Check that the descriptor name exists
+        auto it = graph_descriptors_by_name_.find(descriptor_name);
+        TT_FATAL(it != graph_descriptors_by_name_.end(), "Graph descriptor {} not found in instance", descriptor_name);
+
+        auto graph_descriptor = it->second;
+
+        // Check that it doesn't have a sub_ref
+        GraphInstance graph_instance{
+            {
+                instance_id, 
+                descriptor_name, 
+                graph_descriptor, 
+                &node_ref.graph(),
+            },
+            graph_descriptor->type(),
+        };
+
+        // TODO: Add all other fields for easy access
+
+        node_instance = std::make_shared<GraphInstance>(graph_instance);
+    }
+
+    return node_instance;
+
+}
+
+
+    
 
 // Dynamic checks to implement
 // Check that all instances have been defined somewhere
