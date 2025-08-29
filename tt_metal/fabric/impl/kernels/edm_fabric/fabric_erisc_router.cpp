@@ -747,8 +747,6 @@ FORCE_INLINE void receiver_forward_packet(
     }
 }
 
-constexpr bool swap_nocs = ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES;
-
 #if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
 template <uint8_t rx_channel_id, uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>
@@ -809,7 +807,8 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             payload_size_bytes,
             cached_routing_fields,
             get_downstream_interface_runtime(edm_index),
-            transaction_id);
+            transaction_id,
+            tt::tt_fabric::edm_to_downstream_noc);
     } else {
         if (dest_chip_id == routing_table->my_device_id || mcast_active) {
             execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
@@ -828,7 +827,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                                 get_downstream_interface.template operator()<edm_index>(),
                                 transaction_id,
                                 noc_id);
-                            if constexpr (swap_nocs) {
+                            if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                                 noc_id = 1 - noc_id;
                             }
                         }
@@ -843,7 +842,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                                 get_downstream_interface.template operator()<edm_index>(),
                                 transaction_id,
                                 noc_id);
-                            if constexpr (swap_nocs) {
+                            if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                                 noc_id = 1 - noc_id;
                             }
                         }
@@ -861,7 +860,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                             get_downstream_interface.template operator()<edm_index>(),
                             transaction_id,
                             noc_id);
-                        if constexpr (swap_nocs) {
+                        if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                             noc_id = 1 - noc_id;
                         }
                     }
@@ -877,7 +876,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                             get_downstream_interface.template operator()<edm_index>(),
                             transaction_id,
                             noc_id);
-                        if constexpr (swap_nocs) {
+                        if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                             noc_id = 1 - noc_id;
                         }
                     }
@@ -893,7 +892,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                             get_downstream_interface.template operator()<edm_index>(),
                             transaction_id,
                             noc_id);
-                        if constexpr (swap_nocs) {
+                        if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                             noc_id = 1 - noc_id;
                         }
                     }
@@ -909,7 +908,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                             get_downstream_interface.template operator()<edm_index>(),
                             transaction_id,
                             noc_id);
-                        if constexpr (swap_nocs) {
+                        if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                             noc_id = 1 - noc_id;
                         }
                     }
@@ -927,7 +926,8 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                 payload_size_bytes,
                 cached_routing_fields,
                 get_downstream_interface_runtime(edm_index),
-                transaction_id);
+                transaction_id,
+                noc_id);
         }
     }
 }
@@ -979,7 +979,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -996,7 +996,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1011,7 +1011,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             } else {
@@ -1023,7 +1023,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1041,7 +1041,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1058,7 +1058,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1073,7 +1073,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             } else {
@@ -1085,7 +1085,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1102,7 +1102,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             } else {
@@ -1114,7 +1114,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1128,7 +1128,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1142,7 +1142,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1159,7 +1159,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             } else {
@@ -1171,7 +1171,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1185,7 +1185,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1202,7 +1202,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             } else {
@@ -1214,7 +1214,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1228,7 +1228,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1245,7 +1245,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             } else {
@@ -1261,7 +1261,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1275,7 +1275,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1291,7 +1291,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             } else {
@@ -1307,7 +1307,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1321,7 +1321,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1337,7 +1337,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             } else {
@@ -1353,7 +1353,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1369,7 +1369,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             } else {
@@ -1385,7 +1385,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1401,7 +1401,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             } else {
@@ -1417,7 +1417,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
@@ -1433,7 +1433,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             } else {
@@ -1449,7 +1449,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     get_downstream_interface.template operator()<edm_index>(),
                     transaction_id,
                     noc_id);
-                if constexpr (swap_nocs) {
+                if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
                     noc_id = 1 - noc_id;
                 }
             }
