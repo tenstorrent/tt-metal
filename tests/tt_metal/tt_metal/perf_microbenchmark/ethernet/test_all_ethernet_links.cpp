@@ -141,9 +141,6 @@ public:
         for (auto& [id, device] : device_map) {
             this->devices.push_back(device);
         }
-        for (auto& device : this->devices) {
-            log_info(tt::LogTest, "Device {} open", device->get_devices()[0]->id());
-        }
 
         this->initialize_sender_receiver_pairs(params);
         device_open_ = true;
@@ -414,7 +411,6 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
             throw e;
         }
     }
-
     return programs;
 }
 
@@ -599,14 +595,6 @@ void run(
     std::map<tt_cxy_pair, std::vector<LinkStats>> receiver_stats;
 
     // Create MeshWorkloads from programs for this iteration
-    std::vector<tt_metal::distributed::MeshWorkload> mesh_workloads(device_helper.num_devices);
-    for (size_t i = 0; i < device_helper.num_devices; i++) {
-        tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workloads[i],
-            std::move(programs[i]),
-            tt_metal::distributed::MeshCoordinateRange(
-                tt_metal::distributed::MeshCoordinate(0, 0), tt_metal::distributed::MeshCoordinate(0, 0)));
-    }
     bool slow_dispath_mode = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
     for (uint32_t iteration = 0; iteration < params.num_iterations; iteration++) {
         dump_eth_link_stats(
@@ -615,7 +603,13 @@ void run(
             std::vector<std::thread> threads;
             for (size_t i = 0; i < device_helper.devices.size(); i++) {
                 auto& device = device_helper.devices[i];
-                auto& mesh_workload = mesh_workloads.at(i);
+                auto& program = programs[i];
+                tt_metal::distributed::MeshWorkload mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+                tt_metal::distributed::AddProgramToMeshWorkload(
+                    mesh_workload,
+                    std::move(program),
+                    tt_metal::distributed::MeshCoordinateRange(
+                        tt_metal::distributed::MeshCoordinate(0, 0), tt_metal::distributed::MeshCoordinate(0, 0)));
                 threads.emplace_back([&]() {
                     // Use distributed::EnqueueMeshWorkload instead of LaunchProgram
                     tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
@@ -627,7 +621,14 @@ void run(
         } else {
             for (size_t i = 0; i < device_helper.devices.size(); i++) {
                 auto& device = device_helper.devices[i];
-                auto& mesh_workload = mesh_workloads.at(i);
+                auto& program = programs[i];
+                program.set_runtime_id(0);
+                tt_metal::distributed::MeshWorkload mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+                tt_metal::distributed::AddProgramToMeshWorkload(
+                    mesh_workload,
+                    std::move(program),
+                    tt_metal::distributed::MeshCoordinateRange(
+                        tt_metal::distributed::MeshCoordinate(0, 0), tt_metal::distributed::MeshCoordinate(0, 0)));
                 tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
             }
             log_info(tt::LogTest, "Iteration {} Calling Finish", iteration);
@@ -641,8 +642,6 @@ void run(
     for (const auto& link : device_helper.unique_links) {
         // Only read profiler results from sender
         tt_metal::ReadMeshDeviceProfilerResults(*find_device_with_id(device_helper.devices, link.sender.chip));
-        // tt_metal::detail::ReadDeviceProfilerResults(
-        //     find_device_with_id(device_helper.devices, link.sender.chip)->get_devices()[0]);
 
         switch (params.benchmark_type) {
             case BenchmarkType::EthOnlyUniDir:
