@@ -29,6 +29,13 @@ get_ordered_ethernet_connections(const tt::Cluster& cluster) {
     return make_ordered_ethernet_connections(cluster.get_ethernet_connections());
 }
 
+std::map<
+    tt::umd::chip_id_t,
+    std::map<tt::umd::ethernet_channel_t, std::tuple<tt::umd::chip_id_t, tt::umd::ethernet_channel_t>>>
+get_ordered_ethernet_connections(const std::unique_ptr<tt::umd::Cluster>& cluster) {
+    return make_ordered_ethernet_connections(cluster->get_cluster_description()->get_ethernet_connections());
+}
+
 std::unordered_map<tt::umd::ethernet_channel_t, CoreCoord> map_ethernet_channel_to_core_coord(const tt::Cluster &cluster, tt::umd::chip_id_t chip_id) {
     // logical_eth_core_to_chan_map should be a 1:1 mapping and therefore easily invertible
     std::unordered_map<tt::umd::ethernet_channel_t, CoreCoord> ethernet_channel_to_core_coord;
