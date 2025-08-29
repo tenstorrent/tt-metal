@@ -19,6 +19,8 @@
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
 
+#include "impl/program/program_impl.hpp"
+
 namespace tt::tt_metal {
 
 //////////////////////////////////////
@@ -564,7 +566,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateKernelC
     auto kernel_id = CreateKernel(*program, cmd->file_name()->c_str(), core_spec, kernel_config);
     add_kernel_handle_to_map(cmd->global_id(), kernel_id);
     // Some APIs use Kernel, so convert to and store Kernel.
-    std::shared_ptr<Kernel> kernel = program->get_kernel(kernel_id);
+    std::shared_ptr<Kernel> kernel = program->impl().get_kernel(kernel_id);
     add_kernel_to_map(cmd->global_id(), kernel);
 }
 

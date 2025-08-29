@@ -410,7 +410,7 @@ void HWCommandQueue::enqueue_write_to_core(
 
 void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
-    std::vector<SubDeviceId> sub_device_ids = {program.determine_sub_device_ids(device_)};
+    std::vector<SubDeviceId> sub_device_ids = {program.impl().determine_sub_device_ids(device_)};
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
 
     if (!this->manager_.get_bypass_mode()) {
@@ -420,11 +420,11 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     }
 
     // Finalize Program: Compute relative offsets for data structures (semaphores, kernel binaries, etc) in L1
-    program.finalize_offsets(device_);
+    program.impl().finalize_offsets(device_);
 
-    if (program.get_program_binary_status(device_->id()) == ProgramBinaryStatus::NotSent) {
+    if (program.impl().get_program_binary_status(device_->id()) == ProgramBinaryStatus::NotSent) {
         // Write program binaries to device if it hasn't previously been cached
-        program.allocate_kernel_bin_buf_on_device(device_);
+        program.impl().allocate_kernel_bin_buf_on_device(device_);
         if (program.impl().get_program_transfer_info().binary_data.size()) {
             const BufferRegion buffer_region(0, program.impl().get_kernels_buffer(device_)->size());
             this->enqueue_write_buffer(
@@ -433,7 +433,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
                 buffer_region,
                 false);
         }
-        program.set_program_binary_status(device_->id(), ProgramBinaryStatus::InFlight);
+        program.impl().set_program_binary_status(device_->id(), ProgramBinaryStatus::InFlight);
     }
 
     // Lower the program to device: Generate dispatch commands.
@@ -441,8 +441,8 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     // buffer state at runtime.
     auto program_sizeB = program.impl().kernel_bins_sizeB;
     bool use_prefetcher_cache = program_sizeB and program_sizeB <= this->prefetcher_cache_sizeB_;
-    program.generate_dispatch_commands(device_, use_prefetcher_cache);
-    program.set_last_used_command_queue_for_testing(this);
+    program.impl().generate_dispatch_commands(device_, use_prefetcher_cache);
+    program.impl().set_last_used_command_queue_for_testing(this);
 
     if (this->manager_.get_bypass_mode()) {
         this->trace_nodes_.push_back(
@@ -454,11 +454,11 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     const auto sub_device_index = *sub_device_id;
 
     uint32_t num_additional_workers = 0;
-    if (program.runs_on_noc_multicast_only_cores()) {
+    if (program.impl().runs_on_noc_multicast_only_cores()) {
         num_additional_workers +=
             calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
     }
-    if (program.runs_on_noc_unicast_only_cores()) {
+    if (program.impl().runs_on_noc_unicast_only_cores()) {
         num_additional_workers +=
             calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
     }
@@ -497,7 +497,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     if (use_prefetcher_cache) {
         bool& is_cached = dispatch_metadata.prefetcher_cache_info.is_cached;
         uint32_t& cache_offset = dispatch_metadata.prefetcher_cache_info.offset;
-        std::tie(is_cached, cache_offset) = this->query_prefetcher_cache(program.get_id(), program_sizeB);
+        std::tie(is_cached, cache_offset) = this->query_prefetcher_cache(program.impl().get_id(), program_sizeB);
         TT_ASSERT(
             cache_offset + program_sizeB <= this->prefetcher_cache_sizeB_,
             "Prefetcher cache overflow: offset: {}, program size: {}, cache size: {}",
@@ -525,10 +525,10 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         sub_device_id,
         dispatch_metadata);
     // Update wptrs for tensix and eth launch message in the device class
-    if (program.runs_on_noc_multicast_only_cores()) {
+    if (program.impl().runs_on_noc_multicast_only_cores()) {
         worker_launch_message_buffer_state.inc_mcast_wptr(1);
     }
-    if (program.runs_on_noc_unicast_only_cores()) {
+    if (program.impl().runs_on_noc_unicast_only_cores()) {
         worker_launch_message_buffer_state.inc_unicast_wptr(1);
     }
     this->enqueue_command(command, blocking, sub_device_ids);

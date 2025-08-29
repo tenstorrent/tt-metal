@@ -114,26 +114,26 @@ EnqueueProgramCommand::EnqueueProgramCommand(
 void EnqueueProgramCommand::process() {
     // Compute the total number of workers this program uses
     uint32_t num_workers = 0;
-    if (program.runs_on_noc_multicast_only_cores()) {
+    if (program.impl().runs_on_noc_multicast_only_cores()) {
         num_workers += calculate_expected_workers_to_finish(device, sub_device_id, HalProgrammableCoreType::TENSIX);
     }
-    if (program.runs_on_noc_unicast_only_cores()) {
+    if (program.impl().runs_on_noc_unicast_only_cores()) {
         num_workers += calculate_expected_workers_to_finish(device, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
     }
     // Reserve space for this program in the kernel config ring buffer
     program_dispatch::reserve_space_in_kernel_config_buffer(
         this->config_buffer_mgr,
         program.impl().get_program_config_sizes(),
-        program.get_program_binary_status(device->id()),
+        program.impl().get_program_binary_status(device->id()),
         num_workers,
         this->expected_num_workers_completed,
         dispatch_metadata);
 
-    RecordProgramRun(program.get_id());
+    RecordProgramRun(program.impl().get_id());
 
     // Access the program dispatch-command cache
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
-    auto& cached_program_command_sequence = program.get_cached_program_command_sequences().at(command_hash);
+    auto& cached_program_command_sequence = program.impl().get_cached_program_command_sequences().at(command_hash);
     // Update the generated dispatch commands based on the state of the CQ and the ring buffer
     program_dispatch::update_program_dispatch_commands(
         program.impl(),
@@ -145,7 +145,7 @@ void EnqueueProgramCommand::process() {
         this->dispatch_core_type,
         this->sub_device_id,
         dispatch_metadata,
-        program.get_program_binary_status(device->id()));
+        program.impl().get_program_binary_status(device->id()));
     // Issue dispatch commands for this program
     program_dispatch::write_program_command_sequence(
         cached_program_command_sequence,
@@ -155,7 +155,7 @@ void EnqueueProgramCommand::process() {
         dispatch_metadata.stall_first,
         dispatch_metadata.stall_before_program);
     // Kernel Binaries are committed to DRAM, the first time the program runs on device. Reflect this on host.
-    program.set_program_binary_status(device->id(), ProgramBinaryStatus::Committed);
+    program.impl().set_program_binary_status(device->id(), ProgramBinaryStatus::Committed);
 }
 
 EnqueueTerminateCommand::EnqueueTerminateCommand(
@@ -209,7 +209,7 @@ void EnqueueReadBuffer(
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueReadBuffer, cq, buffer, dst, blocking);
     Buffer& buffer_obj = detail::GetBufferObject(buffer);
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        return detail::ReadFromBuffer(buffer_obj, (uint8_t *)dst);
+        return detail::ReadFromBuffer(buffer_obj, (uint8_t*)dst);
     }
     BufferRegion region(0, buffer_obj.size());
     EnqueueReadSubBuffer(cq, buffer, dst, region, blocking);
@@ -236,8 +236,8 @@ void EnqueueWriteBuffer(
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueWriteBuffer, cq, buffer, src, blocking);
     Buffer& buffer_obj = detail::GetBufferObject(buffer);
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        return detail::WriteToBuffer(buffer_obj,
-            tt::stl::Span<const uint8_t>((const uint8_t *)std::get<const void *>(src), buffer_obj.size()));
+        return detail::WriteToBuffer(
+            buffer_obj, tt::stl::Span<const uint8_t>((const uint8_t*)std::get<const void*>(src), buffer_obj.size()));
     }
     BufferRegion region(0, buffer_obj.size());
     EnqueueWriteSubBuffer(cq, buffer, std::move(src), region, blocking);
@@ -260,18 +260,18 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueProgram, cq, program, blocking);
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        return detail::LaunchProgram((IDevice *)&cq, program);
+        return detail::LaunchProgram((IDevice*)&cq, program);
     }
     detail::DispatchStateCheck(true);
 
     IDevice* device = cq.device();
     detail::CompileProgram(device, program);
-    program.allocate_circular_buffers(device);
-    detail::ValidateCircularBufferRegion(program, device);
+    program.impl().allocate_circular_buffers(device);
+    program.impl().validate_circular_buffer_region(device);
     cq.enqueue_program(program, blocking);
     // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
     // leaks on device.
-    program.release_buffers();
+    program.impl().release_buffers();
 }
 
 void EnqueueRecordEvent(

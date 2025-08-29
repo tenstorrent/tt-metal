@@ -41,6 +41,9 @@
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"
 
+// Access to internal API: ProgramImpl::get_sem_base_addr, get_sem_size, num_kernels, get_kernel
+#include "impl/program/program_impl.hpp"
+
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -56,8 +59,8 @@ void check_program_is_mapped_to_correct_cores(
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 auto logical_core = CoreCoord{x, y};
-                for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-                    auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
+                for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
+                    auto kernel = program.impl().get_kernel(kernel_id);
                     TT_FATAL(kernel->is_on_logical_core(logical_core), "Error");
                     // Check that compute kernel compile time args are mapped to the correct cores
                     if (kernel->get_kernel_processor_class() == tt_metal::HalProcessorClassType::COMPUTE) {
@@ -68,7 +71,7 @@ void check_program_is_mapped_to_correct_cores(
                 for (const auto& cb : program.circular_buffers()) {
                     TT_FATAL(cb->is_on_logical_core(logical_core), "Error");
                 }
-                for (const auto& semaphore : program.semaphores()) {
+                for (const auto& semaphore : program.impl().semaphores()) {
                     TT_FATAL(semaphore.initialized_on_logical_core(logical_core), "Error");
                 }
             }
@@ -86,11 +89,12 @@ void check_semaphores_are_initialized(
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 auto logical_core = CoreCoord{x, y};
                 std::vector<uint32_t> res;
+                auto sem_base_addr = program.impl().get_sem_base_addr(device, logical_core, CoreType::WORKER);
                 tt_metal::detail::ReadFromDeviceL1(
                     device,
                     logical_core,
-                    program.get_sem_base_addr(device, logical_core, CoreType::WORKER),
-                    program.get_sem_size(device, logical_core, CoreType::WORKER),
+                    sem_base_addr,
+                    program.impl().get_sem_size(device, logical_core, CoreType::WORKER),
                     res);
                 std::vector<uint32_t> filtered_res;
                 static uint32_t num_u32_to_skip =
@@ -197,8 +201,7 @@ bool test_program_specified_with_core_range_set(
     tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
     // Reader kernel on all cores reads from same location in DRAM
-    const std::array reader_rt_args = {
-        src_dram_buffer->address(), uint(0), num_tiles};
+    const std::array reader_rt_args = {src_dram_buffer->address(), uint(0), num_tiles};
     for (const auto& [core, dst_l1_buffer] : core_to_l1_buffer) {
         tt_metal::SetRuntimeArgs(program, unary_reader_kernel, core, reader_rt_args);
 

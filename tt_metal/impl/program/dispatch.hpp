@@ -201,6 +201,10 @@ void set_core_go_message_mapping_on_device(
     SystemMemoryManager& manager,
     uint8_t cq_id);
 
+template <typename WorkloadType, typename DeviceType>
+uint32_t program_base_addr_on_core(
+    WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType core_type);
+
 }  // namespace program_dispatch
 
 }  // namespace tt_metal

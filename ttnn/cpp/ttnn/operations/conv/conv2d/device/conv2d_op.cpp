@@ -10,6 +10,7 @@
 #include <tt-metalium/math.hpp>
 
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/constants.hpp>
 
 #include <tt-metalium/work_split.hpp>
@@ -260,7 +261,12 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
 
     const uint32_t post_op_l1_allocation_size =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-    auto actual_cb_size = program_with_cbs.program.get_cb_memory_size();
+
+    // Compute CB total size
+    const auto& cbs = program_with_cbs.program.circular_buffers();
+    auto actual_cb_size = std::accumulate(cbs.begin(), cbs.end(), 0, [](auto acc, const auto& cb) {
+        return acc + (cb->globally_allocated() ? 0 : cb->size());
+    });
 
     auto kernel_dims =
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second});
