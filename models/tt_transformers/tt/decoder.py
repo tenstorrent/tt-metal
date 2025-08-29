@@ -211,7 +211,9 @@ class TransformerBlock(LightweightModule):
             residual = hidden_states
             if mode == "prefill":
                 x.deallocate(True)
-        hidden_states = self.ff_norm(attn_out, mode)
+        else:
+            hidden_states = attn_out
+        hidden_states = self.ff_norm(hidden_states, mode)
         if self.pre_ff_norm is not None:
             # The output of the ff_norm is replicated across the device
             # but the residual is fractured across the devices
