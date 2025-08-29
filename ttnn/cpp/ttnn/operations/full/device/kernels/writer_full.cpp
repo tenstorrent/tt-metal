@@ -73,7 +73,7 @@ void kernel_main() {
     uint32_t end_id = start_id + num_pages_per_core;
     for (std::uint32_t i = start_id; i < end_id; i++) {
         const auto cb_value_addr = get_read_ptr(cb_value);
-        noc_async_write_tile(i, s, cb_value_addr);
+        noc_async_write_page(i, s, cb_value_addr);
     }
     noc_async_writes_flushed();
     cb_pop_front(cb_value, 1);
