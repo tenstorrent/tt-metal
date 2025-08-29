@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 1
+#define ENABLE_DEBUG_PRINT 0
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -195,22 +195,9 @@ ALWI void read_window_with_top_left_index(
         }
         if constexpr (!is_large_kernel) {
             noc_async_read_barrier();
-            // if (ind == 0) {
-            //     DPRINT << "IN_CB " << ENDL();
-            //     tt::data_movement::common::print_bf16_pages(get_read_ptr(in_cb_id), 32, 32);
-            // }
             cb_push_back(in_cb_id, 1);
             if constexpr (return_indices) {
-                // DPRINT << "IN_IDX_CB " << ENDL();
-                // tt::data_movement::common::print_u16_pages(get_read_ptr(in_idx_cb_id), 32, 32);
                 cb_push_back(in_idx_cb_id, 1);
-
-                // cb_wait_front(tile_tmp_cb_id, 1);
-                // cb_wait_front(tile_idx_tmp_cb_id, 1);
-                // tt::data_movement::common::print_bf16_pages(
-                //     get_read_ptr(tile_tmp_cb_id), 32, 32);
-                // tt::data_movement::common::print_u16_pages(
-                //     get_read_ptr(tile_idx_tmp_cb_id), 32, 32);
             }
         }
     }

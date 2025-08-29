@@ -11,7 +11,7 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
-#define DEBUG_PRINT 1
+#define DEBUG_PRINT 0
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -155,17 +155,12 @@ void MAIN {
                         reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
                     }
                 } else {
-                    // UNPACK(tt::compute::common::print_full_tile(curr_in_cb_id));
-
                     tilize_dest_init_short_with_dt(curr_in_cb_id, curr_in_idx_cb_id, topk_output_tiles);
                     tilize_dest_block(curr_in_idx_cb_id, topk_output_tiles, index_dst_idx, topk_cb_tile_idx);
                     tilize_dest_uninit_with_dt(curr_in_idx_cb_id, curr_in_cb_id);
                     tilize_dest_init_short_with_dt(curr_in_idx_cb_id, curr_in_cb_id, topk_output_tiles);
                     tilize_dest_block(curr_in_cb_id, topk_output_tiles, data_dst_idx, topk_cb_tile_idx);
                     tilize_dest_uninit_with_dt(curr_in_cb_id, curr_in_idx_cb_id);
-
-                    // dprint_tensix_dest_reg(0);
-                    // dprint_tensix_dest_reg(2);
 
                     ckernel::max_pool_with_indices<window_size_hw>(data_dst_idx, index_dst_idx);
                 }
