@@ -22,6 +22,52 @@ from models.tt_transformers.tt.generator import Generator, SamplingParams, creat
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
+# Taken from models/tt_transformers/tests/test_accuracy.py as there is a PR to remove this file
+def get_accuracy_thresholds(model_args, optimizations):
+    """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
+    # Read PERF.md
+    perf_file = Path(__file__).parent.parent / "PERF.md"
+    with open(perf_file, "r") as f:
+        content = f.read()
+
+    # Split into sections based on optimization mode
+    sections = content.split("## ")
+    if callable(optimizations):
+        optimizations = optimizations(model_args)
+    first_decoder_conf = optimizations.decoder_optimizations[0]
+    target_section = next(s for s in sections if s.lower().startswith(f"{first_decoder_conf.__name__}\n"))
+
+    # Parse the table and find the row for our model and device
+    # Potential lines have the form "| Llama-3.1-8b    | T3K    | 91        | 99        | 49.8          |"
+    base_model_name = model_args.base_model_name
+    device_name = model_args.device_name
+    correct_line = (
+        lambda line: "|" in line
+        and base_model_name.lower() in line.split("|")[1].strip().lower()
+        and device_name.lower() in line.split("|")[2].strip().lower()
+        and not "(DP=".lower() in line.lower()  # ignore DP/HP report for now
+    )
+    rows = [
+        line.split("|")[1:]  # Each row starts with a separator
+        for line in target_section.split("\n")
+        if correct_line(line)
+    ]
+    if not rows:
+        raise ValueError(
+            f"Could not find accuracy data for {base_model_name} on {device_name} in {optimizations.__name__} mode"
+        )
+
+    assert (
+        len(rows) == 1
+    ), f"Found multiple rows for {base_model_name} on {device_name} in {optimizations.__name__} mode in PERF.md"
+    row = rows[0]
+    top1_acc = float(row[2].strip())
+    top5_acc = float(row[3].strip())
+
+    # Allow for rounding
+    return top1_acc - 0.5, top5_acc - 0.5
+
+
 def create_tt_model(
     mesh_device,
     instruct,
@@ -952,6 +998,20 @@ def test_demo_text(
             acc = token_acc.compute_accuracy()
             logger.info(f"=== Top1 and Top5 Token Accuracy ===")
             logger.info(f" Top1 Accuracy: {acc[0]*100:.2f}%, Top5 Accuracy: {acc[1]*100:.2f}%")
+            total_top1_acc = acc[0] * 100
+            total_top5_acc = acc[1] * 100
+            logger.info(f" Top1 Accuracy: {total_top1_acc:.2f}%, Top5 Accuracy: {total_top5_acc:.2f}%")
+            # Get accuracy thresholds from PERF.md, unless the configuration is from a json
+            min_top1_acc, min_top5_acc = get_accuracy_thresholds(
+                model_args[0],
+                optimizations,
+            )
+            assert (
+                total_top1_acc >= min_top1_acc
+            ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
+            assert (
+                total_top5_acc >= min_top5_acc
+            ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
 
     profiler.end(f"inference_decode", iteration=batch_idx)
 

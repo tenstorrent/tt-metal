@@ -12,11 +12,18 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Model             | Device      | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |-------------------|-------------|-----------|-----------|---------------|-----------|
 | gemma-3-4b-it     | N150        | 85        | 96        | 34            | 64        |
-| gemma-3-4b-it (vis)| N150       | N/A       | N/A       | 25.84         | 920.04    |
 | gemma-3-4b-it     | N300        | 85        | 96        | 36.02         | 89.95     |
-| gemma-3-4b-it (vis)| N300       | N/A       | N/A       | 30.49         | 670.83    |
 | gemma-3-27b-it    | T3K         | 92        | 99        | 16.91         | 466.7     |
-| gemma-3-27b-it (vis)| T3K       | N/A       | N/A       | 14.54         | 975.86    |
+
+## Vision Performance
+
+This configuration uses bfp4 MLP and bfp8 attention weights for all models except:
+
+| Model             | Device      | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
+|-------------------|-------------|-----------|-----------|---------------|-----------|
+| gemma-3-4b-it     | N150        | N/A       | N/A       | 25.84         | 920.04    |
+| gemma-3-4b-it     | N300        | N/A       | N/A       | 30.49         | 670.83    |
+| gemma-3-27b-it    | T3K         | N/A       | N/A       | 14.54         | 975.86    |
 
 
 
@@ -28,8 +35,16 @@ Llama 3 models test as insensitive to attention precision and so we use bfp8 att
 | Model             | Device      | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |-------------------|-------------|-----------|-----------|---------------|-----------|
 | gemma-3-4b-it     | N150        | 91        | 99        | 30            | 76        |
-| gemma-3-4b-it (vis)| N150       | N/A       | N/A       | 24.39         | 948.9     |
 | gemma-3-4b-it     | N300        | 90        | 99        | 33.5          | 110.75    |
-| gemma-3-4b-it (vis)| N300       |  N/A      |  N/A      | 29.55         | 678.13    |
 | gemma-3-27b-it    | T3K         | 94        | 99        | 15.88         | 493.36    |
-| gemma-3-27b-it (vis)| T3K       | N/A       |  N/A      | 13.84         | 995.06    |
+
+## Vision Accuracy
+
+This configuration uses bfp8 MLP and BF16 attention weights (70B+ models use bfp8 attention and bfp4 MLP).
+Llama 3 models test as insensitive to attention precision and so we use bfp8 attention and kv-cache for them even in accuracy mode.
+
+| Model             | Device      | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
+|-------------------|-------------|-----------|-----------|---------------|-----------|
+| gemma-3-4b-it     | N150        | N/A       | N/A       | 24.39         | 948.9     |
+| gemma-3-4b-it     | N300        |  N/A      |  N/A      | 29.55         | 678.13    |
+| gemma-3-27b-it    | T3K         | N/A       |  N/A      | 13.84         | 995.06    |
