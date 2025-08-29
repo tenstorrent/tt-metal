@@ -112,8 +112,18 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
 
     if (operation_attributes.softmax_type == SoftmaxOperationType::SoftmaxInPlace ||
         operation_attributes.softmax_type == SoftmaxOperationType::ScaleMaskSoftmaxInPlace ||
-        operation_attributes.softmax_type == SoftmaxOperationType::ScaleCausalMaskHWSoftmaxInPlace ||
+        operation_attributes.softmax_type == SoftmaxOperationType::ScaleMaskSoftmax ||
         operation_attributes.softmax_type == SoftmaxOperationType::ScaleCausalMaskHWSoftmaxInPlace) {
+        return std::visit(
+            [&](const auto& program_config) -> program_factory_t {
+                using ProgramConfigType = std::decay_t<decltype(program_config)>;
+                if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
+                    return program::SoftmaxShardedProgramFactoryAttentionOptimized{};
+                } else {
+                    return program::SoftmaxProgramFactoryAttentionOptimized{};
+                }
+            },
+            operation_attributes.program_config);
         return program::SoftmaxProgramFactoryAttentionOptimized{};
     } else if (
         operation_attributes.softmax_type == SoftmaxOperationType::Softmax && operation_attributes.dim == rank - 1 &&
@@ -195,8 +205,10 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                     using ProgramConfigType = std::decay_t<decltype(program_config)>;
                     if constexpr (std::is_same_v<ProgramConfigType, SoftmaxDefaultProgramConfig>) {
                         TT_FATAL(
-                            tensors_args.input_tensor.padded_shape() == tensors_args.mask.value().padded_shape(),
-                            "Input and mask batch sizes must match");
+                            tensors_args.input_tensor.padded_shape()[0] == tensors_args.mask.value().padded_shape()[0],
+                            "Input and mask batch sizes must match, got {} for input and {} for mask",
+                            tensors_args.input_tensor.padded_shape(),
+                            tensors_args.mask.value().padded_shape());
                         TT_FATAL(
                             !attributes.is_scale_causal_mask_hw_dims_softmax,
                             "Scale causal mask HW dims softmax not supported in default program config");
@@ -263,16 +275,6 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                     }
                 },
                 attributes.program_config);
-            TT_FATAL(
-                mask.padded_shape()[-2] == tensors_args.input_tensor.padded_shape()[-2],
-                "Non-sharded mask second last dimension must match input tensor. Got mask: {} and input tensor: {}",
-                mask.padded_shape()[-2],
-                tensors_args.input_tensor.padded_shape()[-2]);
-            TT_FATAL(
-                mask.padded_shape()[-1] == tensors_args.input_tensor.padded_shape()[-1],
-                "Non-sharded mask last dimension must match input tensor. Got mask: {} and input tensor: {}",
-                mask.padded_shape()[-1],
-                tensors_args.input_tensor.padded_shape()[-1]);
         }
     } else {
         TT_FATAL(not attributes.scale.has_value(), "Scale value must not be set when mask is not present");
@@ -304,7 +306,6 @@ SoftmaxDeviceOperation::tensor_return_value_t SoftmaxDeviceOperation::create_out
         attributes.inplace) {
         return tensor_args.input_tensor;
     }
-
     // Standard
     return {create_device_tensor(compute_output_specs(attributes, tensor_args), tensor_args.input_tensor.device())};
 }
@@ -476,6 +477,8 @@ Tensor scale_mask_softmax(
         input_format_params.pad_shape,
         input_format_params.pad_value,
         input_format_params.target_layout);
+    const auto rank = formatted_input_tensor.logical_shape().size();
+    const auto dim = rank - 1;
 
     if (mask.has_value()) {
         TT_FATAL(
@@ -508,7 +511,7 @@ Tensor scale_mask_softmax(
             .target_layout = tt::tt_metal::Layout::TILE};
         auto formatted_mask = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
             mask.value(),
-            input_tensor.device(),
+            mask.value().device(),
             mask_format_params.pad_shape,
             mask_format_params.pad_value,
             mask_format_params.target_layout);
@@ -518,7 +521,7 @@ Tensor scale_mask_softmax(
             queue_id,
             SoftmaxOperationType::ScaleMaskSoftmax,
             /*input_tensor=*/formatted_input_tensor,
-            /*dim=*/-1,
+            /*dim=*/dim,
             /*mask=*/formatted_mask,
             /*scale=*/scale,
             /*inplace=*/false,
@@ -535,7 +538,7 @@ Tensor scale_mask_softmax(
         queue_id,
         SoftmaxOperationType::ScaleMaskSoftmax,
         /*input_tensor=*/formatted_input_tensor,
-        /*dim=*/-1,
+        /*dim=*/dim,
         /*mask=*/mask,
         /*scale=*/scale,
         /*inplace=*/false,
@@ -599,13 +602,15 @@ Tensor scale_mask_softmax_in_place(
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
     const auto compute_kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
+    const auto rank = input_tensor.logical_shape().size();
+    const auto dim = rank - 1;
 
     // Operation
     return ttnn::prim::softmax(
         queue_id,
         SoftmaxOperationType::ScaleMaskSoftmaxInPlace,
         /*input_tensor=*/input_tensor,
-        /*dim=*/-1,
+        /*dim=*/dim,
         /*mask=*/mask,
         /*scale=*/scale,
         /*inplace=*/true,
@@ -629,13 +634,15 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
     const auto compute_kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
+    const auto rank = input_tensor.logical_shape().size();
+    const auto dim = rank - 1;
 
     // Operation
     return ttnn::prim::softmax(
         queue_id,
         SoftmaxOperationType::ScaleCausalMaskHWSoftmaxInPlace,
         /*input_tensor=*/input_tensor,
-        /*dim=*/-1,
+        /*dim=*/dim,
         /*mask=*/mask,
         /*scale=*/scale,
         /*inplace=*/true,

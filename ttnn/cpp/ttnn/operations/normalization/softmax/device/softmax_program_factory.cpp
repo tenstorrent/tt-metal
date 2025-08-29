@@ -814,7 +814,6 @@ void SoftmaxProgramFactoryGeneralCLarge::override_runtime_arguments(
 SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryAttentionOptimized::create(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     tt::tt_metal::Program program{};
-    std::cout << "2" << std::endl;
     // Constants
     const auto& shape = tensor_args.input_tensor.padded_shape();
     const uint32_t W = shape[-1], H = (tensor_args.input_tensor.physical_volume() / (shape[0] * shape[-1])),
