@@ -686,11 +686,6 @@ bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& vir
     return true;
 }
 
-bool onlyProfileDispatchCores(const ProfilerReadState state) {
-    return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores() &&
-           state == ProfilerReadState::LAST_SD_L1_READ;
-}
-
 void ReadDeviceProfilerResults(
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
@@ -703,44 +698,6 @@ void ReadDeviceProfilerResults(
         auto profiler_it = tt_metal_device_profiler_map.find(device->id());
         TT_ASSERT(profiler_it != tt_metal_device_profiler_map.end());
         DeviceProfiler& profiler = profiler_it->second;
-
-        if (onlyProfileDispatchCores(state)) {
-            TT_ASSERT(areAllCoresDispatchCores(device, virtual_cores));
-
-            constexpr uint8_t maxLoopCount = 10;
-            constexpr uint32_t loopDuration_us = 10000;
-
-            const auto& hal = MetalContext::instance().hal();
-            for (const CoreCoord& core : virtual_cores) {
-                bool is_core_done = false;
-
-                const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device->id(), core);
-
-                profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-                for (int i = 0; i < maxLoopCount; i++) {
-                    const std::vector<std::uint32_t> control_buffer =
-                        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                            device->id(),
-                            core,
-                            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-                            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
-                    if (control_buffer[kernel_profiler::PROFILER_DONE] == 1) {
-                        is_core_done = true;
-                        break;
-                    }
-                    std::this_thread::sleep_for(std::chrono::microseconds(loopDuration_us));
-                }
-                if (!is_core_done) {
-                    std::string msg = fmt::format(
-                        "Device profiling never finished on device {}, worker core {}, {}",
-                        device->id(),
-                        core.x,
-                        core.y);
-                    TracyMessageC(msg.c_str(), msg.size(), tracy::Color::Tomato3);
-                    log_warning(tt::LogMetal, "{}", msg);
-                }
-            }
-        }
 
         TT_FATAL(
             !tt::tt_metal::MetalContext::instance().dprint_server(),
