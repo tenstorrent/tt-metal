@@ -490,6 +490,8 @@ def run_tt_image_gen(
     input_shape,
     vae,  # can be host vae or tt vae
     batch_size,
+    persistent_buffer,
+    semaphores,
     output_device=None,
     output_shape=None,
     tid=None,
@@ -501,21 +503,7 @@ def run_tt_image_gen(
     profiler.start("image_gen")
     profiler.start("denoising_loop")
 
-    compute_grid_size = ttnn_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    semaphores = [ttnn.create_global_semaphore(ttnn_device, ccl_sub_device_crs, 0) for _ in range(2)]
     cnt = 0
-    # TODO: prettify this
-    persistent_buffer = ttnn.from_torch(
-        torch.zeros((2, 1, 16384, 32)),
-        device=ttnn_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
-        dtype=ttnn.bfloat16,
-    )
 
     for i, t in tqdm(enumerate(tt_timesteps), total=len(tt_timesteps)):
         unet_outputs = []
@@ -529,7 +517,7 @@ def run_tt_image_gen(
                     latent_model_input,
                     input_shape,
                     tt_prompt_embeds[unet_slice] if not use_tp else tt_prompt_embeds,
-                    tt_time_ids[unet_slice],
+                    tt_time_ids if use_tp else tt_time_ids[unet_slice],
                     tt_text_embeds[unet_slice] if not use_tp else tt_text_embeds,
                 )
 
