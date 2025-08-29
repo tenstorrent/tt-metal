@@ -389,6 +389,10 @@ from ttnn._ttnn.operations.conv import (
     convert_conv_weight_tensor_to_grouped_layout,
 )
 
+from ttnn.operations.pool import (
+    prepare_grid_sample_grid,
+)
+
 from ttnn._ttnn.operations.experimental import Conv3dConfig
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
