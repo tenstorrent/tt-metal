@@ -43,7 +43,7 @@ struct LogicalChipConnection {
 
     bool operator==(const LogicalChipConnection& other) const {
         return host_id == other.host_id && tray_id == other.tray_id &&
-               asic_channel.asic_index == other.asic_channel.asic_index &&
+               asic_channel.asic_location == other.asic_channel.asic_location &&
                asic_channel.channel_id == other.asic_channel.channel_id;
     }
 };
@@ -51,7 +51,7 @@ struct LogicalChipConnection {
 struct PhysicalChannelConnection {
     std::string hostname = "";
     uint32_t tray_id = 0;
-    uint32_t asic_index = 0;
+    uint32_t asic_location = 0;
     uint32_t channel_id = 0;
 
     auto operator<=>(const PhysicalChannelConnection& other) const = default;
@@ -75,7 +75,7 @@ struct PhysicalPortConnection {
 namespace tt::tt_fabric::fsd_tests {
 inline std::ostream& operator<<(std::ostream& os, const PhysicalChannelConnection& conn) {
     os << "PhysicalChannelConnection{hostname='" << conn.hostname << "', tray_id=" << conn.tray_id
-       << ", asic_index=" << conn.asic_index << ", channel_id=" << conn.channel_id << "}";
+       << ", asic_location=" << conn.asic_location << ", channel_id=" << conn.channel_id << "}";
     return os;
 }
 inline std::ostream& operator<<(std::ostream& os, const PhysicalPortConnection& conn) {
@@ -92,14 +92,14 @@ template <>
 struct hash<tt::tt_fabric::fsd_tests::LogicalChipConnection> {
     std::size_t operator()(const tt::tt_fabric::fsd_tests::LogicalChipConnection& conn) const {
         return tt::stl::hash::hash_objects_with_default_seed(
-            conn.host_id, conn.tray_id, conn.asic_channel.asic_index, conn.asic_channel.channel_id);
+            conn.host_id, conn.tray_id, conn.asic_channel.asic_location, conn.asic_channel.channel_id);
     }
 };
 template <>
 struct hash<tt::tt_fabric::fsd_tests::PhysicalChannelConnection> {
     std::size_t operator()(const tt::tt_fabric::fsd_tests::PhysicalChannelConnection& conn) const {
         return tt::stl::hash::hash_objects_with_default_seed(
-            conn.hostname, conn.tray_id, conn.asic_index, conn.channel_id);
+            conn.hostname, conn.tray_id, conn.asic_location, conn.channel_id);
     }
 };
 template <>
@@ -295,13 +295,13 @@ public:
             auto* endpoint_a = connection->mutable_endpoint_a();
             endpoint_a->set_host_id(start.host_id);
             endpoint_a->set_tray_id(start.tray_id);
-            endpoint_a->set_asic_index(start.asic_channel.asic_index);
+            endpoint_a->set_asic_location(start.asic_channel.asic_location);
             endpoint_a->set_chan_id(start.asic_channel.channel_id);
 
             auto* endpoint_b = connection->mutable_endpoint_b();
             endpoint_b->set_host_id(end.host_id);
             endpoint_b->set_tray_id(end.tray_id);
-            endpoint_b->set_asic_index(end.asic_channel.asic_index);
+            endpoint_b->set_asic_location(end.asic_channel.asic_location);
             endpoint_b->set_chan_id(end.asic_channel.channel_id);
         }
 
@@ -838,19 +838,19 @@ void validate_fsd_against_gsd(
 
         uint32_t host_id_1 = endpoint_a.host_id();
         uint32_t tray_id_1 = endpoint_a.tray_id();
-        uint32_t asic_index_1 = endpoint_a.asic_index();
+        uint32_t asic_location_1 = endpoint_a.asic_location();
         uint32_t chan_id_1 = endpoint_a.chan_id();
 
         uint32_t host_id_2 = endpoint_b.host_id();
         uint32_t tray_id_2 = endpoint_b.tray_id();
-        uint32_t asic_index_2 = endpoint_b.asic_index();
+        uint32_t asic_location_2 = endpoint_b.asic_location();
         uint32_t chan_id_2 = endpoint_b.chan_id();
 
         const std::string& hostname_1 = hosts[host_id_1].hostname();
         const std::string& hostname_2 = hosts[host_id_2].hostname();
 
-        PhysicalChannelConnection conn_1{hostname_1, tray_id_1, asic_index_1, chan_id_1};
-        PhysicalChannelConnection conn_2{hostname_2, tray_id_2, asic_index_2, chan_id_2};
+        PhysicalChannelConnection conn_1{hostname_1, tray_id_1, asic_location_1, chan_id_1};
+        PhysicalChannelConnection conn_2{hostname_2, tray_id_2, asic_location_2, chan_id_2};
 
         // Sort to ensure consistent ordering
         std::pair<PhysicalChannelConnection, PhysicalChannelConnection> connection_pair_sorted;
@@ -896,15 +896,15 @@ void validate_fsd_against_gsd(
             std::string hostname_1 = first_conn["host_name"].as<std::string>();
             uint32_t chan_id_1 = first_conn["chan_id"].as<uint32_t>();
             uint32_t tray_id_1 = first_conn["tray_id"].as<uint32_t>();
-            uint32_t asic_index_1 = first_conn["asic_index"].as<uint32_t>();
+            uint32_t asic_location_1 = first_conn["asic_location"].as<uint32_t>();
 
             std::string hostname_2 = second_conn["host_name"].as<std::string>();
             uint32_t chan_id_2 = second_conn["chan_id"].as<uint32_t>();
             uint32_t tray_id_2 = second_conn["tray_id"].as<uint32_t>();
-            uint32_t asic_index_2 = second_conn["asic_index"].as<uint32_t>();
+            uint32_t asic_location_2 = second_conn["asic_location"].as<uint32_t>();
 
-            PhysicalChannelConnection conn_1{hostname_1, tray_id_1, asic_index_1, chan_id_1};
-            PhysicalChannelConnection conn_2{hostname_2, tray_id_2, asic_index_2, chan_id_2};
+            PhysicalChannelConnection conn_1{hostname_1, tray_id_1, asic_location_1, chan_id_1};
+            PhysicalChannelConnection conn_2{hostname_2, tray_id_2, asic_location_2, chan_id_2};
 
             // Sort to ensure consistent ordering
             std::pair<PhysicalChannelConnection, PhysicalChannelConnection> connection_pair_sorted;
@@ -936,15 +936,15 @@ void validate_fsd_against_gsd(
             std::string hostname_1 = first_conn["host_name"].as<std::string>();
             uint32_t chan_id_1 = first_conn["chan_id"].as<uint32_t>();
             uint32_t tray_id_1 = first_conn["tray_id"].as<uint32_t>();
-            uint32_t asic_index_1 = first_conn["asic_index"].as<uint32_t>();
+            uint32_t asic_location_1 = first_conn["asic_location"].as<uint32_t>();
 
             std::string hostname_2 = second_conn["host_name"].as<std::string>();
             uint32_t chan_id_2 = second_conn["chan_id"].as<uint32_t>();
             uint32_t tray_id_2 = second_conn["tray_id"].as<uint32_t>();
-            uint32_t asic_index_2 = second_conn["asic_index"].as<uint32_t>();
+            uint32_t asic_location_2 = second_conn["asic_location"].as<uint32_t>();
 
-            PhysicalChannelConnection conn_1{hostname_1, tray_id_1, asic_index_1, chan_id_1};
-            PhysicalChannelConnection conn_2{hostname_2, tray_id_2, asic_index_2, chan_id_2};
+            PhysicalChannelConnection conn_1{hostname_1, tray_id_1, asic_location_1, chan_id_1};
+            PhysicalChannelConnection conn_2{hostname_2, tray_id_2, asic_location_2, chan_id_2};
 
             // Sort to ensure consistent ordering
             std::pair<PhysicalChannelConnection, PhysicalChannelConnection> connection_pair_sorted;
@@ -975,10 +975,6 @@ void validate_fsd_against_gsd(
     }
 
     if (strict_validation) {
-        if (generated_connections.size() != discovered_connections.size()) {
-            throw std::runtime_error("Number of connections mismatch");
-        }
-
         // Find missing and extra connections for detailed reporting
         std::set<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>> missing_in_gsd;
         std::set<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>> extra_in_gsd;
@@ -1035,8 +1031,8 @@ void validate_fsd_against_gsd(
 
                 Board board_a = create_board(board_type_a);
                 Board board_b = create_board(board_type_b);
-                auto port_a = board_a.get_port_for_asic_channel({conn.first.asic_index, conn.first.channel_id});
-                auto port_b = board_b.get_port_for_asic_channel({conn.second.asic_index, conn.second.channel_id});
+                auto port_a = board_a.get_port_for_asic_channel({conn.first.asic_location, conn.first.channel_id});
+                auto port_b = board_b.get_port_for_asic_channel({conn.second.asic_location, conn.second.channel_id});
 
                 PhysicalPortConnection port_a_conn;
                 PhysicalPortConnection port_b_conn;
@@ -1197,10 +1193,17 @@ TEST(Cluster, TestFactorySystemDescriptor5WHGalaxyYTorus) {
 
     // Validate the FSD against the discovered GSD using the common utility function
     EXPECT_THROW(
-        validate_fsd_against_gsd(
-            "fsd/factory_system_descriptor_5_wh_galaxy_y_torus.textproto",
-            "tests/tt_metal/tt_fabric/factory_system_descriptor/global_system_descriptors/"
-            "5_wh_galaxy_y_torus_physical_desc.yaml"),
+        {
+            try {
+                validate_fsd_against_gsd(
+                    "fsd/factory_system_descriptor_5_wh_galaxy_y_torus.textproto",
+                    "tests/tt_metal/tt_fabric/factory_system_descriptor/global_system_descriptors/"
+                    "5_wh_galaxy_y_torus_physical_desc.yaml");
+            } catch (const std::runtime_error& e) {
+                std::cout << e.what() << std::endl;
+                throw;
+            }
+        },
         std::runtime_error);
 }
 
