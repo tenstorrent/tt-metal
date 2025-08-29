@@ -261,8 +261,7 @@ void kernel_main() {
                                 tile_two_id,
                                 pkt_hdr,
                                 *mux_connection_handle,
-                                l1_read_addr,
-                                output_page_size);
+                                l1_read_addr);
                         }
                         uint64_t local_noc0_dest_noc_addr_tile_one = get_noc_addr(tile_one_id, output_addrgen);
                         uint64_t local_noc0_dest_noc_addr_tile_two = get_noc_addr(tile_two_id, output_addrgen);
@@ -279,8 +278,7 @@ void kernel_main() {
                                 tile_two_id,
                                 pkt_hdr,
                                 *mux_connection_handle,
-                                l1_read_addr,
-                                output_page_size);
+                                l1_read_addr);
                         }
                     }
                     tiles_read += 2;
@@ -437,13 +435,7 @@ void kernel_main() {
                         }
 
                         scatter_write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
-                            output_addrgen,
-                            tile_one_id,
-                            tile_two_id,
-                            pkt_hdr,
-                            *mux_connection_handle,
-                            l1_read_addr,
-                            output_page_size);
+                            output_addrgen, tile_one_id, tile_two_id, pkt_hdr, *mux_connection_handle, l1_read_addr);
                         tiles_read += 2;
                         break;
                     }

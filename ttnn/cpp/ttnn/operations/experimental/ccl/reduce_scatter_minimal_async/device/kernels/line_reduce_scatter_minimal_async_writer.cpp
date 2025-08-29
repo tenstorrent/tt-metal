@@ -292,8 +292,7 @@ void kernel_main() {
                             second_tile_id,
                             pkt_hdr,
                             *mux_connection_handle,
-                            l1_read_addr,
-                            intermediate_page_size);
+                            l1_read_addr);
                     } else {
                         ASSERT(false);
                     }

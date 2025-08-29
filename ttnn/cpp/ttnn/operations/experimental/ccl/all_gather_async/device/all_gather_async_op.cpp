@@ -19,13 +19,6 @@ void AllGatherAsync::validate_with_output_tensors(
     const auto& layout = input_tensors[0].layout();
     const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
-    std::string arch_name = tt::tt_metal::hal::get_arch_name();
-    TT_FATAL(
-        (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
-            (input_tensor.memory_config().buffer_type() != BufferType::DRAM) ||
-            !this->use_all_gather_async_llama_sharded,
-        "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
-        "by the fabric api");
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");

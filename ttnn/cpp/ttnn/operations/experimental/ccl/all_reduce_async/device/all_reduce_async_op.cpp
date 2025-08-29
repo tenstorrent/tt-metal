@@ -17,11 +17,6 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
     const auto& buffer_tensor = input_tensors[1];
     const auto& page_size = input_tensors[0].buffer()->page_size();
-    TT_FATAL(
-        (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
-            (input_tensor.memory_config().buffer_type() != BufferType::DRAM),
-        "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
-        "by the fabric api");
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
     TT_FATAL(
         this->ring_size % 2 == 0,

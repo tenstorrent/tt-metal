@@ -219,12 +219,11 @@ void kernel_main() {
                                 mesh_rows,
                                 mesh_cols,
                                 fabric_max_packet_size>(
-                                output_addr_gen,
                                 fabric_connections,
                                 unicast_packet_header,
                                 d,
                                 input_token_read_addr,
-                                global_token,
+                                output_token_write_addr,
                                 (int)output_page_size,
                                 alignment);
                         } else {
@@ -233,13 +232,12 @@ void kernel_main() {
                                 mesh_rows,
                                 mesh_cols,
                                 fabric_max_packet_size>(
-                                output_addr_gen,
                                 fabric_connections,
                                 unicast_packet_header,
                                 dest_chip_ids[d],
                                 dest_mesh_ids[d],
                                 input_token_read_addr,
-                                global_token,
+                                output_token_write_addr,
                                 (int)output_page_size,
                                 alignment);
                         }
@@ -282,12 +280,11 @@ void kernel_main() {
                             mesh_rows,
                             mesh_cols,
                             fabric_max_packet_size>(
-                            metadata_addr_gen,
                             fabric_connections,
                             metadata_packet_header,
                             d,
                             token_indices_address,
-                            global_token,
+                            metadata_write_addr,
                             global_noc_semaphore_address,
                             (int)metadata_page_size,
                             alignment,
@@ -299,13 +296,12 @@ void kernel_main() {
                             mesh_rows,
                             mesh_cols,
                             fabric_max_packet_size>(
-                            metadata_addr_gen,
                             fabric_connections,
                             metadata_packet_header,
                             dest_chip_ids[d],
                             dest_mesh_ids[d],
                             token_indices_address,
-                            global_token,
+                            metadata_write_addr,
                             global_noc_semaphore_address,
                             (int)metadata_page_size,
                             alignment,
@@ -330,7 +326,7 @@ void kernel_main() {
                     base_indices_addr, noc_core_offset_md_write_addr, indices_size_per_core);
             } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
                 if constexpr (is_1d_topology<topology>()) {
-                    l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
+                    fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
                         linearized_mesh_coord,
                         topology,
                         mesh_rows,
@@ -347,7 +343,7 @@ void kernel_main() {
                         1,
                         true);
                 } else {
-                    l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore<
+                    fabric_send_chip_unicast_noc_unicast_with_semaphore<
                         src_chip_id,
                         mesh_rows,
                         mesh_cols,

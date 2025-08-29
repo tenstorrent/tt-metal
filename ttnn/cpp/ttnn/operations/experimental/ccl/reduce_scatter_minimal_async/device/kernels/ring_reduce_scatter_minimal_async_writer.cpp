@@ -266,8 +266,7 @@ void kernel_main() {
                                     tile_two_id,
                                     pkt_hdr,
                                     mux_connection_handle,
-                                    l1_read_addr,
-                                    intermediate_page_size);
+                                    l1_read_addr);
                                 tiles_read += 2;
                                 tiles_read_in_current_direction += 2;
                                 break;
