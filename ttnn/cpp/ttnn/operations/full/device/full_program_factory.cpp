@@ -73,10 +73,22 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
         writer_compile_time_args,
         reader_defines);
 
-    // Set runtime arguments
-    uint32_t num_cores_y = grid.y;
-    uint32_t page_offset = 0;
     auto cores = corerange_to_cores(all_cores, std::nullopt);
+
+    // If there are more pages than cores, we use NCRISC to split the work
+    std::optional<tt::tt_metal::KernelHandle> reader_id = std::nullopt;
+    if (num_pages > num_cores) {
+        reader_id = CreateReadKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp",
+            all_cores,
+            writer_compile_time_args,
+            reader_defines);
+    }
+
+    // Set runtime arguments
+    uint32_t page_offset = 0;
+
     for (const auto& core : cores) {
         uint32_t num_pages_per_core;
         if (core_group_1.contains(core)) {
@@ -86,11 +98,35 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
         } else {
             TT_THROW("Core not in specified core ranges");
         }
-        std::vector<uint32_t> writer_args = {output.buffer()->address(), u.u32, num_pages_per_core, page_offset};
-        SetRuntimeArgs(program, writer_id, core, writer_args);
+        if (reader_id.has_value()) {
+            uint32_t reader_page_start = page_offset;
+            uint32_t num_pages_per_reader = num_pages_per_core / 2;
+            uint32_t writer_page_start = reader_page_start + num_pages_per_reader;
+            uint32_t num_pages_per_writer = num_pages_per_core - num_pages_per_reader;
+            log_info(
+                tt::LogAlways,
+                "Work distribution:: num_pages_per_core: {}, reader_page_start: {}, num_pages_per_reader: {}, "
+                "writer_page_start: {}, num_pages_per_writer: {}",
+                num_pages_per_core,
+                reader_page_start,
+                num_pages_per_reader,
+                writer_page_start,
+                num_pages_per_writer);
+            TT_FATAL(
+                num_pages_per_core == num_pages_per_reader + num_pages_per_writer,
+                "Make sure all pages are assigned to either reader or writer");
+            std::vector<uint32_t> reader_args = {output.buffer()->address(), reader_page_start, num_pages_per_reader};
+            SetRuntimeArgs(program, reader_id.value(), core, reader_args);
+            std::vector<uint32_t> writer_args = {
+                output.buffer()->address(), u.u32, writer_page_start, num_pages_per_writer};
+            SetRuntimeArgs(program, writer_id, core, writer_args);
+        } else {
+            std::vector<uint32_t> writer_args = {output.buffer()->address(), u.u32, page_offset, num_pages_per_core};
+            SetRuntimeArgs(program, writer_id, core, writer_args);
+        }
         page_offset += num_pages_per_core;
     }
-    return {std::move(program), {writer_id, num_cores, num_cores_y}};
+    return {std::move(program), {writer_id, reader_id, cores}};
 }
 
 void FullOperation::ProgramFactory::override_runtime_arguments(
@@ -100,10 +136,13 @@ void FullOperation::ProgramFactory::override_runtime_arguments(
     tensor_return_value_t& output) {
     auto& program = cached_program.program;
     auto& writer_kernel_id = cached_program.shared_variables.writer_id;
-    auto& num_cores = cached_program.shared_variables.num_cores;
-    auto& num_cores_y = cached_program.shared_variables.core_h;
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    auto& reader_kernel_id = cached_program.shared_variables.reader_id;
+    auto& cores = cached_program.shared_variables.cores;
+    for (const auto& core : cores) {
+        if (reader_kernel_id.has_value()) {
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id.value(), core);
+            runtime_args[0] = output.buffer()->address();
+        }
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = output.buffer()->address();
