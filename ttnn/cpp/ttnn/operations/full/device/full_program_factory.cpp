@@ -32,6 +32,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     uint32_t page_size = output.buffer()->page_size();
     TT_FATAL(page_size % output.element_size() == 0, "Page size must be divisible by element size");
     uint32_t elems_per_page = page_size / output.element_size();
+    log_info(tt::LogAlways, "Sanity check: elems_per_page: {}, page_size: {}", elems_per_page, page_size);
 
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
 

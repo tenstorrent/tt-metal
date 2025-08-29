@@ -53,6 +53,7 @@ def test_full_int(device, input_shape, fill_value):
         2.00830080,  # mantissa: 0000 0001 0001, bf16 round up test
         2.02343750,  # mantissa: 0000 0011, bf16 round up test
         -3.9921875,  # test mantissa overflow. answer should be 4
+        0,
     ],
 )
 @pytest.mark.parametrize(
@@ -89,7 +90,7 @@ def test_full_float(device, input_shape, fill_value, dtype, layout):
 )
 @pytest.mark.parametrize(
     "fill_value",
-    [3],
+    [3, 0],
 )
 @pytest.mark.parametrize(
     "layout",
