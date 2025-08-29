@@ -99,14 +99,14 @@ def _golden_function(in0, in1, math_op, bcast_dim, *args, **kwargs):
     return res
 
 
-ttnn.attach_golden_function(ttnn.bcast, _golden_function)
+# ttnn.attach_golden_function(ttnn.bcast, _golden_function)
 
 
 def _nop_golden_function(input_tensor, *args, **kwargs):
     return input_tensor
 
 
-ttnn.attach_golden_function(ttnn.interleaved_to_sharded, _nop_golden_function)
+# ttnn.attach_golden_function(ttnn.interleaved_to_sharded, _nop_golden_function)
 ttnn.attach_golden_function(ttnn.sharded_to_interleaved, _nop_golden_function)
 ttnn.attach_golden_function(ttnn.reshard, _nop_golden_function)
 ttnn.attach_golden_function(ttnn.tilize, _nop_golden_function)

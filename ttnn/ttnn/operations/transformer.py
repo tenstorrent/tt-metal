@@ -49,10 +49,10 @@ def _golden_function(
     return query, key, value
 
 
-ttnn.attach_golden_function(
-    ttnn.transformer.split_query_key_value_and_split_heads,
-    golden_function=_golden_function,
-)
+# ttnn.attach_golden_function(
+#     ttnn.transformer.split_query_key_value_and_split_heads,
+#     golden_function=_golden_function,
+# )
 
 ttnn.attach_golden_function(
     ttnn.experimental.split_query_key_value_and_split_heads,
@@ -100,7 +100,7 @@ def _golden_function(input_tensor: ttnn.Tensor, **_):
     return output_tensor
 
 
-ttnn.attach_golden_function(ttnn.transformer.concatenate_heads, golden_function=_golden_function)
+# ttnn.attach_golden_function(ttnn.transformer.concatenate_heads, golden_function=_golden_function)
 
 ttnn.attach_golden_function(ttnn.experimental.concatenate_heads, golden_function=_golden_function)
 

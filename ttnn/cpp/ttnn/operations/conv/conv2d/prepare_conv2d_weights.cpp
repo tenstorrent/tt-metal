@@ -328,7 +328,7 @@ Tensor to_weight_tile_layout_block_sharded(
     ttnn::Shape w_shape = conv_weight_tensor.padded_shape();
     // Calculate dimensions outside lambda
     uint32_t weight_matrix_cols = w_shape[0];
-    TT_ASSERT(weight_matrix_cols % in_num_channel_shards == 0);
+    TT_ASSERT(weight_matrix_cols % out_num_channel_shards == 0);
     uint32_t conv_output_shard_width = weight_matrix_cols / out_num_channel_shards;
     uint32_t conv_output_shard_width_padded = tt::round_up(conv_output_shard_width, constants::TILE_WIDTH);
     if (conv_output_shard_width < conv_output_shard_width_padded) {
@@ -336,7 +336,7 @@ Tensor to_weight_tile_layout_block_sharded(
         weight_matrix_cols = conv_output_shard_width_padded * out_num_channel_shards;
     }
     uint32_t weight_matrix_rows = w_shape[1] * w_shape[2] * w_shape[3];
-    TT_ASSERT(w_shape[1] % out_num_channel_shards == 0);
+    TT_ASSERT(w_shape[1] % in_num_channel_shards == 0);
     uint32_t conv_input_shard_width = w_shape[1] / in_num_channel_shards;
     uint32_t weight_block_height = conv_input_shard_width * w_shape[2] * w_shape[3];
 

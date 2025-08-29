@@ -419,8 +419,11 @@ Result conv2d_DRAM(
                 ttnn::SmallVector<uint32_t>{1, 1, 1, 1}  // Step
             );
         } else {
+            ShardOrientation shard_orientation =
+                conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
             auto sliced_input_tensor_memory_config = std::get<1>(determine_input_memory_config(
-                conv_config,
+                conv_config.shard_layout.value(),
+                shard_orientation,
                 batch_size,
                 ttnn::Shape({batch_size, input_slice_height, input_slice_width, in_channels}),
                 ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}),
@@ -428,7 +431,9 @@ Result conv2d_DRAM(
                 compute_grid_size,
                 // Setting layout to TILE forces input_channels_alignment to 32.
                 //  The padded_slice op needs aligned reads from L1.
-                Layout::TILE));
+                Layout::TILE,
+                std::nullopt,
+                conv_config.act_block_h_override));
 
             sliced_input_tensor = ttnn::experimental::padded_slice(
                 queue_id,
@@ -567,7 +572,9 @@ Result conv2d_L1(
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
     bool auto_shard = false;
+    log_info(tt::LogOp, "input tensor mem cfg: {}", input_tensor.memory_config());
     if (!input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
+        log_info(tt::LogOp, "conv2d: Auto shard layout for conv2d.");
         if (!conv_config.weights_dtype.has_value()) {
             conv_config.weights_dtype = weight_tensor.dtype();
         }
@@ -596,6 +603,7 @@ Result conv2d_L1(
             bias_tensor.has_value(),
             compute_config);
         auto_shard = true;
+        log_info(tt::LogOp, "conv2d: Auto shard layout determined as {}", conv_config.shard_layout.value());
     }
 
     auto [input_tensor_post_tm, parallel_config, output_parallel_config] = shard_or_reshard_tensor_if_required(

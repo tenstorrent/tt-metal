@@ -145,14 +145,16 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
     bool is_mm_conv);
 
 std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
-    const Conv2dConfig& conv_config,
+    TensorMemoryLayout shard_layout,
+    ShardOrientation block_shard_orientation,
     uint32_t batch_size,
     ttnn::Shape input_tensor_shape,
     ttnn::Shape output_tensor_shape,
     bool is_mm_conv,
     CoreCoord compute_grid_size,
     Layout input_tensor_layout,
-    const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt);
+    const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt,
+    std::optional<uint32_t> act_block_h_override = std::nullopt);
 
 DeviceComputeKernelConfig get_conv_default_compute_kernel_config(MeshDevice* device);
 

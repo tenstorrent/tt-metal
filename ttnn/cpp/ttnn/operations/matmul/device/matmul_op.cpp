@@ -2377,7 +2377,9 @@ void Matmul::validate(
                 std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
                 TT_FATAL(
                     (input_tensor_a.padded_shape()[-1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
-                    "Kt must be divisible by in0_block_w");
+                    "Kt {} must be divisible by in0_block_w {}",
+                    input_tensor_a.padded_shape()[-1] / in0_tile_shape[1],
+                    program_config.in0_block_w);
                 TT_FATAL(
                     program_config.per_core_M % program_config.out_subblock_h == 0,
                     "per_core_M must be divisible by out_subblock_h");

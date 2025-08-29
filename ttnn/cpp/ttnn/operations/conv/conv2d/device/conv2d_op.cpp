@@ -142,6 +142,8 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
         auto shard_spec =
             tt::tt_metal::ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec().value().orientation};
         auto mem_config = this->memory_config.with_shard_spec(shard_spec);
+        log_info(tt::LogOp, "Output memory config {}", mem_config);
+        log_info(tt::LogOp, "Output shape {}", output_shape);
         return {TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(

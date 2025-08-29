@@ -199,6 +199,7 @@ class UNet2DConditionModel:
             num_groups=self.norm_num_groups,
             input_nhw=batch_size * input_height * input_width,
             is_height_sharded=False,
+            is_row_major=True,
         )
 
         if not self.fallback_on_groupnorm:
@@ -375,33 +376,14 @@ class UNet2DConditionModel:
             "conv_config": conv_config,
         }
 
-        if not ttnn.is_tensor_storage_on_device(self.conv_in_weights):
-            self.conv_in_weights = ttnn.prepare_conv_weights(
-                weight_tensor=self.conv_in_weights,
-                weights_format="OIHW",
-                input_memory_config=sample.memory_config(),
-                input_layout=sample.get_layout(),
-                has_bias=True,
-                **conv_kwargs,
-                input_dtype=ttnn.bfloat8_b,
-            )
-            self.conv_in_bias = ttnn.prepare_conv_bias(
-                bias_tensor=self.conv_in_bias,
-                input_memory_config=sample.memory_config(),
-                input_layout=sample.get_layout(),
-                **conv_kwargs,
-                input_dtype=ttnn.bfloat8_b,
-            )
-            self.conv_in_weights = ttnn.to_device(self.conv_in_weights, self.device)
-            self.conv_in_bias = ttnn.to_device(self.conv_in_bias, self.device)
-
-        sample = ttnn.conv2d(
+        sample, [self.conv_in_weights, self.conv_in_bias] = ttnn.conv2d(
             input_tensor=sample,
             weight_tensor=self.conv_in_weights,
             bias_tensor=self.conv_in_bias,
             **conv_kwargs,
             compute_config=compute_config,
             dtype=ttnn.bfloat8_b,
+            return_weights_and_bias=True,
         )
         sample = ttnn.reallocate(sample)  # TODO: Test remove
 
@@ -661,33 +643,14 @@ class UNet2DConditionModel:
             "conv_config": conv_config,
         }
 
-        if not ttnn.is_tensor_storage_on_device(self.conv_out_weights):
-            self.conv_out_weights = ttnn.prepare_conv_weights(
-                weight_tensor=self.conv_out_weights,
-                weights_format="OIHW",
-                input_memory_config=sample.memory_config(),
-                input_layout=sample.get_layout(),
-                has_bias=True,
-                **conv_kwargs_1,
-                input_dtype=ttnn.bfloat8_b,
-            )
-            self.conv_out_bias = ttnn.prepare_conv_bias(
-                bias_tensor=self.conv_out_bias,
-                input_memory_config=sample.memory_config(),
-                input_layout=sample.get_layout(),
-                **conv_kwargs_1,
-                input_dtype=ttnn.bfloat8_b,
-            )
-            self.conv_out_weights = ttnn.to_device(self.conv_out_weights, self.device)
-            self.conv_out_bias = ttnn.to_device(self.conv_out_bias, self.device)
-
-        sample = ttnn.conv2d(
+        sample, [self.conv_out_weights, self.conv_out_bias] = ttnn.conv2d(
             input_tensor=sample,
             **conv_kwargs_1,
             weight_tensor=self.conv_out_weights,
             bias_tensor=self.conv_out_bias,
             compute_config=compute_config,
             dtype=ttnn.bfloat8_b,
+            return_weights_and_bias=True,
         )
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.clone(sample, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
