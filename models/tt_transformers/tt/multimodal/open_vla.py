@@ -20,18 +20,26 @@ from functools import partial
 from typing import Any, Callable, ClassVar, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+import pytest
 import timm
 import tokenizers
 import torch
 import torch.nn as nn
 import transformers
+from PIL import Image
 from timm.models.vision_transformer import LayerScale
-from transformers import AutoModelForCausalLM, PretrainedConfig, PreTrainedModel
+from transformers import AutoModelForCausalLM, AutoProcessor, GenerationMixin, PretrainedConfig, PreTrainedModel
 from transformers.modeling_outputs import ModelOutput
 
 import ttnn
 from models.tt_transformers.demo.simple_text_demo import prepare_generator_args
-from models.tt_transformers.tt.common import create_tt_model, preprocess_inputs_prefill, sample_host
+from models.tt_transformers.tt.common import (
+    create_tt_model,
+    get_block_size,
+    num_blocks_in_seq,
+    preprocess_inputs_prefill,
+    sample_host,
+)
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import ModelArgs
 
@@ -122,7 +130,7 @@ class LLama2OpenVLAArgs(ModelArgs):
         )
 
 
-class OpenVLALanguageModel:
+class OpenVLALanguageModel(GenerationMixin):
     def __init__(self, device):
         self.generator_args_config = {
             "num_devices": device.get_num_devices() if isinstance(device, ttnn.MeshDevice) else 1,
@@ -252,6 +260,97 @@ class OpenVLALanguageModel:
         )
         text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
         return text_after_prompt
+
+    # === `PreTrainedModel` Boilerplate ===
+    def get_input_embeddings(self) -> nn.Module:
+        return self.model[0].embd
+
+    def set_input_embeddings(self, value: nn.Module) -> None:
+        pass
+
+    def get_output_embeddings(self) -> nn.Module:
+        pass
+
+    def set_output_embeddings(self, new_embeddings: nn.Module) -> None:
+        pass
+
+    def get_decoder(self) -> nn.Module:
+        pass
+
+    def set_decoder(self, decoder: nn.Module) -> None:
+        pass
+
+    def tie_weights(self) -> None:
+        pass
+
+    def resize_token_embeddings(
+        self, new_num_tokens: Optional[int] = None, pad_to_multiple_of: Optional[int] = None
+    ) -> nn.Embedding:
+        pass
+
+    def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len):
+        # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
+        block_size = get_block_size(kv_cache)
+        num_blocks = num_blocks_in_seq(prefill_len, block_size)
+        return page_table[:, :num_blocks]
+
+    def __call__(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        past_key_values=None,
+        inputs_embeds=None,
+        labels=None,
+        use_cache=False,
+        output_attentions=False,
+        output_hidden_states=False,
+        return_dict=True,
+    ):
+        assert input_ids is None, f"{self.__class__.__name__} does not accept input_ids"
+        assert position_ids is None, f"{self.__class__.__name__} does not accept position_ids"
+        assert past_key_values is None, f"{self.__class__.__name__} does not accept past_key_values"
+        assert labels is None, f"{self.__class__.__name__} does not accept labels"
+        assert not use_cache, f"{self.__class__.__name__} does not accept use_cache"
+        assert not output_attentions, f"{self.__class__.__name__} does not accept output_attentions"
+        assert not output_hidden_states, f"{self.__class__.__name__} does not accept output_hidden_states"
+        assert return_dict, f"{self.__class__.__name__} does not accept return_dict=False"
+        seq_len = inputs_embeds.shape[2]
+        # Make width multiple of 128
+        if inputs_embeds.shape[2] % 128 != 0:
+            padding = int(np.ceil(inputs_embeds.shape[2] / 128) * 128) - inputs_embeds.shape[2]
+            if padding != 0:
+                inputs_embeds = ttnn.pad(inputs_embeds, [(0, 0), (0, 0), (0, padding), (0, 0)], 0)
+
+        tt_rot_mats_prefill_global = [
+            self.model[0].rope_setup.cos_matrix[:, :, : inputs_embeds.shape[2], :],
+            self.model[0].rope_setup.sin_matrix[:, :, : inputs_embeds.shape[2], :],
+        ]
+        page_table_user = self._get_prefill_user_page_table(self.page_table, self.tt_kv_cache[0], seq_len)
+        tt_page_table = ttnn.from_torch(
+            page_table_user,
+            device=inputs_embeds.device(),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(inputs_embeds.device()),
+        )
+
+        tt_logits = self.model[0].forward(
+            inputs_embeds,
+            None,
+            rot_mats_global=tt_rot_mats_prefill_global,
+            mode="prefill",
+            page_table=tt_page_table,
+            kv_cache=self.tt_kv_cache[0],
+            get_last_token=((seq_len - 1) // 32) * 32,
+        )
+
+        last_token_idx = seq_len - 1
+
+        # Since we give unpadded_seq_len, only the tile containing the last token is returned
+        output_logits = self.model[0].process_output_prefill(tt_logits, last_token_idx=(last_token_idx % 32))
+
+        return output_logits.unsqueeze(0).unsqueeze(0)
 
 
 class PrismaticConfig(PretrainedConfig):
@@ -509,8 +608,8 @@ class PrismaticPreTrainedModel(PreTrainedModel):
 
 
 class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
-    def __init__(self, config: PrismaticConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: PrismaticConfig, ttnn_device=None) -> None:
+        super().__init__(config, ttnn_device=ttnn_device)
 
         # [Validation] Lightweight Validate on `config` Fields + Dependency Versions
         if config.use_fused_vision_backbone is None:
@@ -544,16 +643,15 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
 
         # Instantiate LLM Backbone
         # TODO: Insert TT LLM HERE
-        mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
-
-        self.language_model = OpenVLALanguageModel(mesh_device)
-        breakpoint()
-        self.language_model = AutoModelForCausalLM.from_config(
-            config.text_config, attn_implementation=config._attn_implementation
-        )
+        if ttnn_device is not None:
+            self.language_model = OpenVLALanguageModel(ttnn_device)
+        else:
+            self.language_model = AutoModelForCausalLM.from_config(
+                config.text_config, attn_implementation=config._attn_implementation
+            )
         self.vocab_size = config.text_config.vocab_size
         self.pad_token_id = config.pad_token_id
-
+        self.ttnn_device = ttnn_device
         # HF Boilerplate =>> initializes weights via `_init_weights()` and sets gradient checkpointing
         self.post_init()
 
@@ -680,7 +778,16 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                 )
 
             # Get Input Embeddings (from Language Model Embeddings)
-            input_embeddings = self.get_input_embeddings()(input_ids)
+            if self.ttnn_device is not None:
+                ttnn_input_ids = ttnn.from_torch(
+                    input_ids, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.ttnn_device
+                )
+                input_embeddings = self.get_input_embeddings()(ttnn_input_ids)
+                input_embeddings = ttnn.to_torch(
+                    input_embeddings, mesh_composer=ttnn.ConcatMeshToTensor(self.ttnn_device, dim=2)
+                )
+            else:
+                input_embeddings = self.get_input_embeddings()(input_ids)
 
             # Build Multimodal Embeddings & Attention Mask =>> Prismatic defaults to inserting after <BOS> token (1:)
             multimodal_embeddings = torch.cat(
@@ -704,6 +811,19 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                 multimodal_labels = torch.cat([labels[:, :1], projected_patch_labels, labels[:, 1:]], dim=1)
 
             # Dispatch to Language Model
+            if self.ttnn_device is not None:
+                multimodal_attention_mask = torch.unsqueeze(multimodal_attention_mask, dim=0)
+                multimodal_attention_mask = ttnn.from_torch(
+                    multimodal_attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.ttnn_device
+                )
+                multimodal_embeddings = torch.unsqueeze(multimodal_embeddings, dim=0)
+                multimodal_embeddings = ttnn.from_torch(
+                    multimodal_embeddings,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.ttnn_device,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.ttnn_device, dim=3),
+                )
             language_model_output = self.language_model(
                 input_ids=None,
                 attention_mask=multimodal_attention_mask,
@@ -739,7 +859,15 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                 return *language_model_output, projected_patch_embeddings
 
             return language_model_output
-
+        if self.ttnn_device is not None:
+            return PrismaticCausalLMOutputWithPast(
+                loss=None,
+                logits=language_model_output,
+                past_key_values=None,
+                hidden_states=None,
+                attentions=None,
+                projector_features=projected_patch_embeddings,
+            )
         return PrismaticCausalLMOutputWithPast(
             loss=language_model_output.loss,
             logits=language_model_output.logits,
@@ -795,8 +923,8 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
 class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration):
     config_class: PretrainedConfig = OpenVLAConfig
 
-    def __init__(self, config: OpenVLAConfig) -> None:
-        super().__init__(config)
+    def __init__(self, config: OpenVLAConfig, ttnn_device=None) -> None:
+        super().__init__(config, ttnn_device=ttnn_device)
         self.norm_stats = config.norm_stats
 
         # Compute action bins
@@ -865,31 +993,39 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration):
         return self.norm_stats[unnorm_key]["action"]
 
 
-from PIL import Image
-from transformers import AutoProcessor
-
-processor = AutoProcessor.from_pretrained("openvla/openvla-7b", trust_remote_code=True)
-
-# Create random init image
-image: Image.Image = Image.new("RGB", (224, 224))
-prompt = "In: What action should the robot take to {<INSTRUCTION>}?\nOut:"
-kwargs = {
-    "return_unused_kwargs": True,
-    "torch_dtype": torch.bfloat16,
-    "low_cpu_mem_usage": False,
-    "name_or_path": "openvla/openvla-7b",
-    "pretrained_model_name_or_path": "openvla/openvla-7b",
-}
-config_dict, kwargs = OpenVLAConfig.get_config_dict(**kwargs)
-vla_config, kwargs = OpenVLAConfig.from_dict(config_dict, **kwargs)
-# vla = TTOpenVLAForActionPrediction(vla_config).to("cpu", dtype=torch.bfloat16)
-# # Predict Action (7-DoF; un-normalize for BridgeData V2)
-# inputs = processor(prompt, image).to("cpu", dtype=torch.bfloat16)
-# action = vla.predict_action(**inputs, unnorm_key="bridge_orig", do_sample=False)
-# print(action)
-
-
-import pytest
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": True, "trace_region_size": 30000000, "num_command_queues": 1}], indirect=True
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "P150x8": (1, 8),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "What is your favorite condiment? There are so many condiments to choose from, each bringing its unique flavor and texture to enhance different dishes. Do you prefer the classic taste of ketchup, the creamy richness of mayonnaise, the spicy kick of mustard, or perhaps something more exotic like sriracha or hoisin sauce? Maybe you enjoy the tangy zest of salsa or the smooth and savory taste of aioli. Share what your favorite condiment is and why you love it. Does it remind you of a specific dish or meal?",
+        "In: What action should the robot take to {<INSTRUCTION>}?\nOut:",
+    ],
+)
+def test_language_model(mesh_device, prompt):
+    language_model = OpenVLALanguageModel(mesh_device)
+    predicted_text = language_model.predict_text([prompt])
+    print("Prompt -> ", prompt)
+    print("Final Result -> ", predicted_text)
+    print("DONE")
 
 
 @pytest.mark.parametrize(
@@ -912,11 +1048,23 @@ import pytest
     ],
     indirect=True,
 )
-def test_language_model(mesh_device):
-    language_model = OpenVLALanguageModel(mesh_device)
+def test_openvla_model(mesh_device):
+    processor = AutoProcessor.from_pretrained("openvla/openvla-7b", trust_remote_code=True)
+
+    # Create random init image
+    image: Image.Image = Image.new("RGB", (224, 224))
     prompt = "In: What action should the robot take to {<INSTRUCTION>}?\nOut:"
-    # prompt = "What is your favorite condiment? There are so many condiments to choose from, each bringing its unique flavor and texture to enhance different dishes. Do you prefer the classic taste of ketchup, the creamy richness of mayonnaise, the spicy kick of mustard, or perhaps something more exotic like sriracha or hoisin sauce? Maybe you enjoy the tangy zest of salsa or the smooth and savory taste of aioli. Share what your favorite condiment is and why you love it. Does it remind you of a specific dish or meal?"
-    predicted_text = language_model.predict_text([prompt])
-    print("Prompt -> ", prompt)
-    print("Final Result -> ", predicted_text)
-    print("DONE")
+    kwargs = {
+        "return_unused_kwargs": True,
+        "torch_dtype": torch.bfloat16,
+        "low_cpu_mem_usage": False,
+        "name_or_path": "openvla/openvla-7b",
+        "pretrained_model_name_or_path": "openvla/openvla-7b",
+    }
+    config_dict, kwargs = OpenVLAConfig.get_config_dict(**kwargs)
+    vla_config, kwargs = OpenVLAConfig.from_dict(config_dict, **kwargs)
+    vla = TTOpenVLAForActionPrediction(vla_config, ttnn_device=mesh_device).to("cpu", dtype=torch.bfloat16)
+    # Predict Action (7-DoF; un-normalize for BridgeData V2)
+    inputs = processor(prompt, image).to("cpu", dtype=torch.bfloat16)
+    action = vla.predict_action(**inputs, unnorm_key="bridge_orig", do_sample=False)
+    print(action)
