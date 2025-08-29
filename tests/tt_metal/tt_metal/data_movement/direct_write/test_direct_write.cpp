@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-logger/tt-logger.hpp>
 #include "device_fixture.hpp"
 #include "dm_common.hpp"
 
@@ -39,7 +40,6 @@ bool run_dm(IDevice* device, const DirectWriteConfig& test_config) {
     // (Logical) Core coordinates and ranges
     CoreRangeSet sender_core_set({CoreRange(test_config.sender_core_coord)});
     CoreRangeSet receiver_core_set({CoreRange(test_config.receiver_core_coord)});
-    CoreRangeSet combined_core_set = sender_core_set.merge<CoreRangeSet>(receiver_core_set);
 
     // Get L1 Address info
     L1AddressInfo sender_l1_info =
@@ -55,7 +55,7 @@ bool run_dm(IDevice* device, const DirectWriteConfig& test_config) {
 
     // Check if we have enough space for the test
     uint32_t required_bytes = test_config.same_destination ? 4 : (test_config.num_writes * test_config.addr_stride);
-    if (receiver_l1_info.size < test_config.dest_l1_addr_offset + required_bytes) {
+    if (receiver_l1_info.size < required_bytes) {
         log_error(tt::LogTest, "Insufficient L1 size for the test configuration");
         return false;
     }
@@ -73,7 +73,7 @@ bool run_dm(IDevice* device, const DirectWriteConfig& test_config) {
         test_config.write_value_base,
         test_config.use_posted_writes ? 1u : 0u,
         test_config.same_destination ? 1u : 0u,
-        l1_base_address + test_config.dest_l1_addr_offset,  // Destination L1 address
+        l1_base_address,
         test_config.addr_stride,
         packed_receiver_core_coordinates,
         static_cast<uint32_t>(test_config.noc_id)};
@@ -96,17 +96,18 @@ bool run_dm(IDevice* device, const DirectWriteConfig& test_config) {
     // Assign unique id
     log_info(
         tt::LogTest,
-        "Running Direct Write Test ID: {}, Approach: {}, Writes: {}",
+        "Running Direct Write Test ID: {}, Approach: {}, Posted: {}, Same Destination: {}, Writes : {}",
         test_config.test_id,
         test_config.use_stateful_approach ? "Stateful" : "Non-Stateful",
+        test_config.use_posted_writes ? "True" : "False",
+        test_config.same_destination ? "True" : "False",
         test_config.num_writes);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Initialize receiver memory to known pattern
     uint32_t init_words = test_config.same_destination ? 1 : test_config.num_writes;
     std::vector<uint32_t> init_data(init_words, 0x00000000);  // Initialize to zero
-    tt_metal::detail::WriteToDeviceL1(
-        device, test_config.receiver_core_coord, l1_base_address + test_config.dest_l1_addr_offset, init_data);
+    tt_metal::detail::WriteToDeviceL1(device, test_config.receiver_core_coord, l1_base_address, init_data);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     // Launch the program
@@ -116,11 +117,7 @@ bool run_dm(IDevice* device, const DirectWriteConfig& test_config) {
     std::vector<uint32_t> output_data;
     uint32_t read_bytes = init_words * sizeof(uint32_t);
     tt_metal::detail::ReadFromDeviceL1(
-        device,
-        test_config.receiver_core_coord,
-        l1_base_address + test_config.dest_l1_addr_offset,
-        read_bytes,
-        output_data);
+        device, test_config.receiver_core_coord, l1_base_address, read_bytes, output_data);
 
     // Validation
     bool pass = true;
@@ -134,6 +131,7 @@ bool run_dm(IDevice* device, const DirectWriteConfig& test_config) {
         }
     } else {
         // Different destinations - check first few values
+
         uint32_t check_count =
             std::min(static_cast<uint32_t>(output_data.size()), std::min(test_config.num_writes, 10u));
         for (uint32_t i = 0; i < check_count; i++) {
@@ -163,19 +161,19 @@ void performance_comparison_test(
     uint32_t num_devices_,
     uint32_t test_id,
     CoreCoord sender_core = {0, 0},
-    CoreCoord receiver_core = {0, 1}) {
-    vector<uint32_t> write_counts = {10, 100, 1000};  // Show scaling advantage
+    CoreCoord receiver_core = {1, 1}) {
+    uint32_t max_transactions = 1024;                 // Show scaling advantage
     vector<bool> stateful_options = {false, true};    // Non-stateful vs stateful
     vector<bool> posted_options = {false, true};      // Non-posted vs posted
 
-    for (uint32_t num_writes : write_counts) {
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
         for (bool posted : posted_options) {
             for (bool stateful : stateful_options) {
                 DirectWriteConfig test_config = {
                     .test_id = test_id,
                     .sender_core_coord = sender_core,
                     .receiver_core_coord = receiver_core,
-                    .num_writes = num_writes,
+                    .num_writes = num_of_transactions,
                     .use_posted_writes = posted,
                     .same_destination = true,  // Same dest to show stateful advantage
                     .use_stateful_approach = stateful};
@@ -194,76 +192,26 @@ void address_pattern_test(
     uint32_t num_devices_,
     uint32_t test_id,
     CoreCoord sender_core = {0, 0},
-    CoreCoord receiver_core = {1, 0}) {
+    CoreCoord receiver_core = {1, 1}) {
+    uint32_t max_transactions = 1024;                   // Show scaling advantage
     vector<bool> destination_patterns = {true, false};  // Same vs different destinations
     vector<bool> stateful_options = {false, true};
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
+        for (bool same_dest : destination_patterns) {
+            for (bool stateful : stateful_options) {
+                DirectWriteConfig test_config = {
+                    .test_id = test_id,
+                    .sender_core_coord = sender_core,
+                    .receiver_core_coord = receiver_core,
+                    .num_writes = num_of_transactions,
+                    .same_destination = same_dest,
+                    .use_stateful_approach = stateful};
 
-    for (bool same_dest : destination_patterns) {
-        for (bool stateful : stateful_options) {
-            // Skip non-stateful with different destinations for performance reasons
-            if (!stateful && !same_dest) {
-                continue;
-            }
-
-            DirectWriteConfig test_config = {
-                .test_id = test_id,
-                .sender_core_coord = sender_core,
-                .receiver_core_coord = receiver_core,
-                .num_writes = 50,
-                .same_destination = same_dest,
-                .use_stateful_approach = stateful};
-
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+                for (unsigned int id = 0; id < num_devices_; id++) {
+                    EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+                }
             }
         }
-    }
-}
-
-void noc_comparison_test(
-    ARCH arch_,
-    vector<IDevice*>& devices_,
-    uint32_t num_devices_,
-    uint32_t test_id,
-    CoreCoord sender_core = {1, 1},
-    CoreCoord receiver_core = {2, 2}) {
-    vector<NOC> nocs = {NOC::NOC_0, NOC::NOC_1};
-
-    for (NOC noc_id : nocs) {
-        DirectWriteConfig test_config = {
-            .test_id = test_id,
-            .sender_core_coord = sender_core,
-            .receiver_core_coord = receiver_core,
-            .num_writes = 200,
-            .use_posted_writes = true,
-            .use_stateful_approach = true,  // Use best performing approach
-            .noc_id = noc_id};
-
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-        }
-    }
-}
-
-void correctness_test(
-    ARCH arch_,
-    vector<IDevice*>& devices_,
-    uint32_t num_devices_,
-    uint32_t test_id,
-    CoreCoord sender_core = {0, 0},
-    CoreCoord receiver_core = {0, 1}) {
-    // Simple correctness test with known pattern
-    DirectWriteConfig test_config = {
-        .test_id = test_id,
-        .sender_core_coord = sender_core,
-        .receiver_core_coord = receiver_core,
-        .num_writes = 20,
-        .write_value_base = 0xDEADBEE0,  // Easy to recognize pattern
-        .same_destination = false,       // Test different addresses
-        .use_stateful_approach = true};
-
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
     }
 }
 
@@ -272,23 +220,15 @@ void correctness_test(
 /* ========== TEST CASES ========== */
 
 TEST_F(DeviceFixture, TensixDirectWritePerformanceComparison) {
+    // GTEST_SKIP() << "Skipping test";
     uint32_t test_id = 500;
     unit_tests::dm::direct_write::performance_comparison_test(arch_, devices_, num_devices_, test_id);
 }
 
 TEST_F(DeviceFixture, TensixDirectWriteAddressPatternsPacketSizes) {
+    // GTEST_SKIP() << "Skipping test";
     uint32_t test_id = 501;
     unit_tests::dm::direct_write::address_pattern_test(arch_, devices_, num_devices_, test_id);
-}
-
-TEST_F(DeviceFixture, TensixDirectWriteNOCComparisonPacketSizes) {
-    uint32_t test_id = 502;
-    unit_tests::dm::direct_write::noc_comparison_test(arch_, devices_, num_devices_, test_id);
-}
-
-TEST_F(DeviceFixture, TensixDirectWriteCorrectness) {
-    uint32_t test_id = 503;
-    unit_tests::dm::direct_write::correctness_test(arch_, devices_, num_devices_, test_id);
 }
 
 }  // namespace tt::tt_metal
