@@ -115,6 +115,8 @@ jobs:
           #          # Moved to t3k tests until OOM on single card runners resolved
                     # { name: "qwen7b", runner-label: "N300", performance: false, cmd: run_qwen7b_func, owner_id: U03PUAKE719}, # Mark O'Connor
                     { name: "qwen25_vl", runner-label: "N300", performance: true, cmd: run_qwen25_vl_func, owner_id: U07RY6B5FLJ},  #Gongyu Wang
+                    { name: "gemma3", runner-label: "N150", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews
+                    { name: "gemma3", runner-label: "N300", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews
                     { name: "gemma3", runner-label: "N150", performance: false, cmd: run_gemma3_func, owner_id: U08TJ70UFRT},  # Harry Andrews
                     { name: "gemma3", runner-label: "N300", performance: false, cmd: run_gemma3_func, owner_id: U08TJ70UFRT},  # Harry Andrews
         ]
