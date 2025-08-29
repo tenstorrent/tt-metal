@@ -80,9 +80,12 @@ endforeach()
 # Add the generated protobuf files to your target
 target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})
 
-target_include_directories(fabric PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-
-target_include_directories(fabric PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(
+    fabric
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR}
+)
 
 target_link_libraries(
     fabric
