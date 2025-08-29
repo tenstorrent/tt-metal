@@ -137,6 +137,9 @@ static uint32_t get_worker_or_vc1_connected_sender_channel(const eth_chan_direct
     return target_channel;  // Default to target_channel for Linear/Mesh
 }
 
+// for fabric with tensix extension, for linear/mesh topology, only one sender channel is used, and all
+// other sender channels are makred as skipped. For ring/torus topology, one extra vc1 sender channel will
+// also be used.
 static void update_sender_channel_servicing(
     tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
     std::vector<FabricRiscConfig>& risc_configs,
@@ -351,7 +354,8 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     std::array<size_t, num_receiver_channels>& num_receiver_buffer_slots,
     std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots,
     eth_chan_directions direction) {
-    // Architecture-specific buffer slot configurations
+    // fabric with tensix extension uses different buffer slots options, since only one or two sender channels are
+    // used by fabric router, while other sender channels are skipped and have 0 buffer slots.
     static const std::vector<std::vector<std::pair<size_t, size_t>>> default_with_tensix_buffer_slot_options = {
         {{16, 16}, {8, 16}, {8, 8}},  // WORMHOLE_B0: {sender_slots, receiver_slots}
         {{16, 16}, {8, 16}, {8, 8}}   // BLACKHOLE: {sender_slots, receiver_slots}
@@ -869,6 +873,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     log_trace(tt::LogOp, "Available channel buffering space: {}", this->available_channel_buffering_space);
 
     auto skip_current_sender_channel = [&](uint32_t idx) -> bool {
+        // for dateline connection, skip the last sender channel check (2 for 1d, 4 for 2d)
+        // for dateline upstream, skip the sender channel 1 check (just for 1d)
+        // for dateline upstream adajcent, skip the sender channel 2 check (just for 1d)
+        // for fabric with tensix extension, only check the vc1 sender channel and worker channel, other
+        // channels are skipped
         bool is_2D_routing = FabricContext::is_2D_topology(topology);
         uint32_t target_channel = get_worker_connected_sender_channel(options.direction, topology);
         uint32_t vc1_target_channel = get_worker_or_vc1_connected_sender_channel(options.direction, topology);
