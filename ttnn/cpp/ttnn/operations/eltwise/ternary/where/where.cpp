@@ -98,7 +98,7 @@ Tensor WhereOperation::invoke(
             const auto& t_false = std::get<Tensor>(value_false);
             bool typecast_predicate = ternary_utils::typecast_predicate(predicate, t_true, t_false);
             if (typecast_predicate) {
-                condition = ttnn::typecast(queue_id, predicate, t_true.dtype());
+                condition = ttnn::typecast(predicate, t_true.dtype());
             }
 
             // Check if shapes are broadcast-compatible for TTT using broadcast detection
@@ -123,7 +123,7 @@ Tensor WhereOperation::invoke(
             const auto& t_true = std::get<Tensor>(value_true);
             bool typecast_predicate = ternary_utils::typecast_predicate(predicate, t_true);
             if (typecast_predicate) {
-                condition = ttnn::typecast(queue_id, predicate, t_true.dtype());
+                condition = ttnn::typecast(predicate, t_true.dtype());
             }
             if (ternary_utils::have_same_shape(t_true, predicate)) {
                 log_debug(tt::LogOp, "Where LLK - TTS");
@@ -143,7 +143,7 @@ Tensor WhereOperation::invoke(
             const auto& t_false = std::get<Tensor>(value_false);
             bool typecast_predicate = ternary_utils::typecast_predicate(predicate, t_false);
             if (typecast_predicate) {
-                condition = ttnn::typecast(queue_id, predicate, t_false.dtype());
+                condition = ttnn::typecast(predicate, t_false.dtype());
             }
             if (ternary_utils::have_same_shape(predicate, t_false)) {
                 log_debug(tt::LogOp, "Where LLK - TST");
