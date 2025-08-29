@@ -675,7 +675,8 @@ CoreCoord MeshDevice::logical_grid_size() const {
         this->get_devices(), [](const auto* device) { return device->logical_grid_size(); });
 }
 CoreCoord MeshDevice::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
-    TT_THROW("virtual_noc0_coordinate() is not supported on MeshDevice - use individual devices instead");
+    TT_FATAL(num_devices() == 1, "virtual_noc0_coordinate() is only supported on unit MeshDevice.");
+    return get_devices().front()->virtual_noc0_coordinate(noc_index, coord);
 }
 std::vector<CoreCoord> MeshDevice::worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const {
     return validate_and_get_reference_value(this->get_devices(), [logical_cores](const auto* device) {
@@ -683,9 +684,10 @@ std::vector<CoreCoord> MeshDevice::worker_cores_from_logical_cores(const std::ve
     });
 }
 std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
-    TT_THROW(
-        "get_optimal_dram_bank_to_logical_worker_assignment() is not supported on MeshDevice - use individual devices "
-        "instead");
+    TT_FATAL(
+        num_devices() == 1,
+        "get_optimal_dram_bank_to_logical_worker_assignment() is only supported on unit MeshDevice.");
+    return get_devices().front()->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 }
 CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {
     return validate_and_get_reference_value(this->get_devices(), [logical_coord, core_type](const auto* device) {
