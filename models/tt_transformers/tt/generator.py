@@ -119,7 +119,13 @@ class Generator:
             model_id = user_id // max_batch_size_per_model
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=(last_token_idx % 32))
+            logits_slice = self.model[model_id].process_output_prefill(out, last_token_idx=(last_token_idx % 32))
+            # Align vocab dims by slicing to common size if mismatch
+            if logits_slice.shape[-1] != output_logits.shape[-1]:
+                common = min(logits_slice.shape[-1], output_logits.shape[-1])
+                output_logits[idx, :, :common] = logits_slice[..., :common]
+            else:
+                output_logits[idx] = logits_slice
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
