@@ -93,6 +93,7 @@ fresh_clean() {
 verify_import_path() {
   python - <<'PY'
 import ttnn, sys
+print(ttnn.get_arch_name())
 print("ttnn imported from:", ttnn.__file__)
 PY
 }
