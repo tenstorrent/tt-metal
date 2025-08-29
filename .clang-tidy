@@ -19,7 +19,6 @@ Checks: >
   -bugprone-implicit-widening-of-multiplication-result,
   -bugprone-inc-dec-in-conditions,
   -bugprone-integer-division,
-  -bugprone-macro-parentheses,
   -bugprone-multi-level-implicit-pointer-conversion,
   -bugprone-narrowing-conversions,
   -bugprone-nondeterministic-pointer-iteration-order,
