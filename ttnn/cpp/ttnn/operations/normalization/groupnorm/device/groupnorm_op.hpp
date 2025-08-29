@@ -42,22 +42,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     CoreCoord grid_size,
     bool inplace,
     uint32_t num_out_blocks,
-    const DeviceComputeKernelConfig& compute_kernel_config);
-
-operation::ProgramWithCallbacks groupnorm_multi_core_welford(
-    const Tensor& a,
-    const std::optional<const Tensor>& gamma,
-    const std::optional<const Tensor>& beta,
-    const std::optional<const Tensor>& input_mask,
-    Tensor& output,
-    float eps,
-    uint32_t num_groups,
-    uint32_t num_batches,
-    DataType im_data_format,
-    CoreCoord grid_size,
-    bool inplace,
-    uint32_t num_out_blocks,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool use_welford);
 
 operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     const Tensor& a,
