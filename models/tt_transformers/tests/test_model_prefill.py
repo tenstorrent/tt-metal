@@ -201,7 +201,7 @@ def test_model_inference(
             )
         }
         reference_model = model_args.reference_transformer()
-        reference_model.load_state_dict(reference_state_dict, model_args.fuse_qkv, model_args.fuse_mlp)
+        reference_model.load_state_dict(reference_state_dict)
         # Embedding on host
         embd = model_args.reference_embedding()
         embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})

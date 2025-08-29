@@ -76,7 +76,7 @@ def test_attention_inference(
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
     reference_model = model_args.reference_attention()
-    reference_model.load_state_dict(partial_state_dict, model_args.fuse_qkv)
+    reference_model.load_state_dict(partial_state_dict)
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_rot_mats(

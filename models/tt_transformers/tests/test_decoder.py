@@ -74,7 +74,7 @@ def test_decoder_inference(
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
     reference_model = model_args.reference_decoder()
-    reference_model.load_state_dict(partial_state_dict, fuse_qkv=model_args.fuse_qkv, fuse_mlp=model_args.fuse_mlp)
+    reference_model.load_state_dict(partial_state_dict)
 
     generation_start_pos = 0
     generation_length = 10
