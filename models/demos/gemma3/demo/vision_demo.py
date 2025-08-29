@@ -185,7 +185,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 16446464, "num_command_queues": 2, "l1_small_size": 24576}],
+    [{"fabric_config": True, "trace_region_size": 21448704, "num_command_queues": 2, "l1_small_size": 24576}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -278,11 +278,10 @@ def test_multimodal_demo_text(
 
     # Trace capture dialogs with random images
     trace_dialogs = [
-        [UserMessage(content=["Write a haiku."])],
-        # [UserMessage(content=[ImageMedia(image=trace_img_1120x560), "What do you see in this image?"])],
-        # [UserMessage(content=[ImageMedia(image=img), "What do you see in this image?"])],
-        # [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
-        # [UserMessage(content=[ImageMedia(image=img), "Describe this image in detail."])],
+        [UserMessage(content=[ImageMedia(image=trace_img_1120x560), "What do you see in this image?"])],
+        [UserMessage(content=[ImageMedia(image=img), "What do you see in this image?"])],
+        [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
+        [UserMessage(content=[ImageMedia(image=img), "Describe this image in detail."])],
     ]
 
     if len(trace_dialogs) < max_batch_size:
