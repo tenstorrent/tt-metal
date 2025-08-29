@@ -499,9 +499,7 @@ CoreCoord MeshDevice::compute_with_storage_grid_size() const {
         this->get_devices(), [](const auto* device) { return device->compute_with_storage_grid_size(); });
 }
 
-tt::ARCH MeshDevice::arch() const {
-    return validate_and_get_reference_value(this->get_devices(), [](const auto* device) { return device->arch(); });
-}
+tt::ARCH MeshDevice::arch() const { return tt::tt_metal::MetalContext::instance().get_cluster().arch(); }
 
 size_t MeshDevice::num_rows() const { return view_->num_rows(); }
 
@@ -667,16 +665,6 @@ CoreCoord MeshDevice::dram_grid_size() const {
         this->get_devices(), [](const auto* device) { return device->dram_grid_size(); });
 }
 
-bool MeshDevice::using_slow_dispatch() const {
-    return validate_and_get_reference_value(
-        this->get_devices(), [](const auto* device) { return device->using_slow_dispatch(); });
-}
-
-bool MeshDevice::using_fast_dispatch() const {
-    return validate_and_get_reference_value(
-        this->get_devices(), [](const auto* device) { return device->using_fast_dispatch(); });
-}
-
 // Device property methods that can be delegated to reference device
 CoreCoord MeshDevice::grid_size() const {
     return validate_and_get_reference_value(
@@ -687,9 +675,8 @@ CoreCoord MeshDevice::logical_grid_size() const {
         this->get_devices(), [](const auto* device) { return device->logical_grid_size(); });
 }
 CoreCoord MeshDevice::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
-    return validate_and_get_reference_value(this->get_devices(), [noc_index, coord](const auto* device) {
-        return device->virtual_noc0_coordinate(noc_index, coord);
-    });
+    TT_FATAL(num_devices() == 1, "virtual_noc0_coordinate() is only supported on unit MeshDevice.");
+    return get_devices().front()->virtual_noc0_coordinate(noc_index, coord);
 }
 std::vector<CoreCoord> MeshDevice::worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const {
     return validate_and_get_reference_value(this->get_devices(), [logical_cores](const auto* device) {
@@ -697,9 +684,10 @@ std::vector<CoreCoord> MeshDevice::worker_cores_from_logical_cores(const std::ve
     });
 }
 std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
-    return validate_and_get_reference_value(this->get_devices(), [noc](auto* device) {
-        return device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
-    });
+    TT_FATAL(
+        num_devices() == 1,
+        "get_optimal_dram_bank_to_logical_worker_assignment() is only supported on unit MeshDevice.");
+    return get_devices().front()->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 }
 CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {
     return validate_and_get_reference_value(this->get_devices(), [logical_coord, core_type](const auto* device) {
@@ -915,7 +903,7 @@ bool MeshDevice::initialize(
     // as the number of virtual ethernet cores seen by the MeshDevice
     num_virtual_eth_cores_ = DevicePool::instance().get_max_num_eth_cores_across_all_devices();
     mesh_command_queues_.reserve(this->num_hw_cqs());
-    if (this->using_fast_dispatch()) {
+    if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
             mesh_command_queues_.push_back(std::make_unique<FDMeshCommandQueue>(
                 this,

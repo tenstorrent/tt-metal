@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
         auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
         device_is_mmio = device->get_devices()[0]->is_mmio_capable();
 
-        if (!device->using_fast_dispatch()) {
+        if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
             log_info(LogTest, "Skip! This test needs to be run with fast dispatch enabled");
             return 1;
         }
