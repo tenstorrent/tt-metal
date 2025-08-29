@@ -254,56 +254,26 @@ class ContextParallelConv3d:
             x_pad_NTHWC = self._causal_pad_input(x_NTHWC, pad_front, pad_back)
         else:
             # Multi-device padding. Input is fractured on dim=1 (T) and must pass frames between devices
-            """
-            Disaggregate tensors. First device pre-pads. Each device needs `context_size` frames from the previous.
-            """
             # Pad on first device
-            front_slice = x_NTHWC[:, 0:1, :, :, :]
-            device_tensors_front_pad = ttnn.concat([front_slice] * 2, dim=1)
-            ttnn.deallocate(front_slice)
-            device_tensors_front_pad = ttnn.multiply(device_tensors_front_pad, self.mask)
-            device_tensors_front_pad = ttnn.reallocate(device_tensors_front_pad)
-            halo_tensor = x_NTHWC[:, -context_size:, :, :, :]
-            halo_tensor = ttnn.squeeze(halo_tensor, 0)
-            halos = ttnn.experimental.all_gather_async(
+            halo_tensor = ttnn.squeeze(x_NTHWC, 0)
+            ttnn.synchronize_device(self.mesh_device)
+            halo_tensor = ttnn.experimental.neighbor_pad_async(
                 halo_tensor,
                 dim=0,
-                mesh_device=self.mesh_device,
+                padding=context_size,
+                padding_mode="replicate",
+                direction=0,
                 cluster_axis=1,
-                topology=ttnn.Topology.Linear,
-                multi_device_global_semaphore=self.parallel_manager.gather_semaphores[
-                    self.parallel_manager.ping_pong_idx * 2 : (self.parallel_manager.ping_pong_idx + 1) * 2
+                final_semaphore=self.parallel_manager.gather_semaphores[self.parallel_manager.ping_pong_idx * 2],
+                barrier_semaphore=self.parallel_manager.gather_semaphores[
+                    (self.parallel_manager.ping_pong_idx * 2) + 1
                 ],
+                num_links=1,
+                mesh_device=self.mesh_device,
+                topology=ttnn.Topology.Linear,
             )
             self.parallel_manager.ping_pong_idx = 1 - self.parallel_manager.ping_pong_idx
-            halos_orig_shape = halos.shape
-            halo_chunks = ttnn.chunk(halos, self.halos_chunk_map[halos_orig_shape[3]], 1)
-            ttnn.deallocate(halos)
-            split_tiles = []
-            for i in range(len(halo_chunks)):
-                split_tiles.append(ttnn.to_layout(halo_chunks[i], layout=ttnn.TILE_LAYOUT))
-                ttnn.deallocate(halo_chunks[i])
-            CHUNK_SIZE = 30
-            num_concats = self.halos_chunk_map[halos_orig_shape[3]] // CHUNK_SIZE
-            halos_reshape_back = ttnn.concat(split_tiles[0:CHUNK_SIZE], 1)
-            for i in range(0, num_concats):
-                if i > 0:
-                    halos_reshape_back = ttnn.concat(
-                        [halos_reshape_back] + split_tiles[CHUNK_SIZE * i : CHUNK_SIZE * (i + 1)], 1
-                    )
-                    halos_reshape_back = ttnn.reallocate(halos_reshape_back)
-                for k in range(CHUNK_SIZE * i, CHUNK_SIZE * (i + 1)):
-                    ttnn.deallocate(split_tiles[k])
-            halos_reshape = ttnn.reshape(halos_reshape_back, (32, -1))
-            ttnn.deallocate(halos_reshape_back)
-            halos_reshape = ttnn.matmul(self.proj, halos_reshape)
-            halos_reshape = ttnn.reshape(halos_reshape, device_tensors_front_pad.shape)
-            halos_reshape = ttnn.add(device_tensors_front_pad, halos_reshape)
-            halos_reshape = ttnn.to_layout(halos_reshape, layout=ttnn.ROW_MAJOR_LAYOUT)
-            x_pad_NTHWC = ttnn.concat([halos_reshape, x_NTHWC], dim=1)
-            ttnn.deallocate(device_tensors_front_pad)
-            ttnn.deallocate(halos_reshape)
-            ttnn.deallocate(x_NTHWC)
+            x_pad_NTHWC = ttnn.unsqueeze(halo_tensor, 0)
 
         out_NTHWC = ttnn.experimental.conv3d(
             input_tensor=x_pad_NTHWC,
@@ -312,6 +282,5 @@ class ContextParallelConv3d:
             config=self.conv_config,
             compute_kernel_config=self.compute_kernel_config,
         )
-        ttnn.deallocate(x_pad_NTHWC)
 
         return out_NTHWC
