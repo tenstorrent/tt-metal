@@ -111,7 +111,9 @@ void MAIN {
     constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(22);
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(23);
     constexpr uint32_t num_out_blocks = get_compile_time_arg_val(24);
-    constexpr uint32_t group_size = get_compile_time_arg_val(25);
+    // These are numbers in absolute terms, on a per group, per batch without tiling
+    constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(25);
+    constexpr uint32_t num_rows_per_group = get_compile_time_arg_val(26);
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -136,8 +138,6 @@ void MAIN {
     constexpr uint32_t cb_x = tt::CBIndex::c_24;
     constexpr uint32_t cb_xmm = tt::CBIndex::c_25;
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
-    constexpr uint32_t cb_ex_ping = tt::CBIndex::c_11;
-    constexpr uint32_t cb_ex_pong = tt::CBIndex::c_12;
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;
     constexpr uint32_t cb_ex2pe = tt::CBIndex::c_27;
 
@@ -161,6 +161,7 @@ void MAIN {
     uint32_t index_b_offset = 0;
     uint32_t index_g_offset = 0;
     uint32_t row_offset = num_cols_per_group;
+    uint32_t tile_offset;
     // data offset
     uint32_t num_datum_per_row_offeset = 0;
     // inplace out cbs
@@ -211,7 +212,7 @@ void MAIN {
     tilize_uninit(cb_in_rm, cb_in);
     cb_wait_front(cb_in, per_core_MN);
 #else
-    binary_op_init_common(cb_in0, cb_ex_ping, cb_ex_ping);
+    binary_op_init_common(cb_in0, cb_in0, cb_in0);
 #endif
 
     index_b_offset = 0;
@@ -233,17 +234,6 @@ void MAIN {
         cb_ex_external_tiles_required++;
     }
 
-    // Copy 2 zeros to cb_ex_pong
-    cb_reserve_back(cb_ex_pong, 2);
-    tile_regs_acquire();
-    zeroacc();
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile_block(0, cb_ex_pong, 2);
-    tile_regs_release();
-    cb_push_back(cb_ex_pong, 2);
-    bool read_from_ping = false;
-
     // Start Batch Loop
     for (uint32_t b = 0; b < batch; ++b) {
         DPRINT << "Batch: " << b << " out of " << batch << ENDL();
@@ -255,6 +245,7 @@ void MAIN {
         group_reset_index = 0;
         index_block_w = 0;
         output_tile_index = 0;
+        tile_offset = 0;
 
         // Start Group Loop
         for (uint32_t g = 0; g < group; ++g) {
@@ -262,6 +253,14 @@ void MAIN {
             // Start Welford's Calculation
             uint32_t curr_xy_coord = 0;
             uint32_t curr_xy_limit = 0;
+            tile_offset = (tile_offset + num_channels_per_group) % TILE_WIDTH;
+
+            cb_reserve_back(cb_ex_partial, 2);
+
+            reconfig_data_format_srcb(cb_in0);
+            transpose_wh_init(cb_in0, cb_ex_partial);
+            welford_init();
+            tile_regs_acquire();
 
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                 DPRINT << "out_block_index: " << out_block_index << " out of " << num_out_blocks_padded << ENDL();
@@ -276,28 +275,14 @@ void MAIN {
 
                 // Transpose (from cb_in0) and Welford
                 cb_wait_front(cb_in0, out_block_hw_normal);
-                DPRINT << "welford: read_from_ping: " << (uint32_t)read_from_ping << ENDL();
 
                 index_h_offset = 0;
-                reconfig_data_format_srcb(cb_in0);
-                transpose_wh_init(cb_in0, cb_ex_ping);
-                copy_tile_init(read_from_ping ? cb_ex_ping : cb_ex_pong);
-                welford_init();
 
                 for (uint32_t i = 0; i < out_block_h_actual; ++i) {
-                    curr_xy_limit += group_size;
+                    curr_xy_limit += num_channels_per_group;
                     index_subblock_w_offset = 0;
                     for (uint32_t j = 0; j < num_subblocks_w; ++j) {
                         DPRINT << "welford: j: " << j << " out of " << num_subblocks_w << ENDL();
-                        tile_regs_acquire();
-
-                        // Copy the current values to DST regs 1 and 2
-                        cb_wait_front(read_from_ping ? cb_ex_ping : cb_ex_pong, 2);
-                        cb_reserve_back(read_from_ping ? cb_ex_pong : cb_ex_ping, 2);
-                        copy_tile_to_dst_init_short(read_from_ping ? cb_ex_ping : cb_ex_pong, 0);
-                        copy_tile(read_from_ping ? cb_ex_ping : cb_ex_pong, 0, 1);
-                        copy_tile(read_from_ping ? cb_ex_ping : cb_ex_pong, 1, 2);
-
                         // Run Welford's algorithm
                         for (uint32_t w = 0; w < subblock_w; ++w) {
                             uint32_t index = w + index_subblock_w_offset + index_h_offset;
@@ -308,21 +293,13 @@ void MAIN {
 #else
                             transpose_wh_tile(cb_in0, index, 0);
 #endif
-                            bool is_last_tile_in_group = (out_block_index == num_out_blocks_padded - 1) &&
-                                                         (i == out_block_h_actual - 1) && (j == num_subblocks_w - 1) &&
-                                                         (w == subblock_w - 1);
-                            welford(0, 1, 2, curr_xy_coord, curr_xy_limit, is_last_tile_in_group);
+                            // Check if this is the first tile in the row and set tile_offset accordingly
+                            auto welford_tile_offset = (index_subblock_w_offset + j + i) ? 0 : tile_offset;
+                            welford(0, 1, 2, curr_xy_coord, curr_xy_limit, false, welford_tile_offset);
                             curr_xy_coord += 32;
                         }
-                        tile_regs_commit();
-                        cb_pop_front(read_from_ping ? cb_ex_ping : cb_ex_pong, 2);
 
-                        tile_regs_wait();
-                        pack_tile_block(1, read_from_ping ? cb_ex_pong : cb_ex_ping, 2);
-                        tile_regs_release();
-                        cb_push_back(read_from_ping ? cb_ex_pong : cb_ex_ping, 2);
                         index_subblock_w_offset += subblock_w;
-                        read_from_ping = !read_from_ping;
                     }
                     index_h_offset += block_w;
                 }
@@ -334,21 +311,11 @@ void MAIN {
                 DPRINT << "welford done: out_block_index: " << out_block_index << ENDL();
             }
 
-            cb_wait_front(read_from_ping ? cb_ex_ping : cb_ex_pong, 2);
-            cb_reserve_back(cb_ex_partial, 2);
-            transpose_wh_init(read_from_ping ? cb_ex_ping : cb_ex_pong, cb_ex_partial);
-            tile_regs_acquire();
-            transpose_wh_tile(read_from_ping ? cb_ex_ping : cb_ex_pong, 0, 0);
-            transpose_wh_tile(read_from_ping ? cb_ex_ping : cb_ex_pong, 1, 1);
-            copy_tile(read_from_ping ? cb_ex_ping : cb_ex_pong, 0, 0);
-            copy_tile(read_from_ping ? cb_ex_ping : cb_ex_pong, 1, 1);
-            dprint_tensix_dest_reg(0);
-            dprint_tensix_dest_reg(1);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile_block(0, cb_ex_partial, 2);
+            pack_tile_block(1, cb_ex_partial, 2);
             tile_regs_release();
-            cb_pop_front(read_from_ping ? cb_ex_pong : cb_ex_ping, 2);
+
             cb_push_back(cb_ex_partial, 2);
             // End Local Reduce
             // End Welford's Calculation

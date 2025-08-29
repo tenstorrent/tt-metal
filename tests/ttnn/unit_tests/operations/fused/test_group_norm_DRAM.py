@@ -71,7 +71,7 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x)
 
     # torch input tensor
-    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_input_tensor = torch.ones(N * C * H * W, dtype=torch.bfloat16).reshape(N, C, H, W)
     torch_weight = torch.rand((C,), dtype=torch.bfloat16)
     torch_bias = torch.rand((C,), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.group_norm(
