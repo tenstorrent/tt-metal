@@ -1210,7 +1210,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t W = shape[3];
     uint32_t Wt = W / TILE_WIDTH;
-    uint32_t group_size = W / num_groups;
 
     // Compute optimal core grid
     TT_FATAL(W % TILE_WIDTH == 0, "W (channels): {} must be divisible by {}", W, TILE_WIDTH);
@@ -1706,7 +1705,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
         (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
-        (std::uint32_t)num_out_blocks};
+        (std::uint32_t)num_out_blocks,
+        (std::uint32_t)num_channels_per_group,
+        (std::uint32_t)num_rows_per_batch_per_core_group_1,
+    };
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args_group_1 = {
@@ -1728,7 +1730,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
         (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
-        (std::uint32_t)num_out_blocks};
+        (std::uint32_t)num_out_blocks,
+        (std::uint32_t)num_channels_per_group,
+        (std::uint32_t)num_rows_per_batch_per_core_group_1};
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
     std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_2 = {
@@ -1752,7 +1756,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
         (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
-        (std::uint32_t)num_out_blocks};
+        (std::uint32_t)num_out_blocks,
+        (std::uint32_t)num_channels_per_group,
+        (std::uint32_t)num_rows_per_batch_per_core_group_2};
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_2);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_2);
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args_group_2 = {
@@ -1774,7 +1780,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
         (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
-        (std::uint32_t)num_out_blocks};
+        (std::uint32_t)num_out_blocks,
+        (std::uint32_t)num_channels_per_group,
+        (std::uint32_t)num_rows_per_batch_per_core_group_2};
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_2);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_2);
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
@@ -1974,7 +1982,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
         (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
-        (std::uint32_t)group_size,
+        (std::uint32_t)num_channels_per_group,
+        (std::uint32_t)num_rows_per_batch_per_core_group_1,
     };
     std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_2 = {
         (std::uint32_t)1,
@@ -2006,7 +2015,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
         (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
-        (std::uint32_t)group_size,
+        (std::uint32_t)num_channels_per_group,
+        (std::uint32_t)num_rows_per_batch_per_core_group_2,
     };
 
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_1 = {
@@ -2039,7 +2049,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
         (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
-        (std::uint32_t)group_size,
+        (std::uint32_t)num_channels_per_group,
+        (std::uint32_t)num_rows_per_batch_per_core_group_1,
     };
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_2 = {
         (std::uint32_t)0,
@@ -2071,7 +2082,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
         (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
-        (std::uint32_t)group_size,
+        (std::uint32_t)num_channels_per_group,
+        (std::uint32_t)num_rows_per_batch_per_core_group_2,
     };
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =

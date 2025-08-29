@@ -65,7 +65,7 @@ void kernel_main() {
     constexpr uint32_t num_mcast_cores = get_compile_time_arg_val(2);
     constexpr uint32_t num_batch_group = get_compile_time_arg_val(3);
     constexpr uint32_t num_batches = get_compile_time_arg_val(4);
-    uint32_t num_groups = num_batch_group / num_batches;
+    constexpr uint32_t num_groups = num_batch_group / num_batches;
 
     constexpr uint32_t per_core_N = get_compile_time_arg_val(5);
     const uint32_t per_core_N_bytes = get_compile_time_arg_val(6);
@@ -86,6 +86,9 @@ void kernel_main() {
     constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(18);
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(19);
     constexpr uint32_t num_out_blocks = get_compile_time_arg_val(20);
+    // These are numbers in absolute terms, on a per group, per batch without tiling
+    constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(21);
+    constexpr uint32_t num_rows_per_group = get_compile_time_arg_val(22);
 
     constexpr auto src0_args = TensorAccessorArgs<21>();
     constexpr auto out_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
@@ -364,19 +367,7 @@ void kernel_main() {
                     auto p_local_means = reinterpret_cast<volatile uint16_t*>(local_read_ptr);
                     auto p_local_vars = p_local_means + TILE_WIDTH * TILE_HEIGHT;
 
-                    // TODO: Make transpose work to avoid having to do this manually here
-                    // Doing this for two faces,  face 0 is the first 16 values, face 2 is the last 16 values
-                    for (uint32_t face_h = 0; face_h < 2; ++face_h) {
-                        auto face_mean_addr = p_local_means + face_h * (single_tile_size_bytes >> 2);
-                        auto face_var_addr = p_local_vars + face_h * (single_tile_size_bytes >> 2);
-                        // Copy 16 values from face_addr to p_local_means and p_local_vars
-                        for (uint32_t i = 0; i < 16; i++) {
-                            p_local_means[(face_h << 4) + i] = face_mean_addr[i << 4];
-                            p_local_vars[(face_h << 4) + i] = face_var_addr[i << 4];
-                        }
-                    }
-
-                    auto local_result = combine_welford<32, 1, 1>(p_local_means, p_local_vars);
+                    auto local_result = combine_welford<32, num_channels_per_group * num_rows_per_group / 32, 2>(p_local_means, p_local_vars);
                     DPRINT << "local mean: " << local_result.mean << " local var: " << local_result.variance << " local count: " << local_result.count << ENDL();
 
                     // Write this to cb_ex_global
@@ -388,8 +379,6 @@ void kernel_main() {
                     p_global_vars[0] = local_result.variance;
 
                     cb_pop_front(cb_ex_partial, 2);
-
-                    tt::data_movement::common::print_bf16_pages(global_means_ptr, 16, 4 * 16);
 
                     if constexpr (num_mcast_cores > 1) {
                         // Wait until all other cores have signaled that their partial data is ready
@@ -418,7 +407,7 @@ void kernel_main() {
                         noc_async_write_multicast(
                             l1_read_addr_ex,
                             multicast_data_noc | l1_read_addr_ex,
-                            num_bytes_read,
+                            2 * single_tile_size_bytes,
                             num_mcast_cores_mid_group,
                             true);
                         noc_semaphore_set_multicast(
@@ -431,7 +420,7 @@ void kernel_main() {
                             noc_async_write_multicast(
                                 l1_read_addr_ex,
                                 multicast_first_group_data_noc | l1_read_addr_ex,
-                                num_bytes_read,
+                                2 * single_tile_size_bytes,
                                 num_mcast_cores_first_group,
                                 true);
                             noc_semaphore_set_multicast(
@@ -445,7 +434,7 @@ void kernel_main() {
                             noc_async_write_multicast(
                                 l1_read_addr_ex,
                                 multicast_last_group_data_noc | l1_read_addr_ex,
-                                num_bytes_read,
+                                2 * single_tile_size_bytes,
                                 num_mcast_cores_last_group,
                                 true);
                             noc_semaphore_set_multicast(
