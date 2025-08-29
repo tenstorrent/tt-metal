@@ -4,6 +4,7 @@ include(CMakeFindDependencyMacro)
 
 # Find all required dependencies
 find_dependency(TT-Metalium REQUIRED)
+find_dependency(xtensor REQUIRED)
 
 # Set package as found
 set(TT-NN_FOUND TRUE)
