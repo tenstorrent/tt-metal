@@ -2,15 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import pytest
+
+import ttnn
+from models.demos.yolov5x.common import YOLOV5X_L1_SMALL_SIZE, load_torch_model
+from models.demos.yolov5x.tt.model_preprocessing import create_yolov5x_input_tensors, create_yolov5x_model_parameters
+from models.demos.yolov5x.tt.yolov5x import Yolov5x
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.yolov5x.tt.yolov5x import Yolov5x
-from models.experimental.yolov5x.tt.model_preprocessing import (
-    create_yolov5x_input_tensors,
-    create_yolov5x_model_parameters,
-)
-from models.experimental.yolov5x.common import load_torch_model, YOLOV5X_L1_SMALL_SIZE
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV5X_L1_SMALL_SIZE}], indirect=True)
