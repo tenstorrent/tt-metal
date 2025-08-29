@@ -49,7 +49,7 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
     virtual_core = device->ethernet_core_from_logical_core(logical_core);
     log_info(LogTest, "Running test on device {} core {}...", device->id(), virtual_core.str());
 
-    auto eth_link_kernel = CreateKernel(
+    CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_eth_link_check.cpp",
         logical_core,

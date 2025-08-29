@@ -172,7 +172,6 @@ TEST_F(MeshDeviceFixture, TensixInitializeIllegalSemaphores) {
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = tt_metal::CreateProgram();
         distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
         CoreRange core_range({0, 0}, {1, 1});
         unit_tests::initialize_semaphores::try_creating_more_than_max_num_semaphores(
             devices_.at(id), workload, core_range);
