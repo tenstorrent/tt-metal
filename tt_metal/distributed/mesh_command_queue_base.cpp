@@ -132,6 +132,7 @@ void MeshCommandQueueBase::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
                 buffer,
                 MeshCoordinate(device_y, device_x),
                 shard_data.data(),
+                /*pinned_memory=*/nullptr,
                 /*region=*/std::nullopt,
                 num_txns_per_device);
             this->submit_memcpy_request(num_txns_per_device, true);
