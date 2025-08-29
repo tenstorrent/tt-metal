@@ -166,6 +166,8 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
                 .set_page_size(ouput_cb_index, single_tile_size);
         tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
+        std::vector<uint32_t> reader_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_compile_time_args);
         auto unary_reader_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
@@ -173,7 +175,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt_metal::NOC::RISCV_1_default,
-                .compile_args = {1}});
+                .compile_args = reader_compile_time_args});
 
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
@@ -330,6 +332,8 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
                 .set_page_size(ouput_cb_index, single_tile_size);
         tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
+        std::vector<uint32_t> reader_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_compile_time_args);
         auto unary_reader_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
@@ -337,14 +341,18 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt_metal::NOC::RISCV_1_default,
-                .compile_args = {1}});
+                .compile_args = reader_compile_time_args});
 
+        std::vector<uint32_t> writer_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_stick_layout_8bank.cpp",
             core,
             tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+                .compile_args = writer_compile_time_args});
 
         vector<uint32_t> compute_kernel_args = {uint(num_output_tiles)};
 

@@ -89,7 +89,6 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in3 = 3;
     const uint32_t bias_single_tile_size_bytes = get_tile_size(cb_id_in3);
-    const DataFormat bias_data_format = get_dataformat(cb_id_in3);
 
     uint32_t l1_write_addr_in3;
 #ifndef SKIP_MCAST
