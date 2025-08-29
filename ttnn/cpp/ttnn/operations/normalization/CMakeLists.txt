@@ -39,6 +39,9 @@ target_sources(
         layernorm_distributed/layernorm_post_all_gather.cpp
         layernorm_distributed/layernorm_pre_all_gather.cpp
         rmsnorm/rmsnorm.cpp
+        softmax/softmax.cpp
+        softmax/device/softmax_device_operation.cpp
+        softmax/device/softmax_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_normalization PRIVATE ${FixmeOpIncDirs})

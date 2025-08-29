@@ -5,10 +5,9 @@
 #pragma once
 
 #include "softmax_operation_types.hpp"
-#include "tt-metalium/circular_buffer_config.hpp"
-#include "tt-metalium/core_coord.hpp"
-#include "tt-metalium/kernel_types.hpp"
 
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
@@ -19,6 +18,7 @@ namespace ttnn::operations::normalization::softmax::program {
 //
 // General-purpose softmax with arbitrary dimension support
 //
+//
 struct SoftmaxProgramFactoryGeneral {
     struct shared_variables_t {};
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -26,6 +26,7 @@ struct SoftmaxProgramFactoryGeneral {
     static void override_runtime_arguments(
         cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
+
 //
 // Optimized for transformer attention patterns
 //

@@ -4,14 +4,15 @@
 
 #include "softmax_device_operation.hpp"
 
-#include "softmax/device/softmax_types.hpp"
+#include "softmax_operation_types.hpp"
+#include "softmax_program_factory.hpp"
+
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::normalization::softmax {
-
 SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Determine if we should use sharded multi-core program factory
@@ -27,6 +28,16 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
     } else if (
         operation_attributes.softmax_type == SoftmaxOperationType::Softmax && operation_attributes.dim == rank - 1 &&
         rank == 4) {
+        return std::visit(
+            [&](const auto& program_config) -> program_factory_t {
+                using ProgramConfigType = std::decay_t<decltype(program_config)>;
+                if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
+                    return program::SoftmaxShardedProgramFactoryAttentionOptimized{};
+                } else {
+                    return program::SoftmaxProgramFactoryAttentionOptimized{};
+                }
+            },
+            operation_attributes.program_config);
         return program::SoftmaxProgramFactoryAttentionOptimized{};
     }
     return program::SoftmaxProgramFactoryGeneral{};
@@ -265,14 +276,14 @@ Tensor softmax(
     const auto compute_kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
     const auto rank = input_tensor.logical_shape().size();
-
+    const auto dim_calculated = dim < 0 ? rank + dim : dim;
     if (rank > 4) {
         // General-purpose softmax
         return ttnn::prim::softmax(
             queue_id,
             SoftmaxOperationType::Softmax,
             /*input_tensor=*/input_tensor,
-            /*dim=*/dim,
+            /*dim=*/dim_calculated,
             /*mask=*/std::nullopt,
             /*scale=*/std::nullopt,
             /*inplace=*/false,
@@ -285,26 +296,28 @@ Tensor softmax(
     }
 
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
-    if (dim == rank - 1) {
+    const auto dim_adjusted = dim < 0 ? input_tensor_4D.logical_shape().size() + dim : dim;
+    if (dim_adjusted == rank - 1) {
         // Input tensor formatting
         const ttnn::Shape input_pad_shape =
-            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.padded_shape());
+            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor_4D.padded_shape());
         const ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
             .pad_shape = input_pad_shape,
             .pad_value = -std::numeric_limits<float>::infinity(),
             .target_layout = tt::tt_metal::Layout::TILE};
         auto formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
-            input_tensor,
-            input_tensor.device(),
+            input_tensor_4D,
+            input_tensor_4D.device(),
             input_format_params.pad_shape,
             input_format_params.pad_value,
             input_format_params.target_layout);
+
         // Attention optimized softmax
         return ttnn::prim::softmax(
             queue_id,
             SoftmaxOperationType::Softmax,
             /*input_tensor=*/formatted_input_tensor,
-            /*dim=*/-1,
+            /*dim=*/dim_adjusted,
             /*mask=*/std::nullopt,
             /*scale=*/std::nullopt,
             /*inplace=*/false,
@@ -320,7 +333,7 @@ Tensor softmax(
         queue_id,
         SoftmaxOperationType::Softmax,
         /*input_tensor=*/input_tensor_4D,
-        /*dim=*/dim,
+        /*dim=*/dim_adjusted,
         /*mask=*/std::nullopt,
         /*scale=*/std::nullopt,
         /*inplace=*/false,

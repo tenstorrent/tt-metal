@@ -180,7 +180,6 @@ Pointwise Unary
    ttnn.silu
    ttnn.sin
    ttnn.sinh
-   ttnn.softmax
    ttnn.softplus
    ttnn.softshrink
    ttnn.softsign
@@ -450,6 +449,7 @@ Normalization
    ttnn.layer_norm
    ttnn.rms_norm
    ttnn.batch_norm
+   ttnn.softmax
    ttnn.scale_mask_softmax
    ttnn.softmax_in_place
    ttnn.scale_mask_softmax_in_place

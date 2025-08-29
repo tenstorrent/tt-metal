@@ -19,8 +19,10 @@ struct SoftmaxDeviceOperation {
     using spec_return_value_t = softmax::spec_return_value_t;
     using tensor_return_value_t = softmax::tensor_return_value_t;
 
-    using program_factory_t =
-        std::variant<program::SoftmaxProgramFactoryGeneral, program::SoftmaxProgramFactoryAttentionOptimized>;
+    using program_factory_t = std::variant<
+        program::SoftmaxProgramFactoryGeneral,
+        program::SoftmaxShardedProgramFactoryAttentionOptimized,
+        program::SoftmaxProgramFactoryAttentionOptimized>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

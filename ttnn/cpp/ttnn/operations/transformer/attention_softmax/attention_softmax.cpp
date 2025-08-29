@@ -25,27 +25,29 @@ ttnn::Tensor ExecuteAttentionSoftmax<in_place>::invoke(
     } else {
         if (not attention_mask.has_value()) {
             auto output_tensor = ttnn::multiply(input_tensor, head_size);
-            return ttnn::operations::normalization::softmax(
-                output_tensor, memory_config.value_or(input_tensor.memory_config()));
+            return Tensor{};
+            // ttnn::operations::normalization::softmax(
+            //     output_tensor, memory_config.value_or(input_tensor.memory_config()));
         }
     }
 
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-    auto output_tensor = tt::tt_metal::operation::run(
-                             ttnn::operations::normalization::Softmax{
-                                 head_size,
-                                 in_place,
-                                 memory_config.value_or(input_tensor.memory_config()),
-                                 program_config,
-                                 causal_mask.value(),
-                                 kernel_config_val,
-                                 false},
-                             {input_tensor},
-                             {attention_mask})
-                             .at(0);
-    return output_tensor;
+    // auto output_tensor = tt::tt_metal::operation::run(
+    //                          ttnn::operations::normalization::Softmax{
+    //                              head_size,
+    //                              in_place,
+    //                              memory_config.value_or(input_tensor.memory_config()),
+    //                              program_config,
+    //                              causal_mask.value(),
+    //                              kernel_config_val,
+    //                              false},
+    //                          {input_tensor},
+    //                          {attention_mask})
+    //                          .at(0);
+    // return output_tensor;
+    return Tensor{};
 }
 
 template struct ExecuteAttentionSoftmax<false>;
