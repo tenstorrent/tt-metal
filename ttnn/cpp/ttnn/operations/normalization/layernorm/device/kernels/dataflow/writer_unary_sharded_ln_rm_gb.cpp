@@ -13,16 +13,19 @@ void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
     constexpr bool fuse_gamma = get_compile_time_arg_val(1) == 1;
     constexpr bool fuse_beta = get_compile_time_arg_val(2) == 1;
-    constexpr bool gamma_is_dram = get_compile_time_arg_val(3) == 1;
-    constexpr bool beta_is_dram = get_compile_time_arg_val(4) == 1;
-    constexpr uint32_t block_w = get_compile_time_arg_val(5);
-    constexpr bool FLOAT32_DTYPE_GAMMA = get_compile_time_arg_val(8) == 1;
-    constexpr bool FLOAT32_DTYPE_BETA = get_compile_time_arg_val(9) == 1;
+    constexpr uint32_t block_w = get_compile_time_arg_val(3);
+    constexpr auto gamma_args = TensorAccessorArgs<4>();
+    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    constexpr uint32_t stick_size = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
+    constexpr bool FLOAT32_DTYPE_GAMMA = get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 1) == 1;
+    constexpr bool FLOAT32_DTYPE_BETA = get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 2) == 1;
 
     // Reshard writer
-    constexpr uint32_t worker_core_stride_w_bytes = get_compile_time_arg_val(10);
-    constexpr uint32_t storage_core_stride_w_bytes = get_compile_time_arg_val(11);
-    constexpr uint32_t block_ht = get_compile_time_arg_val(12);
+    constexpr uint32_t worker_core_stride_w_bytes =
+        get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 3);
+    constexpr uint32_t storage_core_stride_w_bytes =
+        get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 4);
+    constexpr uint32_t block_ht = get_compile_time_arg_val(beta_args.next_compile_time_args_offset() + 5);
 
     const uint32_t gamma_addr = get_arg_val<uint32_t>(3);
     const uint32_t beta_addr = get_arg_val<uint32_t>(4);
@@ -56,13 +59,9 @@ void kernel_main() {
     const uint32_t eps = get_arg_val<uint32_t>(2);
     generate_bcast_col_scalar(eps_cb_id, eps);
 
-    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(6) == 1;
-    constexpr uint32_t size = get_compile_time_arg_val(7);
-
     if constexpr (fuse_gamma) {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-
-        const auto gamma = get_interleaved_addr_gen<gamma_is_dram, stick_size_is_pow2>(gamma_addr, size);
+        const auto gamma = TensorAccessor(gamma_args, gamma_addr, stick_size);
 
         constexpr uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_GAMMA ? 64 : 32;
         constexpr uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_GAMMA ? 1024 : 512;
@@ -85,8 +84,7 @@ void kernel_main() {
 
     if constexpr (fuse_beta) {
         const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
-
-        const auto beta = get_interleaved_addr_gen<beta_is_dram, stick_size_is_pow2>(beta_addr, size);
+        const auto beta = TensorAccessor(beta_args, beta_addr, stick_size);
 
         uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_BETA ? 64 : 32;
         uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_BETA ? 1024 : 512;

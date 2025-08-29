@@ -216,10 +216,10 @@ void kernel_main() {
     uint32_t p_addr = get_arg_val<uint32_t>(3);
 
     uint32_t arg_id = 0;
-    constexpr bool dst_is_dram = (bool)get_compile_time_arg_val(0);
-    constexpr bool temp_is_dram = (bool)get_compile_time_arg_val(1);
-    constexpr bool k_is_dram = (bool)get_compile_time_arg_val(2);
-    constexpr bool p_is_dram = (bool)get_compile_time_arg_val(3);
+    constexpr auto dst_args = TensorAccessorArgs<0>();
+    constexpr auto temp_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
+    constexpr auto k_args = TensorAccessorArgs<temp_args.next_compile_time_args_offset()>();
+    constexpr auto p_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(4);
     constexpr uint32_t cb_id_mask = get_compile_time_arg_val(5);
@@ -240,7 +240,7 @@ void kernel_main() {
     generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
     // read k, p, temp
 
-    const InterleavedAddrGen<true> addrg_k = {.bank_base_address = k_addr, .page_size = 128};
+    const auto addrg_k = TensorAccessor(k_args, k_addr, 128);
     cb_reserve_back(cb_id_k, 1);
     uint32_t cb_id_k_ptr = get_write_ptr(cb_id_k);
     uint64_t k_noc_addr = get_noc_addr(0, addrg_k);
@@ -250,7 +250,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* k_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_id_k_ptr);
     uint32_t k = k_ptr[0];
 
-    const InterleavedAddrGen<true> addrg_p = {.bank_base_address = p_addr, .page_size = 64};
+    const auto addrg_p = TensorAccessor(p_args, p_addr, 64);
     cb_reserve_back(cb_id_p, 1);
     uint32_t cb_id_p_ptr = get_write_ptr(cb_id_p);
     uint64_t p_noc_addr = get_noc_addr(0, addrg_p);
@@ -260,7 +260,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint16_t* p_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_id_p_ptr);
     uint32_t p = p_ptr[0];
 
-    const InterleavedAddrGen<true> addrg_temp = {.bank_base_address = temp_addr, .page_size = 64};
+    const auto addrg_temp = TensorAccessor(temp_args, temp_addr, 64);
     // cb_reserve_back(cb_id_temp, 1);
     uint32_t cb_id_temp_ptr = get_write_ptr(cb_id_temp);
     uint64_t temp_noc_addr = get_noc_addr(0, addrg_temp);
@@ -370,7 +370,7 @@ void kernel_main() {
         }
     }
 
-    const InterleavedAddrGen<dst_is_dram> s_out = {.bank_base_address = dst_addr, .page_size = out_stick_size};
+    const auto s_out = TensorAccessor(dst_args, dst_addr, out_stick_size);
     uint64_t dst_noc_addr = get_noc_addr(0, s_out);
     noc_async_write(out_addr + core_id * 4, dst_noc_addr + core_id * 4, 4);
     noc_async_write_barrier();
