@@ -442,7 +442,7 @@ std::map<std::string, std::string> get_defines_fp32(
             TT_FATAL(false, "Undefined op type for binary sfpu operation {}", op_type);
     }
 
-    new_defines.insert({"BINARY_SFPU_OP", fmt::format("{}({}, {});", op_name, idst1, idst2)});
+    new_defines.insert({"BINARY_SFPU_OP", fmt::format("{}({}, {}, {});", op_name, idst1, idst2, idst1)});
 
     if (fused_activations.has_value()) {
         if (op_type == BinaryOpType::ADD and fused_activations.value().size() == 1 and

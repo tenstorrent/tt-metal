@@ -18,20 +18,18 @@ using tt::tt_metal::BufferType;
 ///////////////////////////////////////////////////
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
-constexpr BufferType input_buffer_type = static_cast<BufferType>(get_compile_time_arg_val(1));
-constexpr BufferType intermediate_buffer_type = static_cast<BufferType>(get_compile_time_arg_val(2));
-constexpr uint32_t cb_input_id = get_compile_time_arg_val(3);
-constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(4);
-constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(5);
-constexpr uint32_t tile_granularity = get_compile_time_arg_val(6);
-constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(7);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(8);
-constexpr uint32_t batch_slice_num_pages = get_compile_time_arg_val(9);
-constexpr uint32_t ring_size = get_compile_time_arg_val(10);
-constexpr uint32_t num_batches = get_compile_time_arg_val(11);
-constexpr uint32_t fuse_op = get_compile_time_arg_val(12);
-constexpr bool direction = get_compile_time_arg_val(13);
-constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(14);
+constexpr uint32_t cb_input_id = get_compile_time_arg_val(1);
+constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(2);
+constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(3);
+constexpr uint32_t tile_granularity = get_compile_time_arg_val(4);
+constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(5);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(6);
+constexpr uint32_t batch_slice_num_pages = get_compile_time_arg_val(7);
+constexpr uint32_t ring_size = get_compile_time_arg_val(8);
+constexpr uint32_t num_batches = get_compile_time_arg_val(9);
+constexpr uint32_t fuse_op = get_compile_time_arg_val(10);
+constexpr bool direction = get_compile_time_arg_val(11);
+constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(12);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -53,7 +51,7 @@ void kernel_main() {
     int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 15;
+    constexpr uint32_t ct_idx = 13;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -74,13 +72,9 @@ void kernel_main() {
 
     arg_idx += input_rt_increment;
 #else
-    constexpr uint32_t ct_offset = 0;
-
-    constexpr bool input_tensor_is_dram = input_buffer_type == tt::tt_metal::BufferType::DRAM;
-    auto input_tensor_addrgen = InterleavedAddrGenFast<input_tensor_is_dram>{
-        .bank_base_address = input_tensor_address,
-        .page_size = input_tensor_page_size,
-        .data_format = get_dataformat(cb_input_id)};
+    constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
+    constexpr uint32_t ct_offset = input_tensor_args.num_compile_time_args();
+    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, input_tensor_page_size);
 #endif
 
 #ifdef INTERMEDIATE_IS_SHARDED
@@ -102,11 +96,9 @@ void kernel_main() {
 
     arg_idx += intermediate_rt_increment;
 #else
-    constexpr bool intermediate_tensor_is_dram = intermediate_buffer_type == tt::tt_metal::BufferType::DRAM;
-    auto intermediate_tensor_addrgen = InterleavedAddrGenFast<intermediate_tensor_is_dram>{
-        .bank_base_address = intermediate_tensor_address,
-        .page_size = input_tensor_page_size,
-        .data_format = get_dataformat(cb_input_id)};
+    constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
+    auto intermediate_tensor_addrgen =
+        TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, input_tensor_page_size);
 #endif
 
     ReduceScatterOpReceiver matmul_receiver;

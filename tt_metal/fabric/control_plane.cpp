@@ -75,21 +75,6 @@ UbbId get_ubb_id(chip_id_t chip_id) {
     return UbbId{0, 0};  // Invalid UBB ID if not found
 }
 
-// Helper to extract intermesh ports from config value
-std::vector<chan_id_t> extract_intermesh_eth_links(uint32_t config_value, chip_id_t chip_id) {
-    std::vector<chan_id_t> intermesh_eth_links;
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& soc_desc = cluster.get_soc_desc(chip_id);
-    uint32_t intermesh_eth_links_bits = (config_value >> intermesh_constants::INTERMESH_ETH_LINK_BITS_SHIFT) &
-                                        intermesh_constants::INTERMESH_ETH_LINK_BITS_MASK;
-    for (chan_id_t link = 0; link < static_cast<chan_id_t>(soc_desc.get_num_eth_channels()); ++link) {
-        if (intermesh_eth_links_bits & (1 << link)) {
-            intermesh_eth_links.push_back(link);
-        }
-    }
-    return intermesh_eth_links;
-}
-
 // TODO: Support custom operator< for eth_coord_t to allow usage in std::set
 struct EthCoordComparator {
     bool operator()(const eth_coord_t& eth_coord_a, const eth_coord_t& eth_coord_b) const {
@@ -645,6 +630,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
             std::optional<chip_id_t> nw_chip_physical_id = std::nullopt;
             const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
             // TODO: remove once we use global physical graph to map logical big mesh to physical chips
+            // NOTE: This nw chip may not be set the same for UBB devices when using the Mock Cluster Descriptor
             if (cluster.get_board_type(0) == BoardType::UBB) {
                 for (const auto& chip_id : cluster.all_chip_ids()) {
                     auto candidate_ubb_id = get_ubb_id(chip_id);
@@ -1822,21 +1808,14 @@ void ControlPlane::initialize_fabric_tensix_datamover_config() {
 
 void ControlPlane::initialize_intermesh_eth_links() {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    // If intermesh links are not enabled, set all intermesh_eth_links_ to empty
-    if (not this->is_intermesh_enabled()) {
-        for (const auto& chip_id : cluster.all_chip_ids()) {
-            intermesh_eth_links_[chip_id] = {};
-        }
-        return;
-    }
 
     // Iterate over all chips in the cluster and populate the intermesh_eth_links
     for (const auto& chip_id : cluster.all_chip_ids()) {
-        std::vector<std::pair<CoreCoord, chan_id_t>> intermesh_eth_links;
-        const auto& soc_desc = cluster.get_soc_desc(chip_id);
+        auto& intermesh_eth_links = intermesh_eth_links_[chip_id];
         // Remote connections visible to UMD
         auto remote_connections = cluster.get_ethernet_connections_to_remote_devices().find(chip_id);
         if (remote_connections != cluster.get_ethernet_connections_to_remote_devices().end()) {
+            const auto& soc_desc = cluster.get_soc_desc(chip_id);
             for (auto [link, _] : remote_connections->second) {
                 // Find the CoreCoord for this channel
                 for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
@@ -1847,73 +1826,7 @@ void ControlPlane::initialize_intermesh_eth_links() {
                 }
             }
         }
-        if (cluster.get_board_type(chip_id) != BoardType::UBB) {
-            // TODO: remove branch here once get_ethernet_connections_to_remote_devices() contains
-            // all cross host links, currently on T3K there are some cross host links that are not
-            // visible to UMD
-            if (soc_desc.logical_eth_core_to_chan_map.empty()) {
-                intermesh_eth_links_[chip_id] = {};
-                continue;
-            }
-            // Remote connections not visible to UMD
-            // Read multi-mesh configuration from the first available eth core
-            auto first_eth_core = soc_desc.logical_eth_core_to_chan_map.begin()->first;
-            tt_cxy_pair virtual_eth_core(
-                chip_id,
-                cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, first_eth_core, CoreType::ETH));
-
-            std::vector<uint32_t> config_data(1, 0);
-            auto multi_mesh_config_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
-                tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::INTERMESH_ETH_LINK_CONFIG);
-            cluster.read_core(config_data, sizeof(uint32_t), virtual_eth_core, multi_mesh_config_addr);
-            for (auto link : extract_intermesh_eth_links(config_data[0], chip_id)) {
-                // Find the CoreCoord for this channel
-                for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
-                    if (channel == link and this->is_intermesh_eth_link_trained(chip_id, core_coord)) {
-                        intermesh_eth_links.push_back({core_coord, link});
-                        break;
-                    }
-                }
-            }
-        }
-        intermesh_eth_links_[chip_id] = intermesh_eth_links;
     }
-}
-
-// TODO: all of this can be removed once cluster.get_ethernet_connections_to_remote_devices()
-// contains all the cross host links
-bool ControlPlane::is_intermesh_enabled() const {
-    // Check if the architecture and system support intermesh routing
-    if (not tt_metal::MetalContext::instance().hal().intermesh_eth_links_enabled()) {
-        return false;
-    }
-
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto first_chip_id = *(cluster.all_pci_chip_ids().begin());
-
-    // Check if there are any ethernet cores available on the first chip
-    const auto& soc_desc = cluster.get_soc_desc(first_chip_id);
-    if (soc_desc.logical_eth_core_to_chan_map.empty()) {
-        return false;
-    }
-
-    // UMD Visible Intermesh Links
-    if (!cluster.get_ethernet_connections_to_remote_devices().empty()) {
-        return true;
-    }
-
-    // UMD Hidden Intermesh Links
-    std::vector<uint32_t> config_data(1, 0);
-    auto first_eth_core = soc_desc.logical_eth_core_to_chan_map.begin()->first;
-    tt_cxy_pair virtual_eth_core(
-        first_chip_id,
-        cluster.get_virtual_coordinate_from_logical_coordinates(first_chip_id, first_eth_core, CoreType::ETH));
-    auto multi_mesh_config_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
-        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::INTERMESH_ETH_LINK_CONFIG);
-    cluster.read_core(config_data, sizeof(uint32_t), virtual_eth_core, multi_mesh_config_addr);
-    bool intermesh_enabled =
-        (config_data[0] & intermesh_constants::MULTI_MESH_MODE_MASK) == intermesh_constants::MULTI_MESH_ENABLED_VALUE;
-    return intermesh_enabled;
 }
 
 bool ControlPlane::system_has_intermesh_links() const { return !this->get_all_intermesh_eth_links().empty(); }
@@ -1929,29 +1842,6 @@ bool ControlPlane::is_intermesh_eth_link(chip_id_t chip_id, CoreCoord eth_core) 
         }
     }
     return false;
-}
-
-// TODO: Support Intramesh links through this API as well
-bool ControlPlane::is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord eth_core) const {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto remote_connections = cluster.get_ethernet_connections_to_remote_devices();
-    const auto& soc_desc = cluster.get_soc_desc(chip_id);
-    auto chan_id = soc_desc.logical_eth_core_to_chan_map.at(eth_core);
-
-    if (remote_connections.find(chip_id) != remote_connections.end() and
-        remote_connections.at(chip_id).find(chan_id) != remote_connections.at(chip_id).end()) {
-        return true;
-    }
-    // Read the link status from designated L1 address
-    tt_cxy_pair virtual_eth_core(
-        chip_id, cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
-    std::vector<uint32_t> status_data(1, 0);
-    auto multi_mesh_link_status_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
-        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::INTERMESH_ETH_LINK_STATUS);
-    cluster.read_core(status_data, sizeof(uint32_t), virtual_eth_core, multi_mesh_link_status_addr);
-
-    // Check if the link is trained
-    return (status_data[0] & intermesh_constants::LINK_CONNECTED_MASK) == intermesh_constants::LINK_CONNECTED_MASK;
 }
 
 const std::vector<std::pair<CoreCoord, chan_id_t>>& ControlPlane::get_intermesh_eth_links(chip_id_t chip_id) const {
@@ -2019,23 +1909,6 @@ std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(
                     tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
                     active_ethernet_cores.insert(eth_core);
                 }
-            }
-        }
-
-        if (cluster.get_board_type(chip_id) != BoardType::UBB) {
-            // For Non-UBB Wormhole systems, intermesh links must also be marked as active ethernet cores
-            // These cores are not seen by UMD or the cluster descriptor as active. Control Plane is
-            // responsible for querying this information.
-            // Note: On UBB systems, intermesh links are already identified as active by UMD, so control
-            // plane does not need to do this.
-            const auto& eth_routing_info = cluster.get_eth_routing_info(chip_id);
-            auto intermesh_links = this->get_intermesh_eth_links(chip_id);
-            for (const auto& [eth_coord, eth_chan] : intermesh_links) {
-                if (eth_routing_info.find(eth_coord) != eth_routing_info.end() and
-                    eth_routing_info.at(eth_coord) == EthRouterMode::FABRIC_ROUTER and skip_reserved_cores) {
-                    continue;
-                }
-                active_ethernet_cores.insert(eth_coord);
             }
         }
     }
