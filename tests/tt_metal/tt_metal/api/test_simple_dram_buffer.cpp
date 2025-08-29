@@ -24,26 +24,12 @@ using namespace tt::test::buffer::detail;
 using namespace tt::tt_metal;
 
 namespace tt::test::buffer::detail {
-bool SimpleDramReadOnly(std::shared_ptr<distributed::MeshDevice> mesh_device, size_t local_address, size_t byte_size) {
-    std::vector<uint32_t> inputs =
-        generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
-    std::vector<uint32_t> outputs;
+bool SimpleDramLoopback(std::shared_ptr<distributed::MeshDevice> mesh_device, size_t local_address, size_t byte_size) {
+    std::vector<uint8_t> inputs = generate_uniform_random_vector<uint8_t>(0, UINT8_MAX, byte_size);
+    std::vector<uint8_t> outputs(byte_size);
     uint32_t dram_channel = mesh_device->allocator()->get_dram_channel_from_bank_id(0);
     writeDramBackdoor(mesh_device, dram_channel, local_address, inputs);
-    readDramBackdoor(mesh_device, dram_channel, local_address, byte_size, outputs);
-    bool pass = (inputs == outputs);
-    if (not pass) {
-        log_info(tt::LogTest, "Mismatch at Channel={}, Packet Size(in Bytes)={}", dram_channel, byte_size);
-    }
-    return pass;
-}
-bool SimpleDramWriteOnly(std::shared_ptr<distributed::MeshDevice> mesh_device, size_t local_address, size_t byte_size) {
-    std::vector<uint32_t> inputs =
-        generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
-    std::vector<uint32_t> outputs;
-    uint32_t dram_channel = mesh_device->allocator()->get_dram_channel_from_bank_id(0);
-    writeDramBackdoor(mesh_device, dram_channel, local_address, inputs);
-    readDramBackdoor(mesh_device, dram_channel, local_address, byte_size, outputs);
+    readDramBackdoor(mesh_device, dram_channel, local_address, outputs);
     bool pass = (inputs == outputs);
     if (not pass) {
         log_info(tt::LogTest, "Mismatch at Channel={}, Packet Size(in Bytes)={}", dram_channel, byte_size);
@@ -54,48 +40,30 @@ bool SimpleDramWriteOnly(std::shared_ptr<distributed::MeshDevice> mesh_device, s
 
 namespace tt::tt_metal {
 
-TEST_F(MeshDeviceFixture, TestSimpleDramBufferReadOnlyLo) {
+TEST_F(MeshDeviceFixture, TestSimpleDramBufferLo) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         size_t lo_address = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::DRAM);
-        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), lo_address, 4));
-        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), lo_address, 8));
-        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), lo_address, 16));
-        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), lo_address, 32));
-        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), lo_address, 1024));
-        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), lo_address, 16 * 1024));
+        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), lo_address, 1));
+        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), lo_address, 2));
+        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), lo_address, 4));
+        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), lo_address, 8));
+        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), lo_address, 16));
+        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), lo_address, 32));
+        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), lo_address, 1024));
+        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), lo_address, 16 * 1024));
     }
 }
-TEST_F(MeshDeviceFixture, TestSimpleDramBufferReadOnlyHi) {
+TEST_F(MeshDeviceFixture, TestSimpleDramBufferHi) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         size_t hi_address = this->devices_.at(id)->dram_size_per_channel() - (16 * 1024);
-        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), hi_address, 4));
-        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), hi_address, 8));
-        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), hi_address, 16));
-        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), hi_address, 32));
-        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), hi_address, 1024));
-        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), hi_address, 16 * 1024));
-    }
-}
-TEST_F(MeshDeviceFixture, TestSimpleDramBufferWriteOnlyLo) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t lo_address = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::DRAM);
-        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), lo_address, 4));
-        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), lo_address, 8));
-        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), lo_address, 16));
-        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), lo_address, 32));
-        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), lo_address, 1024));
-        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), lo_address, 16 * 1024));
-    }
-}
-TEST_F(MeshDeviceFixture, TestSimpleDramBufferWriteOnlyHi) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t hi_address = this->devices_.at(id)->dram_size_per_channel() - (16 * 1024);
-        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 4));
-        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 8));
-        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 16));
-        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 32));
-        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 1024));
-        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 16 * 1024));
+        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), hi_address, 1));
+        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), hi_address, 2));
+        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), hi_address, 4));
+        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), hi_address, 8));
+        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), hi_address, 16));
+        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), hi_address, 32));
+        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), hi_address, 1024));
+        ASSERT_TRUE(SimpleDramLoopback(this->devices_.at(id), hi_address, 16 * 1024));
     }
 }
 
