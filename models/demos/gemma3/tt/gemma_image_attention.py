@@ -285,9 +285,8 @@ class TtGemmaImageAttention(LightweightModule):
     def forward(self, x_11SH, mask=None):
         seq_len = x_11SH.shape[-2]
 
-        MAX_MM_SEQ_LEN = (
-            seq_len if "gemma-3" in self.configuration.base_model_name else self.configuration.VISION_MAX_MM_SEQ
-        )
+        # Gemma-3 uses dynamic MAX_MM_SEQ_LEN based on actual sequence length
+        MAX_MM_SEQ_LEN = seq_len
 
         if seq_len > MAX_MM_SEQ_LEN:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
@@ -299,9 +298,7 @@ class TtGemmaImageAttention(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=None
-            if "gemma-3" in self.configuration.base_model_name
-            else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
+            program_config=None,  # Gemma-3: disabled for stability
         )
 
         q_heads_1QSD = ttnn.transpose(ttnn.reshape(q_heads_1QSD, (1, seq_len, self.n_local_heads, -1)), 1, 2)
@@ -313,9 +310,7 @@ class TtGemmaImageAttention(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=None
-            if "gemma-3" in self.configuration.base_model_name
-            else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
+            program_config=None,  # Gemma-3: disabled for stability
         )
 
         k_heads_1KSD = ttnn.transpose(ttnn.reshape(k_heads_1KSD, (1, seq_len, self.n_local_heads, -1)), 1, 2)
@@ -327,9 +322,7 @@ class TtGemmaImageAttention(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=None
-            if "gemma-3" in self.configuration.base_model_name
-            else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
+            program_config=None,  # Gemma-3: disabled for stability
         )
         v_heads_1VSD = ttnn.transpose(ttnn.reshape(v_heads_1VSD, (1, seq_len, self.n_local_heads, -1)), 1, 2)
 
@@ -386,9 +379,7 @@ class TtGemmaImageAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi4,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=None
-            if "gemma-3" in self.configuration.base_model_name
-            else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
+            program_config=None,  # Gemma-3: disabled for stability
         )
         if seq_len > MAX_MM_SEQ_LEN:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
