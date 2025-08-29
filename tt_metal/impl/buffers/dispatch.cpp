@@ -32,9 +32,8 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <tracy/Tracy.hpp>
 #include <tt_stl/overloaded.hpp>
-// For pinned memory NOC addressing
+// For pinned memory NOC addressing (host-only)
 #include "tt_metal/api/tt-metalium/pinned_memory.hpp"
-#include "tt_metal/hw/inc/dataflow_api_addrgen.h"
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
@@ -976,8 +975,15 @@ void copy_interleaved_buffer_to_completion_queue(
                             dispatch_params.expected_num_workers_completed[offset_index]);
 
                         const uint64_t dst_noc_addr = pinned_noc_base + dst_offset_base;
-                        const uint32_t dst_noc_xy = static_cast<uint32_t>(dst_noc_addr >> NOC_ADDR_COORD_SHIFT);
-                        const uint32_t dst_addr_lo = static_cast<uint32_t>(dst_noc_addr & 0xFFFFFFFFull);
+                        const auto& cluster = MetalContext::instance().get_cluster();
+                        const uint64_t pcie_base = cluster.get_pcie_base_addr_from_device(mmio_device_id);
+                        const uint32_t dst_addr_lo = static_cast<uint32_t>(dst_noc_addr - pcie_base);
+                        // Choose the first PCIE core on the MMIO device to derive XY encoding
+                        const auto& soc = cluster.get_soc_desc(mmio_device_id);
+                        const auto& pcie_cores = soc.get_cores(CoreType::PCIE, soc.get_umd_coord_system());
+                        TT_FATAL(!pcie_cores.empty(), "No PCIE core found on MMIO device {}", mmio_device_id);
+                        const uint32_t dst_noc_xy = MetalContext::instance().hal().noc_xy_encoding(
+                            pcie_cores.front().x, pcie_cores.front().y);
 
                         // No flush here; data will arrive via prefetch relay next
                         command_sequence.add_dispatch_write_linear_h<false, false>(
