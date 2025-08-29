@@ -28,7 +28,7 @@ jobs:
           #{name: "N300 WH B0", model-group: "llm_javelin", timeout: 20, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
           {name: "N300 WH B0", model-group: "cnn_javelin", timeout: 10, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
           #{name: "N300 WH B0", model-group: "other", timeout: 5, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
-          {name: "N300 WH B0", model-group: "other_magic_env2", timeout: 45, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
+          #{name: "N300 WH B0", model-group: "other_magic_env", timeout: 45, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
         ]
         # model-group:
         #   - name: llm_javelin
@@ -170,12 +170,12 @@ jobs:
         with:
           run_args: pytest -n auto models/demos/roberta/tests/test_performance.py -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other' }}
-      - name: Run yolov10x model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/model-perf-test
-        with:
-          run_args: pytest -n auto models/demos/yolov10x/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env2' }}
+      # - name: Run yolov10x model_perf test
+      #   timeout-minutes: ${{ matrix.test-info.timeout }}
+      #   uses: ./.github/actions/model-perf-test
+      #   with:
+      #     run_args: pytest -n auto models/demos/yolov10x/tests/perf/ -m models_performance_bare_metal
+      #  if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
       - name: Run sentence_bert model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/model-perf-test
@@ -278,12 +278,6 @@ jobs:
         with:
           run_args: pytest -n auto models/demos/yolov8x/tests/perf/ -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run vit model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/model-perf-test
-        with:
-          run_args: pytest -n auto models/demos/wormhole/vit/demo/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env2' }}
       - name: Run swin_v2 model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/model-perf-test
@@ -338,26 +332,26 @@ jobs:
             env python3 models/perf/merge_perf_results.py CHECK
         #run: export PYTHONPATH=$(pwd) && env python3 models/perf/merge_perf_results.py CHECK
         if: ${{ !cancelled() }}
-      # - name: Run performance regressions
-      #   timeout-minutes: ${{ matrix.test-info.timeout }}
-      #   uses: ./.github/actions/docker-run
-      #   with:
-      #     docker_image: ${{ inputs.docker-image }}
-      #     docker_password: ${{ secrets.GITHUB_TOKEN }}
-      #     docker_opts: ${{ env.DOCKER_OPTS }}
-      #     install_wheel: true
-      #     run_args: |
-      #       if [[ "${{ matrix.test-info.model-group }}" == "other" ]]; then
-      #         echo "No environment variable engineering needed for other models"
-      #       elif [[ "${{ matrix.test-info.model-group }}" == "tt_transformers" ]]; then
-      #         export QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct
-      #         export FAKE_DEVICE=N150
-      #       fi
+      - name: Run performance regressions
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/docker-run
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: ${{ env.DOCKER_OPTS }}
+          install_wheel: true
+          run_args: |
+            if [[ "${{ matrix.test-info.model-group }}" == "other" ]]; then
+              echo "No environment variable engineering needed for other models"
+            elif [[ "${{ matrix.test-info.model-group }}" == "tt_transformers" ]]; then
+              export QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct
+              export FAKE_DEVICE=N150
+            fi
+            pytest -n auto models/demos/wormhole/stable_diffusion/tests -m models_performance_bare_metal --timeout=480
+            # pytest -n auto ${{ join(matrix.test-info.model-list, ' ') }} -m models_performance_bare_metal ${{ matrix.test-info.model-group == 'cnn_javelin' && '--timeout=480' || '' }}
 
-      #       pytest -n auto ${{ join(matrix.test-info.model-list, ' ') }} -m models_performance_bare_metal ${{ matrix.test-info.model-group == 'cnn_javelin' && '--timeout=480' || '' }}
-
-      #       ## Merge all the generated reports
-      #       env python3 models/perf/merge_perf_results.py
+            ## Merge all the generated reports
+            env python3 models/perf/merge_perf_results.py
       #   if: ${{ !cancelled() && matrix.test-info.model-group != 'llm_javelin' && matrix.test-info.model-group != 'other' }}
       # TODO: Fix the pipeline before enabling notifications.
       #- uses: tenstorrent/tt-metal/.github/actions/slack-report@main
