@@ -25,8 +25,8 @@ extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
 extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
 extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 
-extern uint8_t logical_col_to_translated_col[((noc_size_x + 3) / 4) * 4];
-extern uint8_t logical_row_to_translated_row[((noc_size_y + 3) / 4) * 4];
+extern uint8_t logical_col_to_virtual_col[((noc_size_x + 3) / 4) * 4];
+extern uint8_t logical_row_to_virtual_row[((noc_size_y + 3) / 4) * 4];
 
 void l1_to_local_mem_copy(uint32_t* dst, uint32_t tt_l1_ptr* src, int32_t len);
 
@@ -54,19 +54,18 @@ inline void noc_bank_table_init(uint64_t mem_bank_to_noc_addr) {
     l1_to_local_mem_copy((uint*)bank_to_l1_offset, (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes + l1_to_noc_size_bytes + dram_offsets_size_bytes), l1_offsets_size_bytes >> 2);
 }
 
-inline void noc_logical_to_translated_map_init(uint64_t logical_to_translated_map_addr) {
-
-    int32_t logical_col_to_translated_col_size_bytes = sizeof(logical_col_to_translated_col);
+inline void noc_logical_to_virtual_map_init(uint64_t logical_to_virtual_map_addr) {
+    int32_t logical_col_to_virtual_col_size_bytes = sizeof(logical_col_to_virtual_col);
     l1_to_local_mem_copy(
-        (uint*)logical_col_to_translated_col,
-        (uint tt_l1_ptr*)(logical_to_translated_map_addr),
-        logical_col_to_translated_col_size_bytes >> 2);
+        (uint*)logical_col_to_virtual_col,
+        (uint tt_l1_ptr*)(logical_to_virtual_map_addr),
+        logical_col_to_virtual_col_size_bytes >> 2);
 
-    int32_t logical_row_to_translated_row_size_bytes = sizeof(logical_row_to_translated_row);
+    int32_t logical_row_to_virtual_row_size_bytes = sizeof(logical_row_to_virtual_row);
     l1_to_local_mem_copy(
-        (uint*)logical_row_to_translated_row,
-        (uint tt_l1_ptr*)(logical_to_translated_map_addr + logical_col_to_translated_col_size_bytes),
-        logical_row_to_translated_row_size_bytes >> 2);
+        (uint*)logical_row_to_virtual_row,
+        (uint tt_l1_ptr*)(logical_to_virtual_map_addr + logical_col_to_virtual_col_size_bytes),
+        logical_row_to_virtual_row_size_bytes >> 2);
 }
 
 FORCE_INLINE
