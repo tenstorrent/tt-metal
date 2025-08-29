@@ -1551,8 +1551,6 @@ Program::~Program() noexcept = default;
 
 Program::id_t detail::ProgramImpl::get_id() const { return this->id; }
 
-Program::id_t Program::get_id() const { return internal_->get_id(); }
-
 Program::id_t detail::ProgramImpl::get_runtime_id() const { return this->runtime_id; }
 
 Program::id_t Program::get_runtime_id() const { return internal_->get_runtime_id(); }

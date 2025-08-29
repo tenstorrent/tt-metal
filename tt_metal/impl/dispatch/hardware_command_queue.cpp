@@ -497,7 +497,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     if (use_prefetcher_cache) {
         bool& is_cached = dispatch_metadata.prefetcher_cache_info.is_cached;
         uint32_t& cache_offset = dispatch_metadata.prefetcher_cache_info.offset;
-        std::tie(is_cached, cache_offset) = this->query_prefetcher_cache(program.get_id(), program_sizeB);
+        std::tie(is_cached, cache_offset) = this->query_prefetcher_cache(program.impl().get_id(), program_sizeB);
         TT_ASSERT(
             cache_offset + program_sizeB <= this->prefetcher_cache_sizeB_,
             "Prefetcher cache overflow: offset: {}, program size: {}, cache size: {}",
