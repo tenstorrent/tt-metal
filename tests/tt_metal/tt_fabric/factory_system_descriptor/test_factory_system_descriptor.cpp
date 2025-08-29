@@ -22,7 +22,6 @@
 // Add protobuf includes
 #include "factory_system_descriptor.pb.h"
 #include "pod_config.pb.h"
-
 #include "cluster_config.pb.h"
 #include "deployment.pb.h"
 #include <google/protobuf/text_format.h>
@@ -44,7 +43,7 @@ struct LogicalChipConnection {
 
     bool operator==(const LogicalChipConnection& other) const {
         return host_id == other.host_id && tray_id == other.tray_id &&
-               asic_channel.asic_index == other.asic_channel.asic_index &&
+               asic_channel.asic_location == other.asic_channel.asic_location &&
                asic_channel.channel_id == other.asic_channel.channel_id;
     }
 };
@@ -52,7 +51,7 @@ struct LogicalChipConnection {
 struct PhysicalChannelConnection {
     std::string hostname = "";
     uint32_t tray_id = 0;
-    uint32_t asic_index = 0;
+    uint32_t asic_location = 0;
     uint32_t channel_id = 0;
 
     auto operator<=>(const PhysicalChannelConnection& other) const = default;
@@ -76,7 +75,7 @@ struct PhysicalPortConnection {
 namespace tt::tt_fabric::fsd_tests {
 inline std::ostream& operator<<(std::ostream& os, const PhysicalChannelConnection& conn) {
     os << "PhysicalChannelConnection{hostname='" << conn.hostname << "', tray_id=" << conn.tray_id
-       << ", asic_index=" << conn.asic_index << ", channel_id=" << conn.channel_id << "}";
+       << ", asic_location=" << conn.asic_location << ", channel_id=" << conn.channel_id << "}";
     return os;
 }
 inline std::ostream& operator<<(std::ostream& os, const PhysicalPortConnection& conn) {
@@ -93,14 +92,14 @@ template <>
 struct hash<tt::tt_fabric::fsd_tests::LogicalChipConnection> {
     std::size_t operator()(const tt::tt_fabric::fsd_tests::LogicalChipConnection& conn) const {
         return tt::stl::hash::hash_objects_with_default_seed(
-            conn.host_id, conn.tray_id, conn.asic_channel.asic_index, conn.asic_channel.channel_id);
+            conn.host_id, conn.tray_id, conn.asic_channel.asic_location, conn.asic_channel.channel_id);
     }
 };
 template <>
 struct hash<tt::tt_fabric::fsd_tests::PhysicalChannelConnection> {
     std::size_t operator()(const tt::tt_fabric::fsd_tests::PhysicalChannelConnection& conn) const {
         return tt::stl::hash::hash_objects_with_default_seed(
-            conn.hostname, conn.tray_id, conn.asic_index, conn.channel_id);
+            conn.hostname, conn.tray_id, conn.asic_location, conn.channel_id);
     }
 };
 template <>
@@ -296,13 +295,13 @@ public:
             auto* endpoint_a = connection->mutable_endpoint_a();
             endpoint_a->set_host_id(start.host_id);
             endpoint_a->set_tray_id(start.tray_id);
-            endpoint_a->set_asic_index(start.asic_channel.asic_index);
+            endpoint_a->set_asic_location(start.asic_channel.asic_location);
             endpoint_a->set_chan_id(start.asic_channel.channel_id);
 
             auto* endpoint_b = connection->mutable_endpoint_b();
             endpoint_b->set_host_id(end.host_id);
             endpoint_b->set_tray_id(end.tray_id);
-            endpoint_b->set_asic_index(end.asic_channel.asic_index);
+            endpoint_b->set_asic_location(end.asic_channel.asic_location);
             endpoint_b->set_chan_id(end.asic_channel.channel_id);
         }
 
@@ -425,8 +424,8 @@ private:
 
                 // Load pod descriptor and build pod
                 auto pod_descriptor = load_descriptor_from_textproto<tt::fsd::proto::PodDescriptor>(
-                    "tests/tt_metal/tt_fabric/factory_system_descriptor/cabling_descriptors/" + pod_descriptor_name +
-                    ".textproto");
+                    "tests/tt_metal/tt_fabric/factory_system_descriptor/cabling_descriptors/instances/" +
+                    pod_descriptor_name + ".textproto");
                 resolved->pods[child_name] = build_pod(pod_descriptor, host_id);
 
             } else if (child_def.has_graph_ref()) {
@@ -488,6 +487,38 @@ private:
         return resolved;
     }
 
+    // Validate that each host_id is assigned to exactly one pod
+    void validate_host_id_uniqueness() {
+        std::unordered_map<uint32_t, std::string> host_to_pod_path;
+        collect_host_assignments(cluster.root_instance, "", host_to_pod_path);
+    }
+
+    // Recursively collect all host_id assignments with their pod paths
+    void collect_host_assignments(
+        std::shared_ptr<ResolvedGraphInstance> graph,
+        const std::string& path_prefix,
+        std::unordered_map<uint32_t, std::string>& host_to_pod_path) {
+        // Check direct pods in this graph
+        for (const auto& [pod_name, pod] : graph->pods) {
+            uint32_t host_id = pod.host_id;
+            std::string full_pod_path = path_prefix.empty() ? pod_name : path_prefix + "/" + pod_name;
+
+            if (host_to_pod_path.count(host_id)) {
+                throw std::runtime_error(
+                    "Host ID " + std::to_string(host_id) + " is assigned to multiple pods: '" +
+                    host_to_pod_path[host_id] + "' and '" + full_pod_path + "'");
+            }
+
+            host_to_pod_path[host_id] = full_pod_path;
+        }
+
+        // Recursively check subgraphs
+        for (const auto& [subgraph_name, subgraph] : graph->subgraphs) {
+            std::string subgraph_path = path_prefix.empty() ? subgraph_name : path_prefix + "/" + subgraph_name;
+            collect_host_assignments(subgraph, subgraph_path, host_to_pod_path);
+        }
+    }
+
     // Build cluster from descriptor with port connections and validation
     void build_cluster_from_descriptor(const tt::fsd::proto::ClusterDescriptor& cluster_descriptor) {
         // Load graph templates
@@ -497,6 +528,9 @@ private:
 
         // Build the root instance
         cluster.root_instance = build_graph_instance(cluster_descriptor.root_instance());
+
+        // Validate host_id uniqueness across all pods
+        validate_host_id_uniqueness();
     }
 
     // Populate boards_by_host_tray map with pointers to boards in the cluster
@@ -663,14 +697,14 @@ void validate_fsd_against_gsd(
     tt::fsd::proto::FactorySystemDescriptor generated_fsd;
     std::ifstream fsd_file(fsd_filename);
     if (!fsd_file.is_open()) {
-        FAIL() << "Failed to open FSD file: " << fsd_filename;
+        throw std::runtime_error("Failed to open FSD file: " + fsd_filename);
     }
 
     std::string fsd_content((std::istreambuf_iterator<char>(fsd_file)), std::istreambuf_iterator<char>());
     fsd_file.close();
 
     if (!google::protobuf::TextFormat::ParseFromString(fsd_content, &generated_fsd)) {
-        FAIL() << "Failed to parse FSD protobuf from file: " << fsd_filename;
+        throw std::runtime_error("Failed to parse FSD protobuf from file: " + fsd_filename);
     }
 
     const auto& hosts = generated_fsd.hosts();
@@ -680,10 +714,14 @@ void validate_fsd_against_gsd(
 
     // Compare the FSD with the discovered GSD
     // First, compare hostnames from the hosts field
-    ASSERT_TRUE(!generated_fsd.hosts().empty()) << "FSD missing hosts";
+    if (generated_fsd.hosts().empty()) {
+        throw std::runtime_error("FSD missing hosts");
+    }
 
     // Handle the new GSD structure with compute_node_specs
-    ASSERT_TRUE(discovered_gsd["compute_node_specs"]) << "GSD missing compute_node_specs";
+    if (!discovered_gsd["compute_node_specs"]) {
+        throw std::runtime_error("GSD missing compute_node_specs");
+    }
     YAML::Node asic_info_node = discovered_gsd["compute_node_specs"];
 
     // Check that all discovered hostnames are present in the generated FSD hosts
@@ -707,7 +745,9 @@ void validate_fsd_against_gsd(
     }
 
     // Compare board types
-    ASSERT_TRUE(generated_fsd.has_board_types()) << "FSD missing board_types";
+    if (!generated_fsd.has_board_types()) {
+        throw std::runtime_error("FSD missing board_types");
+    }
     std::set<std::tuple<uint32_t, uint32_t, std::string>> generated_board_types;
     for (const auto& board_location : generated_fsd.board_types().board_locations()) {
         uint32_t host_id = board_location.host_id();
@@ -731,7 +771,9 @@ void validate_fsd_against_gsd(
     for (const auto& host_entry : asic_info_node) {
         std::string hostname = host_entry.first.as<std::string>();
         YAML::Node host_node = host_entry.second;
-        ASSERT_TRUE(host_node["asic_info"]) << "Host " << hostname << " missing asic_info";
+        if (!host_node["asic_info"]) {
+            throw std::runtime_error("Host " + hostname + " missing asic_info");
+        }
 
         for (const auto& asic_info : host_node["asic_info"]) {
             uint32_t tray_id = asic_info["tray_id"].as<uint32_t>();
@@ -741,20 +783,27 @@ void validate_fsd_against_gsd(
             if (strict_validation) {
                 auto fsd_board_type = fsd_board_types.extract(fsd_key);
 
-                ASSERT_TRUE(!fsd_board_type.empty())
-                    << "Board type not found in FSD for host " << hostname << ", tray " << tray_id;
+                if (fsd_board_type.empty()) {
+                    throw std::runtime_error(
+                        "Board type not found in FSD for host " + hostname + ", tray " + std::to_string(tray_id));
+                }
 
-                EXPECT_EQ(fsd_board_type.mapped(), gsd_board_type)
-                    << "Board type mismatch for host " << hostname << ", tray " << tray_id
-                    << ": FSD=" << fsd_board_type.mapped() << ", GSD=" << gsd_board_type;
+                if (fsd_board_type.mapped() != gsd_board_type) {
+                    throw std::runtime_error(
+                        "Board type mismatch for host " + hostname + ", tray " + std::to_string(tray_id) +
+                        ": FSD=" + fsd_board_type.mapped() + ", GSD=" + gsd_board_type);
+                }
             } else {
                 auto fsd_board_type = fsd_board_types.find(fsd_key);
                 if (fsd_board_type != fsd_board_types.end()) {
-                    EXPECT_EQ(fsd_board_type->second, gsd_board_type)
-                        << "Board type mismatch for host " << hostname << ", tray " << tray_id
-                        << ": FSD=" << fsd_board_type->second << ", GSD=" << gsd_board_type;
+                    if (fsd_board_type->second != gsd_board_type) {
+                        throw std::runtime_error(
+                            "Board type mismatch for host " + hostname + ", tray " + std::to_string(tray_id) +
+                            ": FSD=" + fsd_board_type->second + ", GSD=" + gsd_board_type);
+                    }
                 } else {
-                    FAIL() << "Board type not found in FSD for host " << hostname << ", tray " << tray_id;
+                    throw std::runtime_error(
+                        "Board type not found in FSD for host " + hostname + ", tray " + std::to_string(tray_id));
                 }
             }
         }
@@ -764,7 +813,9 @@ void validate_fsd_against_gsd(
     }
 
     // Compare chip connections
-    ASSERT_TRUE(generated_fsd.has_eth_connections()) << "FSD missing eth_connections";
+    if (!generated_fsd.has_eth_connections()) {
+        throw std::runtime_error("FSD missing eth_connections");
+    }
 
     // Determine which connection types exist in the discovered GSD
     bool has_local_eth_connections =
@@ -773,8 +824,9 @@ void validate_fsd_against_gsd(
         discovered_gsd["global_eth_connections"] && !discovered_gsd["global_eth_connections"].IsNull();
 
     // At least one connection type should exist
-    ASSERT_TRUE(has_local_eth_connections || has_global_eth_connections)
-        << "No connection types found in discovered GSD";
+    if (!has_local_eth_connections && !has_global_eth_connections) {
+        throw std::runtime_error("No connection types found in discovered GSD");
+    }
 
     // Convert generated connections to a comparable format
     std::set<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>> generated_connections;
@@ -786,19 +838,19 @@ void validate_fsd_against_gsd(
 
         uint32_t host_id_1 = endpoint_a.host_id();
         uint32_t tray_id_1 = endpoint_a.tray_id();
-        uint32_t asic_index_1 = endpoint_a.asic_index();
+        uint32_t asic_location_1 = endpoint_a.asic_location();
         uint32_t chan_id_1 = endpoint_a.chan_id();
 
         uint32_t host_id_2 = endpoint_b.host_id();
         uint32_t tray_id_2 = endpoint_b.tray_id();
-        uint32_t asic_index_2 = endpoint_b.asic_index();
+        uint32_t asic_location_2 = endpoint_b.asic_location();
         uint32_t chan_id_2 = endpoint_b.chan_id();
 
         const std::string& hostname_1 = hosts[host_id_1].hostname();
         const std::string& hostname_2 = hosts[host_id_2].hostname();
 
-        PhysicalChannelConnection conn_1{hostname_1, tray_id_1, asic_index_1, chan_id_1};
-        PhysicalChannelConnection conn_2{hostname_2, tray_id_2, asic_index_2, chan_id_2};
+        PhysicalChannelConnection conn_1{hostname_1, tray_id_1, asic_location_1, chan_id_1};
+        PhysicalChannelConnection conn_2{hostname_2, tray_id_2, asic_location_2, chan_id_2};
 
         // Sort to ensure consistent ordering
         std::pair<PhysicalChannelConnection, PhysicalChannelConnection> connection_pair_sorted;
@@ -824,7 +876,7 @@ void validate_fsd_against_gsd(
             oss << "  - " << dup.first << " <-> " << dup.second;
             error_msg += oss.str() + "\n";
         }
-        FAIL() << error_msg;
+        throw std::runtime_error(error_msg);
     }
 
     // Convert discovered GSD connections to the same format
@@ -834,7 +886,9 @@ void validate_fsd_against_gsd(
     // Process local connections if they exist
     if (has_local_eth_connections) {
         for (const auto& connection_pair : discovered_gsd["local_eth_connections"]) {
-            ASSERT_EQ(connection_pair.size(), 2) << "Each connection should have exactly 2 endpoints";
+            if (connection_pair.size() != 2) {
+                throw std::runtime_error("Each connection should have exactly 2 endpoints");
+            }
 
             const auto& first_conn = connection_pair[0];
             const auto& second_conn = connection_pair[1];
@@ -842,15 +896,15 @@ void validate_fsd_against_gsd(
             std::string hostname_1 = first_conn["host_name"].as<std::string>();
             uint32_t chan_id_1 = first_conn["chan_id"].as<uint32_t>();
             uint32_t tray_id_1 = first_conn["tray_id"].as<uint32_t>();
-            uint32_t asic_index_1 = first_conn["asic_index"].as<uint32_t>();
+            uint32_t asic_location_1 = first_conn["asic_location"].as<uint32_t>();
 
             std::string hostname_2 = second_conn["host_name"].as<std::string>();
             uint32_t chan_id_2 = second_conn["chan_id"].as<uint32_t>();
             uint32_t tray_id_2 = second_conn["tray_id"].as<uint32_t>();
-            uint32_t asic_index_2 = second_conn["asic_index"].as<uint32_t>();
+            uint32_t asic_location_2 = second_conn["asic_location"].as<uint32_t>();
 
-            PhysicalChannelConnection conn_1{hostname_1, tray_id_1, asic_index_1, chan_id_1};
-            PhysicalChannelConnection conn_2{hostname_2, tray_id_2, asic_index_2, chan_id_2};
+            PhysicalChannelConnection conn_1{hostname_1, tray_id_1, asic_location_1, chan_id_1};
+            PhysicalChannelConnection conn_2{hostname_2, tray_id_2, asic_location_2, chan_id_2};
 
             // Sort to ensure consistent ordering
             std::pair<PhysicalChannelConnection, PhysicalChannelConnection> connection_pair_sorted;
@@ -872,7 +926,9 @@ void validate_fsd_against_gsd(
     // Process global_eth_connections if they exist (for 5WHGalaxyYTorusSuperpod)
     if (has_global_eth_connections) {
         for (const auto& connection_pair : discovered_gsd["global_eth_connections"]) {
-            ASSERT_EQ(connection_pair.size(), 2) << "Each connection should have exactly 2 endpoints";
+            if (connection_pair.size() != 2) {
+                throw std::runtime_error("Each connection should have exactly 2 endpoints");
+            }
 
             auto first_conn = connection_pair[0];
             auto second_conn = connection_pair[1];
@@ -880,15 +936,15 @@ void validate_fsd_against_gsd(
             std::string hostname_1 = first_conn["host_name"].as<std::string>();
             uint32_t chan_id_1 = first_conn["chan_id"].as<uint32_t>();
             uint32_t tray_id_1 = first_conn["tray_id"].as<uint32_t>();
-            uint32_t asic_index_1 = first_conn["asic_index"].as<uint32_t>();
+            uint32_t asic_location_1 = first_conn["asic_location"].as<uint32_t>();
 
             std::string hostname_2 = second_conn["host_name"].as<std::string>();
             uint32_t chan_id_2 = second_conn["chan_id"].as<uint32_t>();
             uint32_t tray_id_2 = second_conn["tray_id"].as<uint32_t>();
-            uint32_t asic_index_2 = second_conn["asic_index"].as<uint32_t>();
+            uint32_t asic_location_2 = second_conn["asic_location"].as<uint32_t>();
 
-            PhysicalChannelConnection conn_1{hostname_1, tray_id_1, asic_index_1, chan_id_1};
-            PhysicalChannelConnection conn_2{hostname_2, tray_id_2, asic_index_2, chan_id_2};
+            PhysicalChannelConnection conn_1{hostname_1, tray_id_1, asic_location_1, chan_id_1};
+            PhysicalChannelConnection conn_2{hostname_2, tray_id_2, asic_location_2, chan_id_2};
 
             // Sort to ensure consistent ordering
             std::pair<PhysicalChannelConnection, PhysicalChannelConnection> connection_pair_sorted;
@@ -915,12 +971,10 @@ void validate_fsd_against_gsd(
             oss << "  - " << dup.first << " <-> " << dup.second;
             error_msg += oss.str() + "\n";
         }
-        FAIL() << error_msg;
+        throw std::runtime_error(error_msg);
     }
 
     if (strict_validation) {
-        EXPECT_EQ(generated_connections.size(), discovered_connections.size()) << "Number of connections mismatch";
-
         // Find missing and extra connections for detailed reporting
         std::set<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>> missing_in_gsd;
         std::set<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>> extra_in_gsd;
@@ -978,8 +1032,9 @@ void validate_fsd_against_gsd(
 
                     Board board_a = create_board(board_type_a);
                     Board board_b = create_board(board_type_b);
-                    auto port_a = board_a.get_port_for_asic_channel({conn.first.asic_index, conn.first.channel_id});
-                    auto port_b = board_b.get_port_for_asic_channel({conn.second.asic_index, conn.second.channel_id});
+                    auto port_a = board_a.get_port_for_asic_channel({conn.first.asic_location, conn.first.channel_id});
+                    auto port_b =
+                        board_b.get_port_for_asic_channel({conn.second.asic_location, conn.second.channel_id});
 
                     PhysicalPortConnection port_a_conn;
                     PhysicalPortConnection port_b_conn;
@@ -1061,7 +1116,7 @@ void validate_fsd_against_gsd(
 
         // Fail the test if there are any mismatches
         if (!missing_in_gsd.empty() || !extra_in_gsd.empty()) {
-            FAIL() << "Connection mismatch detected. Check console output for details.";
+            throw std::runtime_error("Connection mismatch detected. Check console output for details.");
         }
 
         // If we get here, all connections match
@@ -1069,25 +1124,33 @@ void validate_fsd_against_gsd(
                   << std::endl;
     } else {
         for (const auto& conn : discovered_connections) {
-            EXPECT_TRUE(generated_connections.find(conn) != generated_connections.end())
-                << "Connection not found in FSD: " << conn.first << " <-> " << conn.second;
+            if (generated_connections.find(conn) == generated_connections.end()) {
+                throw std::runtime_error(
+                    "Connection not found in FSD: " + conn.first.hostname + " <-> " + conn.second.hostname);
+            }
         }
     }
 }
 
-TEST(Cluster, TestFactorySystemDescriptor) {
+TEST(Cluster, TestFactorySystemDescriptor16LB) {
     // Load deployment descriptor for validation only
     auto deployment_descriptor = CablingGenerator::load_descriptor_from_textproto<tt::deployment::DeploymentDescriptor>(
         "tests/tt_metal/tt_fabric/factory_system_descriptor/deployment/16_lb_deployment.textproto");
 
     // Load descriptors for testing
     auto cluster_descriptor = CablingGenerator::load_descriptor_from_textproto<tt::fsd::proto::ClusterDescriptor>(
-        "tests/tt_metal/tt_fabric/factory_system_descriptor/cabling_descriptors/n300_t3k_cluster.textproto");
+        "tests/tt_metal/tt_fabric/factory_system_descriptor/cabling_descriptors/instances/"
+        "16_n300_lb_cluster.textproto");
 
     // Create the cabling generator
     CablingGenerator cabling_generator(cluster_descriptor, deployment_descriptor);
 
-    cabling_generator.emit_textproto_factory_system_descriptor("fsd/factory_system_descriptor_cluster.textproto");
+    cabling_generator.emit_textproto_factory_system_descriptor("fsd/factory_system_descriptor_16_n300_lb.textproto");
+
+    // Validate the FSD against the discovered GSD using the common utility function
+    validate_fsd_against_gsd(
+        "fsd/factory_system_descriptor_16_n300_lb.textproto",
+        "tests/tt_metal/tt_fabric/factory_system_descriptor/global_system_descriptors/16_lb_physical_desc.yaml");
 }
 
 TEST(Cluster, TestFactorySystemDescriptor5LB) {
@@ -1097,17 +1160,18 @@ TEST(Cluster, TestFactorySystemDescriptor5LB) {
 
     // Load the 5LB configuration
     auto cluster_descriptor = CablingGenerator::load_descriptor_from_textproto<tt::fsd::proto::ClusterDescriptor>(
-        "tests/tt_metal/tt_fabric/factory_system_descriptor/cabling_descriptors/n300-5lb.textproto");
+        "tests/tt_metal/tt_fabric/factory_system_descriptor/cabling_descriptors/instances/"
+        "5_n300_lb_superpod.textproto");
 
     // Create the cabling generator
     CablingGenerator cabling_generator(cluster_descriptor, deployment_descriptor);
 
     // Generate the FSD (textproto format)
-    cabling_generator.emit_textproto_factory_system_descriptor("fsd/factory_system_descriptor_5lb.textproto");
+    cabling_generator.emit_textproto_factory_system_descriptor("fsd/factory_system_descriptor_5_n300_lb.textproto");
 
     // Validate the FSD against the discovered GSD using the common utility function
     validate_fsd_against_gsd(
-        "fsd/factory_system_descriptor_5lb.textproto",
+        "fsd/factory_system_descriptor_5_n300_lb.textproto",
         "tests/tt_metal/tt_fabric/factory_system_descriptor/global_system_descriptors/5_lb_physical_desc.yaml");
 }
 
@@ -1119,7 +1183,7 @@ TEST(Cluster, TestFactorySystemDescriptor5WHGalaxyYTorus) {
 
     // Load the WH Galaxy Y Torus configuration
     auto cluster_descriptor = CablingGenerator::load_descriptor_from_textproto<tt::fsd::proto::ClusterDescriptor>(
-        "tests/tt_metal/tt_fabric/factory_system_descriptor/cabling_descriptors/"
+        "tests/tt_metal/tt_fabric/factory_system_descriptor/cabling_descriptors/instances/"
         "5_wh_galaxy_y_torus_superpod.textproto");
 
     // Create the cabling generator
@@ -1130,10 +1194,19 @@ TEST(Cluster, TestFactorySystemDescriptor5WHGalaxyYTorus) {
         "fsd/factory_system_descriptor_5_wh_galaxy_y_torus.textproto");
 
     // Validate the FSD against the discovered GSD using the common utility function
-    validate_fsd_against_gsd(
-        "fsd/factory_system_descriptor_5_wh_galaxy_y_torus.textproto",
-        "tests/tt_metal/tt_fabric/factory_system_descriptor/global_system_descriptors/"
-        "5_wh_galaxy_y_torus_physical_desc.yaml");
+    EXPECT_THROW(
+        {
+            try {
+                validate_fsd_against_gsd(
+                    "fsd/factory_system_descriptor_5_wh_galaxy_y_torus.textproto",
+                    "tests/tt_metal/tt_fabric/factory_system_descriptor/global_system_descriptors/"
+                    "5_wh_galaxy_y_torus_physical_desc.yaml");
+            } catch (const std::runtime_error& e) {
+                std::cout << e.what() << std::endl;
+                throw;
+            }
+        },
+        std::runtime_error);
 }
 
 }  // namespace fsd_tests
