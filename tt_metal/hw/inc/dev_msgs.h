@@ -299,7 +299,7 @@ struct debug_stack_usage_t {
 };
 
 struct debug_eth_link_t {
-    uint8_t link_down;
+    volatile uint8_t link_down;
 };
 
 enum watcher_enable_msg_t {
