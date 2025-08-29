@@ -497,3 +497,122 @@ def test_nearest_upsample_with_uneven_input_shards(
 
     assert allclose
     assert passing
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape, scale_h, scale_w",
+    [
+        ([1, 256, 64, 128], 2, 2),
+        ([2, 256, 32, 64], 2, 2),
+    ],
+)
+@pytest.mark.parametrize("split_factor", [2, 4])
+@pytest.mark.parametrize("mode", ["bilinear"])
+def test_upsample_channel_slicing(device, input_shape, scale_h, scale_w, split_factor, mode):
+    """
+    Test channel slicing for upsample operation.
+    This test splits a tensor along the channel dimension, runs upsample on each slice,
+    then concatenates the results and compares with direct upsample on the original tensor.
+    """
+    batch_size, num_channels, height, width = input_shape
+
+    # Skip if channels not divisible by split_factor
+    if num_channels % split_factor != 0:
+        pytest.skip(f"Channels {num_channels} not divisible by split factor {split_factor}")
+
+    # For bilinear mode, channels per slice must be divisible by 32 (TT requirement)
+    channels_per_slice = num_channels // split_factor
+    if channels_per_slice % 32 != 0:
+        pytest.skip(f"Bilinear mode requires channels per slice ({channels_per_slice}) to be divisible by 32")
+
+    torch.manual_seed(0)
+    input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+
+    # Get reference result by upsampling the full tensor
+    scale_factor = (scale_h, scale_w)
+    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode="bilinear", align_corners=False)
+    reference_result = torch_upsample(input_tensor)
+
+    # Convert to NHWC format for TT operations
+    tt_input = input_tensor.permute(0, 2, 3, 1)  # NCHW -> NHWC
+
+    # Split along channel dimension
+    channels_per_slice = num_channels // split_factor
+    sliced_results = []
+
+    for i in range(split_factor):
+        start_ch = i * channels_per_slice
+        end_ch = (i + 1) * channels_per_slice
+
+        # Extract channel slice
+        slice_input = tt_input[:, :, :, start_ch:end_ch]
+
+        # Convert to TT tensor without flattening
+        tt_slice = ttnn.from_torch(slice_input, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_slice = ttnn.to_layout(tt_slice, ttnn.ROW_MAJOR_LAYOUT)
+
+        # Upsample the slice using original API
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+        )
+        upsampled_slice = ttnn.upsample(
+            tt_slice,
+            scale_factor,
+            mode="bilinear",
+            compute_kernel_config=compute_kernel_config,
+        )
+
+        # Convert back to torch
+        # upsample output is [N, H_out, W_out, C_slice] format
+        upsampled_slice_torch = ttnn.to_torch(upsampled_slice)
+        sliced_results.append(upsampled_slice_torch)
+
+    # Concatenate sliced results along channel dimension
+    # Each slice is in format [N, H_out, W_out, C_slice], so concatenate along dim 3 (channel dim)
+    concatenated_result = torch.cat(sliced_results, dim=3)
+
+    # Also test direct upsample for comparison
+    tt_input_full = ttnn.from_torch(tt_input, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    tt_input_full = ttnn.to_layout(tt_input_full, ttnn.ROW_MAJOR_LAYOUT)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+    )
+    direct_result = ttnn.upsample(
+        tt_input_full,
+        scale_factor,
+        mode="bilinear",
+        compute_kernel_config=compute_kernel_config,
+    )
+
+    # direct_result is in [N, H_out, W_out, C] format
+    direct_result_torch = ttnn.to_torch(direct_result)
+
+    # Compare concatenated sliced result with direct result
+    assert (
+        concatenated_result.shape == direct_result_torch.shape
+    ), f"Shape mismatch: concatenated {concatenated_result.shape} vs direct {direct_result_torch.shape}"
+
+    # Check if results are equal
+    isequal = torch.equal(concatenated_result, direct_result_torch)
+
+    if not isequal:
+        # If not exactly equal, check with tolerance
+        # Bilinear interpolation might have slightly different numerical results
+        allclose = torch.allclose(concatenated_result, direct_result_torch, atol=1e-3, rtol=1e-3)
+        assert allclose, f"Channel slicing result doesn't match direct upsample result for bilinear mode"
+
+    # Also compare with PyTorch reference
+    # Convert PyTorch result from NCHW to NHWC to match TT output format
+    reference_result_nhwc = reference_result.permute(0, 2, 3, 1)
+
+    # For bilinear, allow some tolerance due to numerical differences
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(reference_result_nhwc, concatenated_result, pcc=0.999)
+    allclose_ref = torch.allclose(concatenated_result, reference_result_nhwc, atol=1e-1, rtol=1e-1)
+    logger.info(f"Channel slicing PCC: {pcc_msg}")
+    assert allclose_ref and passing, "Channel sliced result doesn't match PyTorch reference for bilinear mode"
