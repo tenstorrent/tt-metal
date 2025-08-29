@@ -7,6 +7,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/operations/cb_utils.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -28,20 +29,18 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(grid, num_pages);
 
+    uint32_t page_size = output.buffer()->page_size();
+    TT_FATAL(page_size % output.element_size() == 0, "Page size must be divisible by element size");
+    uint32_t elems_per_page = page_size / output.element_size();
+
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
 
     // Create program
     Program program = Program();
 
     // Create circular buffer
-    auto cb_index = tt::CBIndex::c_24;
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        data_format,
-        {
-            {cb_index, 1},
-        });
+    auto cb_index = tt::CBIndex::c_0;
+    tt::tt_metal::create_cb(cb_index, program, all_cores, page_size, num_pages, data_format);
 
     // Create kernels
     std::map<std::string, std::string> reader_defines;
@@ -63,7 +62,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
         }
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_index, elems_per_page};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     auto writer_id = CreateWriteKernel(
@@ -75,8 +74,9 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
 
     // Set runtime arguments
     uint32_t num_cores_y = grid.y;
-    for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    uint32_t page_offset = 0;
+    auto cores = corerange_to_cores(all_cores, std::nullopt);
+    for (const auto& core : cores) {
         uint32_t num_pages_per_core;
         if (core_group_1.contains(core)) {
             num_pages_per_core = num_pages_per_core_group_1;
@@ -85,9 +85,9 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
         } else {
             TT_THROW("Core not in specified core ranges");
         }
-        std::vector<uint32_t> writer_args = {output.buffer()->address(), u.u32, num_pages_per_core, tile_offset};
+        std::vector<uint32_t> writer_args = {output.buffer()->address(), u.u32, num_pages_per_core, page_offset};
         SetRuntimeArgs(program, writer_id, core, writer_args);
-        tile_offset += num_pages_per_core;
+        page_offset += num_pages_per_core;
     }
     return {std::move(program), {writer_id, num_cores, num_cores_y}};
 }
