@@ -77,7 +77,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherAsync) {
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = all_gathered[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
-            float expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
+            float expected = static_cast<float>(i) / static_cast<float>(tensor_spec.logical_shape().volume());
             EXPECT_EQ(data[i].to_float(), expected);
         }
     }

@@ -4,7 +4,9 @@
 
 #pragma once
 
-#include <tt-metalium/multi_mesh_types.hpp>
+#include <cstdint>
+#include <vector>
+#include <tt_metal/api/tt-metalium/multi_mesh_types.hpp>
 
 namespace tt::tt_fabric {
 

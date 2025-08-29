@@ -71,7 +71,7 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     const auto num_rows = n * num_groups;
     const auto num_inner_tiles = (num_channels / num_groups) * Ht * Wt;
 
-    const auto f_c = static_cast<float>(num_channels / num_groups);
+    const auto f_c = static_cast<float>(num_channels) / num_groups;
     const auto f_ht = static_cast<float>(origin_h) / static_cast<float>(TILE_HEIGHT);
     const auto f_wt = static_cast<float>(origin_w) / static_cast<float>(TILE_WIDTH);
     auto scaler = 1.0f / (static_cast<float>(TILE_WIDTH) * sqrt(f_c * f_ht * f_wt));
