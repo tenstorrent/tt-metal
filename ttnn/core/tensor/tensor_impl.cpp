@@ -86,7 +86,7 @@ uint32_t element_size_bytes(DataType dtype) {
         case DataType::UINT32: return sizeof(uint32_t);
         case DataType::UINT16: return sizeof(uint16_t);
         case DataType::UINT8: return sizeof(uint8_t);
-        case DataType::BFLOAT8_B: return sizeof(std::byte);
+        case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: return sizeof(std::byte);
         default: TT_THROW("Unsupported data type");
     }

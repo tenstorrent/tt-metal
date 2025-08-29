@@ -26,7 +26,7 @@ namespace tt::tt_metal::blackhole {
 #include "core_config.h"
 
 HalCoreInfoType create_idle_eth_mem_map() {
-    std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
+    constexpr std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
     static_assert(MEM_IERISC_MAP_END % L1_ALIGNMENT == 0);
 
