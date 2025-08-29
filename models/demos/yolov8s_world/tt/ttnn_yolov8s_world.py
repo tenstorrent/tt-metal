@@ -13,6 +13,7 @@ from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
     ttnn_custom_normalize,
     ttnn_decode_bboxes,
 )
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 class TtConv:
@@ -41,6 +42,7 @@ class TtConv:
         reshard_if_not_optimal=True,
         batch_size=1,
         conv_math_fidelity=None,
+        core_count=64,
     ):
         self.device = device
         self.parameters = parameters
@@ -63,6 +65,7 @@ class TtConv:
         self.reshard_if_not_optimal = reshard_if_not_optimal
         self.batch_size = batch_size
         self.reshape_tensor = reshape_tensor
+        self.core_count = core_count
 
         self.conv_config = self._initialize_conv_config()
         self.compute_config = self._initialize_compute_config(conv_math_fidelity)
@@ -83,6 +86,11 @@ class TtConv:
             reallocate_halo_output=False,
             reshard_if_not_optimal=self.reshard_if_not_optimal,
         )
+        if self.core_count is not None:
+            shard_grid = get_shard_grid_from_num_cores(self.core_count, self.device)
+
+            conv_config.core_grid = shard_grid
+            conv_config.override_sharding_config = True
 
         if self.input_params[4] == 3:
             conv_config.act_block_h_override = 64
@@ -486,12 +494,14 @@ class TtC2fAttn:
             self.parameters["cv1_a"],
             input_params=input_params[0],
             deallocate_activation=self.deallocate_activation,
+            core_count=None,
         )
         self.cv1_b = TtConv(
             self.device,
             self.parameters["cv1_b"],
             input_params=input_params[0],
             deallocate_activation=self.deallocate_activation,
+            core_count=None,
         )
         self.cv2 = TtConv(
             self.device,
