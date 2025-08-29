@@ -82,7 +82,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const uint32_t buffering_factor = 2;
 
     // CB0: Grid data buffer (holds grid coordinates for current output position)
-    const uint32_t grid_cb_num_pages = buffering_factor;
+    const uint32_t grid_cb_num_pages = 1;
     const auto [grid_cb_index, grid_cb_handle] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, aligned_grid_stick_nbytes, grid_cb_num_pages, grid_cb_data_format);
 
