@@ -162,7 +162,7 @@ class TtSDXLPipeline(LightweightModule):
 
             self.image_processing_compiled = True
 
-    def encode_prompts(self, prompts):
+    def encode_prompts(self, prompts, negative_prompt):
         # Encode prompts using the text encoders.
 
         if self.pipeline_config.encoders_on_device:
@@ -184,7 +184,7 @@ class TtSDXLPipeline(LightweightModule):
                     device=self.cpu_device,
                     num_images_per_prompt=1,
                     do_classifier_free_guidance=True,
-                    negative_prompt=None,
+                    negative_prompt=negative_prompt,
                     negative_prompt_2=None,
                     prompt_embeds=None,
                     negative_prompt_embeds=None,
@@ -225,7 +225,7 @@ class TtSDXLPipeline(LightweightModule):
                 device=self.cpu_device,
                 num_images_per_prompt=1,
                 do_classifier_free_guidance=True,
-                negative_prompt=None,
+                negative_prompt=negative_prompt,
                 negative_prompt_2=None,
                 prompt_embeds=None,
                 negative_prompt_embeds=None,
