@@ -77,6 +77,8 @@ struct BufferReadDispatchParams {
     uint32_t total_pages_read = 0;
     uint32_t num_banks = 0;
     bool requires_completion_read = true;
+    void* dst = nullptr;
+    std::shared_ptr<PinnedMemory> pinned_memory = nullptr;
 
     virtual ~BufferReadDispatchParams() = default;
 
