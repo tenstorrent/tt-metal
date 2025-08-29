@@ -23,3 +23,14 @@ TT-Metal Releases
 | [0.56.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.56.0) | Mar 7, 2025  |
 
 ## Release Schedule
+
+![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/Metal_Release_Schedule_2025.png)
+
+## Releases
+
+Visit the [Releases](https://github.com/tenstorrent/tt-metal/releases) section for a full list of Releases and Tags.
+
+## Release Notes
+
+- [v0.62.2](https://github.com/tenstorrent/tt-metal/releases/tag/v0.62.2)
+- [v0.60.1](https://github.com/tenstorrent/tt-metal/releases/tag/v0.60.1)
