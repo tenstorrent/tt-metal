@@ -32,7 +32,6 @@
 #include "fabric_types.hpp"
 #include "hal_types.hpp"
 #include "host_api.hpp"
-#include "intermesh_constants.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/common/env_lib.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -1936,64 +1935,21 @@ void ControlPlane::generate_local_intermesh_link_table() {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     intermesh_link_table_.local_mesh_id = local_mesh_binding_.mesh_ids[0];
     intermesh_link_table_.local_host_rank_id = this->get_local_host_rank_id_binding();
-    const uint32_t remote_config_base_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
-        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ETH_LINK_REMOTE_INFO);
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
-        if (this->has_intermesh_links(chip_id)) {
-            for (const auto& [eth_core, chan_id] : this->get_intermesh_eth_links(chip_id)) {
-                // TODO: remove below logic, should at very least be using UMD apis to get ids
-                // But all this data can be provided by UMD
-                tt_cxy_pair virtual_eth_core(
-                    chip_id, cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
-                uint64_t local_board_id = 0;
-                uint64_t remote_board_id = 0;
-                uint32_t remote_chan_id = 0;
-                cluster.read_core(
-                    &local_board_id,
-                    sizeof(uint64_t),
-                    virtual_eth_core,
-                    remote_config_base_addr + intermesh_constants::LOCAL_BOARD_ID_OFFSET);
-                cluster.read_core(
-                    &remote_board_id,
-                    sizeof(uint64_t),
-                    virtual_eth_core,
-                    remote_config_base_addr + intermesh_constants::REMOTE_BOARD_ID_OFFSET);
-                cluster.read_core(
-                    &remote_chan_id,
-                    sizeof(uint32_t),
-                    virtual_eth_core,
-                    remote_config_base_addr + intermesh_constants::REMOTE_ETH_CHAN_ID_OFFSET);
-                auto local_eth_chan_desc = EthChanDescriptor{
-                    .board_id = local_board_id,
-                    .chan_id = chan_id,
-                };
-                auto remote_eth_chan_desc = EthChanDescriptor{
-                    .board_id = remote_board_id,
-                    .chan_id = remote_chan_id,
-                };
-                intermesh_link_table_.intermesh_links[local_eth_chan_desc] = remote_eth_chan_desc;
-                chip_id_to_asic_id_[chip_id] = local_board_id;
-            }
-        } else if (cluster.arch() != ARCH::BLACKHOLE) {
-            // For chips without intermesh links, we still need to populate the asic IDs
-            // for consistency.
-            // Skip this on Blackhole for now.
-            if (this->get_active_ethernet_cores(chip_id).size() == 0) {
-                // No Active Ethernet Cores found. Not querying the board id off ethernet cores.
-                chip_id_to_asic_id_[chip_id] = chip_id;
-            } else {
-                auto first_eth_core = *(this->get_active_ethernet_cores(chip_id).begin());
-                tt_cxy_pair virtual_eth_core(
-                    chip_id,
-                    cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, first_eth_core, CoreType::ETH));
-                uint64_t local_board_id = 0;
-                cluster.read_core(
-                    &local_board_id,
-                    sizeof(uint64_t),
-                    virtual_eth_core,
-                    remote_config_base_addr + intermesh_constants::LOCAL_BOARD_ID_OFFSET);
-                chip_id_to_asic_id_[chip_id] = local_board_id;
-            }
+        auto local_board_id = cluster.get_unique_chip_ids().at(chip_id);
+        chip_id_to_asic_id_[chip_id] = local_board_id;
+        for (const auto& [eth_core, chan_id] : this->get_intermesh_eth_links(chip_id)) {
+            auto [remote_board_id, remote_chan_id] =
+                cluster.get_ethernet_connections_to_remote_devices().at(chip_id).at(chan_id);
+            auto local_eth_chan_desc = EthChanDescriptor{
+                .board_id = local_board_id,
+                .chan_id = chan_id,
+            };
+            auto remote_eth_chan_desc = EthChanDescriptor{
+                .board_id = remote_board_id,
+                .chan_id = remote_chan_id,
+            };
+            intermesh_link_table_.intermesh_links[local_eth_chan_desc] = remote_eth_chan_desc;
         }
     }
 }
