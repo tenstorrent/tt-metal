@@ -47,7 +47,7 @@ class DistributedRMSNorm(RMSNormBase):
     ) -> WeightConfig:
         torch_metaweight = get_state_dicts(state_dicts, "weight", shape=(hf_config.hidden_size,), dtype=torch.bfloat16)
         num_shards = torch_metaweight.shape[0]
-        assert num_shards == mesh_device.shape[0], "Number of state dictsdoes not match the number of rows."
+        assert num_shards == mesh_device.shape[0], "Number of state dicts does not match the number of rows."
 
         tt_weight = ttnn.as_tensor(
             torch_metaweight.reshape(
