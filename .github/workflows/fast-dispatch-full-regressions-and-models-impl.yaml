@@ -64,7 +64,7 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           install_wheel: true
           docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf:rw
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
