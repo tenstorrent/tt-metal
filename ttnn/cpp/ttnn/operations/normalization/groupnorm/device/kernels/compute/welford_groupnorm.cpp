@@ -52,16 +52,15 @@ void MAIN {
     // Batch Loop:
     //   Group Loop:
     //     This is the process which repeats for every group
-    //     Average, Variance Calc: μ[x] and σ^2[x]
+    //     Average and Variance Calc: μ[x] and σ^2[x]
     //       Local Reduce:
-    //           First we apply an input mask
     //           This is where we calculate μ[x] and σ^2[x]
     //           After summing up, we pass the intermediate results to cb_ex_partial
-    //           The reader kernels then aggregate all of the local scalars into two tiles // TBD
+    //           The reader kernels then aggregate all of the local scalars into two tiles
     //       Global Reduce:
     //           Only the core designated as the sender reduces this tile to produce the global μ[x] and σ^2[x]
     //           It's reader core the sends this data out to all other cores as cb_ex_global
-    //     Denominator Calculation:
+    //     cb_ex2pe Calculation:
     //       First we add variance with cb_eps
     //       Then we take the sqrt
     //       Lastly we take the reciprocal and we have the denominator of our calculation
@@ -137,8 +136,8 @@ void MAIN {
     constexpr uint32_t cb_x = tt::CBIndex::c_24;
     constexpr uint32_t cb_xmm = tt::CBIndex::c_25;
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
-    constexpr uint32_t cb_ex_ping = tt::CBIndex::c_7;
-    constexpr uint32_t cb_ex_pong = tt::CBIndex::c_9;
+    constexpr uint32_t cb_ex_ping = tt::CBIndex::c_11;
+    constexpr uint32_t cb_ex_pong = tt::CBIndex::c_12;
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;
     constexpr uint32_t cb_ex2pe = tt::CBIndex::c_27;
 
