@@ -118,5 +118,6 @@ enum SfpuType {
     threshold,
     where,
     softsign,
-    celu
+    celu,
+    selu,
 };

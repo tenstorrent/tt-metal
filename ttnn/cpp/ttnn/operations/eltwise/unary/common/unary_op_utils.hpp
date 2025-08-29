@@ -85,6 +85,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::WHERE_TSS:
         case UnaryOpType::CELU:
         case UnaryOpType::HARDTANH:
+        case UnaryOpType::SELU:
         case UnaryOpType::THRESHOLD: return true;
         default: return false;
     }
