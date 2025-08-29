@@ -309,29 +309,19 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     std::optional<float> min,
     std::optional<float> max,
     const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(
+        (max.has_value() || min.has_value()),
+        "Either 'min' value or 'max' value can be None. Please provide at least one value");
     Tensor a = input_a;
     if (input_a.dtype() == DataType::INT32) {
-        a = ttnn::typecast(a, DataType::FLOAT32);
+        a = ttnn::typecast(a, DataType::FLOAT32, output_mem_config);
     }
 
-    auto output_memory_config = output_mem_config.value_or(a.memory_config());
-    TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
-    if (!max.has_value()) {
-        return ttnn::where(
-            ttnn::ge(a, min.value(), std::nullopt, output_memory_config), a, min.value(), output_memory_config);
-    } else if (!min.has_value()) {
-        return ttnn::where(
-            ttnn::le(a, max.value(), std::nullopt, output_memory_config), a, max.value(), output_memory_config);
-    } else if (min.value() > max.value()) {
-        return full_like(a, max.value());
-    }
+    // Handle cases where min or max is not provided (null)
+    float min_val = min.has_value() ? min.value() : std::numeric_limits<float>::lowest();
+    float max_val = max.has_value() ? max.value() : std::numeric_limits<float>::max();
 
-    Tensor a_max = ttnn::minimum(a, max.value(), std::nullopt, output_memory_config);
-    if (min.value() == 0.0f) {
-        return ttnn::relu(a_max, output_memory_config);
-    } else {
-        return ttnn::maximum(a_max, min.value(), std::nullopt, output_memory_config);
-    }
+    return ttnn::clamp_tss(a, min_val, max_val, output_mem_config);
 }
 
 Tensor ExecuteUnaryCompositeClamp::invoke(
