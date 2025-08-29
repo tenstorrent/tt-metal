@@ -127,6 +127,12 @@ while [[ "$found" == "false" ]]; do
     --build-all \
     --enable-ccache || build_rc=$?
 
+  echo "Checking environment variables:"
+  echo "TT_METAL_HOME: $TT_METAL_HOME"
+  echo "PYTHONPATH: $PYTHONPATH"
+  echo "ARCH_NAME: ${ARCH_NAME:-}"
+  echo "pwd: $(pwd)"
+
   # Find all ttnn*.so files
   echo "Searching for ttnn*.so files:"
   find . -type f -name '*ttnn*.so'
