@@ -128,7 +128,7 @@ void MAIN {
             copy_tile_to_dst_init_short(cb_add);
             copy_tile(cb_add, 0, 1);
             mul_binary_tile_init();
-            mul_binary_tile(0, 1);
+            mul_binary_tile(0, 1, 0);
 #endif
 
             tile_regs_commit();
@@ -159,10 +159,10 @@ void MAIN {
             copy_tile(cb_tanh_exp, 0, 2);
             where_tile_init();
 #ifdef TANH_FP32
-            where_fp32_tile(0, 1, 2);
+            where_fp32_tile(0, 1, 2, 0);
 #endif
 #ifdef TANH_BF16
-            where_tile(0, 1, 2);
+            where_tile(0, 1, 2, 0);
 #endif
             tile_regs_commit();
             tile_regs_wait();

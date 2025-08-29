@@ -63,6 +63,11 @@ ARGS_CONFIGS = [
     "1111101",  # Everything dynamic
 ]
 
+# For benchmarks that only support all-static configuration
+STATIC_ONLY_ARGS_CONFIGS = [
+    "0000001",  # Everything static
+]
+
 
 def get_individual_test_names(gtest_filter):
     """
@@ -106,7 +111,10 @@ def get_individual_test_names(gtest_filter):
     return test_names
 
 
-def benchmark_impl(gtest_filter, res_dir, export_results_to=None):
+def benchmark_impl(gtest_filter, res_dir, export_results_to=None, args_configs=None):
+    if args_configs is None:
+        args_configs = ARGS_CONFIGS
+
     ENV = os.environ.copy()
     ENV["TT_METAL_DEVICE_PROFILER"] = "1"
     BASE = Path(ENV["TT_METAL_HOME"])
@@ -129,7 +137,7 @@ def benchmark_impl(gtest_filter, res_dir, export_results_to=None):
     setup = device_post_proc_config.default_setup()
     zone_names = []
     timerAnalysis = {}
-    for args_config in ARGS_CONFIGS:
+    for args_config in args_configs:
         zone_name = f"SHARDED_ACCESSOR_{args_config}"
         timerAnalysis[zone_name] = {
             "across": "core",
@@ -176,6 +184,10 @@ def benchmark_impl(gtest_filter, res_dir, export_results_to=None):
     return benchmark_results
 
 
+def benchmark_impl_static_only(gtest_filter, res_dir, export_results_to=None):
+    return benchmark_impl(gtest_filter, res_dir, export_results_to, args_configs=STATIC_ONLY_ARGS_CONFIGS)
+
+
 def export_benchmark_results(benchmark_results, export_dir, benchmark_name):
     """Export benchmark results to JSON file."""
     export_path = Path(export_dir)
@@ -218,6 +230,22 @@ def benchmark_constructor(export_results_to=None):
     )
 
 
+def benchmark_manual_pages_iteration(export_results_to=None):
+    return benchmark_impl_static_only(
+        "AccessorTests/AccessorBenchmarks.ManualPagesIteration/*",
+        res_dir="accessor_manual_pages_iteration_benchmarks",
+        export_results_to=export_results_to,
+    )
+
+
+def benchmark_pages_iterator(export_results_to=None):
+    return benchmark_impl_static_only(
+        "AccessorTests/AccessorBenchmarks.PagesIterator/*",
+        res_dir="accessor_pages_iterator_benchmarks",
+        export_results_to=export_results_to,
+    )
+
+
 def main():
     """Main function with command line argument parsing."""
     parser = argparse.ArgumentParser(
@@ -234,7 +262,13 @@ Examples:
 
     parser.add_argument(
         "--benchmark-name",
-        choices=["get_noc_addr_page_id", "get_noc_addr_page_coord", "constructor"],
+        choices=[
+            "get_noc_addr_page_id",
+            "get_noc_addr_page_coord",
+            "constructor",
+            "manual_pages_iteration",
+            "pages_iterator",
+        ],
         help="Choose which test to run (default: run all tests)",
     )
 
@@ -256,6 +290,8 @@ Examples:
         "get_noc_addr_page_id": benchmark_get_noc_addr_page_id,
         "get_noc_addr_page_coord": benchmark_get_noc_addr_page_coord,
         "constructor": benchmark_constructor,
+        "manual_pages_iteration": benchmark_manual_pages_iteration,
+        "pages_iterator": benchmark_pages_iterator,
     }
 
     if args.benchmark_name:

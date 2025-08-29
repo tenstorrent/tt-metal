@@ -20,7 +20,13 @@ from loguru import logger
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 
-from accessor_benchmarks import benchmark_get_noc_addr_page_id, benchmark_get_noc_addr_page_coord, benchmark_constructor
+from accessor_benchmarks import (
+    benchmark_get_noc_addr_page_id,
+    benchmark_get_noc_addr_page_coord,
+    benchmark_constructor,
+    benchmark_manual_pages_iteration,
+    benchmark_pages_iterator,
+)
 
 from perf_regression import PerformanceData, check_regression, summarize_regression_results
 
@@ -30,6 +36,8 @@ def load_baseline(benchmark_name: str) -> PerformanceData:
         "get_noc_addr_page_id": "get_noc_addr.json",
         "get_noc_addr_page_coord": "get_noc_addr_page_coord.json",
         "constructor": "constructor.json",
+        "manual_pages_iteration": "manual_pages_iteration.json",
+        "pages_iterator": "pages_iterator.json",
     }
 
     if benchmark_name not in gt_file_map:
@@ -62,6 +70,8 @@ def run_current_benchmark(benchmark_name: str) -> PerformanceData:
         "get_noc_addr_page_id": benchmark_get_noc_addr_page_id,
         "get_noc_addr_page_coord": benchmark_get_noc_addr_page_coord,
         "constructor": benchmark_constructor,
+        "manual_pages_iteration": benchmark_manual_pages_iteration,
+        "pages_iterator": benchmark_pages_iterator,
     }
 
     if benchmark_name not in benchmark_functions:
@@ -130,3 +140,13 @@ def test_get_noc_addr_page_id():
 def test_get_noc_addr_page_coord():
     """Test for performance regressions in get_noc_addr_page_coord benchmark."""
     run_benchmark_regression_test("get_noc_addr_page_coord")
+
+
+def test_manual_pages_iteration():
+    """Test for performance regressions in manual_pages_iteration benchmark."""
+    run_benchmark_regression_test("manual_pages_iteration")
+
+
+def test_pages_iterator():
+    """Test for performance regressions in pages_iterator benchmark."""
+    run_benchmark_regression_test("pages_iterator")

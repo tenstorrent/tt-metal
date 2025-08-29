@@ -7,11 +7,10 @@
 #include "debug/dprint.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric.h"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
 // clang-format on
@@ -100,13 +99,7 @@ void kernel_main() {
     fwd_packet_header = PacketHeaderPool::allocate_header();
     zero_l1_buf((uint32_t*)fwd_packet_header, sizeof(PACKET_HEADER_TYPE));
 
-    fabric_set_unicast_route(
-        (MeshPacketHeader*)fwd_packet_header,
-        (eth_chan_directions)fwd_fabric_connection.direction,
-        my_dev_id,
-        fwd_dev_id,
-        fwd_mesh_id,
-        ew_dim);
+    fabric_set_unicast_route((MeshPacketHeader*)fwd_packet_header, my_dev_id, fwd_dev_id, fwd_mesh_id, ew_dim);
 
     setup_connection_and_headers(fwd_fabric_connection, fwd_packet_header, noc_dest_addr, packet_payload_size_bytes);
 
