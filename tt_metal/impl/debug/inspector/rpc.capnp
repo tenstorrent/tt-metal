@@ -66,13 +66,13 @@ struct MeshWorkloadData {
 }
 
 interface Inspector {
-    # Get programs only
+    # Get programs currently alive
     getPrograms @0 () -> (programs :List(ProgramData));
 
-    # Get mesh devices only  
+    # Get mesh devices currently alive
     getMeshDevices @1 () -> (meshDevices :List(MeshDeviceData));
 
-    # Get mesh workloads only
+    # Get mesh workloads currently alive
     getMeshWorkloads @2 () -> (meshWorkloads :List(MeshWorkloadData));
 
     # Search for a kernel
