@@ -101,9 +101,6 @@ while [[ "$found" == "false" ]]; do
 
   build_rc=0
   ./build_metal.sh \
-    --build-dir build \
-    --build-type Release \
-    --toolchain-path cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake \
     --build-all \
     --enable-ccache || build_rc=$?
 
