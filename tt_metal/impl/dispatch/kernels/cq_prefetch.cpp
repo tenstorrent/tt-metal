@@ -25,6 +25,8 @@
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
 
 constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT;  // for NOC PCIe alignemnt
+static_assert(sizeof(CQPrefetchCmd) <= CQ_PREFETCH_CMD_BARE_MIN_SIZE);
+static_assert(sizeof(CQPrefetchCmdLarge) <= CQ_PREFETCH_CMD_BARE_MIN_SIZE);
 struct CQPrefetchHToPrefetchDHeader_s {
     uint32_t length;
     uint8_t raw_copy;     // If true, copy the data directly to the downstream.
@@ -929,11 +931,42 @@ uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr, uint32_t& downstream__
     return stride;
 }
 
+template <bool set_src_noc_addr = false>
+void noc_read_64bit_any_len(uint32_t src_noc_addr, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
+    // noc_read_state_init is unnecessary.
+    if constexpr (set_src_noc_addr) {
+        noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sNdL, CQ_NOC_send, CQ_NOC_WAIT>(
+            noc_index, src_noc_addr, 0, 0, 0);
+    }
+    if (size > NOC_MAX_BURST_SIZE) {
+        // Set length to max burst size.
+        noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_wait>(
+            noc_index, 0, 0, 0, NOC_MAX_BURST_SIZE);
+        while (size > NOC_MAX_BURST_SIZE) {
+            noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SnDl, CQ_NOC_SEND, CQ_NOC_wait>(
+                noc_index, 0, src_addr, dst_addr, 0);
+            src_addr += NOC_MAX_BURST_SIZE;
+            dst_addr += NOC_MAX_BURST_SIZE;
+            size -= NOC_MAX_BURST_SIZE;
+            // Do a wait before either the next iteration or the final read.
+            noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndl, CQ_NOC_send, CQ_NOC_WAIT>(
+                noc_index, 0, 0, 0, 0);
+        }
+    } else {
+        if constexpr (!set_src_noc_addr) {
+            noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndl, CQ_NOC_send, CQ_NOC_WAIT>(
+                noc_index, 0, 0, 0, 0);
+        }
+    }
+    noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SnDL, CQ_NOC_SEND, CQ_NOC_wait>(
+        noc_index, 0, src_addr, dst_addr, size);
+}
+
 uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_ptr) {
     // This ensures that a previous cmd using the scratch buf has finished
     noc_async_writes_flushed();
 
-    volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
+    volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = (volatile CQPrefetchCmdLarge tt_l1_ptr*)cmd_ptr;
     uint32_t noc_xy_addr = cmd->relay_linear.noc_xy_addr;
     uint32_t read_addr = cmd->relay_linear.addr;
     uint64_t wlength = cmd->relay_linear.length | ((uint64_t)cmd->relay_linear.length_hi << 32);
@@ -942,8 +975,8 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
     // First step - read into DB0
     uint32_t scratch_read_addr = scratch_db_top[0];
     uint32_t amt_to_read = (scratch_db_half_size > wlength) ? wlength : scratch_db_half_size;
-    uint64_t noc_addr = get_noc_addr_helper(noc_xy_addr, read_addr);
-    noc_async_read(noc_addr, scratch_read_addr, amt_to_read);
+    noc_read_64bit_any_len<true>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
+
     read_addr += amt_to_read;
     wlength -= amt_to_read;
     noc_async_read_barrier();
@@ -967,8 +1000,7 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
 
             uint32_t amt_to_write = amt_to_read;
             amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
-            noc_addr = get_noc_addr_helper(noc_xy_addr, read_addr);
-            noc_async_read(noc_addr, scratch_read_addr, amt_to_read);
+            noc_read_64bit_any_len<false>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
             read_addr += amt_to_read;
 
             // Third step - write from DB

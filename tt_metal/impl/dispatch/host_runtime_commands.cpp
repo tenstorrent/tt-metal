@@ -25,6 +25,7 @@
 #include "command_queue.hpp"
 #include "device.hpp"
 #include "dispatch/device_command.hpp"
+#include "dispatch/device_command_calculator.hpp"
 #include "impl/context/metal_context.hpp"
 #include "hal_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
@@ -165,7 +166,9 @@ EnqueueTerminateCommand::EnqueueTerminateCommand(
 void EnqueueTerminateCommand::process() {
     // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
     // CQ_PREFETCH_CMD_TERMINATE
-    uint32_t cmd_sequence_sizeB = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    DeviceCommandCalculator calc;
+    calc.add_dispatch_terminate();
+    uint32_t cmd_sequence_sizeB = calc.write_offset_bytes();
 
     // dispatch and prefetch terminate commands each needs to be a separate fetch queue entry
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
