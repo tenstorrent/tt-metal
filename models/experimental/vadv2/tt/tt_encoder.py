@@ -275,6 +275,7 @@ class TtBEVFormerEncoder:
                 prev_bev=prev_bev,
                 **kwargs,
             )
+            ttnn.ReadDeviceProfiler(self.device)
 
             bev_query = output
             if self.return_intermediate:
