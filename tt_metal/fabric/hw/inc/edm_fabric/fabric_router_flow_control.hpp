@@ -46,16 +46,22 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
 };
 
 struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
-    ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender() {}
+    ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender() {
+        for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
+            sender_channel_packets_completed_stream_ids[i] = to_sender_packets_completed_streams[i];
+        }
+    }
 
     FORCE_INLINE void send_completion_credit(uint8_t src_id) {
-        remote_update_ptr_val<receiver_txq_id>(to_sender_packets_completed_streams[src_id], 1);
+        remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[src_id], 1);
     }
 
     // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
     FORCE_INLINE void send_ack_credit(uint8_t src_id) {
-        remote_update_ptr_val<receiver_txq_id>(to_sender_packets_acked_streams[src_id], 1);
+        remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[src_id], 1);
     }
+
+    std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_packets_completed_stream_ids;
 };
 
 using ReceiverChannelResponseCreditSender = typename std::conditional_t<
