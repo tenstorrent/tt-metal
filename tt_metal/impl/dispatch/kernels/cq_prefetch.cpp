@@ -570,7 +570,7 @@ uint32_t process_relay_paged_cmd_large(
     DPRINT << "relay_paged_cmd_large: " << page_size << " " << pages << " " << length_adjust << ENDL();
 #endif
 
-    InterleavedAddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
+    auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec<is_dram>(), base_addr, page_size);
 
     // First step - read into DB0
     uint32_t scratch_read_addr = scratch_db_top[0];
@@ -696,7 +696,7 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_pt
             cmd_ptr, downstream_data_ptr, page_id, base_addr, page_size, pages, length_adjust);
     }
 
-    InterleavedAddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
+    auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec<is_dram>(), base_addr, page_size);
 
     // First step - read into DB0
     uint32_t read_length = pages * page_size;
@@ -1012,7 +1012,7 @@ void paged_read_into_cmddat_q(uint32_t read_ptr, PrefetchExecBufState& exec_buf_
         (max_trace_buffer_pages_in_cmd_dat_q > pages) ? pages : max_trace_buffer_pages_in_cmd_dat_q;
     uint32_t read_length = pages_at_once << log_page_size;
 
-    InterleavedAddrGen<true> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
+    auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), base_addr, page_size);
 
     while (pages_at_once != 0) {
         invalidate_l1_cache();
