@@ -688,7 +688,7 @@ bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& vir
 
 bool onlyProfileDispatchCores(const ProfilerReadState state) {
     return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores() &&
-           state == ProfilerReadState::ONLY_DISPATCH_CORES;
+           state == ProfilerReadState::LAST_SD_L1_READ;
 }
 
 void ReadDeviceProfilerResults(
@@ -746,7 +746,11 @@ void ReadDeviceProfilerResults(
             !tt::tt_metal::MetalContext::instance().dprint_server(),
             "Debug print server is running, cannot read device profiler data");
 
-        profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+        if (state == ProfilerReadState::LAST_SD_L1_READ) {
+            profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::L1, metadata);
+        } else {
+            profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+        }
     }
 #endif
 }
@@ -783,7 +787,11 @@ void ProcessDeviceProfilerResults(
         TT_ASSERT(profiler_it != tt_metal_device_profiler_map.end());
         DeviceProfiler& profiler = profiler_it->second;
 
-        profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+        if (state == ProfilerReadState::LAST_SD_L1_READ) {
+            profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::L1, metadata);
+        } else {
+            profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+        }
 
         if (pushToTracyMidRun(state)) {
             profiler.pushTracyDeviceResults();

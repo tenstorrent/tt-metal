@@ -903,7 +903,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
 
     for (const chip_id_t device_id : devices_to_close) {
         IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
-        detail::ReadDeviceProfilerResults(device, ProfilerReadState::ONLY_DISPATCH_CORES);
+        detail::ReadDeviceProfilerResults(device, ProfilerReadState::LAST_SD_L1_READ);
     }
 
     detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
