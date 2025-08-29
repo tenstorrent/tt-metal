@@ -522,18 +522,18 @@ def test_multimodal_demo_text(
             "N300_Llama-3.2-11B": 23,
             "T3K_Llama-3.2-11B": 20,
             "T3K_Llama-3.2-90B": 3,
-            "N150_gemma-3-4b-it": 285,
-            "N300_gemma-3-4b-it": 390,
-            "T3K_gemma-3-27b-it": 265,
+            "N150_gemma-3-4b": 285,
+            "N300_gemma-3-4b": 390,
+            "T3K_gemma-3-27b": 265,
         }[f"{tt_device_name}_{base_model_name}"]
 
         target_decode_tok_s_u = {
             "N300_Llama-3.2-11B": 21.5,
             "T3K_Llama-3.2-11B": 35,
             "T3K_Llama-3.2-90B": 6,
-            "N150_gemma-3-4b-it": 24,
-            "N300_gemma-3-4b-it": 28,
-            "T3K_gemma-3-27b-it": 13,
+            "N150_gemma-3-4b": 24,
+            "N300_gemma-3-4b": 28,
+            "T3K_gemma-3-27b": 13,
         }[f"{tt_device_name}_{base_model_name}"]
 
         target_decode_tok_s = target_decode_tok_s_u * max_batch_size
