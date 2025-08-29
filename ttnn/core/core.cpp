@@ -38,11 +38,13 @@ void dump_stack_trace_on_segfault() {
     }
 }
 
-uint8_t get_current_command_queue_id() { return tt::tt_metal::GetCurrentCommandQueueId(); }
+QueueId get_current_command_queue_id() { return QueueId(tt::tt_metal::GetCurrentCommandQueueId()); }
+void push_command_queue_id(QueueId cq_id) { tt::tt_metal::PushCurrentCommandQueueId(cq_id.get()); }
+QueueId pop_command_queue_id() { return QueueId(tt::tt_metal::PopCurrentCommandQueueId()); }
 
-void set_current_command_queue_id(uint8_t cq_id) {
-    log_debug(tt::LogTTNN, "Setting current command queue id to {}", cq_id);
-    tt::tt_metal::SetCurrentCommandQueueId(cq_id);
+ScopeGuard with_command_queue_id(QueueId cq_id) {
+    push_command_queue_id(cq_id);
+    return make_guard([cq_id]() { pop_command_queue_id(); });
 }
 
 }  // namespace ttnn::core

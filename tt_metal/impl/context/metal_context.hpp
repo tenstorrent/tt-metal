@@ -93,6 +93,10 @@ public:
     void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
     tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
 
+    using CommandQueueIdStack = std::vector<uint8_t>;
+    CommandQueueIdStack& get_current_command_queue_id_stack();
+    const CommandQueueIdStack& get_current_command_queue_id_stack() const;
+
 private:
     friend class tt::stl::Indestructible<MetalContext>;
     MetalContext();
@@ -153,6 +157,9 @@ private:
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
+
+    // Used to track the current command queue id
+    CommandQueueIdStack current_command_queue_id_stack_;
 
     // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
     // is expected that any downed devices/links will result in some sort of error condition being

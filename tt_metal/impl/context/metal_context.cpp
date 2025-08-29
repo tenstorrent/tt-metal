@@ -1227,4 +1227,11 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     log_debug(LogDevice, "Firmware init complete");
 }
 
+MetalContext::CommandQueueIdStack& MetalContext::get_current_command_queue_id_stack() {
+    return current_command_queue_id_stack_;
+}
+const MetalContext::CommandQueueIdStack& MetalContext::get_current_command_queue_id_stack() const {
+    return current_command_queue_id_stack_;
+}
+
 }  // namespace tt::tt_metal

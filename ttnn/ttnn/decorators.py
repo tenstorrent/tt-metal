@@ -52,7 +52,7 @@ def compare_tensors_using_pcc(
         else:
             torch_output = output
         matches, actual_pcc = comp_pcc(golden_output, torch_output, desired_pcc)
-        commparison_record = ttnn.database.TensorComparisonRecord(
+        comparison_record = ttnn.database.TensorComparisonRecord(
             tensor_id=output.tensor_id,
             golden_tensor_id=golden_output.tensor_id,
             matches=matches,
@@ -73,7 +73,8 @@ def compare_tensors_using_pcc(
 
 PRE_OPERATION_HOOKS = []
 
-set_current_command_queue_id = ttnn._ttnn.core.set_current_command_queue_id
+push_current_command_queue_id = ttnn._ttnn.core.push_current_command_queue_id
+pop_current_command_queue_id = ttnn._ttnn.core.pop_current_command_queue_id
 get_current_command_queue_id = ttnn._ttnn.core.get_current_command_queue_id
 
 
@@ -101,13 +102,12 @@ def register_pre_operation_hook(hook):
 
 POST_OPERATION_HOOKS = []
 
-# Stack to track cq_id contexts and restoration info
+
 # Below hook and context manager allows user to do:
 # with ttnn.command_queue(1):
 #    ttnn.operation1(tensor)           # No cq_id → uses current global cq_id (1)
 #    ttnn.operation2(tensor, cq_id=0)  # Has cq_id → uses 3, then restores to 0
 #    ttnn.operation3(tensor)           # No cq_id → uses current global cq_id (1)
-CQ_ID_STACK = []
 
 
 def cq_id_pre_hook(operation, function_args, function_kwargs):
@@ -117,30 +117,24 @@ def cq_id_pre_hook(operation, function_args, function_kwargs):
     # Check for cq_id from operation kwargs (highest priority)
     if "cq_id" in function_kwargs:
         cq_id = function_kwargs.pop("cq_id")
-        if cq_id is not None:
-            logger.info(f"Using cq_id {cq_id} from operation kwargs")
-        # Even if None, it's popped to avoid passing to the operation
+
+    # Track whether we pushed a cq_id for this operation (store on the function object)
+    cq_id_pre_hook._cq_id_pushed = False
 
     # If we have a cq_id to use, save current state and switch
     if cq_id is not None:
-        old_cq_id = get_current_command_queue_id()
-        CQ_ID_STACK.append(old_cq_id)
-        set_current_command_queue_id(cq_id)
-        logger.debug(
-            f"Switched command queue id from {old_cq_id} to {cq_id} for {operation.python_fully_qualified_name}"
-        )
+        push_current_command_queue_id(cq_id)
+        cq_id_pre_hook._cq_id_pushed = True
 
     return None
 
 
 def cq_id_post_hook(operation, function_args, function_kwargs, output):
     """Post-operation hook to restore original command queue after operation completes"""
-    if not CQ_ID_STACK:
-        return None
-
-    prev_cq_id = CQ_ID_STACK.pop()
-    set_current_command_queue_id(prev_cq_id)
-    logger.debug(f"Restored command queue id to {prev_cq_id} for {operation.python_fully_qualified_name}")
+    # Only pop if we actually pushed a cq_id in the pre-hook
+    if cq_id_pre_hook._cq_id_pushed:
+        pop_current_command_queue_id()
+        cq_id_pre_hook._cq_id_pushed = False  # Reset for next operation
 
     return None
 
@@ -163,11 +157,8 @@ def command_queue(cq_id: int):
     if cq_id is None:
         raise ValueError("cq_id cannot be None in command_queue context")
 
-    # Save the command queue state before entering context
-    old_cq_id = get_current_command_queue_id()
-
-    logger.debug(f"Switching command queue id from {old_cq_id} to {cq_id}")
-    set_current_command_queue_id(cq_id)
+    logger.debug(f"Switching command queue id from {cq_id}")
+    push_current_command_queue_id(cq_id)
     try:
         yield
     finally:
@@ -177,12 +168,10 @@ def command_queue(cq_id: int):
             logger.warning(
                 f"command_queue({cq_id}) context exiting with unexpected command queue ID: {current_cq_id}. "
                 f"This might indicate an operation didn't properly restore the command queue state. "
-                f"Restoring to original value {old_cq_id}."
+                f"Restoring to original value {cq_id}."
             )
 
-        # Restore the original command queue state from before entering context
-        logger.debug(f"Restoring command queue id back to {old_cq_id}")
-        set_current_command_queue_id(old_cq_id)
+        pop_current_command_queue_id()
 
 
 # Register cq_id hooks globally - enabled by default for all TTNN operations
@@ -376,7 +365,7 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs):
         return None
 
 
-def posprocess_global_golden_function_outputs(outputs, golden_outputs):
+def postprocess_global_golden_function_outputs(outputs, golden_outputs):
     import torch
 
     if isinstance(outputs, ttnn.Tensor):
@@ -554,7 +543,7 @@ class Operation:
 
                 if global_golden_function_output is not None:
                     set_tensor_id(global_golden_function_output)
-                    posprocess_global_golden_function_outputs(output, global_golden_function_output)
+                    postprocess_global_golden_function_outputs(output, global_golden_function_output)
                     global_tensor_comparison_records = compare_tensors_using_pcc(
                         self.python_fully_qualified_name,
                         global_golden_function_output,

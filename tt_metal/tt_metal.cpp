@@ -1422,13 +1422,26 @@ void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::S
     }
 }
 
-namespace {
-thread_local uint8_t current_command_queue_id = 0;
+void PushCurrentCommandQueueId(uint8_t cq_id) {
+    auto& command_queue_id_stack = MetalContext::instance().get_current_command_queue_id_stack();
+    command_queue_id_stack.push_back(cq_id);
 }
 
-void SetCurrentCommandQueueId(uint8_t cq_id) { current_command_queue_id = cq_id; }
+uint8_t PopCurrentCommandQueueId() {
+    auto& command_queue_id_stack = MetalContext::instance().get_current_command_queue_id_stack();
+    TT_FATAL(!command_queue_id_stack.empty(), "Current command queue id stack is empty!");
+    uint8_t cq_id = command_queue_id_stack.back();
+    command_queue_id_stack.pop_back();
+    return cq_id;
+}
 
-uint8_t GetCurrentCommandQueueId() { return current_command_queue_id; }
+uint8_t GetCurrentCommandQueueId() {
+    const auto& command_queue_id_stack = MetalContext::instance().get_current_command_queue_id_stack();
+    if (command_queue_id_stack.empty()) {
+        return 0;
+    }
+    return command_queue_id_stack.back();
+}
 
 namespace experimental {
 

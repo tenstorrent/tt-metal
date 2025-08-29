@@ -50,8 +50,7 @@ Tensor dispatch_ops_to_device(Tensor input_tensor, QueueId cq_id) {
     using ttnn::operations::unary::UnaryOpType;
     using ttnn::operations::unary::UnaryWithParam;
 
-    auto last_cq_id = tt::tt_metal::GetCurrentQueueId();
-    tt::tt_metal::SetCurrentQueueId(cq_id);
+    auto guard = ttnn::with_command_queue_id(cq_id);
 
     Tensor output_tensor = ttnn::mul_sfpu(input_tensor, 2);
     for (int i = 0; i < 3; i++) {
@@ -62,8 +61,6 @@ Tensor dispatch_ops_to_device(Tensor input_tensor, QueueId cq_id) {
     output_tensor = ttnn::neg(output_tensor);
     output_tensor = ttnn::mul_sfpu(output_tensor, 2);
     output_tensor = ttnn::add_sfpu(output_tensor, 128);
-
-    tt::tt_metal::SetCurrentQueueId(last_cq_id);
 
     return output_tensor;
 }

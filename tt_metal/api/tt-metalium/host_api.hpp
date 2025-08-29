@@ -957,14 +957,22 @@ void Synchronize(
 
 // clang-format off
 /**
- * Set the current command queue id to be used for synchronization.
+ * Push the current command queue id to the stack.
  * Return value: void
  * | Argument     | Description                                                                       | Type                          | Valid Range                        | Required |
  * |--------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq_id        | The command queue id to set as current.                                           | uint8_t                       |                                    | Yes      |
+ * | cq_id        | The command queue id to push.                                                     | uint8_t                       |                                    | Yes      |
  */
 // clang-format on
-void SetCurrentCommandQueueId(uint8_t cq_id);
+void PushCurrentCommandQueueId(uint8_t cq_id);
+
+// clang-format off
+/**
+ * Pop the current command queue id from the stack.
+ * Return value: uint8_t
+ */
+// clang-format on
+uint8_t PopCurrentCommandQueueId();
 
 // clang-format off
 /**

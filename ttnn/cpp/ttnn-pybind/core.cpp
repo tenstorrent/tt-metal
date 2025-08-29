@@ -17,6 +17,7 @@
 #include <reflect>
 
 #include "ttnn/core.hpp"
+#include "ttnn/common/guard.hpp"
 #include "tt-metalium/lightmetal_binary.hpp"
 #include "tt-metalium/lightmetal_replay.hpp"
 #include "tt-metalium/mesh_device.hpp"
@@ -87,14 +88,8 @@ void py_module(py::module& module) {
     module.def("dump_stack_trace_on_segfault", &ttnn::core::dump_stack_trace_on_segfault);
 
     module.def("get_current_command_queue_id", &ttnn::core::get_current_command_queue_id);
-    module.def(
-        "set_current_command_queue_id",
-        &ttnn::core::set_current_command_queue_id,
-        py::arg("cq_id"),
-        R"doc(
-        Set the current command queue id for the current thread.
-        This command queue will be used by default for all operations on the current thread.
-    )doc");
+    module.def("push_command_queue_id", &ttnn::core::push_command_queue_id);
+    module.def("pop_command_queue_id", &ttnn::core::pop_command_queue_id);
 }
 
 }  // namespace ttnn::core

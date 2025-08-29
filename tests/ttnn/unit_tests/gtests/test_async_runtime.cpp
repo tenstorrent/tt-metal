@@ -130,15 +130,14 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             ttnn::wait_for_event(device_->mesh_command_queue(*workload_dispatch_cq), write_event);
 
             // Run operation on cq 0
-            auto last_cq_id = tt::tt_metal::GetCurrentQueueId();
-            tt::tt_metal::SetCurrentQueueId(workload_dispatch_cq);
-            Tensor output_tensor = ttnn::sqrt(input_tensor);
-            tt::tt_metal::SetCurrentQueueId(last_cq_id);
+            Tensor output_tensor;
+            with_command_queue_id(workload_dispatch_cq, [&]() { output_tensor = ttnn::sqrt(input_tensor); });
+
             auto dummy_buffer_0 =
                 tt::tt_metal::tensor_impl::allocate_device_buffer(device_, TensorSpec(shape, tensor_layout));
-            tt::tt_metal::SetCurrentQueueId(workload_dispatch_cq);
-            output_tensor = ttnn::neg(output_tensor);
-            tt::tt_metal::SetCurrentQueueId(last_cq_id);
+
+            ttnn::with_command_queue_id(workload_dispatch_cq, [&]() { output_tensor = ttnn::neg(output_tensor); });
+
             // Allocate this buffer to stress test async allocation across op execution and explicit allocation
             auto dummy_buffer_1 =
                 tt::tt_metal::tensor_impl::allocate_device_buffer(device_, TensorSpec(shape, tensor_layout));
