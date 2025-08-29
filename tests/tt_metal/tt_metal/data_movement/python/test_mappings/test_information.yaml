@@ -445,10 +445,4 @@ tests:
       Shows scaling advantage of stateful approach with increasing write counts.
 
   501:
-    name: "Direct Write Address Patterns"
-
-  502:
-    name: "Direct Write NOC Comparison"
-
-  503:
-    name: "Direct Write Correctness"
+    name: "Direct Write Address Pattern"

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 void kernel_main() {
     // Compile-time arguments
@@ -25,24 +24,18 @@ void kernel_main() {
         DeviceZoneScopedN("RISCV0");
 
         if (same_destination) {
-            // Case 1: All writes to same destination - ideal for stateful approach
             uint64_t dest_noc_addr = get_noc_addr(receiver_x, receiver_y, dest_l1_addr);
 
             // Setup state once
             if (use_posted_writes) {
-                noc_inline_dw_write_set_state<true, false>(  // posted=true, set_val=false
+                noc_inline_dw_write_set_state<true, false>(
                     dest_noc_addr,
                     0,  // value will be set in with_state calls
                     0xF,
                     write_at_cmd_buf,
                     noc_id);
             } else {
-                noc_inline_dw_write_set_state<false, false>(  // posted=false, set_val=false
-                    dest_noc_addr,
-                    0,
-                    0xF,
-                    write_at_cmd_buf,
-                    noc_id);
+                noc_inline_dw_write_set_state<false, false>(dest_noc_addr, 0, 0xF, write_at_cmd_buf, noc_id);
             }
 
             // Perform writes - only value changes each time
@@ -70,7 +63,6 @@ void kernel_main() {
                 noc_inline_dw_write_set_state<false, false>(base_noc_addr, 0, 0xF, write_at_cmd_buf, noc_id);
             }
 
-            // Perform writes with address updates
             for (uint32_t i = 0; i < num_writes; i++) {
                 uint32_t current_local_addr = dest_l1_addr + (i * addr_stride);
 
