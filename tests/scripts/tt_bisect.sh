@@ -16,16 +16,9 @@ fi
 # Workspace & env
 : "${TT_METAL_HOME:=$(pwd)}"
 export TT_METAL_HOME
-export PYTHON_ENV_DIR="$TT_METAL_HOME/python_env"
 
-# Create venv once (kept across iterations)
-./create_venv.sh
-echo "Virtual environment ready at $PYTHON_ENV_DIR"
-# Shellcheck disable=SC1090
-source "$PYTHON_ENV_DIR/bin/activate"
 
 # Make in-tree modules win and avoid user site interference
-export PYTHONPATH="$TT_METAL_HOME"
 export PYTHONNOUSERSITE=1
 export PYTHONFAULTHANDLER=1
 export PYTHONMALLOC="debug"
