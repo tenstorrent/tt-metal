@@ -9,6 +9,7 @@
 
 #include <ostream>
 
+#include <third_party/umd/device/api/umd/device/cluster.h>
 #include <third_party/umd/device/api/umd/device/types/cluster_descriptor_types.h>
 #include <llrt/tt_cluster.hpp>
 
@@ -52,3 +53,4 @@ namespace std {
 }
 
 ChipIdentifier get_chip_identifier_from_umd_chip_id(const tt::Cluster& cluster, chip_id_t chip_id);
+ChipIdentifier get_chip_identifier_from_umd_chip_id(tt::umd::TTDevice* device, tt::umd::chip_id_t chip_id);

@@ -66,32 +66,6 @@ There's an attribute named asic_id that will show up if your FW is new enough.  
 #include <third_party/umd/device/api/umd/device/topology/topology_discovery.h>
 #include <telemetry/ethernet/chip_identifier.hpp>
 
-static uint16_t get_bus_id(tt::umd::TTDevice* device) { return device->get_pci_device()->get_device_info().pci_bus; }
-
-static ChipIdentifier get_chip_identifier_from_umd_chip_id(tt::umd::TTDevice* device, tt::umd::chip_id_t chip_id) {
-    if (device->get_board_type() == BoardType::UBB) {
-        // UBB is the Galaxy 6U board type
-        const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
-            {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
-            {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
-        };
-        const auto& tray_bus_ids = ubb_bus_ids.at(device->get_arch());
-        const auto bus_id = get_bus_id(device);
-        auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
-        if (tray_bus_id_it != tray_bus_ids.end()) {
-            auto ubb_chip_number = bus_id & 0x0F;
-            return {
-                .id = chip_id,
-                .galaxy_ubb = GalaxyUbbIdentifier{tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_chip_number}};
-        }
-
-        // Invalid UBB, drop through
-    }
-
-    // Not a known cluster type, just use chip ID directly
-    return {.id = chip_id, .galaxy_ubb = {}};  // invalid UBB ID if not found
-}
-
  static auto make_ordered_ethernet_connections(const auto& unordered_connections) {
      std::map<
          tt::umd::chip_id_t,
