@@ -163,7 +163,8 @@ class ResBlock:
         mesh_device=None,
         mesh_axis=None,
         input_shape=None,
-        parallel_manager=None,
+        parallel_config=None,
+        ccl_manager=None,
         torch_ref=None,
     ):
         self.num_out_blocks_map = {
@@ -203,7 +204,8 @@ class ResBlock:
             bias=bias,
             causal=causal,
             input_shape=input_shape,
-            parallel_manager=parallel_manager,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
             torch_ref=torch_ref.stack[2] if torch_ref is not None else None,
         )
         self.conv2 = ContextParallelConv3d(
@@ -214,7 +216,8 @@ class ResBlock:
             bias=bias,
             causal=causal,
             input_shape=input_shape,
-            parallel_manager=parallel_manager,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
             torch_ref=torch_ref.stack[5] if torch_ref is not None else None,
         )
 
