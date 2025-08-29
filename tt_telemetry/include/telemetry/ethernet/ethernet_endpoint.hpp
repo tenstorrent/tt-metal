@@ -16,7 +16,7 @@
 
  struct EthernetEndpoint {
     ChipIdentifier chip;
-    CoreCoord ethernet_core;
+    CoreCoord ethernet_core;  // TODO: use tt::umd::CoreCoord?
     tt::umd::ethernet_channel_t channel;
 
     bool operator<(const EthernetEndpoint &other) const;
@@ -45,3 +45,5 @@ namespace std {
 }
 
 std::map<ChipIdentifier, std::vector<EthernetEndpoint>> get_ethernet_endpoints_by_chip(const tt::Cluster& cluster);
+std::map<ChipIdentifier, std::vector<EthernetEndpoint>> get_ethernet_endpoints_by_chip(
+    const std::unique_ptr<tt::umd::Cluster>& cluster);
