@@ -106,7 +106,6 @@ void MAIN {
     bool wait_mask = true;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #if FUSED_SCALE_MASK
-        DPRINT << "DOING FUSED_SCALE_MASK" << ENDL();
         reconfig_data_format(cb_in0, cb_fused_scale);
         pack_reconfig_data_format(cb_scale_mask);
         mul_tiles_bcast_scalar_init_short(cb_in0, cb_fused_scale);
