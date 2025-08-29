@@ -161,37 +161,37 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::subtract_ranges(
 }
 
 // --- StateDependencies impl ---
-BankManager::StateDependencies::StateDependencies() : adjacency() {
+BankManager::StateDependencies::StateDependencies() {
     // Default: single state (0) with no dependencies
-    adjacency.resize(1);
+    adjacency = AdjacencyList{{}};
 }
 
-BankManager::StateDependencies::StateDependencies(const std::unordered_map<StateId, ttsl::SmallVector<StateId>>& deps) {
-    // Determine total number of states as 1 + max id seen anywhere (keys or values)
-    uint32_t max_id = 0;
-    if (!deps.empty()) {
-        for (const auto& kv : deps) {
+BankManager::StateDependencies::StateDependencies(
+    const std::unordered_map<StateId, ttsl::SmallVector<StateId>>& dependencies_map) {
+    // Determine total number of states as max state id seen anywhere (keys or values)
+    if (dependencies_map.empty()) {
+        adjacency = AdjacencyList{{}};
+    } else {
+        uint32_t max_id = 0;
+        for (const auto& kv : dependencies_map) {
             max_id = std::max(max_id, kv.first.value);
             for (const auto dep_state : kv.second) {
                 max_id = std::max(max_id, dep_state.value);
             }
         }
-        adjacency.resize(static_cast<size_t>(max_id) + 1);
-        for (const auto& kv : deps) {
+        adjacency.resize(static_cast<size_t>(max_id) + 1);  // +1 because state ids are zero-indexed
+        for (const auto& kv : dependencies_map) {
             adjacency[kv.first.value] = kv.second;
         }
-    } else {
-        // If empty, default to single state 0
-        adjacency.resize(1);
     }
 }
+
 uint32_t BankManager::StateDependencies::num_states() const { return static_cast<uint32_t>(adjacency.size()); }
 
 void BankManager::init_allocators_across_states(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset) {
     const uint32_t n = dependencies_.num_states();
     allocators_.resize(n);
     allocated_buffers_.resize(n);
-    reservations_by_source_.resize(n);
     reservations_by_source_.resize(n);
     allocator_offsets_.resize(n);
 

@@ -27,7 +27,7 @@ struct StateDependenciesParam {
         ttsl::SmallVector<tt::tt_metal::BankManager::StateDependencies::StateId>>
         input;
     // Expected dependencies per state (missing keys imply empty list)
-    ttsl::SmallVector<ttsl::SmallVector<tt::tt_metal::BankManager::StateDependencies::StateId>> expected_dependencies;
+    tt::tt_metal::BankManager::StateDependencies::AdjacencyList expected_dependencies;
 };
 
 }  // namespace
@@ -57,6 +57,10 @@ INSTANTIATE_TEST_SUITE_P(
     StateDependencies,
     StateDependenciesParamTest,
     ::testing::Values(
+        // Empty input
+        StateDependenciesParam{
+            /*input=*/{},
+            /*expected_dependencies=*/{{}}},
         // Single state default behavior (explicit input)
         StateDependenciesParam{
             /*input=*/{{StateId{0}, {}}},
