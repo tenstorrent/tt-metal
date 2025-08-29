@@ -117,7 +117,7 @@ private:
 
     // State-dependent members
     // Dependencies between states (also encodes number of states)
-    StateDependencies dependencies_{};
+    StateDependencies state_dependencies_{};
 
     // Track allocations per state: base address -> size_per_bank
     std::vector<std::unordered_map<DeviceAddr, DeviceAddr>> allocated_buffers_{};

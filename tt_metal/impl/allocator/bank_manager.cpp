@@ -203,7 +203,7 @@ BankManager::StateDependencies::StateDependencies(
 uint32_t BankManager::StateDependencies::num_states() const { return static_cast<uint32_t>(dependencies.size()); }
 
 void BankManager::init_allocators_across_states(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset) {
-    const uint32_t n = dependencies_.num_states();
+    const uint32_t n = state_dependencies_.num_states();
     allocators_.resize(n);
     allocated_buffers_.resize(n);
     reservations_by_source_.resize(n);
@@ -244,7 +244,7 @@ BankManager::BankManager(
     DeviceAddr alloc_offset,
     bool disable_interleaved,
     const StateDependencies& dependencies) :
-    buffer_type_(buffer_type), alignment_bytes_(alignment_bytes), dependencies_(dependencies) {
+    buffer_type_(buffer_type), alignment_bytes_(alignment_bytes), state_dependencies_(dependencies) {
     unsigned int bank_id = 0;
     for (const auto bank_offset : bank_offsets) {
         bank_id_to_bank_offset_.insert({bank_id, bank_offset});
@@ -271,7 +271,7 @@ BankManager::BankManager(
     bank_id_to_bank_offset_(bank_id_to_bank_offset),
     interleaved_address_limit_(interleaved_address_limit),
     alignment_bytes_(alignment_bytes),
-    dependencies_(dependencies) {
+    state_dependencies_(dependencies) {
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
 
     // Initialize allocators across states; sets up state-dependent members
@@ -306,10 +306,10 @@ void BankManager::validate_bank_id(uint32_t bank_id) const {
 
 void BankManager::assert_valid_state(BankManager::StateDependencies::StateId state) const {
     TT_FATAL(
-        state.value < dependencies_.num_states(),
+        state.value < state_dependencies_.num_states(),
         "Invalid state {} (num_states={})",
         state.value,
-        dependencies_.num_states());
+        state_dependencies_.num_states());
 }
 
 uint64_t BankManager::allocate_buffer(
@@ -397,7 +397,7 @@ uint64_t BankManager::allocate_buffer(
 
     // Track allocation and update dependents' overlays
     allocated_buffers_[state.value][address.value()] = size_per_bank;
-    for (auto dependent_state : dependencies_.dependents[state.value]) {
+    for (auto dependent_state : state_dependencies_.dependents[state.value]) {
         auto y = dependent_state.value;
         reservations_by_source_[y][state.value].add(address.value(), address.value() + size_per_bank);
     }
@@ -411,7 +411,7 @@ void BankManager::deallocate_buffer(DeviceAddr address, BankManager::StateDepend
     auto it = allocated_buffers_[state.value].find(address);
     if (it != allocated_buffers_[state.value].end()) {
         DeviceAddr size_per_bank = it->second;
-        for (auto dependent_state : dependencies_.dependents[state.value]) {
+        for (auto dependent_state : state_dependencies_.dependents[state.value]) {
             auto y = dependent_state.value;
             reservations_by_source_[y][state.value].remove(address, address + size_per_bank);
         }
@@ -453,7 +453,7 @@ BankManager::~BankManager() {
 }
 
 BankManager&& BankManager::operator=(BankManager&& that) noexcept {
-    dependencies_ = std::move(that.dependencies_);
+    state_dependencies_ = std::move(that.state_dependencies_);
     buffer_type_ = that.buffer_type_;
     allocated_buffers_ = std::move(that.allocated_buffers_);
     bank_id_to_bank_offset_ = std::move(that.bank_id_to_bank_offset_);
