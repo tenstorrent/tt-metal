@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "core_coord.hpp"
+#include "tt_target_device.hpp"
 #include <tt_stl/span.hpp>
 // clang-format off
 #include "hal.hpp"

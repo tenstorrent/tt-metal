@@ -12,7 +12,7 @@
 #include <memory>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
+#include <tt_metal/fabric/erisc_datamover_builder.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 
