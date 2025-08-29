@@ -209,7 +209,7 @@ create_programs(
         tt_metal::CircularBufferConfig(in0_reader_cb_size, {{in0_reader_cb_index, tile_format}})
             .set_page_size(in0_reader_cb_index, single_tile_size)
             .set_globally_allocated_address(*in0_buffer->get_backing_buffer());
-    auto in0_reader_cb = tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, in0_reader_cb_config);
+    tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, in0_reader_cb_config);
 
     // in1 receiver CB
     uint32_t in1_receiver_cb_index = 31;
@@ -229,7 +229,7 @@ create_programs(
         tt_metal::CircularBufferConfig(output_cb_size, {{output_cb_index, tile_format}})
             .set_page_size(output_cb_index, single_tile_size)
             .set_globally_allocated_address(*output_buffer->get_backing_buffer());
-    auto output_cb = tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, output_cb_config);
+    tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, output_cb_config);
 
     // sync CB
     uint32_t sync_cb_index = 2;

@@ -39,7 +39,7 @@ bool runTest(
 
     auto program(tt::tt_metal::CreateProgram());
     distributed::MeshWorkload workload = distributed::CreateMeshWorkload();
-    auto kernel = CreateKernel(
+    CreateKernel(
         program,
         path,
         coord,

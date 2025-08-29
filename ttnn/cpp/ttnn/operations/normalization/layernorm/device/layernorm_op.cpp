@@ -200,10 +200,8 @@ void LayerNorm::validate(
                 uint32_t Mt = M / TILE_WIDTH;
                 uint32_t Kt = K / TILE_WIDTH;
                 // block
-                uint32_t block_w = program_config.block_w * TILE_WIDTH;
                 uint32_t block_h = program_config.block_h * TILE_HEIGHT;
                 const auto shard_spec = a.shard_spec().value();
-                uint32_t num_subblocks_w = program_config.block_w / program_config.subblock_w;
                 // check dims
                 TT_FATAL(
                     program_config.block_w % program_config.subblock_w == 0,

@@ -124,8 +124,6 @@ public:
         std::vector<chip_id_t> ids(this->num_devices, 0);
         std::iota(ids.begin(), ids.end(), 0);
 
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         this->devices_map = tt::tt_metal::detail::CreateDevices(ids);
         this->devices = tt::DevicePool::instance().get_all_active_devices();
 

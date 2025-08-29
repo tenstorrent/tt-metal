@@ -339,7 +339,6 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
     const auto& sender_mesh_device = devices_.at(0);
     const auto& receiver_mesh_device = devices_.at(1);
     const auto sender_device = sender_mesh_device->get_devices()[0];
-    const auto receiver_device = receiver_mesh_device->get_devices()[0];
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
@@ -386,7 +385,6 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
     const auto& sender_mesh_device = devices_.at(1);
     const auto& receiver_mesh_device = devices_.at(0);
     const auto sender_device = sender_mesh_device->get_devices()[0];
-    const auto receiver_device = receiver_mesh_device->get_devices()[0];
 
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
