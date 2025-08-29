@@ -292,11 +292,25 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     BankCoordsWrapper,
     /* IsInterleaved */ true,
     IsDram>> : public InterleavedAddrGen<IsDram> {
+    using DSpec = tensor_accessor::DistributionSpec<
+        RankCT,
+        NumBanksCT,
+        TensorShapeWrapper,
+        ShardShapeWrapper,
+        BankCoordsWrapper,
+        /* IsInterleaved */ true,
+        IsDram>;
+
     template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
     TensorAccessor(
         const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
         const size_t bank_base_address_in,
         const uint32_t page_size_in = 0) :
+        InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {}
+
+    template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
+    constexpr explicit TensorAccessor(
+        DSpec_&& dspec, const size_t bank_base_address_in, const uint32_t page_size_in = 0) :
         InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {}
 
     // Locality APIs
@@ -354,6 +368,34 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
     -> TensorAccessor<decltype(tensor_accessor::make_dspec_from_args(args))>;
+
+template <
+    uint32_t RankCT,
+    uint32_t NumBanksCT,
+    typename TensorShapeWrapper,
+    typename ShardShapeWrapper,
+    typename BankCoordsWrapper,
+    bool IsInterleaved,
+    bool IsDram>
+TensorAccessor(
+    tensor_accessor::DistributionSpec<
+        RankCT,
+        NumBanksCT,
+        TensorShapeWrapper,
+        ShardShapeWrapper,
+        BankCoordsWrapper,
+        IsInterleaved,
+        IsDram>,
+    size_t,
+    uint32_t)
+    -> TensorAccessor<tensor_accessor::DistributionSpec<
+        RankCT,
+        NumBanksCT,
+        TensorShapeWrapper,
+        ShardShapeWrapper,
+        BankCoordsWrapper,
+        IsInterleaved,
+        IsDram>>;
 
 namespace tensor_accessor::detail {
 template <typename... Args, uint32_t... Indexes>
