@@ -20,6 +20,8 @@ from .executor import (
 
 
 def _determine_num_cores_for_even_sharding(shard_dim: int, max_cores: int):
+    if shard_dim == 0:
+        raise ValueError("Shard dimension cannot be zero")
     number_of_cores = max_cores
     while shard_dim % number_of_cores != 0:
         assert number_of_cores > 0, "Unable to find core grid"
@@ -29,7 +31,7 @@ def _determine_num_cores_for_even_sharding(shard_dim: int, max_cores: int):
 
 def get_memory_config_for_persistent_dram_tensor(shape, shard_strategy, dram_grid_size):
     if len(shape) < 2:
-        raise ValueError("Shape must be 2D or higher (was {shape})")
+        raise ValueError(f"Shape must be 2D or higher (was {shape})")
     if dram_grid_size.y != 1:
         raise ValueError(f"Only 1D DRAM grid is supported (was {dram_grid_size})")
 
