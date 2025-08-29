@@ -1,75 +1,73 @@
-pods {
-  pod {
-    pod_id: 1
-    pod_type: "n300_t3k_pod"
+
+# 5LB configuration using V3 schema
+
+graph_templates {
+  name: "5lb"
+  children {
+    name: "pod1"
+    pod_ref { pod_descriptor: "n300_t3k_pod" }
   }
-  pod {
-    pod_id: 2
-    pod_type: "n300_t3k_pod"
+  children {
+    name: "pod2"
+    pod_ref { pod_descriptor: "n300_t3k_pod" }
   }
-  pod {
-    pod_id: 3
-    pod_type: "n300_t3k_pod"
+  children {
+    name: "pod3"
+    pod_ref { pod_descriptor: "n300_t3k_pod" }
   }
-  pod {
-    pod_id: 4
-    pod_type: "n300_t3k_pod"
+  children {
+    name: "pod4"
+    pod_ref { pod_descriptor: "n300_t3k_pod" }
   }
-  pod {
-    pod_id: 5
-    pod_type: "n300_t3k_pod"
+  children {
+    name: "pod5"
+    pod_ref { pod_descriptor: "n300_t3k_pod" }
+  }
+  internal_connections {
+    key: "QSFP"
+    value {
+      connections {
+        port_a { path: ["pod1"] tray_id: 0 port_id: 2 }
+        port_b { path: ["pod2"] tray_id: 0 port_id: 2 }
+      }
+      connections {
+        port_a { path: ["pod1"] tray_id: 3 port_id: 1 }
+        port_b { path: ["pod4"] tray_id: 1 port_id: 2 }
+      }
+      connections {
+        port_a { path: ["pod1"] tray_id: 2 port_id: 1 }
+        port_b { path: ["pod3"] tray_id: 1 port_id: 2 }
+      }
+      connections {
+        port_a { path: ["pod1"] tray_id: 1 port_id: 2 }
+        port_b { path: ["pod5"] tray_id: 1 port_id: 2 }
+      }
+    }
   }
 }
-port_type_connections {
-  key: "QSFP"
-  value {
-    connections {
-      port_a {
-        pod_id: 1
-        tray_id: 4
-        port_id: 2
-      }
-      port_b {
-        pod_id: 2
-        tray_id: 1
-        port_id: 2
-      }
-    }
-    connections {
-      port_a {
-        pod_id: 1
-        tray_id: 3
-        port_id: 1
-      }
-      port_b {
-        pod_id: 4
-        tray_id: 1
-        port_id: 2
-      }
-    }
-    connections {
-      port_a {
-        pod_id: 1
-        tray_id: 2
-        port_id: 1
-      }
-      port_b {
-        pod_id: 3
-        tray_id: 1
-        port_id: 2
-      }
-    }
-    connections {
-      port_a {
-        pod_id: 1
-        tray_id: 1
-        port_id: 2
-      }
-      port_b {
-        pod_id: 5
-        tray_id: 1
-        port_id: 2
-      }
-    }
+
+# Root instance - just one 5LB graph
+root_instance {
+  template_name: "5lb"
+  instance_id: 1
+  child_mappings {
+    key: "pod1"
+    value { host_id: 0 }
+  }
+  child_mappings {
+    key: "pod2"
+    value { host_id: 1 }
+  }
+  child_mappings {
+    key: "pod3"
+    value { host_id: 2 }
+  }
+  child_mappings {
+    key: "pod4"
+    value { host_id: 3 }
+  }
+  child_mappings {
+    key: "pod5"
+    value { host_id: 4 }
   }
 }

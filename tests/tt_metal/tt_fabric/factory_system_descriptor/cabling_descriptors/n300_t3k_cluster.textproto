@@ -1,106 +1,208 @@
-superpods {
-  superpod {
-    superpod_id: 1
-    superpod_type: "n300_t3k_superpod"
+# Simple n300_t3k_cluster using V3 schema
+
+# Superpod template (4 pods)
+graph_templates {
+  name: "n300_t3k_superpod"
+  children {
+    name: "pod1"
+    pod_ref { pod_descriptor: "n300_t3k_pod" }
   }
-  superpod {
-    superpod_id: 2
-    superpod_type: "n300_t3k_superpod"
+  children {
+    name: "pod2"
+    pod_ref { pod_descriptor: "n300_t3k_pod" }
   }
-  superpod {
-    superpod_id: 3
-    superpod_type: "n300_t3k_superpod"
+  children {
+    name: "pod3"
+    pod_ref { pod_descriptor: "n300_t3k_pod" }
   }
-  superpod {
-    superpod_id: 4
-    superpod_type: "n300_t3k_superpod"
+  children {
+    name: "pod4"
+    pod_ref { pod_descriptor: "n300_t3k_pod" }
+  }
+  # Internal superpod connections
+  internal_connections {
+    key: "QSFP"
+    value {
+      connections {
+        port_a { path: ["pod1"] tray_id: 1 port_id: 2 }
+        port_b { path: ["pod4"] tray_id: 1 port_id: 2 }
+      }
+      connections {
+        port_a { path: ["pod1"] tray_id: 3 port_id: 1 }
+        port_b { path: ["pod2"] tray_id: 3 port_id: 1 }
+      }
+      connections {
+        port_a { path: ["pod1"] tray_id: 4 port_id: 2 }
+        port_b { path: ["pod3"] tray_id: 4 port_id: 2 }
+      }
+      connections {
+        port_a { path: ["pod2"] tray_id: 2 port_id: 1 }
+        port_b { path: ["pod3"] tray_id: 2 port_id: 1 }
+      }
+      connections {
+        port_a { path: ["pod2"] tray_id: 4 port_id: 2 }
+        port_b { path: ["pod4"] tray_id: 2 port_id: 1 }
+      }
+      connections {
+        port_a { path: ["pod3"] tray_id: 3 port_id: 1 }
+        port_b { path: ["pod4"] tray_id: 3 port_id: 1 }
+      }
+    }
   }
 }
-port_type_connections {
-  key: "QSFP"
-  value {
-    connections {
-      port_a {
-        superpod_id: 1
-        pod_id: 1
-        tray_id: 2
-        port_id: 1
+
+# Cluster template (4 superpods)
+graph_templates {
+  name: "n300_t3k_cluster"
+  children {
+    name: "superpod1"
+    graph_ref { graph_template: "n300_t3k_superpod" }
+  }
+  children {
+    name: "superpod2"
+    graph_ref { graph_template: "n300_t3k_superpod" }
+  }
+  children {
+    name: "superpod3"
+    graph_ref { graph_template: "n300_t3k_superpod" }
+  }
+  children {
+    name: "superpod4"
+    graph_ref { graph_template: "n300_t3k_superpod" }
+  }
+  # Inter-superpod connections
+  internal_connections {
+    key: "QSFP"
+    value {
+      connections {
+        port_a { path: ["superpod1", "pod1"] tray_id: 2 port_id: 1 }
+        port_b { path: ["superpod3", "pod1"] tray_id: 2 port_id: 1 }
       }
-      port_b {
-        superpod_id: 3
-        pod_id: 1
-        tray_id: 2
-        port_id: 1
+      connections {
+        port_a { path: ["superpod1", "pod3"] tray_id: 1 port_id: 2 }
+        port_b { path: ["superpod2", "pod2"] tray_id: 1 port_id: 2 }
       }
-    }
-    connections {
-      port_a {
-        superpod_id: 1
-        pod_id: 3
-        tray_id: 1
-        port_id: 2
+      connections {
+        port_a { path: ["superpod1", "pod4"] tray_id: 4 port_id: 2 }
+        port_b { path: ["superpod4", "pod1"] tray_id: 2 port_id: 1 }
       }
-      port_b {
-        superpod_id: 2
-        pod_id: 2
-        tray_id: 1
-        port_id: 2
+      connections {
+        port_a { path: ["superpod3", "pod3"] tray_id: 1 port_id: 2 }
+        port_b { path: ["superpod4", "pod2"] tray_id: 1 port_id: 2 }
       }
-    }
-    connections {
-      port_a {
-        superpod_id: 1
-        pod_id: 4
-        tray_id: 4
-        port_id: 2
+      connections {
+        port_a { path: ["superpod3", "pod4"] tray_id: 4 port_id: 2 }
+        port_b { path: ["superpod2", "pod1"] tray_id: 2 port_id: 1 }
       }
-      port_b {
-        superpod_id: 4
-        pod_id: 1
-        tray_id: 2
-        port_id: 1
-      }
-    }
-    connections {
-      port_a {
-        superpod_id: 3
-        pod_id: 3
-        tray_id: 1
-        port_id: 2
-      }
-      port_b {
-        superpod_id: 4
-        pod_id: 2
-        tray_id: 1
-        port_id: 2
+      connections {
+        port_a { path: ["superpod2", "pod4"] tray_id: 4 port_id: 2 }
+        port_b { path: ["superpod4", "pod4"] tray_id: 4 port_id: 2 }
       }
     }
-    connections {
-      port_a {
-        superpod_id: 3
-        pod_id: 4
-        tray_id: 4
-        port_id: 2
-      }
-      port_b {
-        superpod_id: 2
-        pod_id: 1
-        tray_id: 2
-        port_id: 1
+  }
+}
+
+# Root instance with concrete host mappings
+root_instance {
+  template_name: "n300_t3k_cluster"
+  instance_id: 1
+  child_mappings {
+    key: "superpod1"
+    value {
+      sub_instance {
+        template_name: "n300_t3k_superpod"
+        instance_id: 1
+        child_mappings {
+          key: "pod1"
+          value { host_id: 0 }
+        }
+        child_mappings {
+          key: "pod2"
+          value { host_id: 1 }
+        }
+        child_mappings {
+          key: "pod3"
+          value { host_id: 2 }
+        }
+        child_mappings {
+          key: "pod4"
+          value { host_id: 3 }
+        }
       }
     }
-    connections {
-      port_a {
-        superpod_id: 2
-        pod_id: 4
-        tray_id: 4
-        port_id: 2
+  }
+  child_mappings {
+    key: "superpod2"
+    value {
+      sub_instance {
+        template_name: "n300_t3k_superpod"
+        instance_id: 2
+        child_mappings {
+          key: "pod1"
+          value { host_id: 4 }
+        }
+        child_mappings {
+          key: "pod2"
+          value { host_id: 5 }
+        }
+        child_mappings {
+          key: "pod3"
+          value { host_id: 6 }
+        }
+        child_mappings {
+          key: "pod4"
+          value { host_id: 7 }
+        }
       }
-      port_b {
-        superpod_id: 4
-        pod_id: 4
-        tray_id: 4
-        port_id: 2
+    }
+  }
+  child_mappings {
+    key: "superpod3"
+    value {
+      sub_instance {
+        template_name: "n300_t3k_superpod"
+        instance_id: 3
+        child_mappings {
+          key: "pod1"
+          value { host_id: 8 }
+        }
+        child_mappings {
+          key: "pod2"
+          value { host_id: 9 }
+        }
+        child_mappings {
+          key: "pod3"
+          value { host_id: 10 }
+        }
+        child_mappings {
+          key: "pod4"
+          value { host_id: 11 }
+        }
+      }
+    }
+  }
+  child_mappings {
+    key: "superpod4"
+    value {
+      sub_instance {
+        template_name: "n300_t3k_superpod"
+        instance_id: 4
+        child_mappings {
+          key: "pod1"
+          value { host_id: 12 }
+        }
+        child_mappings {
+          key: "pod2"
+          value { host_id: 13 }
+        }
+        child_mappings {
+          key: "pod3"
+          value { host_id: 14 }
+        }
+        child_mappings {
+          key: "pod4"
+          value { host_id: 15 }
+        }
       }
     }
   }
