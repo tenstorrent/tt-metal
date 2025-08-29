@@ -26,7 +26,7 @@ void kernel_main() {
         uint64_t dst_noc_addr = get_noc_addr(responder_x_coord, responder_y_coord, subordinate_l1_addr);
         noc_async_write_one_packet_set_state(dst_noc_addr, packet_size_bytes);
         for (uint32_t i = 0; i < num_packets; i++) {
-            noc_async_write_one_packet_with_state<true>(master_l1_addr, subordinate_l1_addr);
+            noc_async_write_one_packet_with_state(master_l1_addr, subordinate_l1_addr);
         }
         noc_async_write_barrier();
     }
