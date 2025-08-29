@@ -94,8 +94,8 @@ def prepare_grid_sample_grid_pytorch(grid, input_shape):
         dim=-1,
     )
 
-    # Convert entire output to bfloat16
-    return output.to(torch.bfloat16)
+    # Return as float32, conversion to bfloat16 done later
+    return output.float()
 
 
 @pytest.mark.parametrize(
@@ -145,33 +145,48 @@ def test_prepare_grid_sample_grid_comparison(input_shape, grid_shape):
     assert pcc_passed, f"Weight values must pass PCC test: {pcc_message}"
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape_nchw, base_grid_shape, channel_extent_factor",
     [
         ((1, 256, 48, 160), (1, 25281, 7, 2), 7),
     ],
 )
-def test_pytorch_precomputed_grid_channel_extending(input_shape_nchw, base_grid_shape, channel_extent_factor):
+def test_pytorch_precomputed_grid_channel_extending(device, input_shape_nchw, base_grid_shape, channel_extent_factor):
     """Test PyTorch precomputed grid with channel extending functionality"""
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     batch_size, channels, height, width = input_shape_nchw
     input_shape_nhwc = [batch_size, height, width, channels]
     grid_n, grid_h, grid_w, grid_coords = base_grid_shape
 
-    # Generate random grid tensor
+    # Step 1: Get the normal pytorch grid in fp32
     torch_grid = torch.rand(base_grid_shape, dtype=torch.float32) * 2.0 - 1.0
 
-    # Create PyTorch precomputed grid
+    # Step 2: Preprocess it in python
     pytorch_precomputed = prepare_grid_sample_grid_pytorch(torch_grid, input_shape_nhwc)
 
-    # Reshape for channel extending: (N, H, W, 6) -> (N, H, W//extent, 6*extent)
+    # Step 3: Reshape it so that the grid, instead of being 1, H_out, W_out, 6, make it into 1, H_out, W_out/channel_extent_factor, 6*channel_extent_factor
     new_grid_w = grid_w // channel_extent_factor
     final_last_dim = 6 * channel_extent_factor
     pytorch_reshaped = pytorch_precomputed.view(batch_size, grid_h, new_grid_w, final_last_dim)
 
+    # Step 4: Convert that grid to bfloat16
+    pytorch_reshaped_bf16 = pytorch_reshaped.to(torch.bfloat16)
+
+    # Step 5: Send it to ttnn on device
+    ttnn_grid_device = ttnn.from_torch(pytorch_reshaped_bf16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
     # Create input tensor
     torch_input_nchw = torch.randn(input_shape_nchw, dtype=torch.float32)
+    torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    ttnn_input = ttnn.from_torch(
+        torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+    # Step 6: Run ttnn grid sample
+    ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid_device, use_precomputed_grid=True)
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     # Expected output using PyTorch grid_sample
     torch_output_nchw = F.grid_sample(
@@ -186,8 +201,9 @@ def test_pytorch_precomputed_grid_channel_extending(input_shape_nchw, base_grid_
         .view(batch_size, grid_h, new_grid_w, channels * channel_extent_factor)
     )
 
-    pcc_passed, pcc_message = assert_with_pcc(torch_expected_reshaped, torch_expected_reshaped, pcc=0.99)
-    logger.info(pcc_message)
+    # Step 7: Compare to torch with pcc
+    pcc_passed, pcc_message = assert_with_pcc(torch_expected_reshaped, ttnn_output_torch, pcc=0.99)
+    assert pcc_passed, f"PCC test failed: {pcc_message}"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
