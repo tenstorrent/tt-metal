@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import json
 from random import randint
 
 import pytest
@@ -48,7 +49,7 @@ def create_whole_model_state_dict(model_path, hf_config):
 @pytest.fixture
 def hf_config(hf_config):
     """Load DeepSeek config for testing."""
-    hf_config.num_hidden_layers = 3
+    hf_config.num_hidden_layers = 4
     hf_config.max_seq_len = 5 * 1024  # Set max sequence length for testing
     return hf_config
 
@@ -87,8 +88,20 @@ def load_reference_model(hf_config):
     ["random", "real"],
 )
 def test_forward_pass(
-    module_path, mode, seq_len, batch_size, hf_config, tmp_path, mesh_device, model_path, ccl, reset_seeds, weights_type
+    module_path,
+    mode,
+    seq_len,
+    batch_size,
+    hf_config,
+    tmp_path,
+    mesh_device,
+    model_path,
+    ccl,
+    reset_seeds,
+    weights_type,
+    deepseek_cache_path,
 ):
+    tensor_cache_path = deepseek_cache_path / "ttnn_tensors_cache"
     mesh_device.disable_and_clear_program_cache()
     mesh_shape = list(mesh_device.shape)
     num_rows, sdpa_dp_factor = mesh_shape
@@ -150,8 +163,18 @@ def test_forward_pass(
     ############################
     logger.info("Setting up TTNN configs")
 
+    weight_config_path = tensor_cache_path / "moe_model_weight_config.json"
     # For now, since we're only loading one layer, we can replicate
-    weight_config = Model1D.convert_weights(hf_config, state_dict, tmp_path, mesh_device)
+    # save this weight config to json file if it doesn't exist
+    if not weight_config_path.exists():
+        weight_config = Model1D.convert_weights(hf_config, state_dict, tensor_cache_path, mesh_device)
+        with open(weight_config_path, "w") as f:
+            json.dump(weight_config, f)
+        logger.info(f"Saved weight config to {weight_config_path}")
+    else:
+        with open(weight_config_path, "r") as f:
+            weight_config = json.load(f)
+        logger.info(f"Loaded weight config from {weight_config_path}")
 
     if mode == "prefill":
         model_config = Model1D.prefill_model_config(hf_config, mesh_device)
