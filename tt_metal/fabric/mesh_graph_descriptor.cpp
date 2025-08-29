@@ -11,13 +11,16 @@
 #include <iomanip>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
 #include "assert.hpp"
 
 #include "protobuf/mesh_graph_descriptor.pb.h"
 #include "tt-metalium/mesh_graph_descriptor.hpp"
+#include "tt-metalium/mesh_graph_new.hpp"
 
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
+#include <unistd.h>
 
 namespace tt::tt_fabric {
 
@@ -78,9 +81,7 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto) {
 
     proto_ = std::make_unique<proto::MeshGraphDescriptor>(temp_proto);
 
-    save_descriptor_refs();
-
-    construct_graph_instances();
+    populate();
 }
 
 MeshGraphDescriptor::MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path) :
@@ -161,6 +162,15 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshG
 
     return all_errors;
 }
+
+void MeshGraphDescriptor::populate() {
+
+    populate_descriptors();
+    populate_instances(proto_->top_level_instance());
+
+    // Set the top level instance
+}
+
 
 std::vector<std::string> MeshGraphDescriptor::validate_basic_structure(const proto::MeshGraphDescriptor& proto) {
     std::vector<std::string> errors;
@@ -508,79 +518,87 @@ std::vector<std::string> MeshGraphDescriptor::validate_legacy_requirements(const
     return error_messages;
 }
 
-void MeshGraphDescriptor::save_descriptor_refs() {
+void MeshGraphDescriptor::populate_descriptors() {
     // Save the mesh descriptors
     for (const auto& mesh : proto_->mesh_descriptors()) {
-        mesh_descriptors_[mesh.name()] = &mesh;
+        mesh_descriptors_by_name_[mesh.name()] = &mesh;
     }
     // Save the graph descriptors
     for (const auto& graph : proto_->graph_descriptors()) {
-        graph_descriptors_[graph.name()] = &graph;
+        graph_descriptors_by_name_[graph.name()] = &graph;
+        graph_descriptors_by_type_[graph.type()].insert(&graph);
     }
 }
 
-void MeshGraphDescriptor::construct_graph_instances() {
-    auto top_inst = construct_graph_instance(proto_->top_level_instance());
-    auto top_gid = top_inst->global_id;
+void MeshGraphDescriptor::populate_instances(const proto::NodeRef& node_ref) {
+    auto node_instance = construct_node_instance(node_ref);
+    all_instances_.insert(node_instance);
 
-    node_instances_[top_gid] = std::move(top_inst);
-
-    top_level_instance_ = node_instances_[top_gid].get();
+    if (auto graph_descriptor = std::get_if<const proto::GraphDescriptor*>(&node_instance->descriptor)) {
+        for (const auto& instance : (*graph_descriptor)->instances()) {
+            populate_instances(instance);
+        }
+    }
 }
 
-std::unique_ptr<MeshGraphDescriptor::NodeInstance> MeshGraphDescriptor::construct_graph_instance(const proto::NodeRef& node_ref) {
+
+std::shared_ptr<MeshGraphDescriptor::NodeInstance> MeshGraphDescriptor::construct_node_instance(const proto::NodeRef& node_ref) {
+    std::string descriptor_name;
+    uint32_t instance_id;
+
+    std::shared_ptr<NodeInstance> node_instance;
+
     if (node_ref.has_mesh()) {
-        // Check the the mesh descriptor exists
-        auto it = mesh_descriptors_.find(node_ref.mesh().mesh_descriptor());
-        TT_FATAL(it != mesh_descriptors_.end(),
-            "Mesh descriptor {} not found",
-            node_ref.mesh().mesh_descriptor());
+        descriptor_name = node_ref.mesh().mesh_descriptor();
+        instance_id = node_ref.mesh().mesh_id();
 
-        const auto& mesh_descriptor = it->second;
+        // Check that the descriptor name exists
+        auto it = mesh_descriptors_by_name_.find(descriptor_name);
+        TT_FATAL(it != mesh_descriptors_by_name_.end(), "Mesh descriptor {} not found in instance", descriptor_name);
 
-        std::vector<uint32_t> dimensions;
-        for (const auto& dim : mesh_descriptor->device_topology().dims()) {
-            dimensions.push_back(dim);
-        }
+        auto mesh_descriptor = it->second;
 
-        MeshInstance mesh_instance(
-            node_ref.mesh().mesh_descriptor(),
-            node_ref.mesh().mesh_id(),
-            dimensions
-        );
+        // Check that it doesn't have a sub_ref
+        MeshInstance mesh_instance{
+            {instance_id, 
+             descriptor_name, 
+             mesh_descriptor, 
+             &node_ref.mesh(),
+            }
+        };
 
-        return std::make_unique<MeshInstance>(mesh_instance);
+        node_instance = std::make_shared<MeshInstance>(mesh_instance);
 
     } else if (node_ref.has_graph()) {
+        descriptor_name = node_ref.graph().graph_descriptor();
+        instance_id = node_ref.graph().graph_id();
 
-        auto it = graph_descriptors_.find(node_ref.graph().graph_descriptor());
+        // Check that the descriptor name exists
+        auto it = graph_descriptors_by_name_.find(descriptor_name);
+        TT_FATAL(it != graph_descriptors_by_name_.end(), "Graph descriptor {} not found in instance", descriptor_name);
 
-        TT_FATAL(it != graph_descriptors_.end(),
-            "Graph descriptor {} not found", 
-            node_ref.graph().graph_descriptor());
+        auto graph_descriptor = it->second;
 
-        const auto& graph_descriptor = it->second;
+        // Check that it doesn't have a sub_ref
+        GraphInstance graph_instance{
+            {
+                instance_id, 
+                descriptor_name, 
+                graph_descriptor, 
+                &node_ref.graph(),
+            },
+            graph_descriptor->type(),
+        };
 
-        GraphInstance graph_instance(
-            node_ref.graph().graph_descriptor(),
-            node_ref.graph().graph_id()
-        );
+        // TODO: Add all other fields for easy access
 
-        for (const auto& instance : graph_descriptor->instances()) {
-            auto sub_instance = construct_graph_instance(instance);
-            auto sub_gid = sub_instance->global_id;
-
-            node_instances_[sub_gid] = std::move(sub_instance);
-
-            auto [it, inserted] = graph_instance.node_ids.insert(sub_gid);
-            TT_FATAL(inserted, "Node ID {} already exists in graph instance", sub_gid);
-        }
-
-        return std::make_unique<GraphInstance>(graph_instance);
+        node_instance = std::make_shared<GraphInstance>(graph_instance);
     }
 
-    return {};
+    return node_instance;
+
 }
+
 
     
 

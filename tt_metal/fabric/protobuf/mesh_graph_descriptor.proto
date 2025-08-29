@@ -227,13 +227,7 @@ message GraphRef {
     // Instance index of the referenced graph.
     int32 graph_id = 2;
 
-    oneof sub_ref {
-        // Optional nested reference to a sub-mesh (and optionally device) within this graph.
-        MeshRef mesh = 3;
-
-        // Optional nested reference to a sub-graph within this graph.
-        GraphRef graph = 4;
-    }
+    NodeRef sub_ref = 3;
 }
 
 message MeshRef {
