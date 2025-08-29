@@ -42,13 +42,9 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void matmul_init(uint32_t in0_cb_id, uint32_t in1_cb_id, const bool transpose = 0) {
-    // CRITICAL: Only matmul-specific hardware configs that differ from generic startup
-    UNPACK((llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
-    // CRITICAL: Matmul-specific math hw config (no template params vs generic with <false, false>)
-    MATH((llk_math_hw_configure_disaggregated(in0_cb_id, in1_cb_id)));
 }
 
 // clang-format off
@@ -227,14 +223,10 @@ ALWI void matmul_block_init(
     uint32_t block_ct_dim = 1,
     uint32_t block_rt_dim = 1,
     uint32_t block_kt_dim = 1) {
-    // CRITICAL: Only matmul-specific hardware configs that differ from generic startup
-    UNPACK((llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, block_ct_dim, block_rt_dim, block_kt_dim)));
 
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(
         in0_cb_id, in1_cb_id, transpose, block_ct_dim, block_rt_dim, block_kt_dim)));
-    // CRITICAL: Matmul-specific math hw config (no template params vs generic with <false, false>)
-    MATH((llk_math_hw_configure_disaggregated(in0_cb_id, in1_cb_id)));
 }
 
 // clang-format off
