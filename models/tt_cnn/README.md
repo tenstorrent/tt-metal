@@ -1,6 +1,6 @@
 # TT-CNN
 
-The TT-CNN library comprises several modules with reusable functions designed to facilitate the development of high-performance vision models in TTNN. The goal of the library is to minimize code duplication and enhance maintainability, enabling quicker model deployment with superior initial performance. One of these modules is the Pipeline API.
+The TT-CNN library comprises several modules with reusable functions designed to facilitate the development of high-performance vision models in TT-NN. The goal of the library is to minimize code duplication and enhance maintainability, enabling quicker model deployment with superior initial performance. One of these modules is the Pipeline API.
 
 ## Pipeline
 
@@ -9,8 +9,8 @@ This module provides a high-performance pipeline framework for executing CNN mod
 ### Overview
 
 The TT-CNN Pipeline API provides:
-- **Traced execution** for optimal performance through kernel compilation and command recording
-- **Multi-command queue support** for parallel I/O and compute operations
+- **Traced execution** for optimal performance through kernel compilation and command recording.
+- **Multi-command queue support** for parallel I/O and compute operations.
 
 ### Getting Started
 
@@ -65,22 +65,28 @@ The TT-CNN Pipeline API provides advanced performance optimization techniques to
  Tracing eliminates host overhead by recording operation commands into device memory and replaying them during execution. This is particularly effective for **host-bound** models where the host cannot dispatch commands fast enough to keep the device busy.
 
 **Benefits:**
-- Removes gaps between operations on the device
-- Eliminates host-device communication delays during execution
+- Removes gaps between operations on the device.
+- Eliminates host-device communication delays during execution.
 
 **Best for:**
-- Models with static input/output shapes (image classification, object detection)
-- Host-bound scenarios where command dispatch is the bottleneck
+- Models with static input/output shapes (image classification, object detection).
+- Host-bound scenarios where command dispatch is the bottleneck.
+
+**Not suitable for:**
+- Generative models with changing sequence lengths (without advanced techniques).
 
 #### Multiple Command Queues
 Uses two independent command queues to overlap I/O operations with computation, ideal for models where input/output transfer time is significant.
 
 **Benefits:**
-- Overlaps host-to-device and/or device-to-host transfers with model execution
-- Maximizes device utilization, improving throughput
+- Overlaps host-to-device and/or device-to-host transfers with model execution.
+- Enables host to enqueue commands ahead of device execution.
+- Maximizes device utilization, improving throughput.
 
 **Best for:**
-- Large input tensors that take significant time to transfer
+- Models where I/O transfer time is significant compared to computation time.
+- Large input tensors that take significant time to transfer.
+- Scenarios where host can benefit from enqueueing commands ahead of device execution.
 
 ### Choosing the Right Configuration
 
@@ -113,10 +119,10 @@ config = PipelineConfig(
     all_transfers_on_separate_command_queue=False
 )
 ```
-- **Use when**: Host-bound models with host-to-device transfer overhead
-- **Performance**: Benefits of tracing while overlapping input transfers with ops execution
-- **Queue Usage**: CQ0 for ops+output reads, CQ1 for input writes
-- **Requirements**: `dram_input_memory_config` - pipeline handles persistent DRAM tensor allocation
+- **Use when**: Host-bound models with significant host-to-device transfer overhead
+- **Performance**: Combines trace benefits with overlapped input transfers during execution
+- **Queue Usage**: CQ0 for operations + output reads, CQ1 dedicated for input writes
+- **Requirements**: `dram_input_memory_config` - pipeline handles persistent DRAM tensor allocation and event synchronization
 
 #### Multi-Command Queue + Trace + Dedicated CQ for I/O
 ```python
@@ -126,10 +132,11 @@ config = PipelineConfig(
     all_transfers_on_separate_command_queue=True
 )
 ```
-- **Use when**: Host-bound models with host-to-device and device-to-host transfer overhead
+- **Use when**: Host-bound models with significant bidirectional I/O transfer overhead
 - **Executor**: `MultiCQTracedModelPipelinedIOExecutor`
-- **Performance**: Fully overlaps input/output transfers with computation
-- **Requirements**: `dram_output_memory_config`, requires a minimum 2 inputs for pipelining
+- **Performance**: Fully overlaps both input writes and output reads with model execution
+- **Queue Usage**: CQ0 for operations only, CQ1 for both input writes and output reads
+- **Requirements**: `dram_output_memory_config` for persistent output tensors, requires a minimum of two inputs for effective pipelining, complex event synchronization
 
 #### DRAM Memory Configuration
 Many pipeline configurations require memory configs for the persistent tensors that the pipeline automatically allocates and manages during execution. To automatically select optimal DRAM configs given your input shape, use the following utility:
@@ -150,7 +157,7 @@ The L1 memory configs are also required by the Pipeline API and are typically mo
 
 #### Common Issues
 - **Input tensor validation errors**: Ensure all input tensors are host tensors (`StorageType.HOST`) - the pipeline will reject device tensors
-- **Trace buffer size errors**: Increase `trace_region_size` in device parameters
+- **Trace buffer size errors**: Increase `trace_region_size` in device parameters. The error message will indicate the required size: `Creating trace buffers of size XB on device 0, but only 0B is allocated for trace region`
 - **L1 memory allocation failures**: Verify DRAM and L1 memory configurations are correct for your input shapes
 
 ### Examples
