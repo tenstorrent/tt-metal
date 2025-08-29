@@ -36,12 +36,12 @@ enum class PortType {
 
 struct AsicChannel {
     // TODO: This might become asic_location, or get mapped from it
-    uint32_t asic_index;
+    uint32_t asic_location;
     uint32_t channel_id;
 };
 
 inline bool operator==(const AsicChannel& lhs, const AsicChannel& rhs) {
-    return lhs.asic_index == rhs.asic_index && lhs.channel_id == rhs.channel_id;
+    return lhs.asic_location == rhs.asic_location && lhs.channel_id == rhs.channel_id;
 }
 
 struct Port {
