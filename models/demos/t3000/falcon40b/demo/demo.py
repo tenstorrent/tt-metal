@@ -196,8 +196,8 @@ def run_falcon_demo_kv(
         N_warmup_iter = {"inference_prefill": 5, "inference_decode": 5}
         perf_targets = {
             "prefill_t/s": None,
-            "decode_t/s": 11.9 * batch_size,
-            "decode_t/s/u": 11.9,
+            "decode_t/s": 36 * batch_size,
+            "decode_t/s/u": 36,
         }
 
     configuration = FalconConfig(**model_config_entries)
