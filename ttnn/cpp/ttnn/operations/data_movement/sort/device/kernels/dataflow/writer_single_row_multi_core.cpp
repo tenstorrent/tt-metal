@@ -112,4 +112,5 @@ void kernel_main() {
             }  // sub loop
         }  // stage loop
     }  // h loop
+    noc_async_atomic_barrier();
 }
