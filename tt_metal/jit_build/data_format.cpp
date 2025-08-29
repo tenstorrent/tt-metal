@@ -253,8 +253,7 @@ DataFormat get_single_pack_src_format(
         } else {
             pack_src_format = DataFormat::Float32;
         }
-    } else if (tt::is_integer_format(
-                   data_format)) {  // NOLINT(bugprone-branch-clone) clones return from Uint16 - not sure why
+    } else if (tt::is_integer_format(data_format)) {
         pack_src_format = data_format;
     } else if (
         (!is_input_or_output_float32 && input_exp_width == output_exp_width) || condition_exp_float32_match_output ||
