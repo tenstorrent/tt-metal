@@ -109,7 +109,11 @@ class TtTemporalSelfAttention:
             attention_weights, (bs, num_query, self.num_heads, self.num_bev_queue, self.num_levels * self.num_points)
         )
 
-        attention_weights = ttnn.softmax(attention_weights, -1)
+        attention_weights = ttnn.to_torch(attention_weights)  # OOM ISSUE
+        attention_weights = attention_weights.softmax(dim=-1)
+        attention_weights = ttnn.from_torch(
+            attention_weights, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
+        )
 
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_bev_queue, self.num_levels, self.num_points)
