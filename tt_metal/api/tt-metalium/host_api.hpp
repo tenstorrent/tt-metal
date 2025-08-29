@@ -18,6 +18,7 @@
 #include <tt-metalium/lightmetal_binary.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/kernel.hpp>
 
 /** @file */
 
