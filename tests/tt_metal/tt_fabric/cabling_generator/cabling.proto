@@ -2,19 +2,51 @@ syntax = "proto3";
 
 package cabling;
 
+message clustering {
+    message children {
+        oneof type_children {
+            string board_child = 1;
+            string hier_child = 2;
+        }
+    }
+    int32 linear_host_num = 1; // Not to be used by textproto just processing
+    // int32 num_children = 2;
+    repeated children child = 3;
+}
+
+    // repeated int32 dims = 1;
+    // min-level allowed is no-host id (local box connections)
+    // Max Allowed dims is the levels of hierarchy - 1  
+    // Anything with less than max levels is duplicated at that level
+    // Should match across connections
+
+
+    // Using 16-Loudbox as an example
+    // example: (tray: 1, port: 1) (tray: 4, port: 1) would be duplicated across all Pods (all hosts)
+    // example: (host: [0], tray: 3, port: 1) (host: [1], tray: 3, port: 1) would be duplicated across all SuperPods 
+    // example: (host: [/*superpod*/0,/*pod*/0] tray: 2, port: 1) (host: [/*superpod*/2,/*pod*/0] tray: 2, port: 1) would be highest level (not duplicated)
+    // Use highest specificity for links you don't want duplicated
+
+    // If doing across hierarchy level (like a Pod is for some reson a child of a Cluster) then only way to hierachically specify it is to use specific notation
+
+// }
+
 // The overall topology configuration
 message CablingDescriptor {
     message Connection {
         // Represents a connection between two endpoints
         message Endpoint {
             // Represents a single endpoint in a connection
-            int32 host = 1;
+            repeated int32 host = 1;
+            int32 linear_host_num = 4; // Not to be used by textproto just processing
             int32 tray = 2;
             int32 port = 3;
         }
         Endpoint endpoint_a = 1;
         Endpoint endpoint_b = 2;
+        string duplicate_at = 3; // level of hierarchy to duplicate at (if not specified, no duplication)
     }
-    int32 num_hosts = 1;
-    repeated Connection connections = 2;
+    map<string , clustering> hierarchy = 1; // hierarchy type to number of children and type of children
+    string hierarchy_root = 2;
+    repeated Connection connections = 3;
 }

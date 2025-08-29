@@ -1,15 +1,39 @@
-num_hosts: 5
-connections: { ep_a: { host: 0, tray: 1, port: 1 }, ep_b: { host: 0, tray: 4, port: 1 }}
-connections: { ep_a: { host: 0, tray: 2, port: 2 }, ep_b: { host: 0, tray: 3, port: 2 }}
-connections: { ep_a: { host: 1, tray: 1, port: 1 }, ep_b: { host: 1, tray: 4, port: 1 }}
-connections: { ep_a: { host: 1, tray: 2, port: 2 }, ep_b: { host: 1, tray: 3, port: 2 }}
-connections: { ep_a: { host: 2, tray: 1, port: 1 }, ep_b: { host: 2, tray: 4, port: 1 }}
-connections: { ep_a: { host: 2, tray: 2, port: 2 }, ep_b: { host: 2, tray: 3, port: 2 }}
-connections: { ep_a: { host: 4, tray: 1, port: 1 }, ep_b: { host: 4, tray: 4, port: 1 }}
-connections: { ep_a: { host: 4, tray: 2, port: 2 }, ep_b: { host: 4, tray: 3, port: 2 }}
-connections: { ep_a: { host: 3, tray: 1, port: 1 }, ep_b: { host: 3, tray: 4, port: 1 }}
-connections: { ep_a: { host: 3, tray: 2, port: 2 }, ep_b: { host: 3, tray: 3, port: 2 }}
-connections: { ep_a: { host: 0, tray: 1, port: 2 }, ep_b: { host: 3, tray: 4, port: 2 }}
-connections: { ep_a: { host: 1, tray: 1, port: 2 }, ep_b: { host: 3, tray: 3, port: 1 }}
-connections: { ep_a: { host: 2, tray: 1, port: 2 }, ep_b: { host: 3, tray: 2, port: 1 }}
-connections: { ep_a: { host: 4, tray: 1, port: 2 }, ep_b: { host: 3, tray: 1, port: 2 }}
+# Please list hierarchy from lowest to highest level (start with board pods)
+hierarchy: [
+    {key: "T3K", value: { child: [
+        {board_child: "N300"},
+        {board_child: "N300"}, 
+        {board_child: "N300"}, 
+        {board_child: "N300"}]}
+    },
+    {key: "SuperPod", value: { child: [
+        {hier_child: "T3K"}, 
+        {hier_child: "T3K"}, 
+        {hier_child: "T3K"}, 
+        {hier_child: "T3K"}, 
+        {hier_child: "T3K"}]}
+    }
+    # key: "Galaxy", value: {child: [{board_child: "UBB"}, {board_child: "UBB"}, {board_child: "UBB"}, {board_child: "UBB"}]},
+    # {key: "Cluster", value: {child:[
+    #     {hier_child: "SuperPod"}, 
+    #     {hier_child: "SuperPod"}, 
+    #     {hier_child: "SuperPod"}, 
+    #     {hier_child: "SuperPod"}]}
+    # }
+]
+
+hierarchy_root: "SuperPod"
+
+# Will likely need lots of parsing/error checking to ensure this is valid
+# - Search on the map to find highest dimensionality 
+# - Check that leafs end in a Board_type child (no circular references), check hier_child chain leads to board
+# Do a DFS to enumerate hosts, assign host numbers as you go
+# will need to hard validate on assignment; will be linear assignment of flattening out leaves to enumerate hosts, then coorelate to deployment. I.e. if the 3rd leaf is a galaxy but the third deployment host is a T3K, error out.
+
+connections: { endpoint_a: {tray: 1, port: 1 }, endpoint_b: {tray: 4, port: 1 }, duplicate_at: "Pod"}
+connections: { endpoint_a: {tray: 2, port: 2 }, endpoint_b: {tray: 3, port: 2 }, duplicate_at: "Pod"}
+
+connections: { endpoint_a: {host: [0] tray: 1 port: 2 }, endpoint_b: {host: [3] tray: 4 port: 2 }, duplicate_at: "SuperPod"}
+connections: { endpoint_a: {host: [1] tray: 1 port: 2 }, endpoint_b: {host: [3] tray: 3 port: 1 }, duplicate_at: "SuperPod"}
+connections: { endpoint_a: {host: [2] tray: 1 port: 2 }, endpoint_b: {host: [3] tray: 2 port: 1 }, duplicate_at: "SuperPod"}
+connections: { endpoint_a: {host: [4] tray: 1 port: 2 }, endpoint_b: {host: [3] tray: 1 port: 2 }, duplicate_at: "SuperPod"}

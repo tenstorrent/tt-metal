@@ -206,7 +206,6 @@ protobuf_generate_cpp(
     CG_PROTO_CCS
     CG_PROTO_HS
     ${CMAKE_CURRENT_SOURCE_DIR}/cabling_generator/cabling.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/cabling_generator/deployment.proto
 )
 
 target_include_directories(
@@ -231,4 +230,5 @@ target_sources(
     PRIVATE         
         ${CMAKE_CURRENT_SOURCE_DIR}/cabling_generator/cabling_generator.cpp
         ${CG_PROTO_CCS}
+        ${PROTO_SRCS}
 )
