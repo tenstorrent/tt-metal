@@ -32,7 +32,6 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     uint32_t page_size = output.buffer()->page_size();
     TT_FATAL(page_size % output.element_size() == 0, "Page size must be divisible by element size");
     uint32_t elems_per_page = page_size / output.element_size();
-    log_info(tt::LogAlways, "Sanity check: elems_per_page: {}, page_size: {}", elems_per_page, page_size);
 
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
 
@@ -78,11 +77,20 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     // If there are more pages than cores, we use NCRISC to split the work
     std::optional<tt::tt_metal::KernelHandle> reader_id = std::nullopt;
     if (num_pages > num_cores) {
+        // Create a second circular buffer for the reader
+        auto cb_index2 = tt::CBIndex::c_1;
+        tt::tt_metal::create_cb(cb_index2, program, all_cores, page_size, 1, data_format);
+
+        // Create the reader compile time arguments
+        std::vector<uint32_t> reader_compile_time_args = {(uint32_t)cb_index2, elems_per_page, page_size};
+        tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_compile_time_args);
+
+        // Create the reader kernel
         reader_id = CreateReadKernel(
             program,
             "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp",
             all_cores,
-            writer_compile_time_args,
+            reader_compile_time_args,
             reader_defines);
     }
 
@@ -101,27 +109,17 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
         if (reader_id.has_value()) {
             uint32_t reader_page_start = page_offset;
             uint32_t num_pages_per_reader = num_pages_per_core / 2;
+            std::vector<uint32_t> reader_args = {
+                output.buffer()->address(), u.u32, num_pages_per_reader, reader_page_start};
+            SetRuntimeArgs(program, reader_id.value(), core, reader_args);
+
             uint32_t writer_page_start = reader_page_start + num_pages_per_reader;
             uint32_t num_pages_per_writer = num_pages_per_core - num_pages_per_reader;
-            log_info(
-                tt::LogAlways,
-                "Work distribution:: num_pages_per_core: {}, reader_page_start: {}, num_pages_per_reader: {}, "
-                "writer_page_start: {}, num_pages_per_writer: {}",
-                num_pages_per_core,
-                reader_page_start,
-                num_pages_per_reader,
-                writer_page_start,
-                num_pages_per_writer);
-            TT_FATAL(
-                num_pages_per_core == num_pages_per_reader + num_pages_per_writer,
-                "Make sure all pages are assigned to either reader or writer");
-            std::vector<uint32_t> reader_args = {output.buffer()->address(), reader_page_start, num_pages_per_reader};
-            SetRuntimeArgs(program, reader_id.value(), core, reader_args);
             std::vector<uint32_t> writer_args = {
-                output.buffer()->address(), u.u32, writer_page_start, num_pages_per_writer};
+                output.buffer()->address(), u.u32, num_pages_per_writer, writer_page_start};
             SetRuntimeArgs(program, writer_id, core, writer_args);
         } else {
-            std::vector<uint32_t> writer_args = {output.buffer()->address(), u.u32, page_offset, num_pages_per_core};
+            std::vector<uint32_t> writer_args = {output.buffer()->address(), u.u32, num_pages_per_core, page_offset};
             SetRuntimeArgs(program, writer_id, core, writer_args);
         }
         page_offset += num_pages_per_core;
