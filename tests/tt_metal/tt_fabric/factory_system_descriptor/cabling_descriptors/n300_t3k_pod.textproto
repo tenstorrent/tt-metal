@@ -1,3 +1,4 @@
+name: "n300_t3k_pod"
 boards {
   board {
     tray_id: 1
