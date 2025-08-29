@@ -42,6 +42,29 @@ print(ttnn.get_arch_name())
 print("ttnn imported from:", ttnn.__file__)
 PY
 
+echo "::group::Testing $rev"
+  timeout_rc=1
+  max_retries=3
+  attempt=1
+  output_file="bisect_test_output.log"
+  while [ $attempt -le $max_retries ]; do
+    echo "Attempt $attempt on $(git rev-parse HEAD)"
+    echo "Run: $test"
+    if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" >"$output_file" 2>&1; then
+      timeout_rc=0
+      break
+    else
+      timeout_rc=$?
+      echo "Test failed (code $timeout_rc), retrying…"
+      echo "--- Logs (attempt $attempt) ---"
+      sed -n '1,200p' "$output_file" || true
+      echo "------------------------------"
+      attempt=$((attempt+1))
+    fi
+  done
+  echo "Final exit code: $timeout_rc"
+  echo "::endgroup::"
+
 : << 'END'
 Usage:
   -f TEST        : test command to run (quote if it has spaces)
