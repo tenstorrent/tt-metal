@@ -328,6 +328,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->intermesh_eth_links_enabled_ = true;  // Intermesh routing is enabled on Wormhole
     this->virtualized_core_types_ = {AddressableCoreType::TENSIX, AddressableCoreType::ETH};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
+    this->num_semaphores_ = NUM_SEMAPHORES;
 
     this->eps_ = EPS_WHB0;
     this->nan_ = NAN_WHB0;

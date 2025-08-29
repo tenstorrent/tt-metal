@@ -182,7 +182,7 @@ bool test_program_specified_with_core_range_set(
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 
     std::vector<uint32_t> golden_sem_values;
-    for (uint32_t i = 0; i < tt_metal::NUM_SEMAPHORES; i++) {
+    for (uint32_t i = 0; i < tt_metal::MetalContext::instance().hal().get_num_semaphores(); i++) {
         uint32_t initial_value = i;
         tt_metal::CreateSemaphore(program, core_range_set, initial_value);
         golden_sem_values.push_back(initial_value);

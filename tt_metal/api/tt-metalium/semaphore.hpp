@@ -15,8 +15,6 @@ namespace tt {
 
 namespace tt_metal {
 
-constexpr std::uint32_t NUM_SEMAPHORES = 16;
-
 class Semaphore {
 public:
     Semaphore(const CoreRangeSet& core_range_set, uint32_t id, uint32_t initial_value);

@@ -305,6 +305,7 @@ void Hal::initialize_bh() {
     this->virtualized_core_types_ = {
         AddressableCoreType::TENSIX, AddressableCoreType::ETH, AddressableCoreType::PCIE, AddressableCoreType::DRAM};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
+    this->num_semaphores_ = NUM_SEMAPHORES;
 
     this->eps_ = EPS_BH;
     this->nan_ = NAN_BH;

@@ -1263,7 +1263,7 @@ TEST_F(UnitMeshCQFixture, TensixTestSingleSemaphoreConfigCorrectlySentSingleCore
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
-    DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
+    DummyProgramConfig config = {.cr_set = cr_set, .num_sems = MetalContext::instance().hal().get_num_semaphores()};
 
     for (const auto& device : devices_) {
         EXPECT_TRUE(
@@ -1574,7 +1574,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAllSemConfigsCorrectlySentMultiCore) {
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
         CoreRangeSet cr_set(cr);
 
-        DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
+        DummyProgramConfig config = {.cr_set = cr_set, .num_sems = MetalContext::instance().hal().get_num_semaphores()};
         EXPECT_TRUE(
             local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->mesh_command_queue(), config));
     }
@@ -1591,7 +1591,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAllSemaphoreConfigsCorrectlySentMultipleCore
         CoreRangeSet cr_set(std::vector{first_cr, second_cr});
 
         Program program;
-        DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
+        DummyProgramConfig config = {.cr_set = cr_set, .num_sems = MetalContext::instance().hal().get_num_semaphores()};
 
         vector<vector<uint32_t>> expected_semaphore_vals;
 
@@ -1847,14 +1847,14 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
             BRISC_MIDDLE_LOOP = MAX_LOOP;
             BRISC_INNER_LOOP = MAX_LOOP;
             NUM_CBS = NUM_CIRCULAR_BUFFERS;
-            NUM_SEMS = NUM_SEMAPHORES;
+            NUM_SEMS = MetalContext::instance().hal().get_num_semaphores();
             USE_MAX_RT_ARGS = true;
         } else {
             BRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
             BRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
             BRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
             NUM_CBS = rand() % (NUM_CIRCULAR_BUFFERS) + 1;
-            NUM_SEMS = rand() % (NUM_SEMAPHORES) + 1;
+            NUM_SEMS = rand() % (MetalContext::instance().hal().get_num_semaphores()) + 1;
             USE_MAX_RT_ARGS = false;
         }
 
@@ -2128,14 +2128,14 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
             BRISC_MIDDLE_LOOP = MAX_LOOP;
             BRISC_INNER_LOOP = MAX_LOOP;
             NUM_CBS = NUM_CIRCULAR_BUFFERS;
-            NUM_SEMS = NUM_SEMAPHORES;
+            NUM_SEMS = MetalContext::instance().hal().get_num_semaphores();
             USE_MAX_RT_ARGS = true;
         } else {
             BRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
             BRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
             BRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
             NUM_CBS = rand() % (NUM_CIRCULAR_BUFFERS) + 1;
-            NUM_SEMS = rand() % (NUM_SEMAPHORES) + 1;
+            NUM_SEMS = rand() % (MetalContext::instance().hal().get_num_semaphores()) + 1;
             USE_MAX_RT_ARGS = false;
         }
 
@@ -2435,13 +2435,13 @@ TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestPrograms) {
             KernelProperties kernel_properties;
             kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
             kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
-            kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
+            kernel_properties.max_num_sems = MAX_NUM_SEMS() / 2;
             this->create_kernel(program_, CoreType::ETH, false, kernel_properties);
             eth_kernel_added_to_program = true;
         }
         if (rand() % 2 == 0 || !eth_kernel_added_to_program) {
             KernelProperties kernel_properties;
-            kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
+            kernel_properties.max_num_sems = MAX_NUM_SEMS() / 2;
             this->create_kernel(program_, CoreType::WORKER, false, kernel_properties);
         }
 

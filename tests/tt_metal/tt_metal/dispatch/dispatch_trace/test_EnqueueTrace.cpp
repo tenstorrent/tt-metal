@@ -789,13 +789,13 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
             KernelProperties kernel_properties;
             kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
             kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
-            kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
+            kernel_properties.max_num_sems = MAX_NUM_SEMS() / 2;
             this->create_kernel(program, CoreType::ETH, false, kernel_properties);
             eth_kernel_added_to_program = true;
         }
         if (rand() % 2 == 0 || !eth_kernel_added_to_program) {
             KernelProperties kernel_properties;
-            kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
+            kernel_properties.max_num_sems = MAX_NUM_SEMS() / 2;
             this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
         }
         program.set_runtime_id(i);
@@ -1013,13 +1013,13 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
             KernelProperties kernel_properties;
             kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
             kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
-            kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
+            kernel_properties.max_num_sems = MAX_NUM_SEMS() / 2;
             this->create_kernel(program, CoreType::ETH, false, kernel_properties);
             eth_kernel_added_to_program = true;
         }
         if (rand() % 2 == 0 || !eth_kernel_added_to_program) {
             KernelProperties kernel_properties;
-            kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
+            kernel_properties.max_num_sems = MAX_NUM_SEMS() / 2;
             this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
         }
 

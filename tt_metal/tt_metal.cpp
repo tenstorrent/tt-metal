@@ -173,16 +173,17 @@ void ConfigureKernelGroup(
 
 std::optional<uint32_t> get_semaphore_id(const Program& program, const CoreRange& core_range, CoreType core_type) {
     std::optional<uint32_t> semaphore_id = std::nullopt;
-    std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
+    uint8_t num_semaphores = MetalContext::instance().hal().get_num_semaphores();
+    std::vector<uint32_t> semaphore_histogram(num_semaphores, 0);
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
             CoreCoord logical_core(x, y);
             auto semaphores = program.impl().semaphores_on_core(logical_core, core_type);
-            if (semaphores.size() == NUM_SEMAPHORES) {
+            if (semaphores.size() == num_semaphores) {
                 TT_THROW(
                     "Cannot add semaphore on core {}. Max number of semaphores ({}) reached!",
                     logical_core.str(),
-                    NUM_SEMAPHORES);
+                    num_semaphores);
             }
 
             for (const auto& semaphore : semaphores) {

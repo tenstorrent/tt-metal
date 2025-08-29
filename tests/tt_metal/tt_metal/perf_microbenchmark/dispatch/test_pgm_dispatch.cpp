@@ -132,7 +132,7 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
         log_info(LogTest, "  -a: number of runtime args (default {}, max {})", 0, MAX_ARGS);
         log_info(
             LogTest, " -ca: number of common runtime args multicast to all cores (default {}, max {})", 0, MAX_ARGS);
-        log_info(LogTest, "  -S: number of semaphores (default {}, max {})", 0, NUM_SEMAPHORES);
+        log_info(LogTest, "  -S: number of semaphores (default {}, max {})", 0, MetalContext::instance().hal().get_num_semaphores());
         log_info(LogTest, " -kg: number of kernel groups (default 1)");
         log_info(LogTest, " -sd: number of subdevices core ranges (default 1)");
         log_info(LogTest, "  -g: use a 4 byte global variable (additional spans");
@@ -197,8 +197,8 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
         log_fatal(tt::LogTest, "Common Runtime arg count must be 0..{}", MAX_ARGS);
         exit(0);
     }
-    if (info.n_sems > NUM_SEMAPHORES) {
-        log_fatal(tt::LogTest, "Sem count must be 0..{}", NUM_SEMAPHORES);
+    if (info.n_sems > MetalContext::instance().hal().get_num_semaphores()) {
+        log_fatal(tt::LogTest, "Sem count must be 0..{}", MetalContext::instance().hal().get_num_semaphores());
         exit(0);
     }
     if (info.n_kgs > core_x + 1) {

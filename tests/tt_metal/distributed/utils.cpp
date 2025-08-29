@@ -184,14 +184,14 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
             BRISC_MIDDLE_LOOP = MAX_LOOP;
             BRISC_INNER_LOOP = MAX_LOOP;
             NUM_CBS = NUM_CIRCULAR_BUFFERS;
-            NUM_SEMS = NUM_SEMAPHORES;
+            NUM_SEMS = MetalContext::instance().hal().get_num_semaphores();
             USE_MAX_RT_ARGS = true;
         } else {
             BRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
             BRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
             BRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
             NUM_CBS = rand() % (NUM_CIRCULAR_BUFFERS) + 1;
-            NUM_SEMS = rand() % (NUM_SEMAPHORES) + 1;
+            NUM_SEMS = rand() % (MetalContext::instance().hal().get_num_semaphores()) + 1;
             USE_MAX_RT_ARGS = false;
         }
         // Create CBs

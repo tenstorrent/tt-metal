@@ -218,6 +218,7 @@ private:
     bool intermesh_eth_links_enabled_ = false;  // set when an architecture enable intermesh routing
     std::unordered_set<AddressableCoreType> virtualized_core_types_;
     HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
+    uint8_t num_semaphores_ = 0;
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
@@ -357,6 +358,8 @@ public:
         TT_ASSERT(jit_build_query_ != nullptr);
         return *jit_build_query_;
     }
+
+    uint8_t get_num_semaphores() const { return num_semaphores_; }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }

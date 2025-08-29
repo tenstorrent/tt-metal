@@ -661,7 +661,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreSanity) {
     Program program;
     std::vector<uint32_t> expected_semaphore_values;
 
-    for (uint32_t sem = 0; sem < NUM_SEMAPHORES; sem++) {
+    for (uint32_t sem = 0; sem < MetalContext::instance().hal().get_num_semaphores(); sem++) {
         CreateSemaphore(program, full_grid, sem);
         expected_semaphore_values.push_back(sem);
     }
@@ -687,7 +687,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreDifferentPrograms) {
     std::vector<uint32_t> expected_semaphore_values_0;
     std::vector<uint32_t> expected_semaphore_values_1;
 
-    for (uint32_t sem = 0; sem < NUM_SEMAPHORES; sem++) {
+    for (uint32_t sem = 0; sem < MetalContext::instance().hal().get_num_semaphores(); sem++) {
         CreateSemaphore(program0, full_grid, sem);
         expected_semaphore_values_0.push_back(sem);
 

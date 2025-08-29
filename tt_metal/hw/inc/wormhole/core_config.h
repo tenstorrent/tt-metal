@@ -24,5 +24,6 @@ constexpr uint8_t NumEthDispatchClasses = 1;
 constexpr uint8_t noc_size_x = 10;
 constexpr uint8_t noc_size_y = 12;
 constexpr uint8_t tensix_harvest_axis = 0x1;
+constexpr uint8_t NUM_SEMAPHORES = 16;
 #define LOG_BASE_2_OF_DRAM_ALIGNMENT 5
 #define LOG_BASE_2_OF_L1_ALIGNMENT 4

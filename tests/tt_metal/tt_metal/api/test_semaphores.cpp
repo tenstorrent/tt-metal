@@ -101,7 +101,7 @@ void create_and_read_max_num_semaphores(
     auto& program = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
     std::vector<uint32_t> golden;
-    for (uint32_t i = 0; i < tt::tt_metal::NUM_SEMAPHORES; i++) {
+    for (uint32_t i = 0; i < tt::tt_metal::MetalContext::instance().hal().get_num_semaphores(); i++) {
         uint32_t initial_value = i;
         auto semaphore_id = tt_metal::CreateSemaphore(program, core_range, initial_value);
         golden.push_back(initial_value);
@@ -120,7 +120,7 @@ void create_and_read_max_num_semaphores(
         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
             auto logical_core = CoreCoord{x, y};
             std::vector<uint32_t> res;
-            for (uint32_t i = 0; i < tt::tt_metal::NUM_SEMAPHORES; i++) {
+            for (uint32_t i = 0; i < tt::tt_metal::MetalContext::instance().hal().get_num_semaphores(); i++) {
                 std::vector<uint32_t> single_val;
                 uint32_t semaphore_addr =
                     workload.get_sem_base_addr(mesh_device, logical_core, CoreType::WORKER) +

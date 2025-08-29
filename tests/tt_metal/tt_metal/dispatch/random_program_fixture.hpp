@@ -31,7 +31,7 @@ protected:
     static const uint32_t COMMON_RUNTIME_ARGS_VAL_OFFSET = 100;
 
     static const uint32_t MIN_NUM_SEMS = 0;
-    static const uint32_t MAX_NUM_SEMS = NUM_SEMAPHORES;
+    static uint32_t MAX_NUM_SEMS() { return MetalContext::instance().hal().get_num_semaphores(); }
     static const uint32_t SEM_VAL = 1;
 
     static const uint32_t MIN_NUM_CBS = 0;
@@ -60,7 +60,7 @@ protected:
             min_num_rt_args(MIN_NUM_RUNTIME_ARGS),
             max_num_rt_args(MAX_NUM_RUNTIME_ARGS),
             min_num_sems(MIN_NUM_SEMS),
-            max_num_sems(MAX_NUM_SEMS),
+            max_num_sems(MAX_NUM_SEMS()),
             min_num_cbs(MIN_NUM_CBS),
             max_num_cbs(MAX_NUM_CBS) {}
     };
@@ -129,7 +129,7 @@ protected:
         const CoreRangeSet& cores,
         const CoreType core_type = CoreType::WORKER,
         const uint32_t min = MIN_NUM_SEMS,
-        const uint32_t max = MAX_NUM_SEMS) {
+        const uint32_t max = MAX_NUM_SEMS()) {
         const uint32_t num_sems = this->generate_random_num(min, max);
         std::vector<uint32_t> sem_ids;
         for (uint32_t i = 0; i < num_sems; i++) {
@@ -196,7 +196,7 @@ protected:
         small_kernel_properties.max_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS * (2.0 / 10);
         small_kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS * (3.0 / 10);
         small_kernel_properties.min_num_sems = MIN_NUM_SEMS;
-        small_kernel_properties.max_num_sems = MAX_NUM_SEMS * (3.0 / 10);
+        small_kernel_properties.max_num_sems = MAX_NUM_SEMS() * (3.0 / 10);
         small_kernel_properties.min_num_cbs = MIN_NUM_CBS;
         small_kernel_properties.max_num_cbs = MAX_NUM_CBS * (3.0 / 10);
         small_kernel_properties.min_num_rt_args =
@@ -212,8 +212,8 @@ protected:
         large_kernel_properties.max_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS;
         large_kernel_properties.min_num_rt_args = MAX_NUM_RUNTIME_ARGS * (9.0 / 10);
         large_kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS;
-        large_kernel_properties.min_num_sems = MAX_NUM_SEMS * (8.0 / 10);
-        large_kernel_properties.max_num_sems = MAX_NUM_SEMS;
+        large_kernel_properties.min_num_sems = MAX_NUM_SEMS() * (8.0 / 10);
+        large_kernel_properties.max_num_sems = MAX_NUM_SEMS();
         large_kernel_properties.min_num_cbs = MAX_NUM_CBS * (8.0 / 10);
         large_kernel_properties.max_num_cbs = MAX_NUM_CBS;
         return large_kernel_properties;
