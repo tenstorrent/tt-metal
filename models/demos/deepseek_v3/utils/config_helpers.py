@@ -594,7 +594,7 @@ def save_and_get_path(path, tensor):
     )  # TODO: bring regular tensor saving back once Issue #26763 is resolved
 
 
-def get_mesh_coords(mesh_shape: list[int], row: int = None, col: int = None) -> set[ttnn.MeshCoordinate]:
+def get_mesh_coords(mesh_shape: list[int], row: int = None, col: int = None) -> list[ttnn.MeshCoordinate]:
     """Get mesh coordinates for a given mesh shape and optional row and column indices."""
     if row:
         assert 0 <= row < mesh_shape[0], "Row index out of bounds"
