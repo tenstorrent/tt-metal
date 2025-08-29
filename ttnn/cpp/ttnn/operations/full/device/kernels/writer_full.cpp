@@ -15,13 +15,13 @@ constexpr uint32_t onetile = 1;
 void kernel_main() {
     uint32_t output_addr = get_arg_val<uint32_t>(0);
     uint32_t fill_value = get_arg_val<uint32_t>(1);
-    uint32_t num_tiles = get_arg_val<uint32_t>(2);
+    uint32_t num_pages_per_core = get_arg_val<uint32_t>(2);
     uint32_t start_id = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_value = get_compile_time_arg_val(0);
     constexpr uint32_t elems_per_page = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
-    const uint32_t cb_page_size = get_tile_size(cb_value);
+    constexpr uint32_t page_size = get_compile_time_arg_val(2);
+    constexpr auto dst_args = TensorAccessorArgs<3>();
 
     value val;
     val.u = fill_value;
@@ -32,29 +32,29 @@ void kernel_main() {
 
 #ifdef OUTPUT_DTYPE_BFLOAT16
     auto ptr = reinterpret_cast<uint16_t*>(write_addr);
-    for (uint32_t i = 0; i < 1024; ++i) {
+    for (uint32_t i = 0; i < elems_per_page; ++i) {
         ptr[i] = val.u >> 16;
     }
 #endif
 #ifdef OUTPUT_DTYPE_INT32
     auto ptr = reinterpret_cast<uint32_t*>(write_addr);
-    for (uint32_t i = 0; i < 1024; ++i) {
+    for (uint32_t i = 0; i < elems_per_page; ++i) {
         ptr[i] = fill_value;
     }
 #endif
 #ifdef OUTPUT_DTYPE_FLOAT32
     auto ptr = reinterpret_cast<float*>(write_addr);
-    for (uint32_t i = 0; i < 1024; ++i) {
+    for (uint32_t i = 0; i < elems_per_page; ++i) {
         ptr[i] = val.f;
     }
 #endif
     cb_push_back(cb_value, 1);
 
-    const auto s = TensorAccessor(dst_args, output_addr, cb_page_size);
+    const auto s = TensorAccessor(dst_args, output_addr, page_size);
 
     cb_wait_front(cb_value, 1);
 
-    uint32_t end_id = start_id + num_tiles;
+    uint32_t end_id = start_id + num_pages_per_core;
     for (std::uint32_t i = start_id; i < end_id; i++) {
         const auto cb_value_addr = get_read_ptr(cb_value);
         noc_async_write_tile(i, s, cb_value_addr);
