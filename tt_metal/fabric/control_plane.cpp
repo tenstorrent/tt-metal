@@ -1936,13 +1936,17 @@ void ControlPlane::generate_local_intermesh_link_table() {
     intermesh_link_table_.local_mesh_id = local_mesh_binding_.mesh_ids[0];
     intermesh_link_table_.local_host_rank_id = this->get_local_host_rank_id_binding();
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
-        auto local_board_id = cluster.get_unique_chip_ids().at(chip_id);
-        chip_id_to_asic_id_[chip_id] = local_board_id;
+        auto local_board_id = cluster.get_unique_chip_ids().find(chip_id);
+        if (local_board_id == cluster.get_unique_chip_ids().end()) {
+            chip_id_to_asic_id_[chip_id] = chip_id;
+            continue;
+        }
+        chip_id_to_asic_id_[chip_id] = local_board_id->second;
         for (const auto& [eth_core, chan_id] : this->get_intermesh_eth_links(chip_id)) {
             auto [remote_board_id, remote_chan_id] =
                 cluster.get_ethernet_connections_to_remote_devices().at(chip_id).at(chan_id);
             auto local_eth_chan_desc = EthChanDescriptor{
-                .board_id = local_board_id,
+                .board_id = local_board_id->second,
                 .chan_id = chan_id,
             };
             auto remote_eth_chan_desc = EthChanDescriptor{
