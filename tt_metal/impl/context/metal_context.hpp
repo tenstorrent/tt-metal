@@ -164,7 +164,7 @@ private:
     // We are using a thread_local to allow each thread to have its own command queue id stack.
     // This not only allows consumers to set active command queue for a thread
     // but to also easily push/pop ids to temporarily change the current cq id.
-    thread_local CommandQueueIdStack command_queue_id_stack_for_thread_;
+    static thread_local CommandQueueIdStack command_queue_id_stack_for_thread_;
 
     // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
     // is expected that any downed devices/links will result in some sort of error condition being

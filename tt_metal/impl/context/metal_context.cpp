@@ -1242,10 +1242,10 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
 }
 
 MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() {
-    return command_queue_id_stack_for_thread_;
+    return MetalContext::command_queue_id_stack_for_thread_;
 }
 const MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() const {
-    return command_queue_id_stack_for_thread_;
+    return MetalContext::command_queue_id_stack_for_thread_;
 }
 
 }  // namespace tt::tt_metal
