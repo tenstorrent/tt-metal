@@ -242,7 +242,8 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t dateline_upstream_receiver_channel_skip_idx = 1;
     static constexpr std::size_t dateline_upstream_adjcent_sender_channel_skip_idx = 2;
 
-    // for fabric with tensix extension, only one sender channel will be present on fabric router
+    // linear/mesh: for fabric with tensix extension, only one sender channel will be present on fabric router
+    // ring/torus: for fabric with tensix extension, two sender channel will be present on fabric router (vc0 and vc1)
     static constexpr std::size_t num_sender_channels_with_tensix_config = 1;
     static constexpr std::size_t num_sender_channels_with_tensix_config_deadlock_avoidance = 2;
 
