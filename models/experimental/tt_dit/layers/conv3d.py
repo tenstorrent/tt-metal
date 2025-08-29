@@ -276,7 +276,6 @@ class ContextParallelConv3d:
                 ],
             )
             self.parallel_manager.ping_pong_idx = 1 - self.parallel_manager.ping_pong_idx
-            breakpoint()
             halos_orig_shape = halos.shape
             halo_chunks = ttnn.chunk(halos, self.halos_chunk_map[halos_orig_shape[3]], 1)
             ttnn.deallocate(halos)
@@ -295,14 +294,15 @@ class ContextParallelConv3d:
                     halos_reshape_back = ttnn.reallocate(halos_reshape_back)
                 for k in range(CHUNK_SIZE * i, CHUNK_SIZE * (i + 1)):
                     ttnn.deallocate(split_tiles[k])
-            halos_reshape_back = ttnn.reshape(halos_reshape_back, (32, -1))
-            halos_reshape_back = ttnn.matmul(self.proj, halos_reshape_back)
-            halos_reshape_back = ttnn.reshape(halos_reshape_back, device_tensors_front_pad.shape)
-            halos_reshape_back = ttnn.add(device_tensors_front_pad, halos_reshape_back)
-            halos_reshape_back = ttnn.to_layout(halos_reshape_back, layout=ttnn.ROW_MAJOR_LAYOUT)
-            x_pad_NTHWC = ttnn.concat([halos_reshape_back, x_NTHWC], dim=1)
-            ttnn.deallocate(device_tensors_front_pad)
+            halos_reshape = ttnn.reshape(halos_reshape_back, (32, -1))
             ttnn.deallocate(halos_reshape_back)
+            halos_reshape = ttnn.matmul(self.proj, halos_reshape)
+            halos_reshape = ttnn.reshape(halos_reshape, device_tensors_front_pad.shape)
+            halos_reshape = ttnn.add(device_tensors_front_pad, halos_reshape)
+            halos_reshape = ttnn.to_layout(halos_reshape, layout=ttnn.ROW_MAJOR_LAYOUT)
+            x_pad_NTHWC = ttnn.concat([halos_reshape, x_NTHWC], dim=1)
+            ttnn.deallocate(device_tensors_front_pad)
+            ttnn.deallocate(halos_reshape)
             ttnn.deallocate(x_NTHWC)
 
         out_NTHWC = ttnn.experimental.conv3d(
