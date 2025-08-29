@@ -18,6 +18,7 @@
 #include "tt_metal/impl/allocator/bank_manager.hpp"
 #include <unordered_map>
 #include <algorithm>
+#include <numeric>
 
 namespace unit_tests::test_overlapped_bank_manager {}  // namespace unit_tests::test_overlapped_bank_manager
 
@@ -107,23 +108,19 @@ TEST_P(StateDependenciesParamTest, BuildsAdjacencyAndInfersAllowedStates) {
 
     SD sd{deps};
 
-    // Validate allowed states
-    std::vector<uint32_t> got_states;
-    got_states.reserve(sd.adjacency.size());
-    for (const auto& kv : sd.adjacency) {
-        got_states.push_back(kv.first.value);
-    }
+    // Validate allowed states: indices 0..N-1
+    std::vector<uint32_t> got_states(sd.adjacency.size());
+    std::iota(got_states.begin(), got_states.end(), 0);
     std::sort(got_states.begin(), got_states.end());
     EXPECT_EQ(got_states, sorted(tc.expected_states));
     EXPECT_EQ(sd.num_states(), got_states.size());
 
     // Validate edges
     for (auto s : got_states) {
-        auto it = sd.adjacency.find(SD::StateId{s});
-        ASSERT_NE(it, sd.adjacency.end());
+        const auto& neigh = sd.adjacency[s];
         std::vector<uint32_t> got;
-        got.reserve(it->second.size());
-        for (auto d : it->second) {
+        got.reserve(neigh.size());
+        for (auto d : neigh) {
             got.push_back(d.value);
         }
         std::sort(got.begin(), got.end());
@@ -148,15 +145,15 @@ INSTANTIATE_TEST_SUITE_P(
             /*input=*/{{0, {1}}, {1, {0}}},
             /*expected_states=*/{0, 1},
             /*expected_edges=*/{{0, {1}}, {1, {0}}}},
-        // Sparse keys; values-only nodes included
+        // Sparse keys; values-only nodes included; indices are 0..7
         StateDepsCase{
             /*input=*/{{0, {2}}, {7, {3}}},
-            /*expected_states=*/{0, 2, 3, 7},
+            /*expected_states=*/{0, 1, 2, 3, 4, 5, 6, 7},
             /*expected_edges=*/{{0, {2}}, {7, {3}}, {2, {}}, {3, {}}}},
         // Fan-out
         StateDepsCase{
             /*input=*/{{5, {1, 2, 3}}},
-            /*expected_states=*/{1, 2, 3, 5},
+            /*expected_states=*/{0, 1, 2, 3, 4, 5},
             /*expected_edges=*/{{5, {1, 2, 3}}, {1, {}}, {2, {}}, {3, {}}}}));
 
 }  // namespace tt::tt_metal

@@ -162,23 +162,28 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::subtract_ranges(
 
 // --- StateDependencies impl ---
 BankManager::StateDependencies::StateDependencies() : adjacency() {
-    // Default: single state with no dependencies
-    adjacency.emplace(StateId{0}, tt::stl::SmallVector<StateId>{});
+    // Default: single state (0) with no dependencies
+    adjacency.resize(1);
 }
 
 BankManager::StateDependencies::StateDependencies(
     const std::unordered_map<StateId, tt::stl::SmallVector<StateId>, Hasher>& deps) {
-    adjacency.clear();
-    for (const auto& kv : deps) {
-        adjacency.emplace(kv.first, kv.second);
-    }
-    // Ensure states that appear only as dependencies are present as keys
-    for (const auto& kv : deps) {
-        for (const auto dep_state : kv.second) {
-            if (adjacency.find(dep_state) == adjacency.end()) {
-                adjacency.emplace(dep_state, tt::stl::SmallVector<StateId>{});
+    // Determine total number of states as 1 + max id seen anywhere (keys or values)
+    uint32_t max_id = 0;
+    if (!deps.empty()) {
+        for (const auto& kv : deps) {
+            max_id = std::max(max_id, kv.first.value);
+            for (const auto dep_state : kv.second) {
+                max_id = std::max(max_id, dep_state.value);
             }
         }
+        adjacency.resize(static_cast<size_t>(max_id) + 1);
+        for (const auto& kv : deps) {
+            adjacency[kv.first.value] = kv.second;
+        }
+    } else {
+        // If empty, default to single state 0
+        adjacency.resize(1);
     }
 }
 uint32_t BankManager::StateDependencies::num_states() const { return static_cast<uint32_t>(adjacency.size()); }
@@ -192,9 +197,8 @@ void BankManager::init_allocators_across_states(DeviceAddr size_bytes, uint32_t 
     allocator_offsets_.resize(n);
 
     // Build reverse dependency list: for each state s, which states depend on s
-    for (const auto& kv : dependencies_.adjacency) {
-        const uint32_t from = kv.first.value;
-        for (const auto dep : kv.second) {
+    for (uint32_t from = 0; from < dependencies_.adjacency.size(); ++from) {
+        for (const auto dep : dependencies_.adjacency[from]) {
             dependents_[dep.value].push_back(from);
         }
     }
@@ -395,7 +399,8 @@ uint64_t BankManager::allocate_buffer(
     return address.value();
 }
 
-void BankManager::deallocate_buffer_(DeviceAddr address, BankManager::StateDependencies::StateId state) {
+void BankManager::deallocate_buffer(DeviceAddr address, BankManager::StateDependencies::StateId state) {
+    this->assert_valid_state(state);
     // Helper: update overlays and delegate to allocator
     auto it = allocated_buffers_[state.value].find(address);
     if (it != allocated_buffers_[state.value].end()) {
@@ -411,11 +416,6 @@ void BankManager::deallocate_buffer_(DeviceAddr address, BankManager::StateDepen
     allocators_[state.value]->deallocate(address);
 }
 
-void BankManager::deallocate_buffer(DeviceAddr address, BankManager::StateDependencies::StateId state) {
-    this->assert_valid_state(state);
-    this->deallocate_buffer_(address, state);
-}
-
 void BankManager::deallocate_all(BankManager::StateDependencies::StateId state) {
     this->assert_valid_state(state);
     std::vector<DeviceAddr> addrs;
@@ -424,7 +424,7 @@ void BankManager::deallocate_all(BankManager::StateDependencies::StateId state) 
         addrs.push_back(kv.first);
     }
     for (DeviceAddr addr : addrs) {
-        this->deallocate_buffer_(addr, state);
+        this->deallocate_buffer(addr, state);
     }
 }
 

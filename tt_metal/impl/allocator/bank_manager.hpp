@@ -43,7 +43,7 @@ public:
             size_t operator()(const StateId& s) const noexcept { return std::hash<uint32_t>{}(s.value); }
         };
 
-        std::unordered_map<StateId, tt::stl::SmallVector<StateId>, Hasher> adjacency{};
+        tt::stl::SmallVector<tt::stl::SmallVector<StateId>> adjacency{};
 
         StateDependencies();
         explicit StateDependencies(
@@ -141,7 +141,6 @@ private:
     void init_allocators_across_states(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset);
 
     // State-dependent methods
-    void deallocate_buffer_(DeviceAddr address, StateDependencies::StateId state);
     void assert_valid_state(StateDependencies::StateId state) const;
 
     // Helpers to compute union of all source reservations for a state and subtract from free ranges
