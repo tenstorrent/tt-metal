@@ -320,18 +320,6 @@ jobs:
         with:
           run_args: pytest -n auto models/experimental/efficientnetb0/tests/perf/ -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Merge all the generated reports
-        timeout-minutes: 10
-        uses: ./.github/actions/docker-run
-        with:
-          docker_image: ${{ inputs.docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: ${{ env.DOCKER_OPTS }}
-          run_args: |
-            # Merge all the generated reports
-            env python3 models/perf/merge_perf_results.py CHECK
-        #run: export PYTHONPATH=$(pwd) && env python3 models/perf/merge_perf_results.py CHECK
-        if: ${{ !cancelled() }}
       - name: Run performance regressions
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/docker-run
@@ -352,7 +340,20 @@ jobs:
 
             ## Merge all the generated reports
             env python3 models/perf/merge_perf_results.py
-      #   if: ${{ !cancelled() && matrix.test-info.model-group != 'llm_javelin' && matrix.test-info.model-group != 'other' }}
+          if: ${{ !cancelled() && matrix.test-info.model-group != 'llm_javelin' && matrix.test-info.model-group != 'other' }}
+      - name: Merge all the generated reports
+        timeout-minutes: 10
+        uses: ./.github/actions/docker-run
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: ${{ env.DOCKER_OPTS }}
+          run_args: |
+            # Merge all the generated reports
+            env python3 models/perf/merge_perf_results.py CHECK
+        #run: export PYTHONPATH=$(pwd) && env python3 models/perf/merge_perf_results.py CHECK
+        if: ${{ !cancelled() }}
+      
       # TODO: Fix the pipeline before enabling notifications.
       #- uses: tenstorrent/tt-metal/.github/actions/slack-report@main
       #  if: ${{ failure() }}
