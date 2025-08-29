@@ -25,10 +25,10 @@ echo "Virtual environment ready at $PYTHON_ENV_DIR"
 source "$PYTHON_ENV_DIR/bin/activate"
 
 # Make in-tree modules win and avoid user site interference
-export PYTHONPATH="$TT_METAL_HOME:${PYTHONPATH:-}"
+export PYTHONPATH="$TT_METAL_HOME"
 export PYTHONNOUSERSITE=1
-export PYTHONFAULTHANDLER=${PYTHONFAULTHANDLER:-1}
-export PYTHONMALLOC=${PYTHONMALLOC:-debug}
+export PYTHONFAULTHANDLER=1
+export PYTHONMALLOC="debug"
 
 : << 'END'
 Usage:
