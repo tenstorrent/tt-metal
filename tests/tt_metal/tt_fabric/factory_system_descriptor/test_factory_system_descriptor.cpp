@@ -332,6 +332,80 @@ public:
         output_file.close();
     }
 
+    void get_all_qsfp_connections(
+        std::shared_ptr<ResolvedGraphInstance> instance,
+        std::vector<std::pair<std::tuple<uint32_t, uint32_t, uint32_t>, std::tuple<uint32_t, uint32_t, uint32_t>>>&
+            conn_list) {
+        PortType port_type = PortType::QSFP;
+        for (const auto& [start, end] : instance->internal_connections[port_type]) {
+            auto host_id1 = resolve_pod_from_path(std::get<0>(start), instance);
+
+            std::tuple<uint32_t, uint32_t, uint32_t> s_tuple =
+                std::make_tuple(host_id1.second, std::get<1>(start), std::get<2>(start));
+
+            auto host_id2 = resolve_pod_from_path(std::get<0>(end), instance);
+
+            std::tuple<uint32_t, uint32_t, uint32_t> e_tuple =
+                std::make_tuple(host_id2.second, std::get<1>(end), std::get<2>(end));
+            conn_list.push_back(std::make_pair(s_tuple, e_tuple));
+        }
+
+        for (const auto& [child_name, child_instance] : instance->pods) {
+            for (const auto& [start, end] : child_instance.inter_board_connections.at(port_type)) {
+                std::tuple<uint32_t, uint32_t, uint32_t> s_tuple =
+                    std::make_tuple(child_instance.host_id, start.first, start.second);
+
+                std::tuple<uint32_t, uint32_t, uint32_t> e_tuple =
+                    std::make_tuple(child_instance.host_id, end.first, end.second);
+                conn_list.push_back(std::make_pair(s_tuple, e_tuple));
+            }
+            // child_instance.inter_board_connections[port_type];
+
+            // get_all_connections_of_type(child_instance, port_type);
+        }
+
+        for (const auto& [child_name, child_instance] : instance->subgraphs) {
+            get_all_qsfp_connections(child_instance, conn_list);
+        }
+    }
+
+    void emit_csv_cabling_guide(const std::string& output_path) {
+        std::vector<std::pair<std::tuple<uint32_t, uint32_t, uint32_t>, std::tuple<uint32_t, uint32_t, uint32_t>>>
+            conn_list;
+
+        get_all_qsfp_connections(cluster.root_instance, conn_list);
+
+        std::filesystem::create_directories(std::filesystem::path(output_path).parent_path());
+        std::ofstream output_file(output_path);
+        if (!output_file.is_open()) {
+            throw std::runtime_error("Failed to open output file: " + output_path);
+        }
+
+        output_file.fill('0');
+        output_file << "Source,,,,,,,Destination,,,,,,,Cable Length,Cable Type" << std::endl;
+        output_file << "Hall,Aisle,Rack,U,Tray,Port,Label,Hall,Aisle,Rack,U,Tray,Port,Label,," << std::endl;
+
+        for (const auto& [start, end] : conn_list) {
+            auto host_id1 = std::get<0>(start);
+            auto tray_id1 = std::get<1>(start);
+            auto port_id1 = std::get<2>(start);
+
+            auto host_id2 = std::get<0>(end);
+            auto tray_id2 = std::get<1>(end);
+            auto port_id2 = std::get<2>(end);
+
+            const auto& host1 = deployment_hosts[host_id1];
+            const auto& host2 = deployment_hosts[host_id2];
+
+            output_file << host1.hall() << "," << host1.aisle() << "," << std::setw(2) << host1.rack() << ","
+                        << std::setw(2) << host1.shelf_u() << "," << tray_id1 << "," << port_id1 << ",," << host2.hall()
+                        << "," << host2.aisle() << "," << std::setw(2) << host2.rack() << "," << std::setw(2)
+                        << host2.shelf_u() << "," << tray_id2 << "," << port_id2
+                        << ",,,"  // Cable length and type left blank
+                        << std::endl;
+        }
+    }
+
 private:
     // Build pod from descriptor with port connections and validation
     Pod build_pod(const tt::fsd::proto::PodDescriptor& pod_descriptor, uint32_t host_id) {
@@ -1146,6 +1220,7 @@ TEST(Cluster, TestFactorySystemDescriptor16LB) {
     CablingGenerator cabling_generator(cluster_descriptor, deployment_descriptor);
 
     cabling_generator.emit_textproto_factory_system_descriptor("fsd/factory_system_descriptor_16_n300_lb.textproto");
+    cabling_generator.emit_csv_cabling_guide("fsd/cabling_guide_16_n300_lb.csv");
 
     // Validate the FSD against the discovered GSD using the common utility function
     validate_fsd_against_gsd(
@@ -1168,6 +1243,7 @@ TEST(Cluster, TestFactorySystemDescriptor5LB) {
 
     // Generate the FSD (textproto format)
     cabling_generator.emit_textproto_factory_system_descriptor("fsd/factory_system_descriptor_5_n300_lb.textproto");
+    cabling_generator.emit_csv_cabling_guide("fsd/cabling_guide_5_n300_lb.csv");
 
     // Validate the FSD against the discovered GSD using the common utility function
     validate_fsd_against_gsd(
