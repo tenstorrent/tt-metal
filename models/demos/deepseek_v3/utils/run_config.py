@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import fields, is_dataclass
 from enum import Enum
 from types import NoneType
-from typing import Any, Callable, overload
+from typing import Any, overload
 
 from loguru import logger
 
