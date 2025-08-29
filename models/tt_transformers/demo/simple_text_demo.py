@@ -506,7 +506,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
-            4,  # data_parallel
+            1,  # data_parallel
             True,  # token_accuracy
             False,  # stress_test
             False,  # enable_trace -> Teacher forcing does not work if it is on
