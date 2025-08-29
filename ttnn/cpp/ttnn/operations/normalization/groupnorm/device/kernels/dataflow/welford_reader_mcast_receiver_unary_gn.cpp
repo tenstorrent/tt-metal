@@ -83,6 +83,9 @@ void kernel_main() {
     constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(16);
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(17);
     constexpr uint32_t num_out_blocks = get_compile_time_arg_val(18);
+    // These are numbers in absolute terms, on a per group, per batch without tiling
+    constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(19);
+    constexpr uint32_t num_rows_per_group = get_compile_time_arg_val(20);
 
     constexpr auto src0_args = TensorAccessorArgs<19>();
     constexpr auto out_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
@@ -251,7 +254,7 @@ void kernel_main() {
                         }
                     }
 
-                    auto local_result = combine_welford<32, 1, 1>(p_local_means, p_local_vars);
+                    auto local_result = combine_welford<32, num_channels_per_group * num_rows_per_group / 32, 1>(p_local_means, p_local_vars);
                     DPRINT << "local mean: " << local_result.mean << " local var: " << local_result.variance << " local count: " << local_result.count << ENDL();
 
                     // Write this to cb_ex_global
