@@ -167,6 +167,29 @@ inline void calculate_comp_uint16() {
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_eqz_uint32() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        vUInt v = dst_reg[0];
+        vUInt zero = 0;
+        dst_reg[0] = zero;
+        v_if(v == zero) { dst_reg[0] = 1; }
+        v_endif;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_nez_uint32() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        vUInt v = dst_reg[0];
+        vUInt zero = 0;
+        v_if(v != zero) { dst_reg[0] = 1; }
+        v_endif;
+        dst_reg++;
+    }
+}
+
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_unary_int(int scalar) {
     // Convert both operands to two's complement format
