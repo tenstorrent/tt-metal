@@ -87,17 +87,6 @@ fresh_clean() {
   # Nuke build outputs but keep venv/cache
   git reset --hard
   rm -rf build build_Release build_Debug || true
-
-  # Remove any installed wheels that could shadow the tree
-  python - <<'PY'
-import sys, subprocess
-for pkg in ("ttnn","tt_lib","tt_metal"):
-    try:
-        subprocess.run([sys.executable,"-m","pip","uninstall","-y",pkg],
-                       check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
-PY
 }
 
 # After building, verify we import from the workspace
