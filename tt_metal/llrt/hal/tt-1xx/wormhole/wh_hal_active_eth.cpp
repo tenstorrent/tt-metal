@@ -95,8 +95,6 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = sizeof(uint32_t);
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_LINK_REMOTE_INFO)] =
-        eth_l1_mem::address_map::ETH_LINK_REMOTE_INFO_ADDR;
     // Base FW api not supported on WH
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
 
