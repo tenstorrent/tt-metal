@@ -129,7 +129,7 @@ def test_full_callback(device, input_shape, fill_value, layout):
     "fill_value",
     [
         0.0,
-        # 1.0,
+        1.0,
     ],
 )
 @pytest.mark.parametrize(
