@@ -171,7 +171,7 @@ def prepare_device(mesh_device, use_tp):
 )
 @pytest.mark.parametrize(
     "prompt",
-    (["An astronaut riding a green horse", "A dog in a red hat"],),
+    (["An astronaut riding a green horse"],),
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
@@ -184,7 +184,7 @@ def prepare_device(mesh_device, use_tp):
 @pytest.mark.parametrize(
     "vae_on_device",
     [
-        (True),
+        (False),
     ],
 )
 @pytest.mark.parametrize(
@@ -196,7 +196,7 @@ def prepare_device(mesh_device, use_tp):
 @pytest.mark.parametrize(
     "capture_trace",
     [
-        (True),
+        (False),
     ],
 )
 @pytest.mark.parametrize(
