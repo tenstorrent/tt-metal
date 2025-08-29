@@ -28,6 +28,8 @@ struct StateDependenciesParam {
         input;
     // Expected dependencies per state (missing keys imply empty list)
     tt::tt_metal::BankManager::StateDependencies::AdjacencyList expected_dependencies;
+    // Expected reverse edges: for each state, which states depend on it
+    tt::tt_metal::BankManager::StateDependencies::AdjacencyList expected_dependents;
 };
 
 }  // namespace
@@ -39,7 +41,8 @@ using StateId = BankManager::StateDependencies::StateId;
 
 TEST(StateDependencies, DefaultStateDependencies) {
     BankManager::StateDependencies state_dependencies;
-    EXPECT_EQ(state_dependencies.adjacency, BankManager::StateDependencies::AdjacencyList{{}});
+    EXPECT_EQ(state_dependencies.dependencies, BankManager::StateDependencies::AdjacencyList{{}});
+    EXPECT_EQ(state_dependencies.dependents, BankManager::StateDependencies::AdjacencyList{{}});
 }
 
 class StateDependenciesParamTest : public ::testing::TestWithParam<StateDependenciesParam> {};
@@ -50,7 +53,9 @@ TEST_P(StateDependenciesParamTest, BuildsAdjacencyAndInfersAllowedStates) {
     BankManager::StateDependencies state_dependencies{params.input};
 
     // Validate dependencies
-    EXPECT_EQ(state_dependencies.adjacency, params.expected_dependencies);
+    EXPECT_EQ(state_dependencies.dependencies, params.expected_dependencies);
+    // Validate dependents
+    EXPECT_EQ(state_dependencies.dependents, params.expected_dependents);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -60,23 +65,48 @@ INSTANTIATE_TEST_SUITE_P(
         // Empty input
         StateDependenciesParam{
             /*input=*/{},
-            /*expected_dependencies=*/{{}}},
+            /*expected_dependencies=*/{{}},
+            /*expected_dependents=*/{{}}},
         // Single state default behavior (explicit input)
         StateDependenciesParam{
             /*input=*/{{StateId{0}, {}}},
-            /*expected_dependencies=*/{{}}},
+            /*expected_dependencies=*/{{}},
+            /*expected_dependents=*/{{}}},
         // Two-way dependency
         StateDependenciesParam{
             /*input=*/{{StateId{0}, {StateId{1}}}, {StateId{1}, {StateId{0}}}},
-            /*expected_dependencies=*/{{StateId{1}}, {StateId{0}}}},
+            /*expected_dependencies=*/{{StateId{1}}, {StateId{0}}},
+            /*expected_dependents=*/{{StateId{1}}, {StateId{0}}}},
         // Sparse keys with one dependency specified
         StateDependenciesParam{
             /*input=*/{{StateId{3}, {StateId{0}, StateId{1}}}},
-            /*expected_dependencies=*/{{}, {}, {}, {StateId{0}, StateId{1}}}},
+            /*expected_dependencies=*/{{}, {}, {}, {StateId{0}, StateId{1}}},
+            /*expected_dependents=*/{{StateId{3}}, {StateId{3}}, {}, {}}},
         // Sparse keys with one dependency specified (value of dependents imply more states)
         StateDependenciesParam{
             /*input=*/{{StateId{1}, {StateId{3}}}},
-            /*expected_dependencies=*/{{}, {StateId{3}}, {}, {}}}));
+            /*expected_dependencies=*/{{}, {StateId{3}}, {}, {}},
+            /*expected_dependents=*/{{}, {}, {}, {StateId{1}}}},
+        // Fan-in: 1,2,3 depend on 0
+        StateDependenciesParam{
+            /*input=*/{{StateId{1}, {StateId{0}}}, {StateId{2}, {StateId{0}}}, {StateId{3}, {StateId{0}}}},
+            /*expected_dependencies=*/{{}, {StateId{0}}, {StateId{0}}, {StateId{0}}},
+            /*expected_dependents=*/{{StateId{1}, StateId{2}, StateId{3}}, {}, {}, {}}},
+        // Fan-out: 0 depends on 1,2,3
+        StateDependenciesParam{
+            /*input=*/{{StateId{0}, {StateId{1}, StateId{2}, StateId{3}}}},
+            /*expected_dependencies=*/{{StateId{1}, StateId{2}, StateId{3}}, {}, {}, {}},
+            /*expected_dependents=*/{{}, {StateId{0}}, {StateId{0}}, {StateId{0}}}},
+        // Chain: 0->1->2->3
+        StateDependenciesParam{
+            /*input=*/{{StateId{0}, {StateId{1}}}, {StateId{1}, {StateId{2}}}, {StateId{2}, {StateId{3}}}},
+            /*expected_dependencies=*/{{StateId{1}}, {StateId{2}}, {StateId{3}}, {}},
+            /*expected_dependents=*/{{}, {StateId{0}}, {StateId{1}}, {StateId{2}}}},
+        // Cycle: 0->1->2->0
+        StateDependenciesParam{
+            /*input=*/{{StateId{0}, {StateId{1}}}, {StateId{1}, {StateId{2}}}, {StateId{2}, {StateId{0}}}},
+            /*expected_dependencies=*/{{StateId{1}}, {StateId{2}}, {StateId{0}}},
+            /*expected_dependents=*/{{StateId{2}}, {StateId{0}}, {StateId{1}}}}));
 
 TEST_F(DeviceSingleCardBufferFixture, TestOverlappedBankManager) {
     // This test sets up a BankManager for DRAM and L1, mimicking Allocator initialization.

@@ -163,14 +163,16 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::subtract_ranges(
 // --- StateDependencies impl ---
 BankManager::StateDependencies::StateDependencies() {
     // Default: single state (0) with no dependencies
-    adjacency = AdjacencyList{{}};
+    dependencies = AdjacencyList{{}};
+    dependents = AdjacencyList{{}};
 }
 
 BankManager::StateDependencies::StateDependencies(
     const std::unordered_map<StateId, ttsl::SmallVector<StateId>>& dependencies_map) {
     // Determine total number of states as max state id seen anywhere (keys or values)
     if (dependencies_map.empty()) {
-        adjacency = AdjacencyList{{}};
+        dependencies = AdjacencyList{{}};
+        dependents = AdjacencyList{{}};
     } else {
         uint32_t max_id = 0;
         for (const auto& kv : dependencies_map) {
@@ -179,14 +181,24 @@ BankManager::StateDependencies::StateDependencies(
                 max_id = std::max(max_id, dep_state.value);
             }
         }
-        adjacency.resize(static_cast<size_t>(max_id) + 1);  // +1 because state ids are zero-indexed
+        const uint32_t num_states = static_cast<uint32_t>(max_id) + 1;  // +1 because state ids are zero-indexed
+        dependencies.resize(num_states);
+        dependents.resize(num_states);
+
+        // Build dependency list: for each state s, which states does s depend on
         for (const auto& kv : dependencies_map) {
-            adjacency[kv.first.value] = kv.second;
+            dependencies[kv.first.value] = kv.second;
+        }
+        // Build dependents list: for each state s, which states depend on s
+        for (size_t from = 0; from < dependencies.size(); ++from) {
+            for (const auto dep : dependencies[from]) {
+                dependents[dep.value].push_back(StateId{from});
+            }
         }
     }
 }
 
-uint32_t BankManager::StateDependencies::num_states() const { return static_cast<uint32_t>(adjacency.size()); }
+uint32_t BankManager::StateDependencies::num_states() const { return static_cast<uint32_t>(dependencies.size()); }
 
 void BankManager::init_allocators_across_states(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset) {
     const uint32_t n = dependencies_.num_states();
@@ -195,12 +207,7 @@ void BankManager::init_allocators_across_states(DeviceAddr size_bytes, uint32_t 
     reservations_by_source_.resize(n);
     allocator_offsets_.resize(n);
 
-    // Build reverse dependency list: for each state s, which states depend on s
-    for (uint32_t from = 0; from < dependencies_.adjacency.size(); ++from) {
-        for (const auto dep : dependencies_.adjacency[from]) {
-            dependents_[dep.value].push_back(from);
-        }
-    }
+    // Reverse edges now built inside StateDependencies
     for (uint32_t state = 0; state < n; ++state) {
         allocators_[state] = std::make_unique<allocator::FreeListOpt>(
             size_bytes, offset, alignment_bytes, alignment_bytes, allocator::FreeListOpt::SearchPolicy::FIRST);
@@ -388,11 +395,9 @@ uint64_t BankManager::allocate_buffer(
 
     // Track allocation and update dependents' overlays
     allocated_buffers_[state.value][address.value()] = size_per_bank;
-    auto dep_it = dependents_.find(state.value);
-    if (dep_it != dependents_.end()) {
-        for (auto y : dep_it->second) {
-            reservations_by_source_[y][state.value].add(address.value(), address.value() + size_per_bank);
-        }
+    for (auto dependent_state : dependencies_.dependents[state.value]) {
+        auto y = dependent_state.value;
+        reservations_by_source_[y][state.value].add(address.value(), address.value() + size_per_bank);
     }
 
     return address.value();
@@ -404,11 +409,9 @@ void BankManager::deallocate_buffer(DeviceAddr address, BankManager::StateDepend
     auto it = allocated_buffers_[state.value].find(address);
     if (it != allocated_buffers_[state.value].end()) {
         DeviceAddr size_per_bank = it->second;
-        auto dep_it = dependents_.find(state.value);
-        if (dep_it != dependents_.end()) {
-            for (auto y : dep_it->second) {
-                reservations_by_source_[y][state.value].remove(address, address + size_per_bank);
-            }
+        for (auto dependent_state : dependencies_.dependents[state.value]) {
+            auto y = dependent_state.value;
+            reservations_by_source_[y][state.value].remove(address, address + size_per_bank);
         }
         allocated_buffers_[state.value].erase(it);
     }

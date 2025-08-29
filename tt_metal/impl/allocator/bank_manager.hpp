@@ -40,7 +40,8 @@ public:
         };
 
         using AdjacencyList = tt::stl::SmallVector<tt::stl::SmallVector<StateId>>;
-        AdjacencyList adjacency{};
+        AdjacencyList dependencies{};
+        AdjacencyList dependents{};
 
         StateDependencies();
         explicit StateDependencies(const std::unordered_map<StateId, tt::stl::SmallVector<StateId>>& dependencies_map);
@@ -115,8 +116,6 @@ private:
     // State-dependent members
     // Dependencies between states (also encodes number of states)
     StateDependencies dependencies_{};
-    // Reverse edges: for each state, which states depend on it
-    std::unordered_map<uint32_t, tt::stl::SmallVector<uint32_t>> dependents_{};
 
     // Track allocations per state: base address -> size_per_bank
     std::vector<std::unordered_map<DeviceAddr, DeviceAddr>> allocated_buffers_{};
