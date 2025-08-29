@@ -58,6 +58,18 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore) {
+    // Handle empty tensors - no tiling needed for tensors with no data
+    if (input_tensor.physical_volume() == 0) {
+        // Create output tensor with same properties
+        TensorSpec spec(
+            output_padded_shape,
+            TensorLayout(
+                output_dtype.value_or(input_tensor.dtype()),
+                PageConfig(Layout::TILE),
+                memory_config.value_or(input_tensor.memory_config())));
+        return allocate_tensor_on_device(spec, input_tensor.device());
+    }
+
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
     uint32_t output_single_tile_size =
@@ -98,6 +110,18 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore) {
+    // Handle empty tensors - no tiling needed for tensors with no data
+    if (input_tensor.physical_volume() == 0) {
+        // Create output tensor with same properties
+        TensorSpec spec(
+            ttnn::Shape{output_padded_shape},
+            TensorLayout(
+                output_dtype.value_or(input_tensor.dtype()),
+                PageConfig(Layout::TILE),
+                memory_config.value_or(input_tensor.memory_config())));
+        return allocate_tensor_on_device(spec, input_tensor.device());
+    }
+
     return invoke(
         input_tensor, ttnn::Shape{output_padded_shape}, pad_value, memory_config, output_dtype, use_multicore);
 }
@@ -115,6 +139,18 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
 
     padded_shape[-2] = tt::round_up(padded_shape[-2], input_tile_height);
     padded_shape[-1] = tt::round_up(padded_shape[-1], input_tile_width);
+
+    // Handle empty tensors - no tiling needed for tensors with no data
+    if (input_tensor.physical_volume() == 0) {
+        // Create output tensor with same properties
+        TensorSpec spec(
+            padded_shape,
+            TensorLayout(
+                output_dtype.value_or(input_tensor.dtype()),
+                PageConfig(Layout::TILE),
+                memory_config.value_or(input_tensor.memory_config())));
+        return allocate_tensor_on_device(spec, input_tensor.device());
+    }
 
     PadValue pad_value;
     if (input_tensor.dtype() == DataType::BFLOAT16 or input_tensor.dtype() == DataType::FLOAT32) {

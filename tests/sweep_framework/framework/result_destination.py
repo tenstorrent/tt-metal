@@ -273,7 +273,13 @@ class FileResultDestination(ResultDestination):
             return "success"
 
         sweep_name = header_info[0]["sweep_name"]
-        export_path = self.export_dir / f"{sweep_name}.json"
+        run_start_time = run_context.get("test_start_time")
+        if run_start_time:
+            timestamp = run_start_time.strftime("%Y%m%d_%H%M%S")
+        else:
+            # Fallback to current time if run_start_time is not available
+            timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        export_path = self.export_dir / f"{sweep_name}_{timestamp}.json"
 
         git_hash = run_context.get("git_hash", "unknown")
 
@@ -366,9 +372,6 @@ class FileResultDestination(ResultDestination):
                     # fallback to string representation for unsupported types
                     coerced_value = str(v)
 
-                if i == 0:
-                    logger.info(f"k: {k}, v:  {coerced_value}")
-
                 # Map value into appropriate OpParam field
                 if isinstance(coerced_value, (int, float)):
                     op_param_list.append(OpParam(param_name=k, param_value_numeric=float(coerced_value)))
@@ -428,30 +431,6 @@ class FileResultDestination(ResultDestination):
             record_dict = record.model_dump(mode="json")
             record_dict = _flatten_serialized(record_dict)
             validated_records.append(record_dict)
-
-        # Append to existing file or create new one
-        if export_path.exists():
-            try:
-                with open(export_path, "r") as file:
-                    old_data = json.load(file)
-                if isinstance(old_data, list):
-                    validated_records = old_data + validated_records
-                else:
-                    logger.warning(
-                        f"Existing export file {export_path} is not a JSON list. Overwriting with validated records."
-                    )
-            except json.JSONDecodeError:
-                # Corrupt or non-JSON file: back it up and proceed with fresh records
-                try:
-                    backup_path = export_path.with_suffix(export_path.suffix + ".bak")
-                    export_path.rename(backup_path)
-                    logger.warning(
-                        f"Existing export file {export_path} contained invalid JSON. Backed up to {backup_path}."
-                    )
-                except Exception:
-                    logger.warning(
-                        f"Existing export file {export_path} contained invalid JSON and could not be backed up. Overwriting."
-                    )
 
         # Atomic write to avoid truncated/invalid JSON on interruptions
         tmp_path = export_path.with_suffix(export_path.suffix + ".tmp")
