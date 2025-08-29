@@ -65,12 +65,12 @@ There's an attribute named asic_id that will show up if your FW is new enough.  
  #include <third_party/umd/device/api/umd/device/topology/topology_discovery.h>
  #include <telemetry/ethernet/chip_identifier.hpp>
  
- static uint16_t get_bus_id(const std::unique_ptr<tt::umd::TTDevice>& device) {
+ static uint16_t get_bus_id(tt::umd::TTDevice * device) {
      return device->get_pci_device()->get_device_info().pci_bus;
  }
  
  static ChipIdentifier get_chip_identifier_from_umd_chip_id(
-     const std::unique_ptr<tt::umd::TTDevice>& device, tt::umd::chip_id_t chip_id) {
+     tt::umd::TTDevice *device, tt::umd::chip_id_t chip_id) {
      if (device->get_board_type() == BoardType::GALAXY) {
          const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
              {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
@@ -118,24 +118,14 @@ There's an attribute named asic_id that will show up if your FW is new enough.  
      return ethernet_channel_to_core_coord;
  }
  
- std::map<ChipIdentifier, std::vector<EthernetEndpoint>> get_ethernet_endpoints_by_chip(
-     const std::unique_ptr<tt::umd::tt_ClusterDescriptor>& cluster,
-     const std::unordered_map<tt::umd::chip_id_t, std::unique_ptr<tt::umd::TTDevice>>& pcie_device_by_chip_id) {
+ std::map<ChipIdentifier, std::vector<EthernetEndpoint>> get_ethernet_endpoints_by_chip(const std::unique_ptr<tt::umd::Cluster>& cluster) {
      std::map<ChipIdentifier, std::vector<EthernetEndpoint>> ethernet_endpoints_by_chip;
  
-     for (const auto& [chip_id, remote_chip_and_channel_by_channel] : cluster->get_ethernet_connections()) {
-         // Get the TTDevice corresponding to the nearest MMIO chip
-         chip_id_t nearest_pcie_chip_id = cluster->get_closest_mmio_capable_chip(chip_id);
-         TT_ASSERT(
-             pcie_device_by_chip_id.count(nearest_pcie_chip_id) != 0,
-             "MMIO chip chip_id={} missing in pcie_device_by_chip_id map for chip {}",
-             nearest_pcie_chip_id,
-             chip_id);
-         const std::unique_ptr<tt::umd::TTDevice>& device = pcie_device_by_chip_id.at(nearest_pcie_chip_id);
+     for (const auto& [chip_id, remote_chip_and_channel_by_channel] : cluster->get_cluster_description()->get_ethernet_connections()) {
+         tt::umd::TTDevice *device = cluster->get_tt_device(chip_id);
  
          // Create a SOC descriptor just for the purpose of mapping Ethernet channel to core coordinates
-         tt::umd::tt_SocDescriptor soc_desc =
-             tt::umd::tt_SocDescriptor(device->get_arch(), true);  // noc_translation_enabled=true
+         const tt::umd::tt_SocDescriptor &soc_desc = cluster->get_soc_descriptor(chip_id);
  
          ChipIdentifier chip = get_chip_identifier_from_umd_chip_id(device, chip_id);
          std::vector<EthernetEndpoint>& endpoints_this_chip = ethernet_endpoints_by_chip[chip];
@@ -183,13 +173,14 @@ There's an attribute named asic_id that will show up if your FW is new enough.  
  
  void test_umd() {
      std::cout << "Num PCIE devices: " << PCIDevice::enumerate_devices_info().size() << std::endl;
-     std::unique_ptr<tt::umd::tt_ClusterDescriptor> cluster_descriptor =
-         tt::umd::TopologyDiscovery::create_cluster_descriptor();
-     auto connections = make_ordered_ethernet_connections(cluster_descriptor->get_ethernet_connections());
-     std::cout << "Connections: " << cluster_descriptor->get_ethernet_connections().size() << std::endl;
-     std::unordered_map<tt::umd::chip_id_t, std::unique_ptr<tt::umd::TTDevice>> pcie_devices_by_chip_id =
-         get_pcie_devices(cluster_descriptor);
-     auto endpoint_by_chip = get_ethernet_endpoints_by_chip(cluster_descriptor, pcie_devices_by_chip_id);
+     std::unique_ptr<tt::umd::Cluster> cluster =
+         std::make_unique<tt::umd::Cluster>();
+    std::cout << "Got here" << std::endl;
+     auto connections = make_ordered_ethernet_connections(cluster->get_cluster_description()->get_ethernet_connections());
+     std::cout << "Connections: " << cluster->get_cluster_description()->get_ethernet_connections().size() << std::endl;
+    //  std::unordered_map<tt::umd::chip_id_t, std::unique_ptr<tt::umd::TTDevice>> pcie_devices_by_chip_id =
+    //      get_pcie_devices(cluster_descriptor);
+     auto endpoint_by_chip = get_ethernet_endpoints_by_chip(cluster);
      for (auto& [chip_id, endpoints] : endpoint_by_chip) {
          std::cout << chip_id << ":" << std::endl;
          for (auto& endpoint : endpoints) {
