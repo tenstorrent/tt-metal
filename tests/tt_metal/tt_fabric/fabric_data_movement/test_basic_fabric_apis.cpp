@@ -56,25 +56,30 @@ using tt::tt_metal::ShardedBufferConfig;
 using tt::tt_metal::ShardOrientation;
 using tt::tt_metal::ShardSpecBuffer;
 
-std::shared_ptr<tt_metal::Buffer> PrepareBuffer(
-    tt::tt_metal::IDevice* device, uint32_t size, CoreRangeSet& logical_crs, const std::vector<uint32_t>& fill_data) {
+std::shared_ptr<tt_metal::distributed::MeshBuffer> PrepareBuffer(
+    std::shared_ptr<tt_metal::distributed::MeshDevice> device,
+    uint32_t size,
+    CoreRangeSet& logical_crs,
+    std::vector<uint32_t>& fill_data) {
     auto shard_parameters = ShardSpecBuffer(logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig shard_config = {
-        .device = device,
-        .size = size,
+    tt_metal::distributed::DeviceLocalBufferConfig device_local_config{
         .page_size = size,
         .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(shard_parameters),
+        .sharding_args = tt_metal::BufferShardingArgs(shard_parameters, tt_metal::TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false};
+
+    tt_metal::distributed::ReplicatedBufferConfig global_buffer_config{
+        .size = size,
     };
-    auto buffer = CreateBuffer(shard_config);
-    tt::tt_metal::detail::WriteToBuffer(buffer, fill_data);
+    auto buffer = tt_metal::distributed::MeshBuffer::create(global_buffer_config, device_local_config, device.get());
+    tt_metal::distributed::WriteShard(
+        device->mesh_command_queue(), buffer, fill_data, tt::tt_metal::distributed::MeshCoordinate({0, 0}), true);
     return buffer;
 }
 
 void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_mesh = false) {
     CoreCoord logical_core = {0, 0};
-    const auto& devices = DevicePool::instance().get_all_active_devices();
+    const auto& devices = fixture->get_devices();
     const size_t NUM_DEVICES = devices.size();
     bool invalid_test_scenario = !is_multi_mesh && NUM_DEVICES < 2;
     if (invalid_test_scenario) {
@@ -82,12 +87,13 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
     }
 
     std::vector<tt::tt_metal::Program> programs(NUM_DEVICES);
-    std::vector<std::shared_ptr<tt_metal::Buffer>> result_buffers(NUM_DEVICES);
+    std::vector<std::shared_ptr<tt_metal::distributed::MeshBuffer>> result_buffers(NUM_DEVICES);
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
-        auto* src_device = devices[src_idx];
-        auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_device->id());
+        auto src_device = devices[src_idx];
+        auto src_fabric_node_id =
+            control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_devices()[0]->id());
         uint32_t src_fabric_chip_id = src_fabric_node_id.chip_id;
 
         uint32_t result_size = NUM_DEVICES * sizeof(uint32_t);
@@ -106,7 +112,8 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
 
         // Add mesh_id and chip_id pairs for all destinations
         for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
-            auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->id());
+            auto dst_fabric_node_id =
+                control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_devices()[0]->id());
             runtime_args.push_back(*dst_fabric_node_id.mesh_id);  // dst_mesh_id
             runtime_args.push_back(dst_fabric_node_id.chip_id);   // dst_chip_id
         }
@@ -128,14 +135,20 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
     }
 
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
-        auto* src_device = devices[src_idx];
-        auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_device->id());
+        auto src_device = devices[src_idx];
+        auto src_fabric_node_id =
+            control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_devices()[0]->id());
         uint32_t src_fabric_chip_id = src_fabric_node_id.chip_id;
 
         std::vector<uint32_t> result_data;
-        tt::tt_metal::detail::ReadFromBuffer(result_buffers[src_idx], result_data);
+        tt::tt_metal::distributed::ReadShard(
+            src_device->mesh_command_queue(),
+            result_data,
+            result_buffers[src_idx],
+            tt::tt_metal::distributed::MeshCoordinate({0, 0}));
         for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
-            auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->id());
+            auto dst_fabric_node_id =
+                control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_devices()[0]->id());
             uint32_t actual_direction = result_data[dst_idx];
             if (src_fabric_node_id == dst_fabric_node_id) {
                 // Self-routing should return INVALID_DIRECTION
@@ -167,7 +180,8 @@ std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> GenerateAllValid
     }
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(devices[0]->id());
+    auto src_fabric_node_id =
+        control_plane.get_fabric_node_id_from_physical_chip_id(devices[0]->get_devices()[0]->id());
     auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
 
     uint32_t ns_dim = mesh_shape[0];
