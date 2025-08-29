@@ -460,6 +460,23 @@ FORCE_INLINE size_t get_downstream_edm_interface_index(eth_chan_directions downs
     return downstream_edm_interface_index;
 }
 
+template <uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>
+FORCE_INLINE bool check_downstream_interface_has_space_runtime(
+    size_t edm_index,
+    std::array<tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
+        downstream_edm_interfaces_vc0,
+    tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_interface_vc1) {
+    if constexpr (enable_deadlock_avoidance) {
+        if (edm_index == NUM_USED_RECEIVER_CHANNELS - 1) {
+            return downstream_edm_interface_vc1.edm_has_space_for_packet();
+        } else {
+            return downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
+        }
+    } else {
+        return downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
+    }
+}
+
 template <uint8_t rx_channel_id, uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>
 FORCE_INLINE bool can_forward_packet_completely(
     tt_l1_ptr MeshPacketHeader* packet_header,
@@ -478,15 +495,10 @@ FORCE_INLINE bool can_forward_packet_completely(
             if (packet_header->mcast_params[i] and i != my_direction) {
                 const auto edm_index =
                     get_downstream_edm_interface_index<rx_channel_id>(static_cast<eth_chan_directions>(i));
-                if constexpr (enable_deadlock_avoidance) {
-                    if (edm_index == NUM_USED_RECEIVER_CHANNELS - 1) {
-                        has_space &= downstream_edm_interface_vc1.edm_has_space_for_packet();
-                    } else {
-                        has_space &= downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
-                    }
-                } else {
-                    has_space &= downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
-                }
+                has_space &= check_downstream_interface_has_space_runtime<
+                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                    edm_index, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             }
         }
         return has_space;
@@ -503,15 +515,10 @@ FORCE_INLINE bool can_forward_packet_completely(
             const auto downstream_direction =
                 static_cast<eth_chan_directions>(port_direction_table[downstream_channel]);
             const auto edm_index = get_downstream_edm_interface_index<rx_channel_id>(downstream_direction);
-            if constexpr (enable_deadlock_avoidance) {
-                if (edm_index == NUM_USED_RECEIVER_CHANNELS - 1) {
-                    return downstream_edm_interface_vc1.edm_has_space_for_packet();
-                } else {
-                    return downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
-                }
-            } else {
-                return downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
-            }
+            return check_downstream_interface_has_space_runtime<
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                edm_index, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
         } else {
             if (dest_chip_id == routing_table->my_device_id) {
                 // Packet has reached its intended chip. Check if this is an mcast or unicast txn.
@@ -523,15 +530,10 @@ FORCE_INLINE bool can_forward_packet_completely(
                         mcast_active = true;
                         const auto edm_index =
                             get_downstream_edm_interface_index<rx_channel_id>(static_cast<eth_chan_directions>(i));
-                        if constexpr (enable_deadlock_avoidance) {
-                            if (edm_index == NUM_USED_RECEIVER_CHANNELS - 1) {
-                                has_space &= downstream_edm_interface_vc1.edm_has_space_for_packet();
-                            } else {
-                                has_space &= downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
-                            }
-                        } else {
-                            has_space &= downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
-                        }
+                        has_space &= check_downstream_interface_has_space_runtime<
+                            DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                            DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                            edm_index, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
                     }
                 }
                 // Set mcast mode if a valid mcast directions are specified
@@ -544,15 +546,10 @@ FORCE_INLINE bool can_forward_packet_completely(
                 const auto downstream_direction =
                     static_cast<eth_chan_directions>(port_direction_table[downstream_channel]);
                 const auto edm_index = get_downstream_edm_interface_index<rx_channel_id>(downstream_direction);
-                if constexpr (enable_deadlock_avoidance) {
-                    if (edm_index == NUM_USED_RECEIVER_CHANNELS - 1) {
-                        return downstream_edm_interface_vc1.edm_has_space_for_packet();
-                    } else {
-                        return downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
-                    }
-                } else {
-                    return downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
-                }
+                return check_downstream_interface_has_space_runtime<
+                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                    edm_index, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             }
         }
     }
@@ -1549,8 +1546,8 @@ void run_receiver_channel_step_impl(
 #endif
         } else {
             if constexpr (receiver_channel == 0) {
-                can_send_to_all_local_chip_receivers =
-                    can_forward_packet_completely(cached_routing_fields, downstream_edm_interfaces_vc0[0]);
+                can_send_to_all_local_chip_receivers = can_forward_packet_completely(
+                    cached_routing_fields, downstream_edm_interfaces_vc0[receiver_channel]);
             } else {
                 can_send_to_all_local_chip_receivers =
                     can_forward_packet_completely(cached_routing_fields, downstream_edm_interface_vc1);
