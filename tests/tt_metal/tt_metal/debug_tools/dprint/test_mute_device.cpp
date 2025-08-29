@@ -12,6 +12,7 @@
 #include <string>
 #include <variant>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
