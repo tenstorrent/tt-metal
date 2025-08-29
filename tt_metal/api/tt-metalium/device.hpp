@@ -156,10 +156,6 @@ public:
     virtual uint32_t get_trace_buffers_size() const = 0;
     virtual void set_trace_buffers_size(uint32_t size) = 0;
 
-    // Light Metal
-    virtual bool using_slow_dispatch() const = 0;
-    virtual bool using_fast_dispatch() const = 0;
-
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
     virtual bool initialize(

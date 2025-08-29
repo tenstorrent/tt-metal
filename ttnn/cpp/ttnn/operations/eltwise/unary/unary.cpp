@@ -384,10 +384,18 @@ Tensor Hardtanh::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::HARDTANH;
     return detail::unary_impl(
-        input_tensor,
-        {UnaryWithParam{op_type, std::vector<float>{static_cast<float>(min_val), static_cast<float>(max_val)}}},
-        memory_config,
-        optional_output_tensor);
+        input_tensor, {UnaryWithParam{op_type, {min_val, max_val}}}, memory_config, optional_output_tensor);
+}
+
+Tensor Clamp::invoke(
+    const Tensor& input_tensor,
+    const float min_val,
+    const float max_val,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::CLAMP_TSS;
+    return detail::unary_impl(
+        input_tensor, {UnaryWithParam{op_type, {min_val, max_val}}}, memory_config, optional_output_tensor);
 }
 
 Tensor Softshrink::invoke(

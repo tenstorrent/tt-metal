@@ -295,9 +295,19 @@ struct Tanh {
         bool accuracy = false);
 };
 
+struct Clamp {
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        float min_val,
+        float max_val,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 }  // namespace unary
 }  // namespace operations
 
+// NOLINTBEGIN(bugprone-macro-parentheses)
 #define REGISTER_UNARY_OPERATION(operation_name, operation_type) \
     constexpr auto operation_name = ttnn::register_operation<    \
         "ttnn::" #operation_name,                                \
@@ -345,6 +355,7 @@ struct Tanh {
         ttnn::operations::unary::ExecuteUnaryWithOptionalIntegerParameter<                                  \
             ttnn::operations::unary::UnaryOpType::operation_type,                                           \
             data_type>>();
+// NOLINTEND(bugprone-macro-parentheses)
 
 REGISTER_UNARY_OPERATION(acos, ACOS);
 REGISTER_UNARY_OPERATION(asin, ASIN);
@@ -443,6 +454,7 @@ constexpr auto hardtanh = ttnn::register_operation<"ttnn::hardtanh", ttnn::opera
 constexpr auto softshrink = ttnn::register_operation<"ttnn::softshrink", ttnn::operations::unary::Softshrink>();
 constexpr auto deg2rad = ttnn::register_operation<"ttnn::deg2rad", ttnn::operations::unary::Deg2Rad>();
 constexpr auto rad2deg = ttnn::register_operation<"ttnn::rad2deg", ttnn::operations::unary::Rad2Deg>();
+constexpr auto clamp_tss = ttnn::register_operation<"ttnn::clamp_tss", ttnn::operations::unary::Clamp>();
 constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::operations::unary::Softplus>();
 constexpr auto tanh = ttnn::register_operation<"ttnn::tanh", ttnn::operations::unary::Tanh>();
 constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();

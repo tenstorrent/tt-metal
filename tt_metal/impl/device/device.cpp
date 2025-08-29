@@ -287,7 +287,6 @@ void Device::configure_command_queue_programs() {
 }
 
 void Device::init_command_queue_host() {
-    using_fast_dispatch_ = true;
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
 
     auto cq_shared_state = std::make_shared<CQSharedState>();
@@ -394,8 +393,8 @@ void Device::configure_fabric() {
 
     fabric_program_->finalize_offsets(this);
 
-    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, this->using_fast_dispatch());
-    detail::ConfigureDeviceWithProgram(this, *fabric_program_, this->using_fast_dispatch());
+    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
+    detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
 
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox (eg, storage cores) have all landed
@@ -446,10 +445,8 @@ bool Device::initialize(
         num_hw_cqs > 0 and num_hw_cqs <= dispatch_core_manager::MAX_NUM_HW_CQS,
         "num_hw_cqs can be between 1 and {}",
         dispatch_core_manager::MAX_NUM_HW_CQS);
-    this->using_fast_dispatch_ = false;
-    // Trying to preserve logic that was in device_pool.cpp
-    // However, I honestly don't understand it
-    this->num_hw_cqs_ = num_hw_cqs;
+    using_fast_dispatch_ = MetalContext::instance().rtoptions().get_fast_dispatch();
+    num_hw_cqs_ = num_hw_cqs;
     const auto& hal = MetalContext::instance().hal();
     if (worker_l1_size == 0) {
         worker_l1_size = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -683,10 +680,6 @@ CommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
     return *command_queues_[actual_cq_id];
 }
-
-bool Device::using_slow_dispatch() const { return !using_fast_dispatch(); }
-
-bool Device::using_fast_dispatch() const { return using_fast_dispatch_; }
 
 void Device::enable_program_cache() {
     log_info(tt::LogMetal, "Enabling program cache on device {}", this->id_);
