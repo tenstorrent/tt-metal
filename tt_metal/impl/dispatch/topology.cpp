@@ -1278,7 +1278,8 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
             num_local_fabric_routers);
     }
 
-    detail::CompileProgram(device, *fabric_program_ptr, /*force_slow_dispatch=*/device->using_fast_dispatch());
+    detail::CompileProgram(
+        device, *fabric_program_ptr, tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
     return fabric_program_ptr;
 }
 

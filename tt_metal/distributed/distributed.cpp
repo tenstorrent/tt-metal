@@ -21,7 +21,7 @@ void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, co
 }
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
-    if (mesh_cq.device()->using_fast_dispatch()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
@@ -46,7 +46,7 @@ MeshEvent EnqueueRecordEventToHost(
 void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const MeshEvent& event) { mesh_cq.enqueue_wait_for_event(event); }
 
 void EventSynchronize(const MeshEvent& event) {
-    if (event.device()->using_slow_dispatch()) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         return;
     }
     for (const auto& coord : event.device_range()) {
