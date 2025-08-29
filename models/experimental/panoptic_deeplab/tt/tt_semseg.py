@@ -263,8 +263,8 @@ class TtDeepLabV3PlusHead(nn.Module):
                 return y
 
             # previous_y.deallocate()
-            proj_x.deallocate()
-            y_upsampled.deallocate()
+            # proj_x.deallocate()
+            # y_upsampled.deallocate()
 
             y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -272,11 +272,11 @@ class TtDeepLabV3PlusHead(nn.Module):
             # After each normalization and activation
             y = stage["fuse_conv_0"](y)  # Input `y` is now gone
             y = stage["fuse_norm_0"](y)
-            # Activation is fused, so no separate call.
+            y = self.activation(y)
 
             y = stage["fuse_conv_1"](y)  # Input `y` is now gone
             y = stage["fuse_norm_1"](y)
-            # Activation is fused.
+            y = self.activation(y)
 
             # 7. Convert the final result of the block back to DRAM for the next stage.
             y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)

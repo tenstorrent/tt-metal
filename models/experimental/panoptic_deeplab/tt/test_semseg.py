@@ -514,6 +514,7 @@ def test_ttnn_debug(device):
     # run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, "aspp_out") 0.9986pcc
     # run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, "proj_x_out") 0.9987pcc
     # run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, "upsample_out") 0.999pcc
-    # run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, "concat_out") 0.9963pcc
-    run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, "decoder_out")  # 0.9927pcc
-    # run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, "predictor_out")
+    # run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, "concat_out") #0.9963pcc
+    # run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, "fuse_1_out") #0.9978pcc
+    # run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, "decoder_out") #0.997pcc
+    run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, "predictor_out")  # 0.9976pcc
