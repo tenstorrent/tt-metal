@@ -17,6 +17,7 @@ import ttnn
 from models.demos.gemma3.tt.model_config import determine_device_name, parse_decoder_json
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_transformers.tests.test_accuracy import get_accuracy_thresholds
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill, sample_host
 from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision
@@ -997,7 +998,6 @@ def test_demo_text(
         if token_accuracy:
             acc = token_acc.compute_accuracy()
             logger.info(f"=== Top1 and Top5 Token Accuracy ===")
-            logger.info(f" Top1 Accuracy: {acc[0]*100:.2f}%, Top5 Accuracy: {acc[1]*100:.2f}%")
             total_top1_acc = acc[0] * 100
             total_top5_acc = acc[1] * 100
             logger.info(f" Top1 Accuracy: {total_top1_acc:.2f}%, Top5 Accuracy: {total_top5_acc:.2f}%")
