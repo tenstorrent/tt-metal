@@ -27,6 +27,7 @@ echo "pwd: $(pwd)"
 ./create_venv.sh
 ./build_metal.sh \
   --build-all \
+  --build-type RelWithDebInfo \
   --enable-ccache || build_rc=$?
 
 echo "Checking environment variables:"
