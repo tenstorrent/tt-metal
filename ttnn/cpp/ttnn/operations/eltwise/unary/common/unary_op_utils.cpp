@@ -4,6 +4,7 @@
 
 #include "unary_op_utils.hpp"
 
+#include <optional>
 #include <tt-metalium/assert.hpp>
 #include "ttnn/tensor/types.hpp"
 
@@ -80,6 +81,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::GEZ:
         case UnaryOpType::NEZ: return "SFPU_OP_UNARY_COMP_INCLUDE";
         case UnaryOpType::WHERE_TSS: return "SFPU_OP_WHERE_INCLUDE";
+        case UnaryOpType::CLAMP_TSS: return "SFPU_OP_CLAMP_INCLUDE";
         case UnaryOpType::SOFTSHRINK:
         case UnaryOpType::SOFTSIGN:
         case UnaryOpType::HARDSIGMOID:
@@ -425,6 +427,14 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 where_call = fmt::format("where_tile({0}, {1}, {2}, {0});", idst, 1, 2);
             }
             op_init_and_name = std::make_pair("where_tile_init();", where_call);
+            break;
+        }
+        case UnaryOpType::CLAMP_TSS: {
+            float param1 = params[1];
+            op_init_and_name = {
+                "clamp_tile_init();",
+                fmt::format(
+                    "clamp_tile({}, {}, {});", idst, std::bit_cast<uint32_t>(param0), std::bit_cast<uint32_t>(param1))};
             break;
         }
         case UnaryOpType::HARDTANH: {
