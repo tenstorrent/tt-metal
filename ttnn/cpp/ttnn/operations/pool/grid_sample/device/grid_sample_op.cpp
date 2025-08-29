@@ -23,15 +23,18 @@ void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
 
     // Shape validation
     TT_FATAL(input_tensor.logical_shape().rank() == 4, "Input tensor must be 4D (N, C, H, W)");
-    TT_FATAL(grid_tensor.logical_shape().rank() == 4, "Grid tensor must be 4D (N, H_out, W_out, 2)");
+    TT_FATAL(grid_tensor.logical_shape().rank() == 4, "Grid tensor must be 4D (N, H_out, W_out, multiple_of_2_or_6)");
 
+    uint32_t grid_last_dim = grid_tensor.logical_shape()[-1];
     if (use_precomputed_grid_) {
         TT_FATAL(
-            grid_tensor.logical_shape()[-1] == 6,
-            "Grid tensor last dimension must be 6 (h_nw, w_nw, weight_nw, weight_ne, weight_sw, weight_se)");
+            grid_last_dim % 6 == 0 && grid_last_dim >= 6,
+            "Grid tensor last dimension must be a multiple of 6 (multiple sets of h_nw, w_nw, weight_nw, weight_ne, "
+            "weight_sw, weight_se)");
     } else {
         TT_FATAL(
-            grid_tensor.logical_shape()[-1] == 2, "Grid tensor last dimension must be 2 (x, y relative coordinates)");
+            grid_last_dim % 2 == 0 && grid_last_dim >= 2,
+            "Grid tensor last dimension must be a multiple of 2 (multiple sets of x, y relative coordinates)");
     }
 
     TT_FATAL(
@@ -81,9 +84,14 @@ std::vector<TensorSpec> GridSample::compute_output_specs(const std::vector<Tenso
     uint32_t C = input_shape[-1];
     uint32_t H_out = grid_shape[1];
     uint32_t W_out = grid_shape[2];
+    uint32_t grid_last_dim = grid_shape[-1];
 
-    // Define output shape: (N, C, H_out, W_out)
-    const ttnn::Shape output_shape({N, H_out, W_out, C});
+    // Calculate number of grids and output channels
+    uint32_t num_grids = use_precomputed_grid_ ? (grid_last_dim / 6) : (grid_last_dim / 2);
+    uint32_t C_out = C * num_grids;
+
+    // Define output shape: (N, H_out, W_out, C_out) where C_out = C * num_grids
+    const ttnn::Shape output_shape({N, H_out, W_out, C_out});
 
     // Output has same data type as input
     const DataType output_data_type = input_tensor.dtype();
