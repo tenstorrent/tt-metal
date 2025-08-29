@@ -855,7 +855,7 @@ void issue_read_buffer_dispatch_command_sequence(
     calculator.add_prefetch_stall();
     if (pinned_feasible) {
         // When flush_prefetch=false and inline_data=false, size is ignored.
-        calculator.add_dispatch_write_linear<false, false>(0);
+        calculator.add_dispatch_write_linear_h<false, false>(0);
     } else {
         calculator.add_dispatch_write_linear_host();
     }
