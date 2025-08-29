@@ -37,10 +37,6 @@ run_tg_tests() {
     echo "LOG_METAL: running resnet50 run_tg_frequent_tests"
     pytest -n auto models/demos/tg/resnet50/tests/test_resnet50_performant.py ; fail+=$?
 
-  elif [[ "$1" == "sentencebert" ]]; then
-    echo "LOG_METAL: running sentence-bert run_tg_frequent_tests"
-    pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py
-
   elif [[ "$1" == "unit" ]]; then
     echo "LOG_METAL: running unit/distributed run_tg_frequent_tests"
     ## Force IRAM enabled because these tests mixes fabric and non-fabric ccl tests. The IRAM setting must be consistent
