@@ -52,7 +52,6 @@ graph_templates {
 # Root instance with concrete host mappings
 root_instance {
   template_name: "5_wh_galaxy_y_torus_superpod"
-  instance_id: 1
   child_mappings {
     key: "pod1"
     value { host_id: 0 }
