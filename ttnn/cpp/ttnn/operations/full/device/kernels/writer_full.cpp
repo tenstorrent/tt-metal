@@ -24,7 +24,6 @@ void zero_buffer(uint32_t write_addr, int bytes) {
 }
 
 void kernel_main() {
-    DPRINT << "WTF WHY CAN'T I SEE MY CODE?" << ENDL();
     uint32_t output_addr = get_arg_val<uint32_t>(0);
     uint32_t fill_value = get_arg_val<uint32_t>(1);
     uint32_t num_pages_per_core = get_arg_val<uint32_t>(2);
@@ -43,7 +42,6 @@ void kernel_main() {
     uint32_t write_addr = get_write_ptr(cb_value);
 
     if (val.u == 0) {
-        DPRINT << "zero_buffer" << ENDL();
         zero_buffer(write_addr, page_size);
     } else {
 #ifdef OUTPUT_DTYPE_BFLOAT16
