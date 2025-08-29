@@ -60,7 +60,7 @@ void kernel_main() {
     constexpr auto src0_args = TensorAccessorArgs<3>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     constexpr auto src2_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
-#if SRC_SHARDED
+#if SRC_SHARDED_A
     cb_reserve_back(cb_id_src, src_num_tiles);
     cb_push_back(cb_id_src, src_num_tiles);
 #else
@@ -81,7 +81,7 @@ void kernel_main() {
     const uint32_t src_tile_bytes_c = get_tile_size(cb_id_src_c);
     const auto src_c = TensorAccessor(src2_args, src_addr_c, src_tile_bytes_c);
 #endif
-#if !SRC_SHARDED || !SRC_SHARDED_B || !SRC_SHARDED_C
+#if !SRC_SHARDED_A || !SRC_SHARDED_B || !SRC_SHARDED_C
     constexpr uint32_t onetile = 1;
     constexpr bool has_sharding = 0;
     const uint32_t HtWt = Ht * Wt;
@@ -103,7 +103,7 @@ void kernel_main() {
 
     // this is the INPUT tile offset
     uint32_t tile_offset = start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride;
-#if !SRC_BCAST
+#if !SRC_BCAST_A
     tile_offset += start_th * Wt;
 #endif
     uint32_t next_c_shift = c_stride - HtWt;
@@ -139,7 +139,7 @@ void kernel_main() {
                     for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
-#if !SRC_SHARDED
+#if !SRC_SHARDED_A
                             cb_reserve_back(cb_id_src, onetile);
                             uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
                             noc_async_read_tile(tile_offset + tw, src, l1_write_addr_src);
@@ -156,10 +156,10 @@ void kernel_main() {
                             uint32_t l1_write_addr_c = get_write_ptr(cb_id_src_c);
                             noc_async_read_tile(tile_offset_c + tw, src_c, l1_write_addr_c);
 #endif
-#if !SRC_SHARDED || !SRC_SHARDED_B || !SRC_SHARDED_C
+#if !SRC_SHARDED_A || !SRC_SHARDED_B || !SRC_SHARDED_C
                             noc_async_read_barrier();
 #endif
-#if SRC_BCAST && !BCAST_LLK  // no sharding support for row bcast yet
+#if SRC_BCAST_A && !BCAST_LLK  // no sharding support for row bcast yet
                             FILL_TILE_WITH_FIRST_ROW(cb_id_src);
 #endif
 #if SRC_BCAST_B && !BCAST_LLK  // no sharding support for row bcast yet
@@ -168,7 +168,7 @@ void kernel_main() {
 #if SRC_BCAST_C && !BCAST_LLK  // no sharding support for row bcast yet
                             FILL_TILE_WITH_FIRST_ROW_C(cb_id_src_c);
 #endif
-#if !SRC_SHARDED
+#if !SRC_SHARDED_A
                             cb_push_back(cb_id_src, onetile);
 #endif
 #if !SRC_SHARDED_B
@@ -182,7 +182,7 @@ void kernel_main() {
                             // next row of tiles should start at the first column
                             start_tw = 0;
                         }
-#if !SRC_BCAST
+#if !SRC_BCAST_A
                         tile_offset += Wt;
 #endif
 #if !SRC_BCAST_B
@@ -192,7 +192,7 @@ void kernel_main() {
                         tile_offset_c += Wt;
 #endif
                     }
-#if SRC_BCAST
+#if SRC_BCAST_A
                     // same as following logically
                     // tile_offset += HtWt;
                     // tile_offset += next_c_shift;

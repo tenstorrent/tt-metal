@@ -20,7 +20,7 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
             } else if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
                 reader_kernel = KernelName::ReaderOuterBcastTTT;
                 compute_kernel = KernelName::ComputeNoBcastTTT;
-                writer_kernel = KernelName::WriterNoBcastTTT;
+                writer_kernel = KernelName::WriterNoBcast;
             } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
                 reader_kernel = KernelName::ReaderRowBcastTTT;
                 compute_kernel = KernelName::ComputeNoBcastTTT;

@@ -540,13 +540,13 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
         bool value_false_sharded = value_false_tensor.value().memory_config().is_sharded();
-        reader_defines["SRC_SHARDED"] = predicate_sharded ? "1" : "0";      // CB0 sharding
+        reader_defines["SRC_SHARDED_A"] = predicate_sharded ? "1" : "0";    // CB0 sharding
         reader_defines["SRC_SHARDED_B"] = value_true_sharded ? "1" : "0";   // CB1 sharding
         reader_defines["SRC_SHARDED_C"] = value_false_sharded ? "1" : "0";  // CB2 sharding
 
         // Set broadcast defines to match ternary reader kernel expectations
         // CB0 = predicate, CB1 = true tensor, CB2 = false tensor
-        reader_defines["SRC_BCAST"] = pred_is_bcast ? "1" : "0";     // First tensor (CB0)
+        reader_defines["SRC_BCAST_A"] = pred_is_bcast ? "1" : "0";   // First tensor (CB0)
         reader_defines["SRC_BCAST_B"] = true_is_bcast ? "1" : "0";   // Second tensor (CB1)
         reader_defines["SRC_BCAST_C"] = false_is_bcast ? "1" : "0";  // Third tensor (CB2)
 
