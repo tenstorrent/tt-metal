@@ -32,6 +32,7 @@
 #include "sfpu/ckernel_sfpu_log.h"
 #include "sfpu/ckernel_sfpu_max.h"
 #include "sfpu/ckernel_sfpu_max_int32.h"
+#include "sfpu/ckernel_sfpu_max_pool_indices.h"
 #include "sfpu/ckernel_sfpu_mul_int.h"
 #include "sfpu/ckernel_sfpu_negative.h"
 #include "sfpu/ckernel_sfpu_power.h"
