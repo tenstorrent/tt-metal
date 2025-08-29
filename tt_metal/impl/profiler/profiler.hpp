@@ -267,9 +267,6 @@ private:
     // Get tracy context for the core
     void updateTracyContext(std::pair<uint32_t, CoreCoord> device_core);
 
-    // Dump device results to files
-    void dumpDeviceResults() const;
-
 public:
     DeviceProfiler(const IDevice* device, bool new_logs);
 
@@ -327,6 +324,9 @@ public:
     void dumpRoutingInfo() const;
 
     void dumpClusterCoordinates() const;
+
+    // Dump device results to files
+    void dumpDeviceResults() const;
 
     // Push device results to tracy
     void pushTracyDeviceResults();

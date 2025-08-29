@@ -86,7 +86,7 @@ RunTimeOptions::RunTimeOptions() {
     profiler_enabled = false;
     profile_dispatch_cores = false;
     profiler_sync_enabled = false;
-    profiler_mid_run_tracy_push = false;
+    profiler_mid_run_dump = false;
     profiler_buffer_usage_enabled = false;
     profiler_trace_profiler = false;
 #if defined(TRACY_ENABLE)
@@ -105,9 +105,9 @@ RunTimeOptions::RunTimeOptions() {
         if (profiler_trace_profiler_str != nullptr && profiler_trace_profiler_str[0] == '1') {
             profiler_trace_profiler = true;
         }
-        const char* profiler_force_push_enabled_str = std::getenv("TT_METAL_TRACY_MID_RUN_PUSH");
-        if (profiler_force_push_enabled_str != nullptr && profiler_force_push_enabled_str[0] == '1') {
-            profiler_mid_run_tracy_push = true;
+        const char* profiler_mid_run_dump_str = std::getenv("TT_METAL_PROFILER_MID_RUN_DUMP");
+        if (profiler_mid_run_dump_str != nullptr && profiler_mid_run_dump_str[0] == '1') {
+            profiler_mid_run_dump = true;
         }
     }
 
