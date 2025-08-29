@@ -324,6 +324,7 @@ class DeepLabV3PlusHead(nn.Module):
         y = self.decoder[feature_keys[2]]["fuse_conv"](y)
         if debug_stage == "decoder_out":
             return y  # Final decoder output
+        return y
 
     def losses(self, predictions, targets):
         predictions = F.interpolate(predictions, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
