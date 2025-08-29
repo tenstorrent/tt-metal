@@ -315,7 +315,7 @@ class WanAttention:
                     ccl_core_grid_offset=(0, self.sdpa_worker_grid[1]),
                 )
             else:
-                spatial_BHNE, prompt_BHLE = ttnn.transformer.scaled_dot_product_attention(
+                spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
                     q_BHNE,
                     k_BHNE,
                     v_BHNE,
