@@ -114,7 +114,7 @@ public:
     virtual void enqueue_read(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         DistributedHostBuffer& host_buffer,
-        const std::optional<std::unordered_set<MeshCoordinate>>& shards,
+        const std::optional<std::set<MeshCoordinate>>& shards,
         bool blocking) = 0;
 
     virtual MeshEvent enqueue_record_event(
