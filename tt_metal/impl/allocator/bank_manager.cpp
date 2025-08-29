@@ -117,13 +117,15 @@ static std::vector<std::pair<DeviceAddr, DeviceAddr>> merge_two(
     return res;
 }
 
-std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::union_all_sources(
+BankManager::IntervalSet BankManager::IntervalSet::union_all_sources(
     const std::unordered_map<uint32_t, IntervalSet>& by_source) {
     std::vector<std::pair<DeviceAddr, DeviceAddr>> acc;
     for (const auto& kv : by_source) {
         acc = merge_two(acc, kv.second.ranges);
     }
-    return acc;
+    BankManager::IntervalSet out;
+    out.ranges = std::move(acc);
+    return out;
 }
 
 std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::subtract_ranges(
@@ -358,8 +360,8 @@ uint64_t BankManager::allocate_buffer(
             free_abs.emplace_back(r.first, r.second);
         }
     }
-    auto occ = union_all_sources(reservations_by_source_[state.value]);
-    auto allowed = subtract_ranges(free_abs, occ);
+    auto occ = IntervalSet::union_all_sources(reservations_by_source_[state.value]);
+    auto allowed = subtract_ranges(free_abs, occ.ranges);
 
     // Choose a start according to bottom_up
     std::optional<DeviceAddr> chosen;
