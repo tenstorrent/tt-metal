@@ -89,7 +89,7 @@ jobs:
       run_sdxl_tests: ${{ github.event_name == 'schedule' || inputs.run_sdxl_tests }}
       run_train_tests: ${{ github.event_name == 'schedule' || inputs.run_train_tests }}
       run_sdpa_stress_tests: ${{ github.event_name == 'schedule' || inputs.run_sdpa_stress_tests }}
-      run_ttnn-bos-tests: ${{ github.event_name == 'schedule' || inputs.run_bos_tests }}
+      run_ttnn-bos-tests: ${{ inputs.runner-label == 'P150b' && (github.event_name == 'schedule' || inputs.run_bos_tests) }}
   didt-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_didt_tests }}
     needs: build-artifact
