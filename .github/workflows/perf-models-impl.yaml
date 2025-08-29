@@ -340,7 +340,7 @@ jobs:
 
             ## Merge all the generated reports
             env python3 models/perf/merge_perf_results.py
-          if: ${{ !cancelled() && matrix.test-info.model-group != 'llm_javelin' && matrix.test-info.model-group != 'other' }}
+          if: ${{ !cancelled() }}
       - name: Merge all the generated reports
         timeout-minutes: 10
         uses: ./.github/actions/docker-run
