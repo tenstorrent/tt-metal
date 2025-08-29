@@ -34,7 +34,7 @@ class TtSDXLPipelineConfig:
     capture_trace: bool = True
     vae_on_device: bool = True
     encoders_on_device: bool = True
-    use_tp: bool
+    use_tp: bool = False
 
 
 class TtSDXLPipeline(LightweightModule):
@@ -93,6 +93,21 @@ class TtSDXLPipeline(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
+        )
+
+        compute_grid_size = self.ttnn_device.compute_with_storage_grid_size()
+        ccl_sub_device_crs = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+        )
+        self.ag_semaphores = [ttnn.create_global_semaphore(ttnn_device, ccl_sub_device_crs, 0) for _ in range(2)]
+
+        self.ag_persistent_buffer = ttnn.from_torch(
+            torch.zeros((2, 1, 16384, 32)),
+            device=ttnn_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
+            dtype=ttnn.bfloat16,
         )
 
         # Hardcoded input tensor parameters
@@ -156,6 +171,8 @@ class TtSDXLPipeline(LightweightModule):
                 self.tt_latents_shape,
                 self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
                 self.batch_size,
+                self.ag_persistent_buffer,
+                self.ag_semaphores,
                 capture_trace=False,
                 use_tp=self.pipeline_config.use_tp,
             )
@@ -252,21 +269,19 @@ class TtSDXLPipeline(LightweightModule):
             ) = all_embeds
             all_embeds = list(
                 zip(
-                    torch.split(prompt_embeds_batch, 1, dim=0),  # shape is len(prompts/batch_size)=1, 77, 2048
-                    torch.split(negative_prompt_embeds_batch, 1, dim=0),  # shape is len(prompts/batch_size)=1, 77, 2048
-                    torch.split(pooled_prompt_embeds_batch, 1, dim=0),  # shape is len(prompts/batch_size)=1, 1280
-                    torch.split(
-                        negative_pooled_prompt_embeds_batch, 1, dim=0
-                    ),  # shape is len(prompts/batch_size)=1, 1280
+                    torch.split(prompt_embeds_batch, 1, dim=0),
+                    torch.split(negative_prompt_embeds_batch, 1, dim=0),
+                    torch.split(pooled_prompt_embeds_batch, 1, dim=0),
+                    torch.split(negative_pooled_prompt_embeds_batch, 1, dim=0),
                 )
             )
         prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = zip(*all_embeds)
 
         all_prompt_embeds_torch = torch.cat(
-            [torch.stack(prompt_embeds, dim=0), torch.stack(negative_prompt_embeds, dim=0)], dim=1
+            [torch.stack(negative_prompt_embeds, dim=0), torch.stack(prompt_embeds, dim=0)], dim=1
         )
         torch_add_text_embeds = torch.cat(
-            [torch.stack(pooled_prompt_embeds, dim=0), torch.stack(negative_pooled_prompt_embeds, dim=0)], dim=1
+            [torch.stack(negative_pooled_prompt_embeds, dim=0), torch.stack(pooled_prompt_embeds, dim=0)], dim=1
         )
 
         profiler.end("encode_prompts")
@@ -381,6 +396,8 @@ class TtSDXLPipeline(LightweightModule):
             self.tt_latents_shape,
             self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
             self.batch_size,
+            self.ag_persistent_buffer,
+            self.ag_semaphores,
             tid=self.tid if hasattr(self, "tid") else None,
             output_device=self.output_device if hasattr(self, "output_device") else None,
             output_shape=self.output_shape,
@@ -460,47 +477,13 @@ class TtSDXLPipeline(LightweightModule):
                 ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            # self.tt_prompt_embeds_device = [
-            #     ttnn.allocate_tensor_on_device(
-            #         tt_prompt_embeds[0][0].shape,
-            #         tt_prompt_embeds[0][0].dtype,
-            #         tt_prompt_embeds[0][0].layout,
-            #         self.ttnn_device,
-            #         ttnn.DRAM_MEMORY_CONFIG,
-            #     ),
-            #     ttnn.allocate_tensor_on_device(
-            #         tt_prompt_embeds[0][1].shape,
-            #         tt_prompt_embeds[0][1].dtype,
-            #         tt_prompt_embeds[0][1].layout,
-            #         self.ttnn_device,
-            #         ttnn.DRAM_MEMORY_CONFIG,
-            #     ),
-            # ]
-
             self.tt_prompt_embeds_device = ttnn.allocate_tensor_on_device(
                 tt_prompt_embeds[0].shape,
                 tt_prompt_embeds[0].dtype,
                 tt_prompt_embeds[0].layout,
                 self.ttnn_device,
                 ttnn.DRAM_MEMORY_CONFIG,
-            )  # valjda valja
-
-            # self.tt_text_embeds_device = [
-            #     ttnn.allocate_tensor_on_device(
-            #         tt_text_embeds[0][0].shape,
-            #         tt_text_embeds[0][0].dtype,
-            #         tt_text_embeds[0][0].layout,
-            #         self.ttnn_device,
-            #         ttnn.DRAM_MEMORY_CONFIG,
-            #     ),
-            #     ttnn.allocate_tensor_on_device(
-            #         tt_text_embeds[0][1].shape,
-            #         tt_text_embeds[0][1].dtype,
-            #         tt_text_embeds[0][1].layout,
-            #         self.ttnn_device,
-            #         ttnn.DRAM_MEMORY_CONFIG,
-            #     ),
-            # ]
+            )
 
             self.tt_text_embeds_device = ttnn.allocate_tensor_on_device(
                 tt_text_embeds[0].shape,
@@ -510,31 +493,15 @@ class TtSDXLPipeline(LightweightModule):
                 ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            # self.tt_time_ids_device = [
-            #     ttnn.from_torch(
-            #         tt_time_ids[0].squeeze(0),
-            #         dtype=ttnn.bfloat16,
-            #         device=self.ttnn_device,
-            #         layout=ttnn.TILE_LAYOUT,
-            #         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            #         mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device) if is_mesh_device else None,
-            #     ),
-            #     ttnn.from_torch(
-            #         tt_time_ids[1].squeeze(0),
-            #         dtype=ttnn.bfloat16,
-            #         device=self.ttnn_device,
-            #         layout=ttnn.TILE_LAYOUT,
-            #         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            #         mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device) if is_mesh_device else None,
-            #     ),
-            # ]
-
             self.tt_time_ids_device = ttnn.from_torch(
                 tt_time_ids,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                device=self.ttnn_device,
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(0, None)),
             )
+            self.tt_time_ids_device = ttnn.squeeze(self.tt_time_ids_device, dim=0)
             ttnn.synchronize_device(self.ttnn_device)
             profiler.end("prepare_input_tensors")
 
@@ -609,6 +576,8 @@ class TtSDXLPipeline(LightweightModule):
             self.tt_latents_shape,
             self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
             self.batch_size,
+            self.ag_persistent_buffer,
+            self.ag_semaphores,
             capture_trace=True,
             use_tp=self.pipeline_config.use_tp,
         )
