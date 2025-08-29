@@ -1090,6 +1090,8 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
 
     if constexpr (update_addr_lo) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, dest_addr);
+        uint32_t be32 = 0xF << (dest_addr & (NOC_WORD_BYTES - 1));
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
     } else if constexpr (update_addr_hi) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, dest_addr);
     }
