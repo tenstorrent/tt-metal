@@ -41,7 +41,6 @@ std::uint8_t compressed_routing_table_t<ArraySize>::compress_value(std::uint8_t 
         case eth_chan_magic_values::INVALID_DIRECTION:
             return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_INVALID_DIRECTION);
         case eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY:
-            return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_INVALID_ROUTING_TABLE_ENTRY);
         default: return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_INVALID_ROUTING_TABLE_ENTRY);
     }
 }
