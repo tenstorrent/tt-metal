@@ -37,6 +37,7 @@ set(SOURCES
     serialization/model_serializer_test.cpp
     serialization/msgpack_serializer_test.cpp
     serialization/tensor_serializer_test.cpp
+    serialization/safetensors_test.cpp
     ops/cross_entropy_fw_op_test.cpp
     ops/positional_embedding_test.cpp
     ops/layer_norm_op_test.cpp
@@ -78,6 +79,7 @@ else()
 endif()
 
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
+add_definitions(-DTEST_LOCAL_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/local_data")
 
 # Define the target file location
 set(SHAKESPEARE_URL "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt")
