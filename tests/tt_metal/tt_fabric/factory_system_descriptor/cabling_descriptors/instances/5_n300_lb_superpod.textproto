@@ -5,30 +5,30 @@ graph_templates {
   name: "5lb"
   children {
     name: "pod1"
-    pod_ref { pod_descriptor: "n300_t3k_pod" }
+    pod_ref { pod_descriptor: "n300_lb_pod" }
   }
   children {
     name: "pod2"
-    pod_ref { pod_descriptor: "n300_t3k_pod" }
+    pod_ref { pod_descriptor: "n300_lb_pod" }
   }
   children {
     name: "pod3"
-    pod_ref { pod_descriptor: "n300_t3k_pod" }
+    pod_ref { pod_descriptor: "n300_lb_pod" }
   }
   children {
     name: "pod4"
-    pod_ref { pod_descriptor: "n300_t3k_pod" }
+    pod_ref { pod_descriptor: "n300_lb_pod" }
   }
   children {
     name: "pod5"
-    pod_ref { pod_descriptor: "n300_t3k_pod" }
+    pod_ref { pod_descriptor: "n300_lb_pod" }
   }
   internal_connections {
     key: "QSFP"
     value {
       connections {
-        port_a { path: ["pod1"] tray_id: 0 port_id: 2 }
-        port_b { path: ["pod2"] tray_id: 0 port_id: 2 }
+        port_a { path: ["pod1"] tray_id: 4 port_id: 2 }
+        port_b { path: ["pod2"] tray_id: 1 port_id: 2 }
       }
       connections {
         port_a { path: ["pod1"] tray_id: 3 port_id: 1 }
@@ -49,7 +49,6 @@ graph_templates {
 # Root instance - just one 5LB graph
 root_instance {
   template_name: "5lb"
-  instance_id: 1
   child_mappings {
     key: "pod1"
     value { host_id: 0 }

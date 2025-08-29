@@ -221,9 +221,9 @@ find_package(Protobuf REQUIRED)
 protobuf_generate_cpp(
     PROTO_SRCS
     PROTO_HDRS
-    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/factory_system_descriptor.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/pod_config.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/cluster_config.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/schemas/factory_system_descriptor.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/schemas/pod_config.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/schemas/cluster_config.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/deployment/deployment.proto
 )
 
