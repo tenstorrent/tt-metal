@@ -882,7 +882,7 @@ class MLA1D(SharedStateAddOn, AbstractModule):
 
         # CCL states setup (Must be in order of execution)
         get_rs_params = lambda axis: {
-            "multi_device_global_semaphore": ccl.get_reduce_sem(axis=axis),
+            "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(axis=axis),
             "barrier_semaphore": ccl.get_barrier_sem(axis=axis),
             "num_links": ccl.get_max_links(axis=axis),
         }

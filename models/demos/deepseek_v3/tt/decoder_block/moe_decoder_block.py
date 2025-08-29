@@ -135,6 +135,7 @@ class MoEDecoderBlock(DecoderBlockBase):
             },
             "revert_dp": {
                 "multi_device_global_semaphore": ccl.get_gather_sem(0),
+                "barrier_semaphore": ccl.get_barrier_sem(1),
             },
         }
 

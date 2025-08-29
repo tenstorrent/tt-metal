@@ -20,14 +20,14 @@ class CCL1D:
         self.from_sems = []
         self.to_sems = []
         self.point_to_point_sems = []
-        self.reduce_sems = []
+        self.reduce_scatter_sems = []
         self.barrier_sems = []
         for _ in range(len(list(mesh_device.shape))):
             self.gather_sems.append([])
             self.from_sems.append([])
             self.to_sems.append([])
             self.point_to_point_sems.append([])
-            self.reduce_sems.append([])
+            self.reduce_scatter_sems.append([])
             self.barrier_sems.append([])
             for _ in range(2):
                 self.gather_sems[-1].append(
@@ -41,7 +41,7 @@ class CCL1D:
                 self.point_to_point_sems[-1].append(
                     ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0)
                 )
-                self.reduce_sems[-1].append(
+                self.reduce_scatter_sems[-1].append(
                     [
                         ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
                         ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
@@ -106,11 +106,11 @@ class CCL1D:
         self.sem_cnt[axis] = (self.sem_cnt[axis] + 1) % 2
         return sem
 
-    def get_reduce_sem(self, axis):
+    def get_reduce_scatter_sem(self, axis):
         """
         Get a semaphore for the given axis.
         """
-        sem = self.reduce_sems[axis][self.sem_cnt[axis]]
+        sem = self.reduce_scatter_sems[axis][self.sem_cnt[axis]]
         self.sem_cnt[axis] = (self.sem_cnt[axis] + 1) % 2
         return sem
 
