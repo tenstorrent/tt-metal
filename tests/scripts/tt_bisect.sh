@@ -13,11 +13,9 @@ else
   echo "Not running inside Docker"
 fi
 
-# Workspace & env
-: "${TT_METAL_HOME:=$(pwd)}"
-export TT_METAL_HOME
 
 
+./create_venv.sh
 # Make in-tree modules win and avoid user site interference
 export PYTHONNOUSERSITE=1
 export PYTHONFAULTHANDLER=1
