@@ -106,8 +106,8 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const uint32_t output_cb_page_size = tt::constants::FACE_WIDTH * output_tensor.element_size();
     const uint32_t output_cb_num_pages = out_ntiles_c * buffering_factor;
     // Calculate number of grids for multi-grid support (needed for reader compile args)
-    uint32_t grid_last_dim = grid_shape[-1];
-    uint32_t num_grids = use_precomputed_grid ? (grid_last_dim / 6) : (grid_last_dim / 2);
+    uint32_t grid_last_dim = grid_tensor.logical_shape()[-1];
+    const uint32_t num_grids = use_precomputed_grid ? (grid_last_dim / 6) : (grid_last_dim / 2);
 
     const auto [output_cb_index, output_cb_handle] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, output_cb_page_size, output_cb_num_pages, output_cb_data_format);
@@ -160,7 +160,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             dummy_cb_id,                              // 10: Scalar CB 1 (unused)
             output_cb_index,                          // 11: Output CB
             one_scalar_per_core,                      // 12: Scalar mode
-            in_ntiles_c                               // 13: Tiles per channel (for CB space reservation)
+            out_ntiles_c                              // 13: Tiles per channel (for CB space reservation)
         };
 
         compute_kernel_group_1 = tt::tt_metal::CreateKernel(
@@ -191,7 +191,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             dummy_cb_id,                              // 10: Scalar CB 1 (unused)
             output_cb_index,                          // 11: Output CB
             one_scalar_per_core,                      // 12: Scalar mode
-            in_ntiles_c                               // 13: Tiles per channel (for CB space reservation)
+            out_ntiles_c                              // 13: Tiles per channel (for CB space reservation)
         };
 
         compute_kernel_group_2 = tt::tt_metal::CreateKernel(
