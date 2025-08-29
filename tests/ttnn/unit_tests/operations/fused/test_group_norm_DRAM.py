@@ -3,23 +3,30 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 import torch
-
-from loguru import logger
-
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
-from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
+        # Simple cases to test Welford's algorithm
+        (1, 32, 1, 32, 1, 1, 1, 1),
+        (1, 32 * 8, 1, 32, 8, 1, 8, 1),
+        (1, 32, 1, 32 * 2, 1, 1, 1, 2),
+        (1, 32, 1, 32 * 32, 1, 1, 1, 8),
+        (2, 32 * 8, 1, 32 * 32, 8, 1, 8, 2),
+        (1, 32 * 8, 1, 32 * 32, 8, 2, 8, 8),
+        (8, 768, 1, 32 * 32, 8, 2, 8, 8),
+        (8, 32 * 8, 1, 32, 8, 1, 8, 1),
+        (8, 32 * 32, 1, 512, 8, 2, 8, 8),
+        (8, 768, 1, 512, 8, 2, 8, 8),
+        (1, 128, 1, 512, 1, 2, 1, 1),
+        # Existing cases
         (8, 768, 1, 512, 32, 2, 8, 8),  # base case
-        (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
         (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
         (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
         (1, 480, 1, 64, 8, 1, 1, 1),  # test last group ends less than max tile span
@@ -65,7 +72,8 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
         (1, 128 // 4, 1024, 1024, 32 // 4, 8, 8, 8),
     ],
 )
-def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x):
+@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
+def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, use_welford):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
@@ -111,6 +119,7 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
             core_grid=grid_size,
             inplace=False,
             num_out_blocks=num_out_blocks,
+            use_welford=use_welford,
         )
         ttnn.synchronize_device(device)
 
