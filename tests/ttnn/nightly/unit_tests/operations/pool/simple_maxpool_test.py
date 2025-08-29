@@ -5,12 +5,12 @@ import math
 device = ttnn.CreateDevice(0, l1_small_size=8192)
 
 in_n = 1
-in_h = 159
-in_w = 159
-in_c = 1
+in_h = 3
+in_w = 3
+in_c = 32
 kernel_size = [3, 3]
 stride = [1, 1]
-padding = [1, 1]
+padding = [0, 0]
 dilation = [1, 1]
 shard_scheme = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 ceil_mode = False
@@ -49,13 +49,16 @@ torch.manual_seed(0)
 # torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
 
 # Create tensor where each element equals its HW coordinate (h * in_w + w)
-torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
-# torch_input = torch.zeros(tensor_shape, dtype=torch.bfloat16)
-# for n in range(in_n):
-#     for c in range(in_c):
-#         for h in range(in_h):
-#             for w in range(in_w):
-#                 torch_input[n, c, h, w] = 1
+# torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+torch_input = torch.zeros(tensor_shape, dtype=torch.bfloat16)
+for n in range(in_n):
+    for c in range(in_c):
+        for h in range(in_h):
+            for w in range(in_w):
+                val = 1
+                if c > 15:
+                    val = 2
+                torch_input[n, c, h, w] = val
 
 ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
 torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
