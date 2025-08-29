@@ -76,6 +76,7 @@ def create_tt_clip_text_encoders(pipeline, ttnn_device):
 
 def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, tokenizer_2, ttnn_device, batch_size):
     logger.info("Performing warmup run on encoding, to make use of program caching in actual inference...")
+    batch_size = ttnn_device.get_num_devices()
     dummy_prompt = ["abc"] * batch_size
     dummy_ids = tokenizer(
         dummy_prompt,
@@ -132,6 +133,7 @@ def batch_encode_prompt_on_device(
     negative_pooled_prompt_embeds: Optional[torch.Tensor] = None,
     lora_scale: Optional[float] = None,
     clip_skip: Optional[int] = None,
+    use_tp: bool = False,
 ):
     r"""
     Encodes the prompt into text encoder hidden states.
@@ -178,6 +180,11 @@ def batch_encode_prompt_on_device(
     prompt = [prompt] if isinstance(prompt, str) else prompt
 
     num_devices = ttnn_device.get_num_devices()
+    num_promts = len(prompt)
+    if use_tp and num_promts < num_devices:
+        # Pad prompts by cycling through existing ones to match num_devices
+        prompt = [prompt[i % len(prompt)] for i in range(num_devices)]
+
     assert len(prompt) == num_devices, "Prompt length must be equal to number of devices"
     assert prompt_2 is None, "Prompt 2 is not supported currently"
     assert lora_scale is None, "Lora scale is not supported currently with on device text encoders"
@@ -384,7 +391,15 @@ def batch_encode_prompt_on_device(
             bs_embed * num_images_per_prompt, -1
         )
 
-    return prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds
+    if not use_tp:
+        return prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds
+    else:
+        return (
+            prompt_embeds[:num_promts],
+            negative_prompt_embeds[:num_promts],
+            pooled_prompt_embeds[:num_promts],
+            negative_pooled_prompt_embeds[:num_promts],
+        )
 
 
 # Copied from sdxl pipeline
@@ -518,7 +533,7 @@ def run_tt_image_gen(
                     input_shape,
                     tt_prompt_embeds[unet_slice] if not use_tp else tt_prompt_embeds,
                     tt_time_ids if use_tp else tt_time_ids[unet_slice],
-                    tt_text_embeds[unet_slice] if not use_tp else tt_text_embeds,
+                    ttnn.unsqueeze(tt_text_embeds[unet_slice], dim=0) if not use_tp else tt_text_embeds,
                 )
 
                 unet_outputs.append(noise_pred)

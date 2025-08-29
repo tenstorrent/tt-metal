@@ -57,7 +57,7 @@ class TtSDXLPipeline(LightweightModule):
 
         self.ttnn_device = ttnn_device
         self.cpu_device = "cpu"
-        self.batch_size = ttnn_device.get_num_devices()
+        self.batch_size = list(self.ttnn_device.shape)[1] if pipeline_config.use_tp else ttnn_device.get_num_devices()
         self.torch_pipeline = torch_pipeline
         self.pipeline_config = pipeline_config
 
@@ -219,6 +219,7 @@ class TtSDXLPipeline(LightweightModule):
                     negative_pooled_prompt_embeds=None,
                     lora_scale=None,
                     clip_skip=None,
+                    use_tp=self.pipeline_config.use_tp,
                 )
                 # batch_encode_prompt_on_device returns a single tuple of 4 tensors,
                 # but we need individual tuples for each prompt

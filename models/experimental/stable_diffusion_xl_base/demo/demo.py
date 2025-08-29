@@ -86,13 +86,6 @@ def run_demo_inference(
         torch_add_text_embeds,  # tuple len = prompts/batch_size of tensors of shape (2, 77, 2048)
     ) = tt_sdxl.encode_prompts(prompts, negative_prompts)
 
-    # prompt_embeds_torch is tuple of len = prompts/batch_size of tensors of shape (batch_size, 77, 2048)
-
-    # prompt_embeds_torch = torch.stack(prompt_embeds_torch, dim=0) # not sure if this is right, should be (prompts/batch_size, 2, 77, 2048)
-    # negative_prompt_embeds_torch = torch.stack(negative_prompt_embeds_torch, dim=0) # which should be split into 2 tensors of shape (prompts/batch_size, 1, 77, 2048)
-    # pooled_prompt_embeds_torch = torch.stack(pooled_prompt_embeds_torch, dim=0)
-    # negative_pooled_prompt_embeds_torch = torch.stack(negative_pooled_prompt_embeds_torch, dim=0)
-
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
         all_prompt_embeds_torch,
         torch_add_text_embeds,
@@ -196,26 +189,34 @@ def prepare_device(mesh_device, use_tp):
 @pytest.mark.parametrize(
     "vae_on_device",
     [
+        (True),
         (False),
     ],
+    ids=("device_vae", "host_vae"),
 )
 @pytest.mark.parametrize(
     "encoders_on_device",
     [
+        (True),
         (False),
     ],
+    ids=("device_encoders", "host_encoders"),
 )
 @pytest.mark.parametrize(
     "capture_trace",
     [
+        (True),
         (False),
     ],
+    ids=("with_trace", "no_trace"),
 )
 @pytest.mark.parametrize(
     "use_tp",
     [
         (True),
+        (False),
     ],
+    ids=("use_tp", "no_tp"),
 )
 def test_demo(
     mesh_device,
