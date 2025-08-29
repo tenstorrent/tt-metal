@@ -1,33 +1,73 @@
 syntax = "proto3";
 
+import "pod_config.proto";
+
 package tt.fsd.proto;
 
+// TODO: Allow/move pod descriptors here
 message ClusterDescriptor {
-    message SuperPod {
-      int32 superpod_id = 1;
-      string superpod_type = 2;
-    }
+    // Graph templates - reusable definitions (can be nested arbitrarily)
+    repeated GraphTemplate graph_templates = 1;
 
-    message SuperPods {
-        repeated SuperPod superpod = 1;
-    }
+    // Root graph instance
+    GraphInstance root_instance = 2;
+}
 
-    message Port {
-        int32 superpod_id = 1;
-        int32 pod_id = 2;
-        int32 tray_id = 3;
-        int32 port_id = 4;
-    }
+message GraphTemplate {
+    string name = 1;
 
-    message Connection {
-        Port port_a = 1;
-        Port port_b = 2;
-    }
+    // Child instances within this template
+    repeated ChildInstance children = 2;
 
-    message PortConnections {
-        repeated Connection connections = 1;
-    }
+    // Internal connections within this graph template
+    map<string, PortConnections> internal_connections = 3;
+}
 
-    SuperPods superpods = 1;
-    map<string, PortConnections> port_type_connections = 2;
+message ChildInstance {
+    string name = 1;  // Instance name within the template
+
+    oneof instance_type {
+        PodRef pod_ref = 2;      // Leaf node - always a pod
+        GraphRef graph_ref = 3;  // Can reference another graph template (arbitrary depth)
+    }
+}
+
+message PodRef {
+    string pod_descriptor = 1;  // e.g. "n300_t3k_pod"
+}
+
+message GraphRef {
+    string graph_template = 1;  // e.g. "n300_t3k_superpod", "memory_subsystem", etc.
+}
+
+// Graph instance - instantiation of a template with concrete mappings
+message GraphInstance {
+    string template_name = 1;
+    int32 instance_id = 2;      // Unique ID for this instance
+
+    // Recursive child mappings - each child gets mapped to host_id (if pod) or sub-instance (if graph)
+    map<string, ChildMapping> child_mappings = 3;
+}
+
+message ChildMapping {
+    oneof mapping {
+        int32 host_id = 1;                // For pod instances (leaf nodes)
+        GraphInstance sub_instance = 2;  // For nested graph instances (recursive)
+    }
+}
+
+// Path-based addressing - supports arbitrary depth
+message Port {
+    repeated string path = 1;   // Path down the hierarchy: ["superpod1", "memory_group", "pod2"]
+    int32 tray_id = 2;
+    int32 port_id = 3;
+}
+
+message Connection {
+    Port port_a = 1;
+    Port port_b = 2;
+}
+
+message PortConnections {
+    repeated Connection connections = 1;
 }
