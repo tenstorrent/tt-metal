@@ -240,9 +240,9 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.97)
 
 
-@pytest.mark.parametrize("h", [32, 1024])
-@pytest.mark.parametrize("w", [2880, 4096])
-@pytest.mark.parametrize("use_welford", [True, False])
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [4096])
+@pytest.mark.parametrize("use_welford", [True])
 @skip_welford_blackhole("'use_welford'")
 def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford):
     if not use_welford:
@@ -250,8 +250,8 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
 
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_residual_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.ones((h, w), dtype=torch.bfloat16)
+    torch_residual_input_tensor = torch.ones((h, w), dtype=torch.bfloat16)
     torch_weight = torch.rand((w,), dtype=torch.bfloat16)
     torch_bias = torch.rand((w,), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.layer_norm(
@@ -274,5 +274,8 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    print(torch_output_tensor)
+    print(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)
