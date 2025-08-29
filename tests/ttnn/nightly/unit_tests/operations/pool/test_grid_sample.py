@@ -87,7 +87,7 @@ def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape, use_prec
 @pytest.mark.parametrize(
     "input_shape, grid_shape, channel_extent_factor",
     [
-        ((1, 256, 48, 160), (1, 25281, 7, 2), 7),
+        ((1, 256, 48, 160), (1, 25281, 7, 2), 1),
         # ((1, 32, 16, 16), (1, 8, 8, 2), 1),
         # ((2, 64, 24, 24), (2, 12, 12, 2), 2),
         # ((2, 64, 24, 24), (2, 12, 12, 2), 3),
