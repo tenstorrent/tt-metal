@@ -37,6 +37,121 @@ struct StateDependenciesParam {
 
 namespace tt::tt_metal {
 
+// --- IntervalSet unit tests (explicitly test add/remove) ---
+using IS = BankManager::IntervalSet;
+
+TEST(IntervalSetTest, AddMergesAndOrders) {
+    IS s;
+
+    // Add a single range
+    s.add(10, 20);
+    ASSERT_EQ(s.ranges.size(), 1u);
+    EXPECT_EQ(s.ranges[0].first, 10);
+    EXPECT_EQ(s.ranges[0].second, 20);
+
+    // Add adjacent range -> should merge
+    s.add(20, 30);
+    ASSERT_EQ(s.ranges.size(), 1u);
+    EXPECT_EQ(s.ranges[0].first, 10);
+    EXPECT_EQ(s.ranges[0].second, 30);
+
+    // Add overlapping/expanding range -> should merge and expand
+    s.add(5, 12);
+    ASSERT_EQ(s.ranges.size(), 1u);
+    EXPECT_EQ(s.ranges[0].first, 5);
+    EXPECT_EQ(s.ranges[0].second, 30);
+
+    // Add disjoint range -> should keep two sorted, disjoint intervals
+    s.add(50, 60);
+    ASSERT_EQ(s.ranges.size(), 2u);
+    EXPECT_EQ(s.ranges[0].first, 5);
+    EXPECT_EQ(s.ranges[0].second, 30);
+    EXPECT_EQ(s.ranges[1].first, 50);
+    EXPECT_EQ(s.ranges[1].second, 60);
+
+    // Add no-op invalid range (start >= end)
+    s.add(100, 100);
+    ASSERT_EQ(s.ranges.size(), 2u);
+    EXPECT_EQ(s.ranges[0].first, 5);
+    EXPECT_EQ(s.ranges[0].second, 30);
+    EXPECT_EQ(s.ranges[1].first, 50);
+    EXPECT_EQ(s.ranges[1].second, 60);
+}
+
+TEST(IntervalSetTest, RemoveSplitsAndBounds) {
+    IS s;
+    s.add(5, 30);
+    s.add(50, 60);
+    ASSERT_EQ(s.ranges.size(), 2u);
+    EXPECT_EQ(s.ranges[0].first, 5);
+    EXPECT_EQ(s.ranges[0].second, 30);
+    EXPECT_EQ(s.ranges[1].first, 50);
+    EXPECT_EQ(s.ranges[1].second, 60);
+
+    // Remove range touching boundary (half-open), no overlap
+    s.remove(30, 40);
+    ASSERT_EQ(s.ranges.size(), 2u);
+    EXPECT_EQ(s.ranges[0].first, 5);
+    EXPECT_EQ(s.ranges[0].second, 30);
+    EXPECT_EQ(s.ranges[1].first, 50);
+    EXPECT_EQ(s.ranges[1].second, 60);
+
+    // Remove interior -> split into two
+    s.remove(10, 20);
+    ASSERT_EQ(s.ranges.size(), 3u);
+    EXPECT_EQ(s.ranges[0].first, 5);
+    EXPECT_EQ(s.ranges[0].second, 10);
+    EXPECT_EQ(s.ranges[1].first, 20);
+    EXPECT_EQ(s.ranges[1].second, 30);
+    EXPECT_EQ(s.ranges[2].first, 50);
+    EXPECT_EQ(s.ranges[2].second, 60);
+
+    // Remove across multiple ranges -> trims appropriately
+    s.remove(0, 55);
+    ASSERT_EQ(s.ranges.size(), 1u);
+    EXPECT_EQ(s.ranges[0].first, 55);
+    EXPECT_EQ(s.ranges[0].second, 60);
+
+    // Remove no-op invalid range
+    s.remove(100, 100);
+    ASSERT_EQ(s.ranges.size(), 1u);
+    EXPECT_EQ(s.ranges[0].first, 55);
+    EXPECT_EQ(s.ranges[0].second, 60);
+}
+
+TEST(IntervalSetTest, AddRemoveSequenceMaintainsCanonicalForm) {
+    IS s;
+
+    // Build up two ranges
+    s.add(0, 5);
+    s.add(10, 15);
+    ASSERT_EQ(s.ranges.size(), 2u);
+    EXPECT_EQ(s.ranges[0].first, 0);
+    EXPECT_EQ(s.ranges[0].second, 5);
+    EXPECT_EQ(s.ranges[1].first, 10);
+    EXPECT_EQ(s.ranges[1].second, 15);
+
+    // Bridge the gap to force merge into one
+    s.add(5, 10);
+    ASSERT_EQ(s.ranges.size(), 1u);
+    EXPECT_EQ(s.ranges[0].first, 0);
+    EXPECT_EQ(s.ranges[0].second, 15);
+
+    // Carve out the middle
+    s.remove(6, 9);
+    ASSERT_EQ(s.ranges.size(), 2u);
+    EXPECT_EQ(s.ranges[0].first, 0);
+    EXPECT_EQ(s.ranges[0].second, 6);
+    EXPECT_EQ(s.ranges[1].first, 9);
+    EXPECT_EQ(s.ranges[1].second, 15);
+
+    // Fill it back (adjacent/overlap) and ensure coalesced
+    s.add(6, 9);
+    ASSERT_EQ(s.ranges.size(), 1u);
+    EXPECT_EQ(s.ranges[0].first, 0);
+    EXPECT_EQ(s.ranges[0].second, 15);
+}
+
 // --- StateDependencies parameterized tests ---
 using StateId = BankManager::StateDependencies::StateId;
 

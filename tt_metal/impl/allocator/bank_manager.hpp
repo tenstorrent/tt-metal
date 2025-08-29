@@ -51,6 +51,14 @@ public:
         uint32_t num_states() const;
     };
 
+    // Per-source reservations: for each state, map of source_state -> disjoint interval set
+    struct IntervalSet {
+        // Stored as sorted, disjoint intervals [start, end)
+        std::vector<std::pair<DeviceAddr, DeviceAddr>> ranges;
+        void add(DeviceAddr start, DeviceAddr end);
+        void remove(DeviceAddr start, DeviceAddr end);
+    };
+
     BankManager(
         const BufferType& buffer_type,
         const std::vector<int64_t>& bank_descriptors,
@@ -118,18 +126,12 @@ private:
     // State-dependent members
     // Dependencies between states (also encodes number of states)
     StateDependencies state_dependencies_{};
+    // Allocator masks contributed by dependencies on other states
+    ttsl::SmallVector<std::unordered_map<uint32_t, IntervalSet>> reservations_by_source_{};
 
-    // Track allocations per state: base address -> size_per_bank
-    std::vector<std::unordered_map<DeviceAddr, DeviceAddr>> allocated_buffers_{};
-    std::vector<std::unique_ptr<allocator::Algorithm>> allocators_{};
-    // Per-source reservations: for each state, map of source_state -> disjoint interval set
-    struct IntervalSet {
-        // Stored as sorted, disjoint intervals [start, end)
-        std::vector<std::pair<DeviceAddr, DeviceAddr>> ranges;
-        void add(DeviceAddr start, DeviceAddr end);
-        void remove(DeviceAddr start, DeviceAddr end);
-    };
-    std::vector<std::unordered_map<uint32_t, IntervalSet>> reservations_by_source_{};
+    // Track allocations per state
+    ttsl::SmallVector<std::unordered_map<DeviceAddr, DeviceAddr>> allocated_buffers_{};
+    ttsl::SmallVector<std::unique_ptr<allocator::Algorithm>> allocators_{};
 
     // State-independent methods
     void validate_bank_id(uint32_t bank_id) const;
