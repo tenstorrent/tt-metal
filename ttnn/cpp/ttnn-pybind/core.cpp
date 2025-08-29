@@ -87,9 +87,9 @@ void py_module(py::module& module) {
 
     module.def("dump_stack_trace_on_segfault", &ttnn::core::dump_stack_trace_on_segfault);
 
-    module.def("get_current_command_queue_id", &ttnn::core::get_current_command_queue_id);
-    module.def("push_current_command_queue_id", &ttnn::core::push_current_command_queue_id);
-    module.def("pop_current_command_queue_id", &ttnn::core::pop_current_command_queue_id);
+    module.def("get_current_command_queue_id_for_thread", &ttnn::core::get_current_command_queue_id_for_thread);
+    module.def("push_current_command_queue_id_for_thread", &ttnn::core::push_current_command_queue_id_for_thread);
+    module.def("pop_current_command_queue_id_for_thread", &ttnn::core::pop_current_command_queue_id_for_thread);
 }
 
 }  // namespace ttnn::core

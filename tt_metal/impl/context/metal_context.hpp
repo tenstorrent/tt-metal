@@ -93,9 +93,12 @@ public:
     void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
     tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
 
+    // This is used to track the current thread's command queue id stack
     using CommandQueueIdStack = std::vector<uint8_t>;
-    CommandQueueIdStack& get_current_command_queue_id_stack();
-    const CommandQueueIdStack& get_current_command_queue_id_stack() const;
+    CommandQueueIdStack& get_command_queue_id_stack_for_thread() { return command_queue_id_stack_for_thread_; }
+    const CommandQueueIdStack& get_command_queue_id_stack_for_thread() const {
+        return command_queue_id_stack_for_thread_;
+    }
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;
@@ -158,8 +161,10 @@ private:
     tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
 
-    // Used to track the current command queue id
-    CommandQueueIdStack current_command_queue_id_stack_;
+    // We are using a thread_local to allow each thread to have its own command queue id stack.
+    // This not only allows consumers to set active command queue for a thread
+    // but to also easily push/pop ids to temporarily change the current cq id.
+    thread_local CommandQueueIdStack command_queue_id_stack_for_thread_;
 
     // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
     // is expected that any downed devices/links will result in some sort of error condition being

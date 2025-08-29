@@ -480,7 +480,7 @@ tt_fabric::FabricNodeId MeshDevice::get_fabric_node_id(const MeshCoordinate& coo
 }
 
 MeshCommandQueue& MeshDevice::mesh_command_queue(std::optional<uint8_t> cq_id) const {
-    auto id = cq_id.value_or(GetCurrentCommandQueueId());
+    auto id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
 
     TT_FATAL(id < mesh_command_queues_.size(), "cq_id {} is out of range", id);
     return *(mesh_command_queues_[id]);
@@ -836,7 +836,7 @@ std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& t
 }
 
 void MeshDevice::begin_mesh_trace(std::optional<uint8_t> cq_id, const MeshTraceId& trace_id) {
-    uint8_t actual_cq_id = cq_id.value_or(GetCurrentCommandQueueId());
+    uint8_t actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
 
     TracyTTMetalBeginMeshTrace(this->get_device_ids(), *trace_id);
     TT_FATAL(
@@ -858,7 +858,7 @@ void MeshDevice::begin_mesh_trace(std::optional<uint8_t> cq_id, const MeshTraceI
 }
 
 void MeshDevice::end_mesh_trace(std::optional<uint8_t> cq_id, const MeshTraceId& trace_id) {
-    uint8_t actual_cq_id = cq_id.value_or(GetCurrentCommandQueueId());
+    uint8_t actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
 
     TracyTTMetalEndMeshTrace(this->get_device_ids(), *trace_id);
     TT_FATAL(
@@ -881,7 +881,7 @@ void MeshDevice::end_mesh_trace(std::optional<uint8_t> cq_id, const MeshTraceId&
 }
 
 void MeshDevice::replay_mesh_trace(std::optional<uint8_t> cq_id, const MeshTraceId& trace_id, bool blocking) {
-    uint8_t actual_cq_id = cq_id.value_or(GetCurrentCommandQueueId());
+    uint8_t actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
 
     ZoneScoped;
     TracyTTMetalReplayMeshTrace(this->get_device_ids(), *trace_id);

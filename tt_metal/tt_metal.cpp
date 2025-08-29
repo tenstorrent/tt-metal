@@ -1440,25 +1440,25 @@ void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::S
     }
 }
 
-void PushCurrentCommandQueueId(uint8_t cq_id) {
-    auto& command_queue_id_stack = MetalContext::instance().get_current_command_queue_id_stack();
-    command_queue_id_stack.push_back(cq_id);
+void PushCurrentCommandQueueIdForThread(uint8_t cq_id) {
+    auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
+    cq_stack.push_back(cq_id);
 }
 
-uint8_t PopCurrentCommandQueueId() {
-    auto& command_queue_id_stack = MetalContext::instance().get_current_command_queue_id_stack();
-    TT_FATAL(!command_queue_id_stack.empty(), "Current command queue id stack is empty!");
-    uint8_t cq_id = command_queue_id_stack.back();
-    command_queue_id_stack.pop_back();
+uint8_t PopCurrentCommandQueueIdForThread() {
+    auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
+    TT_FATAL(!cq_stack.empty(), "Current command queue id stack is empty!");
+    uint8_t cq_id = cq_stack.back();
+    cq_stack.pop_back();
     return cq_id;
 }
 
-uint8_t GetCurrentCommandQueueId() {
-    const auto& command_queue_id_stack = MetalContext::instance().get_current_command_queue_id_stack();
-    if (command_queue_id_stack.empty()) {
+uint8_t GetCurrentCommandQueueIdForThread() {
+    const auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
+    if (cq_stack.empty()) {
         return 0;
     }
-    return command_queue_id_stack.back();
+    return cq_stack.back();
 }
 
 namespace experimental {

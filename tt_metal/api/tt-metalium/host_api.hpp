@@ -964,7 +964,7 @@ void Synchronize(
  * | cq_id        | The command queue id to push.                                                     | uint8_t                       |                                    | Yes      |
  */
 // clang-format on
-void PushCurrentCommandQueueId(uint8_t cq_id);
+void PushCurrentCommandQueueIdForThread(uint8_t cq_id);
 
 // clang-format off
 /**
@@ -972,7 +972,7 @@ void PushCurrentCommandQueueId(uint8_t cq_id);
  * Return value: uint8_t
  */
 // clang-format on
-uint8_t PopCurrentCommandQueueId();
+uint8_t PopCurrentCommandQueueIdForThread();
 
 // clang-format off
 /**
@@ -980,7 +980,7 @@ uint8_t PopCurrentCommandQueueId();
  * Return value: uint8_t
  */
 // clang-format on
-uint8_t GetCurrentCommandQueueId();
+uint8_t GetCurrentCommandQueueIdForThread();
 
 }  // namespace tt_metal
 

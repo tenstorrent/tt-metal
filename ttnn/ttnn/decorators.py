@@ -73,9 +73,9 @@ def compare_tensors_using_pcc(
 
 PRE_OPERATION_HOOKS = []
 
-push_current_command_queue_id = ttnn._ttnn.core.push_current_command_queue_id
-pop_current_command_queue_id = ttnn._ttnn.core.pop_current_command_queue_id
-get_current_command_queue_id = ttnn._ttnn.core.get_current_command_queue_id
+push_current_command_queue_id_for_thread = ttnn._ttnn.core.push_current_command_queue_id_for_thread
+pop_current_command_queue_id_for_thread = ttnn._ttnn.core.pop_current_command_queue_id_for_thread
+get_current_command_queue_id_for_thread = ttnn._ttnn.core.get_current_command_queue_id_for_thread
 
 
 @contextmanager
@@ -103,13 +103,6 @@ def register_pre_operation_hook(hook):
 POST_OPERATION_HOOKS = []
 
 
-# Below hook and context manager allows user to do:
-# with ttnn.command_queue(1):
-#    ttnn.operation1(tensor)           # No cq_id → uses current global cq_id (1)
-#    ttnn.operation2(tensor, cq_id=0)  # Has cq_id → uses 3, then restores to 0
-#    ttnn.operation3(tensor)           # No cq_id → uses current global cq_id (1)
-
-
 def cq_id_pre_hook(operation, function_args, function_kwargs):
     """Pre-operation hook to handle cq_id parameter by temporarily changing command queue"""
     cq_id = None
@@ -123,7 +116,7 @@ def cq_id_pre_hook(operation, function_args, function_kwargs):
 
     # If we have a cq_id to use, save current state and switch
     if cq_id is not None:
-        push_current_command_queue_id(cq_id)
+        push_current_command_queue_id_for_thread(cq_id)
         cq_id_pre_hook._cq_id_pushed = True
 
     return None
@@ -133,7 +126,7 @@ def cq_id_post_hook(operation, function_args, function_kwargs, output):
     """Post-operation hook to restore original command queue after operation completes"""
     # Only pop if we actually pushed a cq_id in the pre-hook
     if cq_id_pre_hook._cq_id_pushed:
-        pop_current_command_queue_id()
+        pop_current_command_queue_id_for_thread()
         cq_id_pre_hook._cq_id_pushed = False  # Reset for next operation
 
     return None
@@ -152,18 +145,18 @@ def command_queue(cq_id: int):
     Example:
         with ttnn.command_queue(1):
             result = ttnn.some_operation(tensor)  # Will use cq_id 1
-            result2 = ttnn.other_operation(tensor, cq_id=2)  # Will use cq_id 2 (overrides context)
+            result2 = ttnn.other_operation(tensor, cq_id=0)  # Will use cq_id 2 (overrides context)
     """
     if cq_id is None:
         raise ValueError("cq_id cannot be None in command_queue context")
 
     logger.debug(f"Switching command queue id from {cq_id}")
-    push_current_command_queue_id(cq_id)
+    push_current_command_queue_id_for_thread(cq_id)
     try:
         yield
     finally:
         # Check if command queue is in expected state when exiting context
-        current_cq_id = get_current_command_queue_id()
+        current_cq_id = get_current_command_queue_id_for_thread()
         if current_cq_id != cq_id:
             logger.warning(
                 f"command_queue({cq_id}) context exiting with unexpected command queue ID: {current_cq_id}. "
@@ -171,7 +164,7 @@ def command_queue(cq_id: int):
                 f"Restoring to original value {cq_id}."
             )
 
-        pop_current_command_queue_id()
+        pop_current_command_queue_id_for_thread()
 
 
 # Register cq_id hooks globally - enabled by default for all TTNN operations
