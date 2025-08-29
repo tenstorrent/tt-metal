@@ -30,6 +30,7 @@ private:
     std::ofstream mesh_devices_ostream;
     std::ofstream mesh_workloads_ostream;
     bool initialized;
+    std::filesystem::path logging_path;
 
     int64_t convert_timestamp(const time_point& tp) const {
         return std::chrono::duration_cast<std::chrono::nanoseconds>(tp.time_since_epoch()).count();
@@ -37,6 +38,10 @@ private:
 
 public:
     Logger(const std::filesystem::path& logging_path);
+
+    std::filesystem::path get_logging_path() const noexcept {
+        return logging_path;
+    }
 
     void log_program_created(const ProgramData& program_data) noexcept;
     void log_program_destroyed(const ProgramData& program_data) noexcept;

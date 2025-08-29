@@ -119,6 +119,7 @@ def generate_header(methods: List[MethodInfo]) -> str:
 
 #pragma once
 
+#include <filesystem>
 #include <functional>
 #include <capnp/ez-rpc.h>
 #include "impl/debug/inspector/rpc.capnp.h"
@@ -129,6 +130,8 @@ class RpcServer final : public rpc::Inspector::Server {
 public:
     RpcServer() = default;
     ~RpcServer() = default;
+
+    void serialize(const std::filesystem::path& directory);
 
     // RPC interface implementation - delegates to callbacks
 '''
@@ -195,6 +198,9 @@ def generate_source(methods: List[MethodInfo]) -> str:
 // Generated from impl/debug/inspector/rpc.capnp by generate_inspector_rpc_server.py
 
 #include "impl/debug/inspector/rpc_server_generated.hpp"
+#include <fstream>
+#include <capnp/serialize-packed.h>
+#include <kj/std/iostream.h>
 #include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_metal::inspector {
@@ -226,6 +232,33 @@ namespace tt::tt_metal::inspector {
         return kj::Promise<void>(KJ_EXCEPTION(FAILED, e.what()));
     }}
 }}
+
+'''
+
+
+    source += '''void RpcServer::serialize(const std::filesystem::path& directory) {
+    if (!std::filesystem::exists(directory)) {
+        std::filesystem::create_directories(directory);
+    }
+'''
+    for method in methods:
+        if method.params:
+            continue
+        method_name_cap = method.name[0].upper() + method.name[1:]
+        source += f'''
+    if ({method.name}_callback) {{
+        auto file_path = directory / "{method.name}.capnp.bin";
+        ::capnp::MallocMessageBuilder message;
+        {method.name}_callback(message.initRoot<rpc::Inspector::{method_name_cap}Results>());
+        std::fstream file(file_path, std::ios::out | std::ios::binary);
+        if (file) {{
+            ::kj::std::StdOutputStream ostream(file);
+            ::kj::BufferedOutputStreamWrapper buffered_output(ostream);
+            ::capnp::writePackedMessage(buffered_output, message);
+        }}
+    }}
+'''
+    source += '''}
 
 '''
 

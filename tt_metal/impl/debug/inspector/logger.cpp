@@ -12,6 +12,7 @@ namespace tt::tt_metal::inspector {
 
 Logger::Logger(const std::filesystem::path& logging_path)
     : initialized(false)
+    , logging_path(logging_path)
 {
     constexpr std::string_view additional_text =
         "\nYou can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment "

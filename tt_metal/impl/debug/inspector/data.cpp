@@ -42,6 +42,10 @@ RpcServer& Data::get_rpc_server() {
     return rpc_server_controller.get_rpc_server();
 }
 
+void Data::serialize() {
+    rpc_server_controller.get_rpc_server().serialize(logger.get_logging_path());
+}
+
 void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results) {
     std::lock_guard<std::mutex> lock(programs_mutex);
     auto programs = results.initPrograms(programs_data.size());

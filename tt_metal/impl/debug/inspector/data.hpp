@@ -16,6 +16,7 @@ public:
 private:
     Data(); // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
 
+    void serialize();
     RpcServer& get_rpc_server();
     void rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results);
     void rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& results);
