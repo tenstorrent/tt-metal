@@ -234,26 +234,22 @@ static FORCE_INLINE void fabric_set_mcast_route(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t* range,
     uint8_t i) {
-#if defined(FABRIC_2D)
+#if defined(FABRIC_2D)  // for both DYNAMIC
     // 2D multicast
     const auto& slot = connection_manager.get(i);
     if (range[i] != 0) {
         switch (slot.tag) {
             case 0: {
-                fabric_set_mcast_route(
-                    packet_header, connection_manager.my_chip_id, connection_manager.my_mesh_id, range[i], 0, 0, 0);
+                fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, range[i], 0, 0, 0);
             } break;
             case 1: {
-                fabric_set_mcast_route(
-                    packet_header, connection_manager.my_chip_id, connection_manager.my_mesh_id, 0, range[i], 0, 0);
+                fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, 0, range[i], 0, 0);
             } break;
             case 2: {
-                fabric_set_mcast_route(
-                    packet_header, connection_manager.my_chip_id, connection_manager.my_mesh_id, 0, 0, range[i], 0);
+                fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, 0, 0, range[i], 0);
             } break;
             case 3: {
-                fabric_set_mcast_route(
-                    packet_header, connection_manager.my_chip_id, connection_manager.my_mesh_id, 0, 0, 0, range[i]);
+                fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, 0, 0, 0, range[i]);
             } break;
             default: ASSERT(FALSE);
         }

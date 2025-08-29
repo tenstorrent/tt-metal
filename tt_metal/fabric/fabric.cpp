@@ -281,6 +281,10 @@ void append_routing_plane_connection_manager_rt_args(
     if (fabric_context.is_2D_routing_enabled()) {
         auto kernel = tt::tt_metal::detail::GetKernel(worker_program, kernel_id);
         kernel->add_defines({{"FABRIC_2D", "1"}});
+        if (fabric_context.is_dynamic_routing_enabled()) {
+            kernel->add_defines({{"FABRIC_2D_DYNAMIC", "1"}});
+            kernel->add_defines({{"DYNAMIC_ROUTING_ENABLED", "1"}});
+        }
         auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
         worker_args.push_back(mesh_shape[1]);                     // ew_dim
         worker_args.push_back(src_fabric_node_id.chip_id);        // my_chip_id
