@@ -262,6 +262,9 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "rsub_tile_init();", fmt::format("rsub_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             break;
         case UnaryOpType::RPOW:
+            std::cout << "log_val: " << logf(param0) << std::endl;
+            std::cout << "param0: " << param0 << std::endl;
+            std::cout << "std::bit_cast<uint32_t>(log_val): " << std::bit_cast<uint32_t>(logf(param0)) << std::endl;
             op_init_and_name = {
                 "rpow_tile_init();",
                 fmt::format("rpow_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(logf(param0)))};
