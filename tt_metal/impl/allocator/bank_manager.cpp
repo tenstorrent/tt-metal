@@ -167,7 +167,7 @@ BankManager::StateDependencies::StateDependencies() : adjacency() {
 }
 
 BankManager::StateDependencies::StateDependencies(
-    const std::unordered_map<StateId, tt::stl::SmallVector<StateId>, Hasher>& deps) {
+    const std::unordered_map<StateId, tt::stl::SmallVector<StateId>>& deps) {
     // Determine total number of states as 1 + max id seen anywhere (keys or values)
     uint32_t max_id = 0;
     if (!deps.empty()) {

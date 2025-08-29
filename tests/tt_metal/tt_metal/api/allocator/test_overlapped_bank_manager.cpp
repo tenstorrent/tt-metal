@@ -45,26 +45,26 @@ namespace tt::tt_metal {
 class StateDependenciesParamTest : public ::testing::TestWithParam<StateDepsCase> {};
 
 TEST_P(StateDependenciesParamTest, BuildsAdjacencyAndInfersAllowedStates) {
-    const auto& tc = GetParam();
-    using SD = BankManager::StateDependencies;
+    const auto& params = GetParam();
+    using StateId = BankManager::StateDependencies::StateId;
 
     // Convert input to StateId + SmallVector
-    std::unordered_map<SD::StateId, tt::stl::SmallVector<SD::StateId>, SD::Hasher> deps{};
-    for (const auto& kv : tc.input) {
-        tt::stl::SmallVector<SD::StateId> neigh;
+    std::unordered_map<StateId, tt::stl::SmallVector<StateId>> deps{};
+    for (const auto& kv : params.input) {
+        tt::stl::SmallVector<StateId> neigh;
         for (auto d : kv.second) {
-            neigh.push_back(SD::StateId{d});
+            neigh.push_back(StateId{d});
         }
-        deps.emplace(SD::StateId{kv.first}, std::move(neigh));
+        deps.emplace(StateId{kv.first}, std::move(neigh));
     }
 
-    SD sd{deps};
+    BankManager::StateDependencies sd{deps};
 
     // Validate allowed states: indices 0..N-1
     std::vector<uint32_t> got_states(sd.adjacency.size());
     std::iota(got_states.begin(), got_states.end(), 0);
     std::sort(got_states.begin(), got_states.end());
-    EXPECT_EQ(got_states, sorted(tc.expected_states));
+    EXPECT_EQ(got_states, sorted(params.expected_states));
     EXPECT_EQ(sd.num_states(), got_states.size());
 
     // Validate edges
@@ -77,8 +77,8 @@ TEST_P(StateDependenciesParamTest, BuildsAdjacencyAndInfersAllowedStates) {
         }
         std::sort(got.begin(), got.end());
 
-        auto exp_it = tc.expected_edges.find(s);
-        std::vector<uint32_t> exp = (exp_it == tc.expected_edges.end()) ? std::vector<uint32_t>{} : exp_it->second;
+        auto exp_it = params.expected_edges.find(s);
+        std::vector<uint32_t> exp = (exp_it == params.expected_edges.end()) ? std::vector<uint32_t>{} : exp_it->second;
         EXPECT_EQ(got, sorted(exp)) << "mismatch for state " << s;
     }
 }
@@ -159,7 +159,7 @@ TEST_F(DeviceSingleCardBufferFixture, TestOverlappedBankManager) {
 TEST_F(DeviceSingleCardBufferFixture, Overlay_MergeUnmerge_RG_into_B) {
     // States: 0=R, 1=G, 2=B
     using SD = BankManager::StateDependencies;
-    std::unordered_map<SD::StateId, tt::stl::SmallVector<SD::StateId>, SD::Hasher> deps_map;
+    std::unordered_map<SD::StateId, tt::stl::SmallVector<SD::StateId>> deps_map;
     deps_map.emplace(SD::StateId{0}, tt::stl::SmallVector<SD::StateId>{SD::StateId{2}});  // R depends on B
     deps_map.emplace(SD::StateId{1}, tt::stl::SmallVector<SD::StateId>{SD::StateId{2}});  // G depends on B
     deps_map.emplace(

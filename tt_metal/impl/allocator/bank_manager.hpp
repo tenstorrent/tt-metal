@@ -39,15 +39,10 @@ public:
             bool operator!=(const StateId& other) const noexcept { return value != other.value; }
         };
 
-        struct Hasher {
-            size_t operator()(const StateId& s) const noexcept { return std::hash<uint32_t>{}(s.value); }
-        };
-
         tt::stl::SmallVector<tt::stl::SmallVector<StateId>> adjacency{};
 
         StateDependencies();
-        explicit StateDependencies(
-            const std::unordered_map<StateId, tt::stl::SmallVector<StateId>, Hasher>& dependencies_map);
+        explicit StateDependencies(const std::unordered_map<StateId, tt::stl::SmallVector<StateId>>& dependencies_map);
 
         uint32_t num_states() const;
     };
@@ -162,3 +157,13 @@ private:
 }  // namespace tt_metal
 
 }  // namespace tt
+
+// Enable default std::hash usage for StateId so callers don't need to pass a hasher
+namespace std {
+template <>
+struct hash<tt::tt_metal::BankManager::StateDependencies::StateId> {
+    size_t operator()(const tt::tt_metal::BankManager::StateDependencies::StateId& s) const noexcept {
+        return std::hash<uint32_t>{}(s.value);
+    }
+};
+}  // namespace std
