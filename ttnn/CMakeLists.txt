@@ -96,12 +96,11 @@ target_sources(
 target_include_directories(
     ttnn_core
     PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>
-        $<INSTALL_INTERFACE:include>
+        api
     PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/api/ttnn
-        ${CMAKE_CURRENT_SOURCE_DIR}/core
-        ${CMAKE_CURRENT_SOURCE_DIR}/cpp # FIXME: Depend on the Ops needed (make the circular obvious)
+        api/ttnn
+        core
+        cpp # FIXME: Depend on the Ops needed (make the circular obvious)
 )
 target_include_directories(ttnn_core SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 target_link_libraries(
