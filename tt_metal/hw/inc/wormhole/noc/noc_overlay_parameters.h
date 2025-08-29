@@ -59,10 +59,10 @@
         stream_id,                                                                \
         reg_id,                                                                   \
         ((NOC_STREAM_READ_REG(stream_id, reg_id) & ~((1 << field##_WIDTH) - 1)) | \
-         ((val & ((1 << field##_WIDTH) - 1)) << field))))
+         (((val) & ((1 << field##_WIDTH) - 1)) << (field)))))
 #define NOC_STREAM_READ_REG_FIELD(stream_id, reg_id, field) \
-    ((NOC_STREAM_READ_REG(stream_id, reg_id) >> field) & ((1 << field##_WIDTH) - 1))
-#define NOC_STREAM_GET_REG_FIELD(reg_val, field) (((reg_val) >> field) & ((1 << field##_WIDTH) - 1))
+    ((NOC_STREAM_READ_REG(stream_id, reg_id) >> (field)) & ((1 << field##_WIDTH) - 1))
+#define NOC_STREAM_GET_REG_FIELD(reg_val, field) (((reg_val) >> (field)) & ((1 << field##_WIDTH) - 1))
 
 #define NOC_WRITE_REG(addr, val) ((*((volatile uint32_t*)(addr)))) = (val)
 #define NOC_READ_REG(addr) (*((volatile uint32_t*)(addr)))
