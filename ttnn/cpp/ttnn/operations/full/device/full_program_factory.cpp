@@ -40,7 +40,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
 
     // Create circular buffer
     auto cb_index = tt::CBIndex::c_0;
-    tt::tt_metal::create_cb(cb_index, program, all_cores, page_size, num_pages, data_format);
+    tt::tt_metal::create_cb(cb_index, program, all_cores, page_size, 1, data_format);
 
     // Create kernels
     std::map<std::string, std::string> reader_defines;

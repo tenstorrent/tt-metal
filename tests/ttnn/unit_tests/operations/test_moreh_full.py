@@ -62,11 +62,18 @@ def test_full_int(device, input_shape, fill_value):
         torch.float32,
     ],
 )
-def test_full_float(device, input_shape, fill_value, dtype):
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.TILE_LAYOUT,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ],
+)
+def test_full_float(device, input_shape, fill_value, dtype, layout):
     torch_any = torch.rand((input_shape), dtype=dtype)
 
     torch_output = torch.full(input_shape, fill_value, dtype=dtype)
-    any = ttnn.from_torch(torch_any, device=device, layout=ttnn.TILE_LAYOUT)
+    any = ttnn.from_torch(torch_any, device=device, layout=layout)
     tt_output = ttnn.moreh_full(input_shape, fill_value, any)
     assert ttnn.is_tensor_storage_on_device(tt_output)
     tt_output_cpu = ttnn.to_torch(tt_output)
@@ -88,6 +95,7 @@ def test_full_float(device, input_shape, fill_value, dtype):
     "layout",
     [
         ttnn.TILE_LAYOUT,  # Currently only support tile layout
+        ttnn.ROW_MAJOR_LAYOUT,
     ],
 )
 def test_full_callback(device, input_shape, fill_value, layout):
@@ -95,7 +103,7 @@ def test_full_callback(device, input_shape, fill_value, layout):
         torch_any = torch.randint(0, 100, (input_shape), dtype=torch.int32)
         torch_output = torch.full(input_shape, fill_value, dtype=torch.int32)
 
-        any = ttnn.from_torch(torch_any, device=device, layout=ttnn.TILE_LAYOUT)
+        any = ttnn.from_torch(torch_any, device=device, layout=layout)
         tt_output = ttnn.moreh_full(input_shape, fill_value, any)
         assert ttnn.is_tensor_storage_on_device(tt_output)
         tt_output_cpu = ttnn.to_torch(tt_output)
