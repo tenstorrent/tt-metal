@@ -125,6 +125,10 @@ class TtYOLOv7Matmul:
         bias_dtype=ttnn.bfloat8_b,
         output_dtype=ttnn.bfloat8_b,
         pad_input=0,
+        # Memory configuration: "dram", "height_sharded", "block_sharded"
+        memory_config_type="height_sharded",
+        # Matmul type: "1d" (default) or "2d"
+        matmul_type="1d",
         # Matmul configuration parameters
         compute_grid_size=(8, 8),
         per_core_M=4,
@@ -145,6 +149,7 @@ class TtYOLOv7Matmul:
         packer_l1_acc=False,
         fuse_batch=True,
         mcast_in0=False,
+        transpose_mcast=False,
         tile_size=32,
     ):
         self.weights = parameters["weight"]
@@ -159,6 +164,10 @@ class TtYOLOv7Matmul:
         self.weight_dtype = weight_dtype
         self.bias_dtype = bias_dtype
         self.output_dtype = output_dtype
+
+        # Memory and matmul configuration
+        self.memory_config_type = memory_config_type
+        self.matmul_type = matmul_type
 
         # Matmul configuration
         self.compute_grid_size = compute_grid_size
@@ -182,6 +191,7 @@ class TtYOLOv7Matmul:
         self.packer_l1_acc = packer_l1_acc
         self.fuse_batch = fuse_batch
         self.mcast_in0 = mcast_in0
+        self.transpose_mcast = transpose_mcast
         self.tile_size = tile_size
 
         # Pre-process weights and bias once during initialization
@@ -213,7 +223,6 @@ class TtYOLOv7Matmul:
         """Prepare weights and bias tensors for computation."""
         if not self._weights_processed:
             # Convert weights to tiled layout
-            print(self.weights.shape)
             self.weights = ttnn.convert_conv_weight_tensor_to_tiled_layout(
                 self.weights,
                 self.weights.shape[1] // self.tile_size,
@@ -222,7 +231,6 @@ class TtYOLOv7Matmul:
             )
             self.weights = ttnn.to_dtype(self.weights, self.weight_dtype)
             self.weights = ttnn.to_device(self.weights, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            print(self.weights.shape)
             self._weights_processed = True
 
         if not self._bias_processed:
@@ -243,29 +251,104 @@ class TtYOLOv7Matmul:
         )
 
     def _create_matmul_config(self):
-        """Create matmul program configuration."""
+        """Create matmul program configuration based on matmul type."""
         fused_activation = self._get_activation_function()
 
-        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=self.compute_grid_size,
-            in0_block_w=self.in0_block_w,
-            out_subblock_h=self.out_subblock_h,
-            out_subblock_w=self.out_subblock_w,
-            out_block_h=self.out_block_h,
-            out_block_w=self.out_block_w,
-            per_core_M=self.per_core_M,
-            per_core_N=self.per_core_N,
-            fuse_batch=self.fuse_batch,
-            fused_activation=fused_activation,
-            mcast_in0=self.mcast_in0,
-            num_global_cb_receivers=0,
-        )
+        if self.matmul_type == "1d":
+            return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=self.compute_grid_size,
+                in0_block_w=self.in0_block_w,
+                out_subblock_h=self.out_subblock_h,
+                out_subblock_w=self.out_subblock_w,
+                out_block_h=self.out_block_h,
+                out_block_w=self.out_block_w,
+                per_core_M=self.per_core_M,
+                per_core_N=self.per_core_N,
+                fuse_batch=self.fuse_batch,
+                fused_activation=fused_activation,
+                mcast_in0=self.mcast_in0,
+                num_global_cb_receivers=0,
+            )
+        elif self.matmul_type == "2d":
+            return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=self.compute_grid_size,
+                in0_block_w=self.in0_block_w,
+                out_subblock_h=self.out_subblock_h,
+                out_subblock_w=self.out_subblock_w,
+                out_block_h=self.out_block_h,
+                out_block_w=self.out_block_w,
+                per_core_M=self.per_core_M,
+                per_core_N=self.per_core_N,
+                fuse_batch=self.fuse_batch,
+                fused_activation=fused_activation,
+                transpose_mcast=self.transpose_mcast,
+            )
+        else:
+            raise ValueError(f"Unsupported matmul type: {self.matmul_type}")
+
+    def _calculate_shard_shapes(self, input_tensor):
+        """Calculate shard shapes based on memory config type and input tensor."""
+        batch_size, _, nhw, input_channels = input_tensor.shape
+        output_channels = self.out_features
+
+        if self.memory_config_type == "height_sharded":
+            # Height sharded: shard along height dimension
+            num_cores = self._create_shard_grid().num_cores()
+            shard_height = (nhw + num_cores * 32 - 1) // (num_cores * 32) * 32
+            input_shard_shape = [shard_height, input_channels]
+            output_shard_shape = [shard_height, output_channels]
+
+        elif self.memory_config_type == "block_sharded":
+            # Block sharded: shard along both height and width dimensions
+            grid_h, grid_w = self.compute_grid_size
+            shard_height = (nhw + grid_h * 32 - 1) // (grid_h * 32) * 32
+            shard_width_in = (input_channels + grid_w * 32 - 1) // (grid_w * 32) * 32
+            shard_width_out = (output_channels + grid_w * 32 - 1) // (grid_w * 32) * 32
+            input_shard_shape = [shard_height, shard_width_in]
+            output_shard_shape = [shard_height, shard_width_out]
+
+        else:  # DRAM - no sharding
+            input_shard_shape = None
+            output_shard_shape = None
+
+        return input_shard_shape, output_shard_shape
 
     def _create_memory_config(self, shard_shape=None):
-        """Create memory configuration for sharding."""
-        shard_grid = self._create_shard_grid()
-        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+        """Create memory configuration based on memory config type."""
+        if self.memory_config_type == "dram":
+            return ttnn.DRAM_MEMORY_CONFIG
+        elif self.memory_config_type == "height_sharded":
+            if shard_shape is None:
+                raise ValueError("Shard shape required for height sharded memory config")
+            shard_grid = self._create_shard_grid()
+            shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+            return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+        elif self.memory_config_type == "block_sharded":
+            if shard_shape is None:
+                raise ValueError("Shard shape required for block sharded memory config")
+            shard_grid = self._create_shard_grid()
+            shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+            return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
+        else:
+            raise ValueError(f"Unsupported memory config type: {self.memory_config_type}")
+
+    def _calculate_per_core_values(self, input_tensor):
+        """Calculate per_core_M and per_core_N values based on tensor dimensions and grid size."""
+        batch_size, _, nhw, input_channels = input_tensor.shape
+        output_channels = self.out_features
+        grid_h, grid_w = self.compute_grid_size
+
+        if self.memory_config_type == "height_sharded":
+            # For 1D height sharded, only M dimension is distributed
+            num_cores = self._create_shard_grid().num_cores()
+            per_core_M = (nhw + 32 * num_cores - 1) // (32 * num_cores)
+            per_core_N = output_channels // 32
+        else:  # For DRAM and block sharded
+            # Both M and N dimensions can be distributed
+            per_core_M = (nhw + 32 * grid_h - 1) // (32 * grid_h)
+            per_core_N = (output_channels + 32 * grid_w - 1) // (32 * grid_w)
+
+        return per_core_M, per_core_N
 
     def _pad_input_tensor(self, input_tensor, device):
         """Pad input tensor if required."""
@@ -280,37 +363,57 @@ class TtYOLOv7Matmul:
     def __call__(self, device, input_tensor):
         # Prepare weights and bias (only done once)
         self._prepare_weights_and_bias(device)
-        print(input_tensor.shape)
+
+        # Calculate dynamic shard shapes and per-core values based on input tensor
+        input_shard_shape, output_shard_shape = self._calculate_shard_shapes(input_tensor)
+        per_core_M, per_core_N = self._calculate_per_core_values(input_tensor)
+
+        # Update per-core values for this specific call
+        self.per_core_M = per_core_M
+        self.per_core_N = per_core_N
 
         # Create configurations
         compute_config = self._create_compute_config(device)
         matmul_config = self._create_matmul_config()
-        input_memory_config = self._create_memory_config(self.input_shard_shape)
-        output_memory_config = self._create_memory_config(self.output_shard_shape)
 
-        # Apply memory configuration to input tensor
-        input_tensor = ttnn.to_memory_config(input_tensor, input_memory_config)
-        print(input_tensor.shape, input_tensor.memory_config(), input_tensor.layout)
+        # Create memory configurations based on type
+        if self.memory_config_type == "dram":
+            input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+            output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        else:
+            input_memory_config = self._create_memory_config(input_shard_shape)
+            output_memory_config = self._create_memory_config(output_shard_shape)
+
+        # Apply memory configuration to input tensor if not DRAM
+        if self.memory_config_type != "dram":
+            input_tensor = ttnn.to_memory_config(input_tensor, input_memory_config)
+
+        if input_tensor.layout != ttnn.TILE_LAYOUT:
+            # Convert to interleaved, tilize, then reshard to block
+            input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+            input_tensor = ttnn.interleaved_to_sharded(input_tensor, input_memory_config)
+
         # Pad input tensor if needed
         input_tensor = self._pad_input_tensor(input_tensor, device)
-        print(input_tensor.shape)
 
         # Perform linear operation
-        output_tensor = ttnn.linear(
-            input_tensor,
-            self.weights,
-            bias=self.bias,
-            program_config=matmul_config,
-            memory_config=output_memory_config,
-            dtype=self.output_dtype,
-            compute_kernel_config=compute_config,
-            # transpose_b=True,
-        )
+        linear_args = {
+            "input_tensor_a": input_tensor,
+            "input_tensor_b": self.weights,
+            "bias": self.bias,
+            "program_config": matmul_config,
+            "dtype": self.output_dtype,
+            "compute_kernel_config": compute_config,
+        }
 
-        print(output_tensor.shape)
+        # Add memory_config only if not DRAM (for DRAM, let ttnn decide)
+        if self.memory_config_type != "dram":
+            linear_args["memory_config"] = output_memory_config
+
+        output_tensor = ttnn.linear(**linear_args)
 
         output_tensor = output_tensor[:, :, : -self.pad_input, :] if self.pad_input > 0 else output_tensor
-        print(output_tensor.shape)
 
         return output_tensor
 
@@ -349,7 +452,6 @@ def sharded_concat(
     in_shard_width = input_tensors[id].shape[-1]
     shard_height = (input_tensors[id].shape[2] + num_cores - 1) // num_cores
     shard_height = ((shard_height + 31) // 32) * 32
-    print("Shard height:", shard_height)
 
     input_sharded_memory_config = ttnn.create_sharded_memory_config_(
         (shard_height, in_shard_width),
@@ -363,7 +465,6 @@ def sharded_concat(
         out_shard_width += input_tensors[i].shape[-1]
 
         if input_tensors[i].shape[-1] != in_shard_width:
-            print(f"Input tensor {i} does not have the correct memory config, converting...")
             temp_input_shared_memory_config = ttnn.create_sharded_memory_config_(
                 (shard_height, input_tensors[i].shape[-1]),
                 core_grid=shard_grid,
@@ -375,7 +476,6 @@ def sharded_concat(
         else:
             # If the input tensor already has the correct memory config, we can skip this step
             input_tensors[i] = ttnn.to_memory_config(input_tensors[i], input_sharded_memory_config)
-        print(input_tensors[i].shape, input_tensors[i].memory_config().shard_spec.grid, input_tensors[i].layout)
 
     output_sharded_memory_config = ttnn.create_sharded_memory_config_(
         (shard_height, out_shard_width),

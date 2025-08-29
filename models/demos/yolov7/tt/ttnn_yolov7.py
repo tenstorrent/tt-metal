@@ -310,15 +310,13 @@ class ttnn_yolov7:
             deallocate_activation=True,
             enable_split_reader=True,
             enable_act_double_buffer=True,
-            # num_cores_nhw=64,
+            weights_dtype=ttnn.bfloat8_b,
         )
         self.conv5 = Matmul(
             [1, 160, 160, 128],
             parameters["4"],
-            input_dtype=ttnn.bfloat8_b,
             weight_dtype=ttnn.bfloat16,
             bias_dtype=ttnn.bfloat16,
-            output_dtype=ttnn.bfloat8_b,
             pad_input=0,
             per_core_M=13,
             per_core_N=2,
@@ -328,18 +326,14 @@ class ttnn_yolov7:
             out_block_h=13,
             out_block_w=2,
             shard_grid_cores=((0, 0, 7, 6), (0, 7, 5, 7)),
-            input_shard_shape=(416, 128),
-            output_shard_shape=(416, 64),
             math_approx_mode=False,
         )
 
         self.conv6 = Matmul(
             [1, 160, 160, 128],
             parameters["5"],
-            input_dtype=ttnn.bfloat8_b,
             weight_dtype=ttnn.bfloat16,
             bias_dtype=ttnn.bfloat16,
-            output_dtype=ttnn.bfloat8_b,
             pad_input=0,
             per_core_M=13,
             per_core_N=2,
@@ -349,8 +343,6 @@ class ttnn_yolov7:
             out_block_h=13,
             out_block_w=2,
             shard_grid_cores=((0, 0, 7, 6), (0, 7, 5, 7)),
-            input_shard_shape=(416, 128),
-            output_shard_shape=(416, 64),
             math_approx_mode=False,
         )
 
@@ -358,34 +350,34 @@ class ttnn_yolov7:
             [1, 160, 160, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["6"],
+            weights_dtype=ttnn.bfloat8_b,
             # num_cores_nhw=64,
         )
         self.conv8 = Conv(
             [1, 160, 160, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["7"],
+            weights_dtype=ttnn.bfloat8_b,
             # num_cores_nhw=64,
         )
         self.conv9 = Conv(
             [1, 160, 160, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["8"],
+            weights_dtype=ttnn.bfloat8_b,
             # num_cores_nhw=64,
         )
         self.conv10 = Conv(
             [1, 160, 160, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["9"],
+            weights_dtype=ttnn.bfloat8_b,
             # num_cores_nhw=64,
         )
 
         self.conv11 = Matmul(
             [1, 160, 160, 256],
             parameters["11"],
-            input_dtype=ttnn.bfloat8_b,
-            weight_dtype=ttnn.bfloat8_b,
-            bias_dtype=ttnn.bfloat8_b,
-            output_dtype=ttnn.bfloat8_b,
             pad_input=0,
             per_core_M=13,
             per_core_N=8,
@@ -395,8 +387,6 @@ class ttnn_yolov7:
             out_block_h=13,
             out_block_w=8,
             shard_grid_cores=((0, 0, 7, 6), (0, 7, 5, 7)),
-            input_shard_shape=(416, 256),
-            output_shard_shape=(416, 256),
             math_approx_mode=False,
         )
         self.conv12 = Conv(
@@ -453,14 +443,27 @@ class ttnn_yolov7:
         self.conv21 = Matmul(
             [1, 80, 80, 512],
             parameters["24"],
-            shard_grid_cores=((0, 0, 7, 5), (0, 6, 1, 6)),
+            memory_config_type="block_sharded",
+            matmul_type="2d",
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            out_block_h=25,
+            out_block_w=2,
             math_approx_mode=True,
         )
 
-        self.conv22 = Conv(
+        self.conv22 = Matmul(
             [1, 40, 40, 512],
-            (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["26"],
+            memory_config_type="block_sharded",
+            matmul_type="2d",
+            in0_block_w=2,
+            out_subblock_h=7,
+            out_subblock_w=1,
+            out_block_h=7,
+            out_block_w=1,
+            math_approx_mode=True,
         )
         self.conv23 = Conv(
             [1, 80, 80, 256],
@@ -472,17 +475,32 @@ class ttnn_yolov7:
             [1, 80, 80, 256],
             (3, 3, 2, 2, 1, 1, 1, 1),
             parameters["28"],
+            height_sharding=False,
         )
 
-        self.conv25 = Conv(
+        self.conv25 = Matmul(
             [1, 40, 40, 512],
-            (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["30"],
+            memory_config_type="block_sharded",
+            matmul_type="2d",
+            in0_block_w=2,
+            out_subblock_h=7,
+            out_subblock_w=1,
+            out_block_h=7,
+            out_block_w=1,
+            math_approx_mode=True,
         )
-        self.conv26 = Conv(
+        self.conv26 = Matmul(
             [1, 40, 40, 512],
-            (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["31"],
+            memory_config_type="block_sharded",
+            matmul_type="2d",
+            in0_block_w=2,
+            out_subblock_h=7,
+            out_subblock_w=1,
+            out_block_h=7,
+            out_block_w=1,
+            math_approx_mode=True,
         )
         self.conv27 = Conv(
             [1, 40, 40, 256],
@@ -509,22 +527,37 @@ class ttnn_yolov7:
             height_sharding=False,
         )
 
-        self.conv31 = Conv(
+        self.conv31 = Matmul(
             [1, 40, 40, 1024],
-            (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["37"],
-            height_sharding=False,
+            memory_config_type="block_sharded",
+            matmul_type="2d",
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            out_block_h=7,
+            out_block_w=4,
+            math_approx_mode=True,
         )
+
         self.conv32 = Conv(
             [1, 20, 20, 1024],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["39"],
             height_sharding=False,
+            weights_dtype=ttnn.bfloat8_b,
         )
-        self.conv33 = Conv(
+        self.conv33 = Matmul(
             [1, 40, 40, 1024],
-            (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["40"],
+            memory_config_type="block_sharded",
+            matmul_type="2d",
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            out_block_h=7,
+            out_block_w=2,
+            math_approx_mode=True,
         )
         self.conv34 = Conv(
             [1, 40, 40, 512],
@@ -588,6 +621,7 @@ class ttnn_yolov7:
             [1, 20, 20, 512],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["52"],
+            height_sharding=False,
         )
         self.conv43 = Conv(
             [1, 20, 20, 1024],
@@ -610,25 +644,21 @@ class ttnn_yolov7:
             [1, 40, 40, 256],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["58"],
-            height_sharding=False,
         )
         self.conv47 = Conv(
             [1, 40, 40, 128],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["59"],
-            height_sharding=False,
         )
         self.conv48 = Conv(
             [1, 40, 40, 128],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["60"],
-            height_sharding=False,
         )
         self.conv49 = Conv(
             [1, 40, 40, 128],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["61"],
-            height_sharding=False,
         )
 
         self.conv50 = Conv(
