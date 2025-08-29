@@ -95,36 +95,6 @@ def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=16)
     return tt_weight, tt_bias
 
 
-def prepare_conv3d_mask_proj(mesh_device, context_size, N, C, T, H, W):
-    num_devices = mesh_device.get_num_devices()
-    torch_mask = torch.zeros(N, context_size * num_devices, H, W, C)
-    torch_mask[:, 0:context_size, :, :, :] = 1
-    tt_mask = ttnn.from_torch(
-        torch_mask,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, 1]),
-    )
-
-    torch_proj = torch.zeros(2 * context_size * num_devices, 2 * context_size * num_devices)
-    for i in range(1, num_devices):
-        torch_proj[2 * context_size * i, 2 * context_size * (i - 1)] = 1
-        torch_proj[2 * context_size * i + 1, 2 * context_size * (i - 1) + 1] = 1
-        torch_proj[2 * context_size * i + 2, 2 * context_size * (i - 1) + 2] = 1
-        torch_proj[2 * context_size * i + 3, 2 * context_size * (i - 1) + 3] = 1
-    tt_proj = ttnn.from_torch(
-        torch_proj,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, 0]),
-    )
-    return tt_mask, tt_proj
-
-
 class ContextParallelConv3d:
     def __init__(
         self,
@@ -204,8 +174,6 @@ class ContextParallelConv3d:
         self.weight, self.bias = prepare_conv3d_weights(
             self.mesh_device, self.torch_weight, self.torch_bias, conv_config
         )
-        N, C, T, H, W = input_shape
-        self.mask, self.proj = prepare_conv3d_mask_proj(self.mesh_device, self.kernel_size[0] - 1, N, C, T, H, W)
 
     @classmethod
     def from_torch(cls, torch_ref, mesh_device, parallel_config, ccl_manager):
