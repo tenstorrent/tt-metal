@@ -77,10 +77,10 @@ uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
-// These arrays are used to store the logical to translated coordinate mapping
+// These arrays are used to store the logical to virtual coordinate mapping
 // Round up to nearest multiple of 4 to ensure uint32_t alignment for L1 to local copies
-uint8_t logical_col_to_translated_col[((noc_size_x + 3) / 4) * 4] __attribute__((used));
-uint8_t logical_row_to_translated_row[((noc_size_y + 3) / 4) * 4] __attribute__((used));
+uint8_t logical_col_to_virtual_col[((noc_size_x + 3) / 4) * 4] __attribute__((used));
+uint8_t logical_row_to_virtual_row[((noc_size_y + 3) / 4) * 4] __attribute__((used));
 
 #define MEM_MOVER_VIEW_IRAM_BASE_ADDR (0x4 << 12)
 
@@ -337,7 +337,7 @@ int main() {
     do_crt1((uint32_t*)MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
     noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
-    noc_logical_to_translated_map_init(MEM_LOGICAL_TO_TRANSLATED_SCRATCH);
+    noc_logical_to_virtual_map_init(MEM_LOGICAL_TO_VIRTUAL_SCRATCH);
 
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     noc_index = 0;
