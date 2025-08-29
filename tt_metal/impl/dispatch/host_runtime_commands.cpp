@@ -129,7 +129,7 @@ void EnqueueProgramCommand::process() {
         this->expected_num_workers_completed,
         dispatch_metadata);
 
-    RecordProgramRun(program.get_id());
+    RecordProgramRun(program.impl().get_id());
 
     // Access the program dispatch-command cache
     uint64_t command_hash = *device->get_active_sub_device_manager_id();

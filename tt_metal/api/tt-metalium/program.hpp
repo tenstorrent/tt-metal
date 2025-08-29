@@ -39,7 +39,6 @@ public:
     //////////////////////////////
 
     void set_runtime_id(id_t id);
-    id_t get_id() const;
     id_t get_runtime_id() const;
 
     //////////////////////////////
