@@ -139,7 +139,6 @@ def run_neighbor_pad_impl(
             logger.info(f"Done iteration {i}")
 
     for i in range(num_iters):
-        breakpoint()
         tt_np_out_tensor = tt_neighbor_pad_out_tensor_list[i]
         torch_np_out_tensor = np_output_tensor_goldens_list[i if not enable_trace else 0]
 
@@ -168,9 +167,15 @@ def run_neighbor_pad_impl(
     "num_devices, input_shape, dim, layout, input_dtype, padding",
     [
         (8, [32, 60, 106, 768], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2),
+        (8, [88, 120, 212, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2),
+        (8, [168, 240, 424, 256], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2),
+        (8, [168, 480, 848, 128], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2),
     ],
     ids=[
         "mochi_vae_1",
+        "mochi_vae_2",
+        "mochi_vae_3",
+        "mochi_vae_4",
     ],
 )
 @pytest.mark.parametrize(
