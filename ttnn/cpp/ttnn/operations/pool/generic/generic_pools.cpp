@@ -214,8 +214,6 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
 
         Shape spatial_shape({1, input_h, input_w, 1});
 
-        printf("input_h: %u, input_w: %u, batch_size: %u, channels: %u\n", input_h, input_w, batch_size, channels);
-
         // Create indices tensor with UINT32 since repeat operation requires it
         Tensor indices_hw = ttnn::index_all<uint32_t>(
             spatial_shape,

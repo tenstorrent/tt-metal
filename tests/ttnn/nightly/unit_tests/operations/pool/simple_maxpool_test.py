@@ -41,9 +41,6 @@ else:
     out_h = math.floor((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
     out_w = math.floor((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
 
-print("out_h:", out_h)
-print("out_w:", out_w)
-
 # Create tensor filled with height and width coordinates
 torch.manual_seed(0)
 # torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
@@ -64,9 +61,6 @@ ttnn_layout = ttnn.ROW_MAJOR_LAYOUT
 if ttnn_dtype == ttnn.bfloat8_b:
     ttnn_layout = ttnn.TILE_LAYOUT
 ttnn_input = ttnn.from_torch(torch_input_reshaped, ttnn_dtype, layout=ttnn_layout, device=device)
-
-# print("Output without indices:")
-# print(ttnn.to_torch(ttnn_output))
 
 ttnn_output, indices = ttnn.max_pool2d(
     input_tensor=ttnn_input,

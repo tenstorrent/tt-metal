@@ -40,21 +40,8 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     const auto& input_shape = input.padded_shape();
     ttnn::Shape output_shape = ttnn::Shape(input_shape.to_array_4D());
 
-    // Debug prints for input information
-    printf("=== HALO COMPUTE_OUTPUT_SPECS DEBUG ===\n");
-    printf(
-        "input_shape: [%u, %u, %u, %u]\n",
-        (uint32_t)input_shape[0],
-        (uint32_t)input_shape[1],
-        (uint32_t)input_shape[2],
-        (uint32_t)input_shape[3]);
-    printf("max_out_nsticks_per_core_: %u\n", max_out_nsticks_per_core_);
-
     uint32_t nbatch = input_shape[0];
     uint32_t total_nsticks = config_.num_cores_nhw * max_out_nsticks_per_core_;
-
-    printf("nbatch: %u\n", nbatch);
-    printf("total_nsticks = %u * %u = %u\n", config_.num_cores_nhw, max_out_nsticks_per_core_, total_nsticks);
 
     // output_shape[0] remains same
     // output_shape[1] remains same
@@ -81,40 +68,11 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
         input_tensor.memory_config(),
         output_memory_config_);
 
-    // Debug prints for shard and core information using printf
-    printf("=== HALO SHARD DEBUG INFO ===\n");
-    printf(
-        "Input tensor shard spec shape: [%u, %u]\n",
-        input_tensor.memory_config().shard_spec()->shape[0],
-        input_tensor.memory_config().shard_spec()->shape[1]);
-    printf(
-        "Output memory config shard spec shape: [%u, %u]\n",
-        output_memory_config_.shard_spec()->shape[0],
-        output_memory_config_.shard_spec()->shape[1]);
-    printf("config_.num_cores_nhw: %u\n", config_.num_cores_nhw);
-    printf("Input tensor grid num_cores: %u\n", input_tensor.memory_config().shard_spec()->grid.num_cores());
-    printf("Output memory config grid num_cores: %u\n", output_memory_config_.shard_spec()->grid.num_cores());
-
     if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
         auto input_core_range = *(input_tensor.memory_config().shard_spec()->grid.ranges().begin());
         auto output_core_range = *(output_memory_config_.shard_spec()->grid.ranges().begin());
         auto input_core_w = input_core_range.end_coord.y - input_core_range.start_coord.y + 1;
         auto output_core_w = output_core_range.end_coord.y - output_core_range.start_coord.y + 1;
-
-        printf(
-            "Input core range: (%zu,%zu) to (%zu,%zu), width: %zu\n",
-            input_core_range.start_coord.x,
-            input_core_range.start_coord.y,
-            input_core_range.end_coord.x,
-            input_core_range.end_coord.y,
-            input_core_w);
-        printf(
-            "Output core range: (%zu,%zu) to (%zu,%zu), width: %zu\n",
-            output_core_range.start_coord.x,
-            output_core_range.start_coord.y,
-            output_core_range.end_coord.x,
-            output_core_range.end_coord.y,
-            output_core_w);
 
         TT_FATAL(
             input_core_w == output_core_w, "Input core width {} != Output core width {}", input_core_w, output_core_w);
@@ -127,31 +85,9 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
         input_tensor.mesh_buffer()->deallocate();
     }
 
-    // Debug prints for shard shape calculation
-    printf("=== SHARD SHAPE CALCULATION DEBUG ===\n");
-    printf(
-        "output_shape: [%u, %u, %u, %u]\n",
-        (uint32_t)output_shape[0],
-        (uint32_t)output_shape[1],
-        (uint32_t)output_shape[2],
-        (uint32_t)output_shape[3]);
-    printf(
-        "output_shape[0] * output_shape[2] = %u * %u = %u\n",
-        (uint32_t)output_shape[0],
-        (uint32_t)output_shape[2],
-        (uint32_t)(output_shape[0] * output_shape[2]));
-    printf("config_.num_cores_nhw = %u\n", config_.num_cores_nhw);
-    printf(
-        "tt::div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw) = %u\n",
-        tt::div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw));
-    printf("input_tensor shard_spec shape[1] = %u\n", input_tensor.memory_config().shard_spec()->shape[1]);
-
     std::array<uint32_t, 2> shard_shape = {
         tt::div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw),
         input_tensor.memory_config().shard_spec()->shape[1]};
-
-    printf("Calculated shard_shape: [%u, %u]\n", shard_shape[0], shard_shape[1]);
-    printf("===================================\n");
 
     auto out_mem_config = output_memory_config_.with_shard_spec(ShardSpec{
         output_memory_config_.shard_spec()->grid,
@@ -350,8 +286,6 @@ Tensor halo_op(
             "input shard size larger than output shard size, falling back to normal operation");
         in_place = false;
     }
-
-    printf("in_nsticks_per_core: %u, max_out_nsticks_per_core: %u\n", in_nsticks_per_core, max_out_nsticks_per_core);
 
     return operation::run(
                HaloDeviceOperation{
