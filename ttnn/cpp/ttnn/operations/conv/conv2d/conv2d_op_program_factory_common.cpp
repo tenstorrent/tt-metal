@@ -197,13 +197,13 @@ std::vector<CBInfo> get_cb_info(
                 sharding_scheme,
                 is_1d_depthwise_conv,
                 block_config.act_block_h_ntiles,
-                pconfig.per_core_out_matrix_height_ntile,
                 conv_input_shard_shape[1],
                 per_core_out_matrix_width_ntiles * tt::constants::TILE_WIDTH,
                 kernel_size[1],
                 tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE,
                 input_datatype,
-                conv_config.weights_dtype.value())) {
+                conv_config.weights_dtype.value(),
+                num_blocks_act_h > 1)) {
             uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles;
             uint32_t act_block_h_nsubblocks_split_last = act_block_h_nsubblocks / 2;
             uint32_t act_block_h_nsubblocks_split = act_block_h_nsubblocks - act_block_h_nsubblocks_split_last;
@@ -399,13 +399,14 @@ float_t get_noc_transfer_rate(uint32_t transfer_size, bool is_blackhole) {
 }
 
 bool is_split_reader_viable(
-    uint32_t per_core_out_matrix_height_ntiles,
+    uint32_t act_block_h_ntiles,
     uint32_t input_channels,
     uint32_t output_channels,
     uint32_t kernel_width,
     bool is_blackhole,
     DataType input_datatype,
-    DataType weights_datatype) {
+    DataType weights_datatype,
+    bool fully_buffered) {
     // Determine bytes per element based on input data type, halo outputs either float32 or bfloat16
     uint32_t bytes_per_element = (input_datatype == DataType::FLOAT32) ? 4 : 2;
     const float_t noc_transfer_unit = bytes_per_element * input_channels * kernel_width;
@@ -414,7 +415,7 @@ bool is_split_reader_viable(
     const float_t noc_transfer_rate = get_noc_transfer_rate(static_cast<uint32_t>(noc_transfer_unit), is_blackhole);
     const float_t noc_transfer_time = noc_transfer_unit / noc_transfer_rate;
 
-    const uint32_t dram_transfer_speed = is_blackhole ? 32 : 16;
+    const uint32_t dram_transfer_speed = is_blackhole ? 16 : 8;
     // Additional heuristic factors from stash insights
     // Determine bytes per element based on weights data type
     uint32_t weights_bytes_per_element = (weights_datatype == DataType::FLOAT32)     ? 4
@@ -426,31 +427,44 @@ bool is_split_reader_viable(
         static_cast<float_t>(weights_bytes_per_element * input_channels * output_channels * kernel_width) /
         dram_transfer_speed;
 
-    const float_t act_cost = per_core_out_matrix_height_ntiles * tt::constants::TILE_HEIGHT * noc_transfer_time;
+    const float_t act_cost = act_block_h_ntiles * tt::constants::TILE_HEIGHT * noc_transfer_time;
 
-    return act_cost > weights_cost;
+    float_t comparison_factor = 1.0;
+    if (fully_buffered) {
+        comparison_factor = 2;
+    }
+    log_info(
+        tt::LogOp,
+        "is_split_reader_viable: act_cost={}, weights_cost={}, comparison_factor={}, act_cost > comparison_factor * "
+        "weights_cost={}",
+        act_cost,
+        weights_cost,
+        comparison_factor,
+        act_cost > comparison_factor * weights_cost);
+    return act_cost > comparison_factor * weights_cost;
 }
 
 bool is_split_reader_supported(
     TensorMemoryLayout memory_layout,
     bool is_1d_depthwise_conv,
     uint32_t act_block_h_ntiles,
-    uint32_t per_core_out_matrix_height_ntiles,
     uint32_t input_channels,
     uint32_t output_channels,
     uint32_t kernel_width,
     bool is_blackhole,
     DataType input_datatype,
-    DataType weights_datatype) {
+    DataType weights_datatype,
+    bool fully_buffered) {
     return memory_layout == TensorMemoryLayout::HEIGHT_SHARDED && !is_1d_depthwise_conv && act_block_h_ntiles > 1 &&
            is_split_reader_viable(
-               per_core_out_matrix_height_ntiles,
+               act_block_h_ntiles,
                input_channels,
                output_channels,
                kernel_width,
                is_blackhole,
                input_datatype,
-               weights_datatype);
+               weights_datatype,
+               fully_buffered);
 }
 
 }  // namespace conv2d

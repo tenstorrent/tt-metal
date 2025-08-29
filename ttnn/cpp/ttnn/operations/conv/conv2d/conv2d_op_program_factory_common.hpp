@@ -94,13 +94,13 @@ bool is_split_reader_supported(
     TensorMemoryLayout memory_layout,
     bool is_1d_depthwise_conv,
     uint32_t act_block_h_ntiles,
-    uint32_t per_core_out_matrix_height_ntiles,
     uint32_t input_channels,
     uint32_t output_channels,
     uint32_t kernel_width,
     bool is_blackhole,
     DataType input_datatype,
-    DataType weights_datatype);
+    DataType weights_datatype,
+    bool fully_buffered);
 
 }  // namespace conv2d
 }  // namespace ttnn::operations::conv
