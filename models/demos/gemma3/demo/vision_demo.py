@@ -278,10 +278,11 @@ def test_multimodal_demo_text(
 
     # Trace capture dialogs with random images
     trace_dialogs = [
-        [UserMessage(content=[ImageMedia(image=trace_img_1120x560), "What do you see in this image?"])],
-        [UserMessage(content=[ImageMedia(image=img), "What do you see in this image?"])],
-        [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
-        [UserMessage(content=[ImageMedia(image=img), "Describe this image in detail."])],
+        [UserMessage(content=["Write a haiku."])],
+        # [UserMessage(content=[ImageMedia(image=trace_img_1120x560), "What do you see in this image?"])],
+        # [UserMessage(content=[ImageMedia(image=img), "What do you see in this image?"])],
+        # [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
+        # [UserMessage(content=[ImageMedia(image=img), "Describe this image in detail."])],
     ]
 
     if len(trace_dialogs) < max_batch_size:
@@ -319,7 +320,6 @@ def test_multimodal_demo_text(
     assert len(dialogs) % max_batch_size == 0
     total_users = len(dialogs)
     num_batches = total_users // max_batch_size
-    # num_batches = 1
 
     sampler = get_batch_sampler(temperature, top_p, model_args[0].tokenizer)
     _num_prefill_tokens = 0

@@ -104,7 +104,7 @@ class Generator:
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
 
             # Check if 'pixel_values' exists and index it safely
-            if "pixel_values" in local_kwargs:
+            if local_kwargs.get("pixel_values", None) is not None:
                 local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]

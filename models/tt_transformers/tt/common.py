@@ -706,7 +706,7 @@ def hf_multimodal_encode(messages, processor):
         **encoded,
         tokens=encoded["input_ids"].squeeze(0),
         vision=SimpleNamespace(
-            images=encoded["pixel_values"],
+            images=encoded.get("pixel_values", None),
             mask=None,
         ),
     )
