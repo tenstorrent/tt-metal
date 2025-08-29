@@ -94,7 +94,7 @@ def run_inference_and_save(
         save_yolo_predictions_by_model(result, save_dir, image_path, model_type)
 
 
-def run_yolov11n_demo(
+def run_yolov11m_demo(
     device, model_type, use_weights_from_ultralytics, res, input_loc, batch_size_per_device, model_location_generator
 ):
     model, runner, mesh_composer, batch_size = init_model_and_runner(
@@ -115,7 +115,7 @@ def run_yolov11n_demo(
     logger.info("Inference done")
 
 
-def run_yolov11n_demo_dataset(
+def run_yolov11m_demo_dataset(
     device, model_type, use_weights_from_ultralytics, res, batch_size_per_device, model_location_generator
 ):
     model, runner, mesh_composer, batch_size = init_model_and_runner(
@@ -169,7 +169,7 @@ def run_yolov11n_demo_dataset(
 def test_demo(
     device, model_type, use_weights_from_ultralytics, res, input_loc, batch_size_per_device, model_location_generator
 ):
-    run_yolov11n_demo(
+    run_yolov11m_demo(
         device,
         model_type,
         use_weights_from_ultralytics,
@@ -215,7 +215,7 @@ def test_demo_dp(
     batch_size_per_device,
     model_location_generator,
 ):
-    run_yolov11n_demo(
+    run_yolov11m_demo(
         mesh_device,
         model_type,
         use_weights_from_ultralytics,
@@ -244,7 +244,7 @@ def test_demo_dp(
 )
 @pytest.mark.parametrize("res", [(640, 640)])
 def test_demo_dataset(device, model_type, use_weights_from_ultralytics, res, model_location_generator):
-    run_yolov11n_demo_dataset(
+    run_yolov11m_demo_dataset(
         device,
         model_type,
         use_weights_from_ultralytics,
@@ -272,7 +272,7 @@ def test_demo_dataset(device, model_type, use_weights_from_ultralytics, res, mod
 )
 @pytest.mark.parametrize("res", [(640, 640)])
 def test_demo_dataset_dp(mesh_device, model_type, use_weights_from_ultralytics, res, model_location_generator):
-    run_yolov11n_demo_dataset(
+    run_yolov11m_demo_dataset(
         mesh_device,
         model_type,
         use_weights_from_ultralytics,
