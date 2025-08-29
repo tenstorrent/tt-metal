@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+# Cap'N Proto file schema: https://capnproto.org/language.html
+
 @0xf8b5d6e3c2a19074;
 
 using Cxx = import "/capnp/c++.capnp";
