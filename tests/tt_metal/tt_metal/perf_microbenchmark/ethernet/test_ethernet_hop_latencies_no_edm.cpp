@@ -62,7 +62,8 @@ public:
             tt::tt_metal::GetNumPCIeDevices() == 4) {
             // Get all chip IDs
             std::vector<chip_id_t> chip_ids;
-            for (chip_id_t id = 0; id < num_devices_; id++) {
+            chip_ids.reserve(num_devices_);
+for (chip_id_t id = 0; id < num_devices_; id++) {
                 chip_ids.push_back(id);
             }
             mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape{2, 4}));
