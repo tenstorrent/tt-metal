@@ -6,6 +6,8 @@
 #include <tt_stl/caseless_comparison.hpp>
 #include <enchantum/enchantum.hpp>
 
+#include <tt-metalium/host_api.hpp>
+
 namespace ttnn::core {
 
 bool has_storage_type_of(const ttnn::Tensor& tensor, const ttnn::StorageType& storage_type) {
@@ -35,6 +37,14 @@ void dump_stack_trace_on_segfault() {
         exit(EXIT_FAILURE);
     }
 }
+
+uint8_t get_current_command_queue_id() { return tt::tt_metal::GetCurrentCommandQueueId(); }
+
+void set_current_command_queue_id(uint8_t cq_id) {
+    log_debug(tt::LogTTNN, "Setting current command queue id to {}", cq_id);
+    tt::tt_metal::SetCurrentCommandQueueId(cq_id);
+}
+
 }  // namespace ttnn::core
 
 namespace ttnn {

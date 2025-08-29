@@ -37,6 +37,9 @@ void segfault_handler(int sig);
 
 void dump_stack_trace_on_segfault();
 
+uint8_t get_current_command_queue_id();
+void set_current_command_queue_id(uint8_t cq_id);
+
 }  // namespace core
 
 using core::get_memory_config;

@@ -85,6 +85,16 @@ void py_module(py::module& module) {
         )doc");
 
     module.def("dump_stack_trace_on_segfault", &ttnn::core::dump_stack_trace_on_segfault);
+
+    module.def("get_current_command_queue_id", &ttnn::core::get_current_command_queue_id);
+    module.def(
+        "set_current_command_queue_id",
+        &ttnn::core::set_current_command_queue_id,
+        py::arg("cq_id"),
+        R"doc(
+        Set the current command queue id for the current thread.
+        This command queue will be used by default for all operations on the current thread.
+    )doc");
 }
 
 }  // namespace ttnn::core

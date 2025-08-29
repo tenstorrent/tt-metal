@@ -1422,6 +1422,14 @@ void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::S
     }
 }
 
+namespace {
+thread_local uint8_t current_command_queue_id = 0;
+}
+
+void SetCurrentCommandQueueId(uint8_t cq_id) { current_command_queue_id = cq_id; }
+
+uint8_t GetCurrentCommandQueueId() { return current_command_queue_id; }
+
 namespace experimental {
 
 GlobalCircularBuffer CreateGlobalCircularBuffer(
