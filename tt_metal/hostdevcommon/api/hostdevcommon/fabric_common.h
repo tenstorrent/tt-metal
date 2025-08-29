@@ -13,10 +13,7 @@ using chan_id_t = std::uint8_t;
 using routing_plane_id_t = std::uint8_t;
 
 static constexpr std::uint32_t CLIENT_INTERFACE_SIZE = 3280;
-static constexpr std::uint32_t GATEKEEPER_INFO_SIZE = 848;
 static constexpr std::uint32_t PACKET_WORD_SIZE_BYTES = 16;
-static constexpr std::uint32_t PACKET_HEADER_SIZE_BYTES = 48;
-static constexpr std::uint32_t PACKET_HEADER_SIZE_WORDS = PACKET_HEADER_SIZE_BYTES / PACKET_WORD_SIZE_BYTES;
 
 // Constants for fabric mesh configuration
 static constexpr std::uint32_t MAX_MESH_SIZE = 1024;
@@ -38,20 +35,6 @@ enum eth_chan_directions : std::uint8_t {
     NORTH = 2,
     SOUTH = 3,
     COUNT = 4,
-};
-
-enum packet_session_command : std::uint32_t {
-    ASYNC_WR = (0x1 << 0),
-    ASYNC_WR_RESP = (0x1 << 1),
-    ASYNC_RD = (0x1 << 2),
-    ASYNC_RD_RESP = (0x1 << 3),
-    DSOCKET_WR = (0x1 << 4),
-    SSOCKET_WR = (0x1 << 5),
-    ATOMIC_INC = (0x1 << 6),
-    ATOMIC_READ_INC = (0x1 << 7),
-    SOCKET_OPEN = (0x1 << 8),
-    SOCKET_CLOSE = (0x1 << 9),
-    SOCKET_CONNECT = (0x1 << 10),
 };
 
 struct routing_table_t {

@@ -1524,7 +1524,7 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricDatamoverBuild
             // Setup VC0 connection
             constexpr uint32_t ds_vc0_index = 1;
             auto ds_vc0_send_chan = get_downstream_edm_sender_channel(is_2D_routing, this->direction);
-            setup_downstream_vc_connection(builder, ds_vc0_index, ds_vc0_send_chan);
+            setup_downstream_vc_connection(builder, ds_vc0_index, ds_vc0_send_chan, false);
 
             if (!fabric_context.need_deadlock_avoidance_support(this->direction)) {
                 return;
@@ -1545,14 +1545,14 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricDatamoverBuild
             // Setup VC1 connection if needed
             constexpr uint32_t ds_index = 2;
             auto vc1_send_chan = get_sender_channel_count(is_2D_routing) - 1;
-            setup_downstream_vc_connection(builder, ds_index, vc1_send_chan);
+            setup_downstream_vc_connection(builder, ds_index, vc1_send_chan, true);
         },
         downstream_builder);
 }
 
 template <typename BuilderType>
 void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
-    BuilderType& downstream_builder, uint32_t vc_idx, uint32_t channel_id) {
+    BuilderType& downstream_builder, uint32_t vc_idx, uint32_t channel_id, bool is_vc1) {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
     const auto ds_noc_x = downstream_builder.get_noc_x();
@@ -1562,15 +1562,21 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     auto adapter_spec = downstream_builder.build_connection_to_fabric_channel(channel_id);
 
     if (is_2D_routing) {
-        uint32_t val = this->downstream_edm_vcs_noc_x[vc_idx].value_or(0);
-        val |= (ds_noc_x << (ds_dir * 8));
-        this->downstream_edm_vcs_noc_x[vc_idx] = val;
+        // TODO: unify vc0 and vc1?
+        if (is_vc1) {
+            this->downstream_edm_vcs_noc_x[vc_idx] = ds_noc_x;
+            this->downstream_edm_vcs_noc_y[vc_idx] = ds_noc_y;
+        } else {
+            uint32_t val = this->downstream_edm_vcs_noc_x[vc_idx].value_or(0);
+            val |= (ds_noc_x << (ds_dir * 8));
+            this->downstream_edm_vcs_noc_x[vc_idx] = val;
 
-        val = this->downstream_edm_vcs_noc_y[vc_idx].value_or(0);
-        val |= (ds_noc_y << (ds_dir * 8));
-        this->downstream_edm_vcs_noc_y[vc_idx] = val;
+            val = this->downstream_edm_vcs_noc_y[vc_idx].value_or(0);
+            val |= (ds_noc_y << (ds_dir * 8));
+            this->downstream_edm_vcs_noc_y[vc_idx] = val;
 
-        this->downstream_edms_connected |= 0x1 << ds_dir;
+            this->downstream_edms_connected |= 0x1 << ds_dir;
+        }
     } else {
         this->downstream_edm_vcs_noc_x[vc_idx] = ds_noc_x;
         this->downstream_edm_vcs_noc_y[vc_idx] = ds_noc_y;

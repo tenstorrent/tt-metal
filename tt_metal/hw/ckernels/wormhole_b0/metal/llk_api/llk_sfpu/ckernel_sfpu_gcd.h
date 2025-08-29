@@ -51,18 +51,18 @@ inline void calculate_sfpu_gcd_body() {
 }
 
 template <int ITERATIONS = 8>
-inline void calculate_sfpu_gcd(const uint dst_offset)
-{
+inline void calculate_sfpu_gcd(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Binary GCD algorithm.
     for (int d = 0; d < ITERATIONS; d++) {
+        // size of each tile in Dest is 64 rows
         constexpr uint dst_tile_size = 64;
 
-        TTI_SFPLOAD(p_sfpu::LREG0, 4, 3, 0); // a
-        TT_SFPLOAD(p_sfpu::LREG1, 4, 3, dst_offset * dst_tile_size); // b
+        TT_SFPLOAD(p_sfpu::LREG0, 4, 3, dst_index_in0 * dst_tile_size);  // a
+        TT_SFPLOAD(p_sfpu::LREG1, 4, 3, dst_index_in1 * dst_tile_size);  // b
 
         calculate_sfpu_gcd_body<31>();
 
-        TTI_SFPSTORE(p_sfpu::LREG1, 4, 3, 0);
+        TT_SFPSTORE(p_sfpu::LREG1, 4, 3, dst_index_out * dst_tile_size);
         dst_reg++;
     }
 }
