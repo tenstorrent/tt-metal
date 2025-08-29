@@ -72,7 +72,7 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [8])
 def test_rs_row_nightly(
-    p150_mesh_device,
+    bh_2d_mesh_device,
     num_devices,
     num_links,
     rs_input_shape,
@@ -90,11 +90,11 @@ def test_rs_row_nightly(
 ):
     if (2 == num_devices) and (rs_topology == ttnn.Topology.Ring):
         pytest.skip("Ring configuration requires more than 2 devices")
-    if (p150_mesh_device.shape[0] != num_devices) and (rs_topology == ttnn.Topology.Ring):
+    if (bh_2d_mesh_device.shape[0] != num_devices) and (rs_topology == ttnn.Topology.Ring):
         pytest.skip("Ring configuration requires the entire row or column so it loops around")
-    if p150_mesh_device.shape[0] < num_devices:
+    if bh_2d_mesh_device.shape[0] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")
-    submesh_device = p150_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
     run_reduce_scatter_impl(
         submesh_device,
