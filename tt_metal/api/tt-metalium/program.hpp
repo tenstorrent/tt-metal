@@ -19,10 +19,10 @@ namespace detail {
 class ProgramImpl;
 }  // namespace detail
 
+using ProgramId = std::uint64_t;
+
 class Program {
 public:
-    using id_t = std::uint64_t;
-
     Program();
     explicit Program(const ProgramDescriptor& descriptor);
     ~Program() noexcept;
@@ -38,8 +38,8 @@ public:
     // These are often used in tracing and testing.
     //////////////////////////////
 
-    void set_runtime_id(id_t id);
-    id_t get_runtime_id() const;
+    void set_runtime_id(ProgramId id);
+    ProgramId get_runtime_id() const;
 
     //////////////////////////////
     // Buffer related functions:

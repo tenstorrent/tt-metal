@@ -1471,9 +1471,9 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     Inspector::program_compile_finished(this, device, build_env.build_key);
 }
 
-void detail::ProgramImpl::set_runtime_id(Program::id_t id) { this->runtime_id = id; }
+void detail::ProgramImpl::set_runtime_id(ProgramId id) { this->runtime_id = id; }
 
-void Program::set_runtime_id(Program::id_t id) { internal_->set_runtime_id(id); }
+void Program::set_runtime_id(ProgramId id) { internal_->set_runtime_id(id); }
 
 uint32_t detail::ProgramImpl::get_sem_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type = hal_programmable_core_type_from_core_type(core_type);
@@ -1549,11 +1549,11 @@ Program& Program::operator=(Program&& other) noexcept = default;
 
 Program::~Program() noexcept = default;
 
-Program::id_t detail::ProgramImpl::get_id() const { return this->id; }
+ProgramId detail::ProgramImpl::get_id() const { return this->id; }
 
-Program::id_t detail::ProgramImpl::get_runtime_id() const { return this->runtime_id; }
+ProgramId detail::ProgramImpl::get_runtime_id() const { return this->runtime_id; }
 
-Program::id_t Program::get_runtime_id() const { return internal_->get_runtime_id(); }
+ProgramId Program::get_runtime_id() const { return internal_->get_runtime_id(); }
 
 size_t detail::ProgramImpl::num_kernels() const {
     size_t count = 0;

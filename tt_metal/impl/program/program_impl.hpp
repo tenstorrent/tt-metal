@@ -188,9 +188,9 @@ public:
 
     ~ProgramImpl() noexcept;
 
-    void set_runtime_id(Program::id_t id);
-    Program::id_t get_runtime_id() const;
-    Program::id_t get_id() const;
+    void set_runtime_id(ProgramId id);
+    ProgramId get_runtime_id() const;
+    ProgramId get_id() const;
     std::size_t num_kernels() const;
     std::span<const std::shared_ptr<CircularBuffer>> circular_buffers() const;
     const std::vector<Semaphore>& semaphores() const;
@@ -273,7 +273,6 @@ public:
 
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
-    // Should be const?
     bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
 
