@@ -48,23 +48,6 @@ static bool is_ethernet_endpoint_up(
     return false;
 }
 
-// TODO: hard-coded address is WH only. Need to add a UMD HAL layer.
-static bool is_link_up(const std::unique_ptr<tt::umd::Cluster>& cluster, EthernetEndpoint ep) {
-    uint32_t link_up_value = 0;
-    tt::umd::CoreCoord ethernet_core = tt::umd::CoreCoord(
-        ep.ethernet_core.x, ep.ethernet_core.y, tt::umd::CoreType::ETH, tt::umd::CoordSystem::LOGICAL);
-    cluster->read_from_device(&link_up_value, ep.chip.id, ethernet_core, 0x1ed4, sizeof(uint32_t));
-
-    if (cluster->get_tt_device(ep.chip.id)->get_arch() == tt::ARCH::WORMHOLE_B0) {
-        return link_up_value == 6;  // see eth_fw_api.h
-    } else if (cluster->get_tt_device(ep.chip.id)->get_arch() == tt::ARCH::BLACKHOLE) {
-        return link_up_value == 1;
-    }
-
-    TT_ASSERT(false, "Unsupported architecture for chip {}", ep.chip);
-    return false;
-}
-
 static void old_test_print_link_health() {
     const tt::tt_metal::MetalContext& instance = tt::tt_metal::MetalContext::instance();
     const tt::Cluster& cluster = instance.get_cluster();
@@ -152,8 +135,8 @@ static void test_print_link_health() {
 
             // Print
             std::cout << "  Channel " << channel << " -> [" << remote_chip << "], Channel " << remote_channel
-                      << " (Link Status: " << (is_link_up(cluster, endpoint) ? "UP" : "DOWN") << '/'
-                      << (is_link_up(cluster, remote_endpoint) ? "UP" : "DOWN") << ')' << std::endl;
+                      << " (Link Status: " << (is_ethernet_endpoint_up(cluster, endpoint) ? "UP" : "DOWN") << '/'
+                      << (is_ethernet_endpoint_up(cluster, remote_endpoint) ? "UP" : "DOWN") << ')' << std::endl;
         }
     }
 }

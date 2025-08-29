@@ -91,31 +91,6 @@ There's an attribute named asic_id that will show up if your FW is new enough.  
      return ethernet_channel_to_core_coord;
  }
 
- std::map<ChipIdentifier, std::vector<EthernetEndpoint>> get_ethernet_endpoints_by_chip(const std::unique_ptr<tt::umd::Cluster>& cluster) {
-     std::map<ChipIdentifier, std::vector<EthernetEndpoint>> ethernet_endpoints_by_chip;
-
-     for (const auto& [chip_id, remote_chip_and_channel_by_channel] : cluster->get_cluster_description()->get_ethernet_connections()) {
-         tt::umd::TTDevice *device = cluster->get_tt_device(chip_id);
-
-         // Create a SOC descriptor just for the purpose of mapping Ethernet channel to core coordinates
-         const tt::umd::tt_SocDescriptor &soc_desc = cluster->get_soc_descriptor(chip_id);
-
-         ChipIdentifier chip = get_chip_identifier_from_umd_chip_id(device, chip_id);
-         std::vector<EthernetEndpoint>& endpoints_this_chip = ethernet_endpoints_by_chip[chip];
-
-         for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
-             // Construct EthernetEndpoint from its components
-             CoreCoord ethernet_core = soc_desc.get_eth_core_for_channel(channel, tt::umd::CoordSystem::LOGICAL);
-             EthernetEndpoint endpoint{.chip = chip, .ethernet_core = ethernet_core, .channel = channel};
-
-             // Add to list of endpoints for current chip
-             endpoints_this_chip.push_back(endpoint);
-         }
-     }
-
-     return ethernet_endpoints_by_chip;
- }
-
  static std::unordered_map<tt::umd::chip_id_t, std::unique_ptr<tt::umd::TTDevice>> get_pcie_devices(
      const std::unique_ptr<tt::umd::tt_ClusterDescriptor>& cluster_descriptor) {
      std::unordered_map<tt::umd::chip_id_t, std::unique_ptr<tt::umd::TTDevice>> pcie_device_by_chip_id;
