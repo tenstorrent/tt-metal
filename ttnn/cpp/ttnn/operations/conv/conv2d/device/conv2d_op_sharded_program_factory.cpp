@@ -296,13 +296,15 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         a.memory_config().memory_layout(),
         is_conv_1d_depthwise_conv,
         act_block_h_ntiles,
-        p_config.per_core_out_matrix_height_ntile,
         shard_shape[1],
         p_config.per_core_out_matrix_width_ntile * tt::constants::TILE_WIDTH,
         filter_w,
         device->arch() == tt::ARCH::BLACKHOLE,
         a.dtype(),
-        b.dtype());
+        b.dtype(),
+        per_core_out_matrix_height_ntiles / block_config.act_block_h_ntiles > 1);
+    log_info(tt::LogOp, "enable_split_reader: {}", enable_split_reader);
+
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
     // check is for 16-byte alignment
     TT_FATAL(
