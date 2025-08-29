@@ -668,13 +668,10 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     this->enqueue_record_event(event, sub_device_ids);
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled()) {
         while (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
-            if (MetalContext::instance().dprint_server() and
-                MetalContext::instance().dprint_server()->hang_detected()) {
+            if ((MetalContext::instance().dprint_server() and
+                 MetalContext::instance().dprint_server()->hang_detected()) ||
+                MetalContext::instance().watcher_server()->killed_due_to_error()) {
                 // DPrint Server hang, early exit. We're in test mode, so main thread will assert.
-                this->set_exit_condition();
-                return;
-            } else if (MetalContext::instance().watcher_server()->killed_due_to_error()) {
-                // Illegal NOC txn killed watcher, early exit. We're in test mode, so main thread will assert.
                 this->set_exit_condition();
                 return;
             }
