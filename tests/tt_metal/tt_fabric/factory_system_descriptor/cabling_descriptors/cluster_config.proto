@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package tt.fsd.proto;
+
+message ClusterDescriptor {
+    message SuperPod {
+      int32 superpod_id = 1;
+      string superpod_type = 2;
+    }
+
+    message SuperPods {
+        repeated SuperPod superpod = 1;
+    }
+
+    message Port {
+        int32 superpod_id = 1;
+        int32 pod_id = 2;
+        int32 tray_id = 3;
+        int32 port_id = 4;
+    }
+
+    message Connection {
+        Port port_a = 1;
+        Port port_b = 2;
+    }
+
+    message PortConnections {
+        repeated Connection connections = 1;
+    }
+
+    SuperPods superpods = 1;
+    map<string, PortConnections> port_type_connections = 2;
+}

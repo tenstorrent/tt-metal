@@ -149,10 +149,57 @@ target_link_libraries(
 )
 target_sources(test_fabric_1d_bw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test_fabric_edm.cpp)
 
-# cabling_generator
-
+# Find protobuf package
 find_package(Protobuf REQUIRED)
 
+# Generate C++ code from protobuf definitions
+protobuf_generate_cpp(
+    PROTO_SRCS
+    PROTO_HDRS
+    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/factory_system_descriptor.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/pod_config.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/superpod_config.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/cluster_config.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/deployment/deployment.proto
+)
+
+add_executable(test_factory_system_descriptor)
+target_include_directories(
+    test_factory_system_descriptor
+    PRIVATE
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${CMAKE_CURRENT_BINARY_DIR} # For generated protobuf headers
+)
+set_target_properties(
+    test_factory_system_descriptor
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
+target_link_libraries(
+    test_factory_system_descriptor
+    PRIVATE
+        umd::device
+        tt-logger::tt-logger
+        TT::STL
+        enchantum::enchantum
+        fmt::fmt-header-only
+        yaml-cpp::yaml-cpp
+        gmock_main
+        ${Protobuf_LIBRARIES} # Link against protobuf libraries
+)
+target_sources(
+    test_factory_system_descriptor
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/test_factory_system_descriptor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/board/board.cpp
+        ${PROTO_SRCS} # Add generated protobuf source files
+        ${PROTO_HDRS} # Add generated protobuf header files
+)
+
+
+# cabling_generator
 add_executable(cabling_generator)
 
 protobuf_generate_cpp(
@@ -161,14 +208,15 @@ protobuf_generate_cpp(
     ${CMAKE_CURRENT_SOURCE_DIR}/cabling_generator/cabling.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/cabling_generator/deployment.proto
 )
-    
+
 target_include_directories(
     cabling_generator
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/cabling_generator/
-        ${CMAKE_CURRENT_BINARY_DIR})
+        ${CMAKE_CURRENT_BINARY_DIR}
+)
 
-        target_link_libraries(
+target_link_libraries(
     cabling_generator
     PRIVATE
         protobuf 
