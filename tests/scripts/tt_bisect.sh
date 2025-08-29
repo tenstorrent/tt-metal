@@ -86,7 +86,6 @@ fresh_clean() {
 
   # Nuke build outputs but keep venv/cache
   git reset --hard
-  git clean -xfd -e python_env -e .venv -e venv || true
   rm -rf build build_Release build_Debug || true
 
   # Remove any installed wheels that could shadow the tree
