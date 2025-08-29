@@ -152,16 +152,15 @@ static ChipIdentifier get_chip_identifier_from_umd_chip_id(tt::umd::TTDevice* de
      return pcie_device_by_chip_id;
  }
 
- static bool is_link_up(const std::unique_ptr<tt_ClusterDescriptor> &cluster, const std::unordered_map<tt::umd::chip_id_t, std::unique_ptr<tt::umd::TTDevice>> &pcie_device_by_chip_id, EthernetEndpoint ep) {
-     chip_id_t nearest_pcie_chip_id = cluster->get_closest_mmio_capable_chip(ep.chip.id);
-     const std::unique_ptr<tt::umd::TTDevice>& device = pcie_device_by_chip_id.at(nearest_pcie_chip_id);
-
+ static bool is_link_up(const std::unique_ptr<tt::umd::Cluster>& cluster, EthernetEndpoint ep) {
      uint32_t link_up_value = 0;
-     device->read_from_device(&link_up_value, ep.ethernet_core, 0x1ed4, sizeof(uint32_t));
+     tt::umd::CoreCoord ethernet_core = tt::umd::CoreCoord(
+         ep.ethernet_core.x, ep.ethernet_core.y, tt::umd::CoreType::ETH, tt::umd::CoordSystem::LOGICAL);
+     cluster->read_from_device(&link_up_value, ep.chip.id, ethernet_core, 0x1ed4, sizeof(uint32_t));
 
-     if (device->get_arch() == tt::ARCH::WORMHOLE_B0) {
+     if (cluster->get_tt_device(ep.chip.id)->get_arch() == tt::ARCH::WORMHOLE_B0) {
          return link_up_value == 6;  // see eth_fw_api.h
-     } else if (device->get_arch() == tt::ARCH::BLACKHOLE) {
+     } else if (cluster->get_tt_device(ep.chip.id)->get_arch() == tt::ARCH::BLACKHOLE) {
          return link_up_value == 1;
      }
 
@@ -182,7 +181,7 @@ static ChipIdentifier get_chip_identifier_from_umd_chip_id(tt::umd::TTDevice* de
      for (auto& [chip_id, endpoints] : endpoint_by_chip) {
          std::cout << chip_id << ":" << std::endl;
          for (auto& endpoint : endpoints) {
-             std::cout << "  " << endpoint << /*" = " << (is_link_up(cluster_descriptor, pcie_devices_by_chip_id, endpoint) ? "UP" : "DOWN") <<*/ std::endl;
+             std::cout << "  " << endpoint << " = " << (is_link_up(cluster, endpoint) ? "UP" : "DOWN") << std::endl;
          }
      }
      std::cout << "Finished" << std::endl;
