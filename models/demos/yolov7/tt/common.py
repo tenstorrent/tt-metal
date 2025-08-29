@@ -29,6 +29,7 @@ class TtYOLOv7Conv2D:
         math_approx_mode=False,
         input_channels_alignment=32,
         use_1d_systolic_array=True,
+        output_layout=ttnn.TILE_LAYOUT,
     ) -> None:
         self.weights = parameters["weight"]
         self.bias = parameters["bias"]
@@ -54,6 +55,7 @@ class TtYOLOv7Conv2D:
         self.is_reshape = is_reshape
         self.enable_split_reader = enable_split_reader
         self.enable_act_double_buffer = enable_act_double_buffer
+        self.output_layout = output_layout
 
     def __call__(self, device, input_tensor):
         conv_config = ttnn.Conv2dConfig(
@@ -67,6 +69,7 @@ class TtYOLOv7Conv2D:
             else self.enable_act_double_buffer,
             enable_weights_double_buffer=True if self.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED else False,
             deallocate_activation=self.deallocate_activation,
+            output_layout=self.output_layout,
         )
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),

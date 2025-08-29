@@ -183,7 +183,15 @@ class ttnn_detect:
         self.stride = [8.0, 16.0, 32.0]
 
         self.m = []
-        self.convm_1 = Conv([1, 80, 80, 256], (1, 1, 1, 1, 0, 0, 1, 1), parameters["0"], is_reshape=True, activation="")
+        self.convm_1 = Conv(
+            [1, 80, 80, 256],
+            (1, 1, 1, 1, 0, 0, 1, 1),
+            parameters["0"],
+            is_reshape=True,
+            activation="",
+            height_sharding=False,
+            num_cores_nhw=64,
+        )
         self.m.append(self.convm_1)
 
         self.convm_2 = Conv([1, 40, 40, 512], (1, 1, 1, 1, 0, 0, 1, 1), parameters["1"], is_reshape=True, activation="")
@@ -301,6 +309,8 @@ class ttnn_yolov7:
             [1, 160, 160, 256],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["11"],
+            dtype=ttnn.bfloat16,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         self.conv12 = Conv(
             [1, 80, 80, 256],
@@ -323,11 +333,15 @@ class ttnn_yolov7:
             [1, 80, 80, 256],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["17"],
+            dtype=ttnn.bfloat16,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         self.conv16 = Conv(
             [1, 80, 80, 256],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["18"],
+            dtype=ttnn.bfloat16,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         self.conv17 = Conv(
             [1, 80, 80, 128],
@@ -408,16 +422,21 @@ class ttnn_yolov7:
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["37"],
             height_sharding=False,
+            num_cores_nhw=64,
         )
         self.conv32 = Conv(
             [1, 20, 20, 1024],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["39"],
+            height_sharding=False,
+            num_cores_nhw=64,
         )
         self.conv33 = Conv(
             [1, 40, 40, 1024],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["40"],
+            height_sharding=False,
+            num_cores_nhw=64,
         )
         self.conv34 = Conv(
             [1, 40, 40, 512],
@@ -434,11 +453,15 @@ class ttnn_yolov7:
             [1, 20, 20, 1024],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["43"],
+            height_sharding=False,
+            num_cores_nhw=64,
         )
         self.conv36 = Conv(
             [1, 20, 20, 1024],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["44"],
+            height_sharding=False,
+            num_cores_nhw=64,
         )
         self.conv37 = Conv(
             [1, 20, 20, 256],
@@ -466,6 +489,7 @@ class ttnn_yolov7:
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["50"],
             height_sharding=False,
+            num_cores_nhw=64,
         )
         self.SPPCSPC = ttnn_SPPCSPC(device, parameters["51"])
 
@@ -616,21 +640,29 @@ class ttnn_yolov7:
             [1, 40, 40, 1024],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["88"],
+            height_sharding=False,
+            num_cores_nhw=64,
         )
         self.conv70 = Conv(
             [1, 20, 20, 256],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["90"],
+            height_sharding=False,
+            num_cores_nhw=64,
         )
         self.conv71 = Conv(
             [1, 40, 40, 256],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["91"],
+            height_sharding=False,
+            num_cores_nhw=64,
         )
         self.conv72 = Conv(
             [1, 40, 40, 256],
             (3, 3, 2, 2, 1, 1, 1, 1),
             parameters["92"],
+            height_sharding=False,
+            num_cores_nhw=64,
         )
 
         self.conv73 = Conv(
@@ -638,32 +670,41 @@ class ttnn_yolov7:
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["94"],
             height_sharding=False,
+            num_cores_nhw=64,
         )
         self.conv74 = Conv(
             [1, 20, 20, 1024],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["95"],
             height_sharding=False,
+            num_cores_nhw=64,
         )
         self.conv75 = Conv(
             [1, 20, 20, 512],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["96"],
+            height_sharding=False,
+            num_cores_nhw=64,
         )
         self.conv76 = Conv(
             [1, 20, 20, 256],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["97"],
+            height_sharding=False,
+            num_cores_nhw=64,
         )
         self.conv77 = Conv(
             [1, 20, 20, 256],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["98"],
+            height_sharding=False,
+            num_cores_nhw=64,
         )
         self.conv78 = Conv(
             [1, 20, 20, 256],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["99"],
+            num_cores_nhw=64,
         )
 
         self.conv79 = Conv(
@@ -671,6 +712,7 @@ class ttnn_yolov7:
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["101"],
             height_sharding=False,
+            num_cores_nhw=64,
         )
         self.repconv1 = ttnn_repconv(device, parameters["102"], [1, 80, 80, 128])
         self.repconv2 = ttnn_repconv(device, parameters["103"], [1, 40, 40, 256])
