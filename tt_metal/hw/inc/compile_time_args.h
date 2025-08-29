@@ -39,7 +39,7 @@ constexpr uint32_t get_named_ct_arg(std::string_view name) {
 #endif
     // This should never be reached if the named argument is defined in KERNEL_COMPILE_TIME_ARG_MAP.
     // Upon reaching this point, compilation should fail, but it currently does not.
-    ASSERT(false, "Named argument not found in KERNEL_COMPILE_TIME_ARG_MAP");
+    ASSERT(false);
     return 0;
 }
 
