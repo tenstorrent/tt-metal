@@ -135,7 +135,7 @@ private:
     void generate_cross_host_connections();
     void remove_unresolved_nodes();
     void resolve_hostname_uniqueness();
-
+    void validate_graphs();
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;
     std::unordered_map<std::string, std::string> host_to_mobo_name_;

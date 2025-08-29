@@ -240,6 +240,7 @@ void PhysicalSystemDescriptor::run_global_discovery() {
     if (my_rank == controller_rank) {
         this->remove_unresolved_nodes();
         this->generate_cross_host_connections();
+        this->validate_graphs();
     }
     this->exchange_metadata(false);
     distributed_context.barrier();
@@ -464,6 +465,87 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
         fout << root;
     } else {
         std::cout << root << std::endl;
+    }
+}
+
+void PhysicalSystemDescriptor::validate_graphs() {
+    // Validate that the representation of the system is internally consistent.
+    for (const auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
+        for (const auto& [src_asic, edges] : asic_group) {
+            const auto& src_host = asic_descriptors_.at(src_asic).host_name;
+            const auto& src_host_edges = system_graph_.host_connectivity_graph.at(src_host);
+            for (const auto& edge : edges) {
+                auto dst_asic = edge.first;
+                const auto& dst_host = asic_descriptors_.at(dst_asic).host_name;
+                const auto& eth_conns = edge.second;
+                bool all_connections_local =
+                    std::all_of(eth_conns.begin(), eth_conns.end(), [&](const EthConnection& eth_conn) {
+                        return eth_conn.is_local;
+                    });
+                bool all_connections_global =
+                    std::all_of(eth_conns.begin(), eth_conns.end(), [&](const EthConnection& eth_conn) {
+                        return !eth_conn.is_local;
+                    });
+                // All connections on this edge must be local or global.
+                TT_FATAL(
+                    all_connections_local || all_connections_global,
+                    "Physical Discover Error: All ethernet connections should either be local or global. Please reset "
+                    "the system and try again.");
+                // If all connections are local, then the src_host and dst_host should be the same
+                if (all_connections_local) {
+                    // If connections are local, then the src_host and dst_host should be the same.
+                    for (const auto& eth_conn : eth_conns) {
+                        TT_FATAL(
+                            src_host == dst_host,
+                            "Physical Discovery Error: Local Connection between {} and {} is not on the same host. "
+                            "Please reset the system and try again.",
+                            src_host,
+                            dst_host);
+                    }
+                } else {
+                    // If connections are global, then the src_host and dst_host should be different.
+                    TT_FATAL(
+                        src_host != dst_host,
+                        "Physical Discovery Error: Hostnames for connections marked as global should be different. "
+                        "Please reset the system and try again.");
+                    for (const auto& eth_conn : eth_conns) {
+                        bool host_neighbor_found = false;
+                        for (const auto& src_host_edge : src_host_edges) {
+                            if (src_host_edge.first == dst_host) {
+                                host_neighbor_found = true;
+                                const auto& exit_node_conns = src_host_edge.second;
+                                bool exit_node_conn_found =
+                                    std::find_if(
+                                        exit_node_conns.begin(),
+                                        exit_node_conns.end(),
+                                        [&](const ExitNodeConnection& exit_node_conn) {
+                                            return exit_node_conn.src_exit_node == src_asic &&
+                                                   exit_node_conn.dst_exit_node == dst_asic &&
+                                                   exit_node_conn.eth_conn.src_chan == eth_conn.src_chan &&
+                                                   exit_node_conn.eth_conn.dst_chan == eth_conn.dst_chan;
+                                        }) != exit_node_conns.end();
+                                // A global connection should be visible as an exit node from the src_host to the
+                                // dst_host.
+                                TT_FATAL(
+                                    exit_node_conn_found,
+                                    "Physical Discovery Error: Global Connection between {} and {} is not found in the "
+                                    "host connectivity graph. Please reset the system and try again.",
+                                    src_host,
+                                    dst_host);
+                                break;
+                            }
+                        }
+                        // A global connection should be visible as an exit node from the src_host to the dst_host.
+                        TT_FATAL(
+                            host_neighbor_found,
+                            "Physical Discovery Error: Global Connection between {} and {} is not found in the host "
+                            "connectivity graph. Please reset the system and try again.",
+                            src_host,
+                            dst_host);
+                    }
+                }
+            }
+        }
     }
 }
 
