@@ -73,12 +73,19 @@ TEST_F(MeshDeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
     }
 }
 
-TEST_F(DeviceFixture, TensixTestNamedCompileTimeArgs) {
-    for (IDevice* device : this->devices_) {
+TEST_F(MeshDeviceFixture, TensixTestNamedCompileTimeArgs) {
+    for (const auto& mesh_device : this->devices_) {
         CoreCoord core = {0, 0};
+        auto& cq = mesh_device->mesh_command_queue();
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        distributed::MeshWorkload workload;
         Program program;
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
+        auto device = mesh_device->get_devices()[0];
 
-        const uint32_t write_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+        const uint32_t write_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
         const std::map<std::string, std::string> defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}};
 
@@ -87,7 +94,7 @@ TEST_F(DeviceFixture, TensixTestNamedCompileTimeArgs) {
             {"num_tiles", 64}, {"enable_debug", 1}, {"stride_value", 8}, {"buffer_size", 1024}};
 
         CreateKernel(
-            program,
+            program_,
             "tests/tt_metal/tt_metal/test_kernels/misc/named_compile_time_args_kernel.cpp",
             core,
             DataMovementConfig{
@@ -96,7 +103,7 @@ TEST_F(DeviceFixture, TensixTestNamedCompileTimeArgs) {
                 .compile_args = compile_time_args,
                 .defines = defines,
                 .named_compile_time_args = named_compile_time_args});
-        this->RunProgram(device, program);
+        distributed::EnqueueMeshWorkload(cq, workload, false);
 
         std::vector<uint32_t> results;
         detail::ReadFromDeviceL1(device, core, write_addr, 4 * sizeof(uint32_t), results);
