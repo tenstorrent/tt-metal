@@ -21,8 +21,9 @@ struct RuntimeQueryResponse {
     std::optional<std::string> error_message;
 };
 
-static constexpr int NUM_TRACE_EXECUTIONS = 10;
-
+static constexpr size_t NUM_TRACE_EXECUTIONS = 16;
+static constexpr size_t WARMUP_TRACE_EXECUTIONS = 5;
+static constexpr size_t NUM_OUTLIERS_TO_REMOVE = 6;
 /**
  * @brief Extracts a trace of the operation(s) and returns the trace ID.
  *
@@ -90,15 +91,28 @@ template <typename TraceID>
 uint64_t execute_time_and_release_trace(TraceID trace_id, MeshDevice* device) {
     try {
         uint64_t duration = 0;
-        for (int i = 0; i < NUM_TRACE_EXECUTIONS; ++i) {
+        std::array<uint64_t, NUM_TRACE_EXECUTIONS> durations;
+
+        for (size_t i = 0; i < NUM_TRACE_EXECUTIONS + WARMUP_TRACE_EXECUTIONS; ++i) {
             auto start = std::chrono::high_resolution_clock::now();
             ttnn::operations::trace::execute_trace(device, trace_id, ttnn::DefaultQueueId, /* blocking = */ true);
             auto end = std::chrono::high_resolution_clock::now();
-            duration += std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+
+            if (i >= WARMUP_TRACE_EXECUTIONS) {
+                durations[i - WARMUP_TRACE_EXECUTIONS] =
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+            }
         }
 
         ttnn::operations::trace::release_trace(device, trace_id);
-        return duration / NUM_TRACE_EXECUTIONS;
+
+        // Remove outliers before averaging
+        std::sort(durations.begin(), durations.end());
+        size_t offset = NUM_OUTLIERS_TO_REMOVE / 2;
+        auto begin_it = durations.begin() + offset;
+        auto end_it = durations.end() - offset;
+        uint64_t sum = std::accumulate(begin_it, end_it, static_cast<uint64_t>(0));
+        return sum / (NUM_TRACE_EXECUTIONS - NUM_OUTLIERS_TO_REMOVE);
 
     } catch (const std::exception& e) {
         // Ensure captured trace is released before returning to avoid a memory leak
