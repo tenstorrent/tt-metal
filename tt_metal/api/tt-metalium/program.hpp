@@ -13,7 +13,6 @@ namespace tt::tt_metal {
 // Fwd declares
 class ProgramDescriptor;
 class CircularBuffer;
-class Kernel;
 
 namespace detail {
 class ProgramImpl;
