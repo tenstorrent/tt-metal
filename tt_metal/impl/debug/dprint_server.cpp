@@ -57,7 +57,7 @@ using std::uint32_t;
 
 using namespace tt;
 
-#define CAST_U8P(p) reinterpret_cast<uint8_t*>(p)
+#define CAST_U8P(p) (reinterpret_cast<uint8_t*>(p))
 
 namespace {
 
