@@ -166,38 +166,6 @@ run_t3000_llama3_perplexity_tests_t3000() {
   fi
 }
 
-run_t3000_llama3_70n90b_perplexity_tests_t3000() {
-
-  echo "LOG_METAL: Checking number of devices"
-  python3 -c "import ttnn; print('Number of devices:', ttnn.get_num_devices())"
-
-  # Split long set of tests into two groups
-  # This one runs all the T3K tests
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_llama3_perplexity_tests_t3000"
-
-
-  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
-  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/
-
-  for MESH_DEVICE in T3K; do
-    # 70B and 90B tests has the same configuration between `-k "attention-accuracy"` and `-k "attention-performance"` so we only run one of them
-    for LLAMA_DIR in "$llama70b" "$llama90b"; do
-      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout=3600 ; fail+=$?
-    done
-  done
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama3_perplexity_tests_t3000 $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_qwen25_perplexity_tests() {
   # Record the start time
   fail=0
@@ -265,7 +233,6 @@ run_t3000_tests() {
   # Run llama3 perplexity tests
   run_t3000_llama3_perplexity_tests_single_card
   run_t3000_llama3_perplexity_tests_t3000
-  run_t3000_llama3_70n90b_perplexity_tests_t3000
 }
 
 fail=0

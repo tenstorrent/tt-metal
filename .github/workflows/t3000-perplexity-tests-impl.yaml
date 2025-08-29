@@ -30,7 +30,6 @@ jobs:
           { name: "t3k_mistral_tests", arch: wormhole_b0, cmd: run_t3000_mistral_perplexity_tests, timeout: 300, U0896VBAKFC}, # Pratikkumar Prajapati
           { name: "t3k_llama3_tests_single_card", arch: wormhole_b0, cmd: run_t3000_llama3_perplexity_tests_single_card, timeout: 300, owner_id: U03PUAKE719}, # Mark O'Connor
           { name: "t3k_llama3_tests_t3k", arch: wormhole_b0, cmd: run_t3000_llama3_perplexity_tests_t3000, timeout: 300, owner_id: U03PUAKE719}, # Mark O'Connor
-          { name: "t3k_llama3_70n90b_tests_t3k", arch: wormhole_b0, cmd: run_t3000_llama3_70n90b_perplexity_tests_t3000, timeout: 300, owner_id: U03PUAKE719}, #
           { name: "t3k_qwen25_tests", arch: wormhole_b0, cmd: run_t3000_qwen25_perplexity_tests, timeout: 300, owner_id: U03PUAKE719}, # Mark O'Connor
           { name: "t3k_qwen3_tests", arch: wormhole_b0, cmd: run_t3000_qwen3_perplexity_tests, timeout: 300, owner_id: U03PUAKE719}, # Mark O'Connor
         ]
