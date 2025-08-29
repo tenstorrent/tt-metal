@@ -598,7 +598,7 @@ class TtImagePoolingAttn:
             ttnn.to_layout(
                 ttnn.reshape(
                     pool(
-                        input_tensor=ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT),
+                        input_tensor=x,
                         batch_size=1,
                         input_h=int(math.sqrt(x.shape[2])),
                         input_w=int(math.sqrt(x.shape[2])),
