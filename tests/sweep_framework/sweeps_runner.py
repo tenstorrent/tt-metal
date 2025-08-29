@@ -26,6 +26,8 @@ from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_re
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
 from sweep_utils.roofline_utils import get_updated_message
 
+# import ttnn
+
 PROCESS_TERMINATION_TIMEOUT_SECONDS = 5
 
 
@@ -51,10 +53,12 @@ class SweepsConfig:
     elastic_password: Optional[str] = None
     summary: bool = False
     run_contents: str = None
+    arch_name: Optional[str] = None
 
 
 def create_config_from_args(args) -> SweepsConfig:
     """Create configuration object from parsed arguments"""
+
     config = SweepsConfig(
         module_name=args.module_name,
         suite_name=args.suite_name,
@@ -72,16 +76,32 @@ def create_config_from_args(args) -> SweepsConfig:
         summary=args.summary,
     )
 
-    if config.vector_source == "elastic" or config.result_destination == "elastic":
+    if args.vector_source == "elastic" or args.result_dest == "elastic":
         from framework.elastic_config import get_elastic_url
 
-        config.elastic_connection_string = get_elastic_url("corp")
+        elastic_connection_string = get_elastic_url("corp")
 
         # Acquire once
-        config.elastic_username = os.getenv("ELASTIC_USERNAME")
-        config.elastic_password = os.getenv("ELASTIC_PASSWORD")
-        if not config.elastic_username or not config.elastic_password:
-            raise ValueError("ELASTIC_USERNAME and ELASTIC_PASSWORD must be set in environment variables")
+        elastic_username = os.getenv("ELASTIC_USERNAME")
+        elastic_password = os.getenv("ELASTIC_PASSWORD")
+        if not elastic_username or not elastic_password:
+            logger.error("ELASTIC_USERNAME and ELASTIC_PASSWORD must be set in environment variables")
+            exit(1)
+        config.elastic_connection_string = elastic_connection_string
+        config.elastic_username = elastic_username
+        config.elastic_password = elastic_password
+
+    # Validate and set ARCH_NAME
+    allowed_arch = {"blackhole", "wormhole_b0"}
+    arch_env = os.getenv("ARCH_NAME")
+    if not arch_env:
+        logger.error("ARCH_NAME must be set in environment and be one of ['blackhole', 'wormhole_b0']")
+        exit(1)
+    arch_env = arch_env.strip()
+    if arch_env not in allowed_arch:
+        logger.error(f"Invalid ARCH_NAME '{arch_env}'. Must be one of ['blackhole', 'wormhole_b0']")
+        exit(1)
+    config.arch_name = arch_env
 
     return config
 
@@ -170,7 +190,7 @@ def gather_single_test_perf(device, test_passed):
         logger.error("Multi-device perf is not supported. Failing.")
         return None
     # Read profiler data from device
-    ttnn.ReadDeviceProfiler(device)
+    # ttnn.ReadDeviceProfiler(device)
     opPerfData = get_device_data_generate_report(
         PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True
     )
@@ -311,14 +331,14 @@ def run(test_module, input_queue, output_queue, config: SweepsConfig):
 
 
 def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig):
+    # runs a single suite in a test vector
     results = []
     input_queue = Queue()
     output_queue = Queue()
     p = None
     timeout = get_timeout(test_module)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
-    arch = ttnn.get_arch_name()
-    reset_util = tt_smi_util.ResetUtil(arch)
+    reset_util = tt_smi_util.ResetUtil(config.arch_name)
 
     if len(test_vectors) > 1 and not config.dry_run:
         p = Process(target=run, args=(test_module, input_queue, output_queue, config))
@@ -517,7 +537,7 @@ def run_sweeps(
         run_metadata = {
             "initiated_by": get_initiated_by(),
             "host": get_hostname(),
-            "card_type": ttnn.get_arch_name(),
+            "card_type": config.arch_name,
             "run_type": "sweeps",
             "run_contents": config.run_contents,
             "git_author": get_git_author(),
@@ -828,7 +848,6 @@ if __name__ == "__main__":
     # Parse modules for running specific tests
     module_names = get_module_names(config)
 
-    from ttnn import *
     from framework.serialize import *
     from framework.device_fixtures import default_device
 
