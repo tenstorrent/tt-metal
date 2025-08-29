@@ -10,6 +10,15 @@ from ...utils.substate import substate, indexed_substates
 from ...parallel.manager import CCLManager
 from ...parallel.config import EncoderParallelConfig
 from ...layers.feedforward import ColParallelLinear, ParallelFeedForward
+from ttnn.distributed.distributed import ConcatMeshToTensor
+
+
+compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
 
 
 class CLIPConfig:
@@ -125,7 +134,9 @@ class CLIPEncoder:
         if self.eos_token_id is None:
             self.eos_token_id = 2
 
-        pooled_output = _gather_eos(normalized_final_state, prompt_tokenized, self.eos_token_id, mesh_device)
+        pooled_output = self._gather_eos(
+            normalized_final_state, prompt_tokenized, self.eos_token_id, mesh_device, self.ccl_manager
+        )
 
         # apply text projection if specified
         if with_projection:
@@ -139,30 +150,65 @@ class CLIPEncoder:
             # sequence embedding, pooled embedding without projection
             return encoder_output, pooled_output
 
+    def _pool_eos_from_torch_tensors(self, ids_t: torch.Tensor, seq_t: torch.Tensor, eos_token_id: int) -> torch.Tensor:
+        """Helper function to pool EOS tokens from torch tensors.
 
-def _gather_eos(seq_emb: ttnn.Tensor, input_ids: ttnn.Tensor, eos_token_id: int, device: ttnn.Device) -> ttnn.Tensor:
-    ids_t = ttnn.to_torch(ttnn.get_device_tensors(input_ids)[0])
+        Args:
+            ids_t: Token IDs tensor [B, S]
+            seq_t: Sequence embeddings tensor [B, S, H]
+            eos_token_id: EOS token ID to search for
 
-    # from HF: if self.eos_token_id == 2: use argmax, else: search for eos_token_id
-    if eos_token_id == 2:
-        # use argmax (highest token ID position)
-        eos_idx = ids_t.to(dtype=torch.int, device=ids_t.device).argmax(dim=-1)
-    else:
-        # search for specific eos_token_id
-        eos_mask = (ids_t.to(dtype=torch.int, device=ids_t.device) == eos_token_id).int()
-        eos_idx = eos_mask.argmax(dim=-1)
+        Returns:
+            Pooled tensor [B, H]
+        """
+        # from HF: if self.eos_token_id == 2: use argmax, else: search for eos_token_id
+        if eos_token_id == 2:
+            # use argmax (highest token ID position)
+            eos_idx = ids_t.to(dtype=torch.int, device=ids_t.device).argmax(dim=-1)
+        else:
+            # search for specific eos_token_id
+            eos_mask = (ids_t.to(dtype=torch.int, device=ids_t.device) == eos_token_id).int()
+            eos_idx = eos_mask.argmax(dim=-1)
 
-    seq_t = ttnn.to_torch(ttnn.get_device_tensors(seq_emb)[0])  # [B, S, H]
-    b = torch.arange(seq_t.size(0))
-    pooled_t = seq_t[b, eos_idx]  # [B, H]
+        # Use vectorized indexing to get pooled output
+        b = torch.arange(seq_t.size(0))
+        pooled_t = seq_t[b, eos_idx]  # [B, H]
+        return pooled_t
 
-    return ttnn.from_torch(
-        pooled_t,
-        dtype=seq_emb.get_dtype(),
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-    )
+    def _gather_eos(
+        self,
+        seq_emb: ttnn.Tensor,
+        input_ids: ttnn.Tensor,
+        eos_token_id: int,
+        device: ttnn.Device,
+        ccl_manager: CCLManager,
+    ) -> ttnn.Tensor:
+        if ccl_manager is not None:
+            ids_t = ttnn.to_torch(ttnn.get_device_tensors(input_ids)[0])
+            seq_t = ttnn.to_torch(ttnn.get_device_tensors(seq_emb)[0])  # [B, S, H]
+
+            pooled_t = self._pool_eos_from_torch_tensors(ids_t, seq_t, eos_token_id)
+
+            return ttnn.from_torch(
+                pooled_t,
+                dtype=seq_emb.get_dtype(),
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            )
+        else:
+            ids_t = ttnn.to_torch(input_ids, mesh_composer=ConcatMeshToTensor(device, dim=0))
+            seq_t = ttnn.to_torch(seq_emb, mesh_composer=ConcatMeshToTensor(device, dim=0))
+
+            pooled_t = self._pool_eos_from_torch_tensors(ids_t, seq_t, eos_token_id)
+
+            return ttnn.from_torch(
+                pooled_t,
+                dtype=seq_emb.get_dtype(),
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
+            )
 
 
 class CLIPStack:
@@ -270,7 +316,9 @@ class CLIPEncoderLayer:
         hidden_states = ttnn.layer_norm(
             hidden_states, weight=self.layer_norm2, bias=self.layer_norm2_bias, epsilon=self.layer_norm_eps
         )
-        mlp_output_fractured = self.mlp(hidden_states)  # fractured on columns
+        mlp_output_fractured = self.mlp(
+            hidden_states, compute_kernel_config=compute_kernel_config
+        )  # fractured on columns
         hidden_states_shape = list(mlp_output_fractured.shape)
 
         mlp_output_fractured = ttnn.unsqueeze(mlp_output_fractured, 0)
@@ -361,9 +409,9 @@ class CLIPAttention:
     def __call__(self, hidden_states, causal_attention_mask):
         batch_size, seq_length, _ = hidden_states.shape
 
-        q = self.q_proj(hidden_states)
-        k = self.k_proj(hidden_states)
-        v = self.v_proj(hidden_states)
+        q = self.q_proj(hidden_states, compute_kernel_config=compute_kernel_config)
+        k = self.k_proj(hidden_states, compute_kernel_config=compute_kernel_config)
+        v = self.v_proj(hidden_states, compute_kernel_config=compute_kernel_config)
 
         q = q * self.scale
 
@@ -407,7 +455,7 @@ class CLIPAttention:
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
             )
-        dense_out = self.o_proj(attn_output)
+        dense_out = self.o_proj(attn_output, compute_kernel_config=compute_kernel_config)
 
         if self.parallel_config.tensor_parallel.factor > 1:
             dense_out = ttnn.experimental.all_gather_async(
