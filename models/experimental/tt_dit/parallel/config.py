@@ -67,3 +67,27 @@ def vae_all_gather(ccl_manager, x: ttnn.Tensor, cluster_axis: int = 1, dim: int 
     if h != 1:
         x_g = x_g.reshape(b, h, w, -1)
     return x_g
+
+
+def vae_neighbor_pad(
+    ccl_manager, x: ttnn.Tensor, cluster_axis: int = 1, dim: int = 0, context_size: int = 2, direction: int = 0
+) -> ttnn.Tensor:
+    global_semaphore = ccl_manager.get_np_ping_pong_semaphore(cluster_axis)
+    barrier_semaphore = ccl_manager.get_barrier_semaphore(cluster_axis)
+
+    ttnn.synchronize_device(x.device())
+    x_pad = ttnn.experimental.neighbor_pad_async(
+        x,
+        dim=dim,
+        padding=context_size,
+        padding_mode="replicate",
+        direction=direction,
+        cluster_axis=cluster_axis,
+        final_semaphore=global_semaphore,
+        barrier_semaphore=barrier_semaphore,
+        num_links=ccl_manager.num_links,
+        mesh_device=x.device(),
+        topology=ttnn.Topology.Linear,
+    )
+
+    return x_pad
