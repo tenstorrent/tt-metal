@@ -39,7 +39,8 @@ public:
             bool operator!=(const StateId& other) const noexcept { return value != other.value; }
         };
 
-        tt::stl::SmallVector<tt::stl::SmallVector<StateId>> adjacency{};
+        using AdjacencyList = tt::stl::SmallVector<tt::stl::SmallVector<StateId>>;
+        AdjacencyList adjacency{};
 
         StateDependencies();
         explicit StateDependencies(const std::unordered_map<StateId, tt::stl::SmallVector<StateId>>& dependencies_map);

@@ -21,92 +21,58 @@
 #include <numeric>
 
 namespace {
-struct StateDepsCase {
-    // Input as map of u32 -> vector<u32>
-    std::unordered_map<uint32_t, std::vector<uint32_t>> input;
-    // Expected allowed states
-    std::vector<uint32_t> expected_states;
+struct StateDependenciesParam {
+    std::unordered_map<
+        tt::tt_metal::BankManager::StateDependencies::StateId,
+        ttsl::SmallVector<tt::tt_metal::BankManager::StateDependencies::StateId>>
+        input;
     // Expected dependencies per state (missing keys imply empty list)
-    std::unordered_map<uint32_t, std::vector<uint32_t>> expected_edges;
+    ttsl::SmallVector<ttsl::SmallVector<tt::tt_metal::BankManager::StateDependencies::StateId>> expected_dependencies;
 };
-
-std::vector<uint32_t> sorted(const std::vector<uint32_t>& v) {
-    auto c = v;
-    std::sort(c.begin(), c.end());
-    return c;
-}
 
 }  // namespace
 
 namespace tt::tt_metal {
 
 // --- StateDependencies parameterized tests ---
+using StateId = BankManager::StateDependencies::StateId;
 
-class StateDependenciesParamTest : public ::testing::TestWithParam<StateDepsCase> {};
+TEST(StateDependencies, DefaultStateDependencies) {
+    BankManager::StateDependencies state_dependencies;
+    EXPECT_EQ(state_dependencies.adjacency, BankManager::StateDependencies::AdjacencyList{{}});
+}
+
+class StateDependenciesParamTest : public ::testing::TestWithParam<StateDependenciesParam> {};
 
 TEST_P(StateDependenciesParamTest, BuildsAdjacencyAndInfersAllowedStates) {
     const auto& params = GetParam();
-    using StateId = BankManager::StateDependencies::StateId;
 
-    // Convert input to StateId + SmallVector
-    std::unordered_map<StateId, tt::stl::SmallVector<StateId>> deps{};
-    for (const auto& kv : params.input) {
-        tt::stl::SmallVector<StateId> neigh;
-        for (auto d : kv.second) {
-            neigh.push_back(StateId{d});
-        }
-        deps.emplace(StateId{kv.first}, std::move(neigh));
-    }
+    BankManager::StateDependencies state_dependencies{params.input};
 
-    BankManager::StateDependencies sd{deps};
-
-    // Validate allowed states: indices 0..N-1
-    std::vector<uint32_t> got_states(sd.adjacency.size());
-    std::iota(got_states.begin(), got_states.end(), 0);
-    std::sort(got_states.begin(), got_states.end());
-    EXPECT_EQ(got_states, sorted(params.expected_states));
-    EXPECT_EQ(sd.num_states(), got_states.size());
-
-    // Validate edges
-    for (auto s : got_states) {
-        const auto& neigh = sd.adjacency[s];
-        std::vector<uint32_t> got;
-        got.reserve(neigh.size());
-        for (auto d : neigh) {
-            got.push_back(d.value);
-        }
-        std::sort(got.begin(), got.end());
-
-        auto exp_it = params.expected_edges.find(s);
-        std::vector<uint32_t> exp = (exp_it == params.expected_edges.end()) ? std::vector<uint32_t>{} : exp_it->second;
-        EXPECT_EQ(got, sorted(exp)) << "mismatch for state " << s;
-    }
+    // Validate dependencies
+    EXPECT_EQ(state_dependencies.adjacency, params.expected_dependencies);
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    StateDeps,
+    StateDependencies,
     StateDependenciesParamTest,
     ::testing::Values(
         // Single state default behavior (explicit input)
-        StateDepsCase{
-            /*input=*/{{0, {}}},
-            /*expected_states=*/{0},
-            /*expected_edges=*/{{0, {}}}},
+        StateDependenciesParam{
+            /*input=*/{{StateId{0}, {}}},
+            /*expected_dependencies=*/{{}}},
         // Two-way dependency
-        StateDepsCase{
-            /*input=*/{{0, {1}}, {1, {0}}},
-            /*expected_states=*/{0, 1},
-            /*expected_edges=*/{{0, {1}}, {1, {0}}}},
-        // Sparse keys; values-only nodes included; indices are 0..7
-        StateDepsCase{
-            /*input=*/{{0, {2}}, {7, {3}}},
-            /*expected_states=*/{0, 1, 2, 3, 4, 5, 6, 7},
-            /*expected_edges=*/{{0, {2}}, {7, {3}}, {2, {}}, {3, {}}}},
-        // Fan-out
-        StateDepsCase{
-            /*input=*/{{5, {1, 2, 3}}},
-            /*expected_states=*/{0, 1, 2, 3, 4, 5},
-            /*expected_edges=*/{{5, {1, 2, 3}}, {1, {}}, {2, {}}, {3, {}}}}));
+        StateDependenciesParam{
+            /*input=*/{{StateId{0}, {StateId{1}}}, {StateId{1}, {StateId{0}}}},
+            /*expected_dependencies=*/{{StateId{1}}, {StateId{0}}}},
+        // Sparse keys with one dependency specified
+        StateDependenciesParam{
+            /*input=*/{{StateId{3}, {StateId{0}, StateId{1}}}},
+            /*expected_dependencies=*/{{}, {}, {}, {StateId{0}, StateId{1}}}},
+        // Sparse keys with one dependency specified (value of dependents imply more states)
+        StateDependenciesParam{
+            /*input=*/{{StateId{1}, {StateId{3}}}},
+            /*expected_dependencies=*/{{}, {StateId{3}}, {}, {}}}));
 
 TEST_F(DeviceSingleCardBufferFixture, TestOverlappedBankManager) {
     // This test sets up a BankManager for DRAM and L1, mimicking Allocator initialization.
@@ -159,11 +125,11 @@ TEST_F(DeviceSingleCardBufferFixture, TestOverlappedBankManager) {
 TEST_F(DeviceSingleCardBufferFixture, Overlay_MergeUnmerge_RG_into_B) {
     // States: 0=R, 1=G, 2=B
     using SD = BankManager::StateDependencies;
-    std::unordered_map<SD::StateId, tt::stl::SmallVector<SD::StateId>> deps_map;
-    deps_map.emplace(SD::StateId{0}, tt::stl::SmallVector<SD::StateId>{SD::StateId{2}});  // R depends on B
-    deps_map.emplace(SD::StateId{1}, tt::stl::SmallVector<SD::StateId>{SD::StateId{2}});  // G depends on B
+    std::unordered_map<SD::StateId, ttsl::SmallVector<SD::StateId>> deps_map;
+    deps_map.emplace(SD::StateId{0}, ttsl::SmallVector<SD::StateId>{SD::StateId{2}});  // R depends on B
+    deps_map.emplace(SD::StateId{1}, ttsl::SmallVector<SD::StateId>{SD::StateId{2}});  // G depends on B
     deps_map.emplace(
-        SD::StateId{2}, tt::stl::SmallVector<SD::StateId>{SD::StateId{0}, SD::StateId{1}});  // B depends on R,G
+        SD::StateId{2}, ttsl::SmallVector<SD::StateId>{SD::StateId{0}, SD::StateId{1}});  // B depends on R,G
     SD deps{deps_map};
 
     // Single logical bank with offset 0 for simplicity
