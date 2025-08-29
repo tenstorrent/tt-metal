@@ -93,6 +93,7 @@ protected:
                 device->close();
                 device.reset();
             }
+
             id_to_device_.clear();
             devices_.clear();
         }
