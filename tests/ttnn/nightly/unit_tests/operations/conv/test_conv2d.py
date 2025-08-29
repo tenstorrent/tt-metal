@@ -4224,7 +4224,7 @@ def test_conv_sharded_rm_input(
     )
 
 @pytest.mark.parametrize(
-    "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, has_bias, multipler",
+    "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, has_bias, frequency_in_model",
     [
         (1, 1024, 2048, 32, 64, 1, 1, 1, 1, 0, 0, 1, False, 1),
         (1, 1024, 256, 32, 64, 1, 1, 1, 1, 0, 0, 1, False, 5),
@@ -4284,11 +4284,11 @@ def test_conv2d_panoptic(
     groups,
     torch_tensor_map,
     has_bias,
-    multipler,
+    frequency_in_model,
 ):
     skip_if_not_blackhole_20_cores(device)
 
-    signpost(header=f"conv2d_{input_channels}_{output_channels}_{input_height}_{input_width}; multipler={multipler}")
+    signpost(header=f"conv2d_{input_channels}_{output_channels}_{input_height}_{input_width}; frequency_in_model={frequency_in_model}")
     run_conv(
         device=device,
         config_override=None,
@@ -4320,7 +4320,7 @@ def test_conv2d_panoptic(
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity, multipler",
+    "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity, frequency_in_model",
     # fmt: off
     (
         (1, 256, 256,  128,    256,   SliceHeight,   2,  ttnn.bfloat8_b,  (3, 3), (1, 1), (1, 1), (1, 1), 32,  ttnn.MathFidelity.HiFi4, 3), # Panoptic
@@ -4358,7 +4358,7 @@ def test_conv_dram_panoptic(
     fp32_accum,
     input_layout,
     packer_l1_acc,
-    multipler,
+    frequency_in_model,
 ):
     skip_if_not_blackhole_20_cores(device)
 
@@ -4367,7 +4367,7 @@ def test_conv_dram_panoptic(
     }
 
     signpost(
-        header=f"dram_slice_conv_{slice_type}_{num_slices}_slices_{input_channels}_{output_channels}_{input_height}_{input_width}; multipler={multipler}"
+        header=f"dram_slice_conv_{slice_type}_{num_slices}_slices_{input_channels}_{output_channels}_{input_height}_{input_width}; frequency_in_model={frequency_in_model}"
     )
     run_conv(
         device,
@@ -4404,12 +4404,12 @@ def test_conv_dram_panoptic(
 
 
 @pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader, split_input_channels_factor, split_output_channels_factor, act_db, w_db, multipler",
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader, split_input_channels_factor, split_output_channels_factor, act_db, w_db, frequency_in_model",
     # fmt: off
     (
         (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (12, 12), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 2, 1, False, True, 2),  # Panoptic
         (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (18, 18), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 2, 1, False, True, 2),  # Panoptic
-        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (6, 6), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 2, 1, False, True, 2),  # Panoptic
+        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1),  (6, 6),  (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 2, 1, False, True, 2),  # Panoptic
     ),
     # fmt: on
 )
@@ -4442,7 +4442,7 @@ def test_conv2d_ch_split_dram_panoptic(
     split_output_channels_factor,
     act_db,
     w_db,
-    multipler,
+    frequency_in_model,
 ):
     skip_if_not_blackhole_20_cores(device)
 
@@ -4451,7 +4451,7 @@ def test_conv2d_ch_split_dram_panoptic(
     config_override["act_block_w_div"] = act_block_w_div
 
     signpost(
-        header=f"ch_slice_conv_{split_input_channels_factor}_{split_output_channels_factor}_x_{input_channels}_{output_channels}_{input_height}_{input_width}; multipler={multipler}"
+        header=f"ch_slice_conv_{split_input_channels_factor}_{split_output_channels_factor}_x_{input_channels}_{output_channels}_{input_height}_{input_width}; frequency_in_model={frequency_in_model}"
     )
 
     if split_input_channels_factor > 1 or split_output_channels_factor > 1:
