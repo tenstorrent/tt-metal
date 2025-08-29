@@ -26,6 +26,7 @@ message PodDescriptor {
         repeated Connection connections = 1;
     }
 
-    Boards boards = 1;
-    map<string, PortConnections> port_type_connections = 2;
+    string name = 1;
+    Boards boards = 2;
+    map<string, PortConnections> port_type_connections = 3;
 }
