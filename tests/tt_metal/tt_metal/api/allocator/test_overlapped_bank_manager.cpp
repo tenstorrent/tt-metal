@@ -20,59 +20,6 @@
 #include <algorithm>
 #include <numeric>
 
-namespace unit_tests::test_overlapped_bank_manager {}  // namespace unit_tests::test_overlapped_bank_manager
-
-namespace tt::tt_metal {
-
-TEST_F(DeviceSingleCardBufferFixture, TestOverlappedBankManager) {
-    // This test sets up a BankManager for DRAM and L1, mimicking Allocator initialization.
-
-    // Get device and soc descriptor
-    IDevice* device = this->device_;
-    const metal_SocDescriptor& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
-
-    // DRAM setup
-    {
-        // Gather all DRAM bank descriptors (address offsets per channel, as in Allocator)
-        const size_t num_channels = soc_desc.get_num_dram_views();
-        std::vector<int64_t> dram_bank_descriptors(num_channels);
-        for (size_t channel = 0; channel < num_channels; ++channel) {
-            dram_bank_descriptors.at(channel) =
-                static_cast<int64_t>(soc_desc.get_address_offset(static_cast<int>(channel)));
-        }
-        // Use per-channel DRAM size adjusted by allocator bases and alignment
-        const uint64_t dram_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
-        const uint32_t dram_alignment = device->allocator()->get_alignment(BufferType::DRAM);
-        const uint64_t dram_trace_region_size = device->allocator()->get_config().trace_region_size;
-        const uint64_t dram_size =
-            static_cast<uint64_t>(device->dram_size_per_channel()) - dram_unreserved_base - dram_trace_region_size;
-
-        // Set up BankManager for DRAM with default single-state dependencies
-        BankManager::StateDependencies deps;  // defaults to single state, no overlaps
-        BankManager dram_bank_manager(
-            BufferType::DRAM,
-            dram_bank_descriptors,
-            dram_size,
-            dram_alignment,
-            /*alloc_offset=*/dram_unreserved_base,
-            /*disable_interleaved=*/false,
-            deps);
-
-        // Allocate a buffer and check
-        uint32_t alloc_size = 64 * 1024;
-        auto addr = dram_bank_manager.allocate_buffer(
-            alloc_size,
-            alloc_size,
-            /*bottom_up=*/true,
-            CoreRangeSet(std::vector<CoreRange>{}),  // Not used for DRAM
-            std::nullopt,
-            BankManager::StateDependencies::StateId{0});
-        EXPECT_GT(addr, 0u);
-        dram_bank_manager.deallocate_buffer(addr, BankManager::StateDependencies::StateId{0});
-    }
-}
-
-// --- StateDependencies parameterized tests ---
 namespace {
 struct StateDepsCase {
     // Input as map of u32 -> vector<u32>
@@ -88,7 +35,12 @@ std::vector<uint32_t> sorted(const std::vector<uint32_t>& v) {
     std::sort(c.begin(), c.end());
     return c;
 }
+
 }  // namespace
+
+namespace tt::tt_metal {
+
+// --- StateDependencies parameterized tests ---
 
 class StateDependenciesParamTest : public ::testing::TestWithParam<StateDepsCase> {};
 
@@ -156,9 +108,53 @@ INSTANTIATE_TEST_SUITE_P(
             /*expected_states=*/{0, 1, 2, 3, 4, 5},
             /*expected_edges=*/{{5, {1, 2, 3}}, {1, {}}, {2, {}}, {3, {}}}}));
 
-}  // namespace tt::tt_metal
+TEST_F(DeviceSingleCardBufferFixture, TestOverlappedBankManager) {
+    // This test sets up a BankManager for DRAM and L1, mimicking Allocator initialization.
 
-namespace tt::tt_metal {
+    // Get device and soc descriptor
+    IDevice* device = this->device_;
+    const metal_SocDescriptor& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
+
+    // DRAM setup
+    {
+        // Gather all DRAM bank descriptors (address offsets per channel, as in Allocator)
+        const size_t num_channels = soc_desc.get_num_dram_views();
+        std::vector<int64_t> dram_bank_descriptors(num_channels);
+        for (size_t channel = 0; channel < num_channels; ++channel) {
+            dram_bank_descriptors.at(channel) =
+                static_cast<int64_t>(soc_desc.get_address_offset(static_cast<int>(channel)));
+        }
+        // Use per-channel DRAM size adjusted by allocator bases and alignment
+        const uint64_t dram_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
+        const uint32_t dram_alignment = device->allocator()->get_alignment(BufferType::DRAM);
+        const uint64_t dram_trace_region_size = device->allocator()->get_config().trace_region_size;
+        const uint64_t dram_size =
+            static_cast<uint64_t>(device->dram_size_per_channel()) - dram_unreserved_base - dram_trace_region_size;
+
+        // Set up BankManager for DRAM with default single-state dependencies
+        BankManager::StateDependencies deps;  // defaults to single state, no overlaps
+        BankManager dram_bank_manager(
+            BufferType::DRAM,
+            dram_bank_descriptors,
+            dram_size,
+            dram_alignment,
+            /*alloc_offset=*/dram_unreserved_base,
+            /*disable_interleaved=*/false,
+            deps);
+
+        // Allocate a buffer and check
+        uint32_t alloc_size = 64 * 1024;
+        auto addr = dram_bank_manager.allocate_buffer(
+            alloc_size,
+            alloc_size,
+            /*bottom_up=*/true,
+            CoreRangeSet(std::vector<CoreRange>{}),  // Not used for DRAM
+            std::nullopt,
+            BankManager::StateDependencies::StateId{0});
+        EXPECT_GT(addr, 0u);
+        dram_bank_manager.deallocate_buffer(addr, BankManager::StateDependencies::StateId{0});
+    }
+}
 
 TEST_F(DeviceSingleCardBufferFixture, Overlay_MergeUnmerge_RG_into_B) {
     // States: 0=R, 1=G, 2=B
