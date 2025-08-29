@@ -22,17 +22,15 @@ void kernel_main() {
 
 #if FUSED_SCALE_MASK
     constexpr uint32_t block_wt = get_compile_time_arg_val(0);
-    constexpr bool is_dram_mask = get_compile_time_arg_val(1) == 1;
+    constexpr auto mask_args = TensorAccessorArgs<1>();
     const uint32_t mask_addr = get_arg_val<uint32_t>(2);
     const uint32_t mask_start_tile_id = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_attn = tt::CBIndex::c_3;
     uint32_t mask_tile_bytes = get_tile_size(cb_attn);
-    const DataFormat mask_data_format = get_dataformat(cb_attn);
     uint32_t mask_id = mask_start_tile_id;
 
-    const InterleavedAddrGenFast<is_dram_mask> addr_mask = {
-        .bank_base_address = mask_addr, .page_size = mask_tile_bytes, .data_format = mask_data_format};
+    const auto addr_mask = TensorAccessor(mask_args, mask_addr, mask_tile_bytes);
 
     constexpr auto cb_fused_scale = tt::CBIndex::c_2;
     const uint32_t pre_scale = get_arg_val<uint32_t>(1);
@@ -40,8 +38,8 @@ void kernel_main() {
 
 #if defined(CAUSAL_MASK) && !defined(SHARDED_CAUSAL_MASK)
 
-    constexpr uint32_t fused_head = get_compile_time_arg_val(4);
-    constexpr uint32_t mask_block_ht = get_compile_time_arg_val(6);
+    constexpr uint32_t fused_head = get_compile_time_arg_val(mask_args.next_compile_time_args_offset() + 2);
+    constexpr uint32_t mask_block_ht = get_compile_time_arg_val(mask_args.next_compile_time_args_offset() + 4);
 
     for (uint32_t f = 0; f < fused_head; f++) {
         mask_id = mask_start_tile_id;

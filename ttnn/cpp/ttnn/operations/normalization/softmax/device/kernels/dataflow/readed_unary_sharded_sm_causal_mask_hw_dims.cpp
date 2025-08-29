@@ -21,7 +21,7 @@ void kernel_main() {
     const uint32_t reduce_scaler = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t block_wt = get_compile_time_arg_val(0);
-    constexpr bool is_dram_mask = get_compile_time_arg_val(1) == 1;
+    constexpr auto mask_args = TensorAccessorArgs<1>();
 
     const uint32_t mask_addr = get_arg_val<uint32_t>(2);
     const uint32_t mask_start_tile_id = get_arg_val<uint32_t>(3);
@@ -29,17 +29,15 @@ void kernel_main() {
 
     constexpr uint32_t cb_attn = tt::CBIndex::c_3;
     uint32_t mask_tile_bytes = get_tile_size(cb_attn);
-    const DataFormat mask_data_format = get_dataformat(cb_attn);
     uint32_t mask_id = mask_start_tile_id;
 
-    const InterleavedAddrGenFast<is_dram_mask> addr_mask = {
-        .bank_base_address = mask_addr, .page_size = mask_tile_bytes, .data_format = mask_data_format};
+    const auto addr_mask = TensorAccessor(mask_args, mask_addr, mask_tile_bytes);
 
     constexpr auto cb_fused_scale = tt::CBIndex::c_2;
     const uint32_t pre_scale = get_arg_val<uint32_t>(1);
     generate_bcast_unary_scalar(cb_fused_scale, pre_scale);
 
-    constexpr uint32_t block_ht = get_compile_time_arg_val(4);
+    constexpr uint32_t block_ht = get_compile_time_arg_val(mask_args.next_compile_time_args_offset() + 2);
     for (uint32_t h = 0; h < block_ht; h++) {
         cb_reserve_back(cb_attn, block_wt);
         uint32_t l1_write_addr = get_write_ptr(cb_attn);
