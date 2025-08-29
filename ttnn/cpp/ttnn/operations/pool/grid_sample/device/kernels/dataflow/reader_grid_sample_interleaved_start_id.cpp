@@ -43,8 +43,9 @@ void kernel_main() {
     constexpr uint32_t input_height = get_compile_time_arg_val(5);
     constexpr uint32_t input_width = get_compile_time_arg_val(6);
     constexpr uint32_t output_hw_size = get_compile_time_arg_val(7);
+    constexpr uint32_t num_grids = get_compile_time_arg_val(8);
 
-    constexpr auto src_args = TensorAccessorArgs<8>();
+    constexpr auto src_args = TensorAccessorArgs<9>();
     constexpr auto grid_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     const auto s0 = TensorAccessor(grid_args, grid_addr, grid_stick_nbytes);
@@ -74,121 +75,128 @@ void kernel_main() {
 
     zero_out_tiles<input_cb_index>();
 
-    for (uint32_t i = start_page_id; i < end_id; ++i) {
+    // Outer loop: iterate over spatial positions (output sticks)
+    for (uint32_t spatial_pos = start_page_id; spatial_pos < end_id; ++spatial_pos) {
+        // Read the grid stick for this spatial position (contains num_grids sets of coordinates)
         uint32_t l1_write_grid_addr = get_write_ptr(grid_cb_index);
-        uint64_t grid_noc_addr = s0.get_noc_addr(i);
+        uint64_t grid_noc_addr = s0.get_noc_addr(spatial_pos);
 
         noc_async_read(grid_noc_addr, l1_write_grid_addr, grid_stick_nbytes);
         noc_async_read_barrier();
 
-        // Read the first two bfloat16 values (grid coordinates) from the L1 buffer
-
         volatile tt_l1_ptr uint16_t* grid_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_grid_addr);
-        uint16_t weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf;
-        int32_t h0, h1, w0, w1;
 
-#ifdef USE_PRECOMPUTED_GRID
-        int16_t h0_raw = *reinterpret_cast<volatile int16_t*>(&grid_ptr[0]);
-        int16_t w0_raw = *reinterpret_cast<volatile int16_t*>(&grid_ptr[1]);
-
-        h0 = static_cast<int32_t>(h0_raw);
-        w0 = static_cast<int32_t>(w0_raw);
-        h1 = h0 + 1;
-        w1 = w0 + 1;
-
-#else
-        uint16_t h_coord_raw = grid_ptr[1];
-        uint16_t w_coord_raw = grid_ptr[0];
-
-        float h_coord_rel = bfloat16_to_float(h_coord_raw);
-        float w_coord_rel = bfloat16_to_float(w_coord_raw);
-
-        float h_coord_image = h_coord_rel * height_scale + height_offset;
-        float w_coord_image = w_coord_rel * width_scale + width_offset;
-
-        h0 = static_cast<int32_t>(floor(h_coord_image));
-        h1 = h0 + 1;
-        w0 = static_cast<int32_t>(floor(w_coord_image));
-        w1 = w0 + 1;
-
-#endif
-
-        bool h0_valid = (h0 >= 0) && (h0 < static_cast<int32_t>(input_height));
-        bool h1_valid = (h1 >= 0) && (h1 < static_cast<int32_t>(input_height));
-        bool w0_valid = (w0 >= 0) && (w0 < static_cast<int32_t>(input_width));
-        bool w1_valid = (w1 >= 0) && (w1 < static_cast<int32_t>(input_width));
-
-        uint32_t curr_batch = i / output_hw_size;
+        uint32_t curr_batch = spatial_pos / output_hw_size;
         uint32_t batch_offset = curr_batch * input_height * input_width;
 
-        cb_reserve_back(input_cb_index, 1);
-        uint32_t l1_write_input_addr = get_write_ptr(input_cb_index);
-
-        uint64_t dram_read_addr = 0;
-
-        if (h0_valid && w0_valid) {
-            uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
-            dram_read_addr = s1.get_noc_addr(north_west_stick_index);
-            noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
-        }
-        l1_write_input_addr += input_stick_nbytes;
-
-        if (h0_valid && w1_valid) {
-            uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
-            dram_read_addr = s1.get_noc_addr(north_east_stick_index);
-            noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
-        }
-        l1_write_input_addr += input_stick_nbytes;
-
-        if (h1_valid && w0_valid) {
-            uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
-            dram_read_addr = s1.get_noc_addr(south_west_stick_index);
-            noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
-        }
-        l1_write_input_addr += input_stick_nbytes;
-
-        if (h1_valid && w1_valid) {
-            uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
-            dram_read_addr = s1.get_noc_addr(south_east_stick_index);
-            noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
-        }
-
-        // Calculate bilinear interpolation weights
+        // Inner loop: process num_grids coordinate sets within this spatial position
+        for (uint32_t grid_idx = 0; grid_idx < num_grids; ++grid_idx) {
+            uint16_t weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf;
+            int32_t h0, h1, w0, w1;
 
 #ifdef USE_PRECOMPUTED_GRID
-        // Weights are already in grid data
-        weight_nw_bf = grid_ptr[2];
-        weight_ne_bf = grid_ptr[3];
-        weight_sw_bf = grid_ptr[4];
-        weight_se_bf = grid_ptr[5];
+            // Each precomputed grid entry has 6 values: h0, w0, weight_nw, weight_ne, weight_sw, weight_se
+            uint32_t grid_offset = grid_idx * 6;
+            int16_t h0_raw = *reinterpret_cast<volatile int16_t*>(&grid_ptr[grid_offset + 0]);
+            int16_t w0_raw = *reinterpret_cast<volatile int16_t*>(&grid_ptr[grid_offset + 1]);
+
+            h0 = static_cast<int32_t>(h0_raw);
+            w0 = static_cast<int32_t>(w0_raw);
+            h1 = h0 + 1;
+            w1 = w0 + 1;
+
+            // Read precomputed weights
+            weight_nw_bf = grid_ptr[grid_offset + 2];
+            weight_ne_bf = grid_ptr[grid_offset + 3];
+            weight_sw_bf = grid_ptr[grid_offset + 4];
+            weight_se_bf = grid_ptr[grid_offset + 5];
 #else
-        float h0_f = static_cast<float>(h0);
-        float w0_f = static_cast<float>(w0);
+            // Each regular grid entry has 2 values: x, y coordinates
+            uint32_t grid_offset = grid_idx * 2;
+            uint16_t h_coord_raw = grid_ptr[grid_offset + 1];  // y coordinate
+            uint16_t w_coord_raw = grid_ptr[grid_offset + 0];  // x coordinate
 
-        float h_frac = h_coord_image - h0_f;
-        float w_frac = w_coord_image - w0_f;
-        float h_frac_inv = 1.0f - h_frac;
-        float w_frac_inv = 1.0f - w_frac;
+            float h_coord_rel = bfloat16_to_float(h_coord_raw);
+            float w_coord_rel = bfloat16_to_float(w_coord_raw);
 
-        float weight_nw = (h0_valid && w0_valid) ? (h_frac_inv * w_frac_inv) : 0.0f;  // North-West
-        float weight_ne = (h0_valid && w1_valid) ? (h_frac_inv * w_frac) : 0.0f;      // North-East
-        float weight_sw = (h1_valid && w0_valid) ? (h_frac * w_frac_inv) : 0.0f;      // South-West
-        float weight_se = (h1_valid && w1_valid) ? (h_frac * w_frac) : 0.0f;          // South-East
+            float h_coord_image = h_coord_rel * height_scale + height_offset;
+            float w_coord_image = w_coord_rel * width_scale + width_offset;
 
-        weight_nw_bf = float_to_bfloat16(weight_nw);
-        weight_ne_bf = float_to_bfloat16(weight_ne);
-        weight_sw_bf = float_to_bfloat16(weight_sw);
-        weight_se_bf = float_to_bfloat16(weight_se);
+            h0 = static_cast<int32_t>(floor(h_coord_image));
+            h1 = h0 + 1;
+            w0 = static_cast<int32_t>(floor(w_coord_image));
+            w1 = w0 + 1;
+
+            // Calculate bilinear interpolation weights
+            bool h0_valid = (h0 >= 0) && (h0 < static_cast<int32_t>(input_height));
+            bool h1_valid = (h1 >= 0) && (h1 < static_cast<int32_t>(input_height));
+            bool w0_valid = (w0 >= 0) && (w0 < static_cast<int32_t>(input_width));
+            bool w1_valid = (w1 >= 0) && (w1 < static_cast<int32_t>(input_width));
+
+            float h0_f = static_cast<float>(h0);
+            float w0_f = static_cast<float>(w0);
+
+            float h_frac = h_coord_image - h0_f;
+            float w_frac = w_coord_image - w0_f;
+            float h_frac_inv = 1.0f - h_frac;
+            float w_frac_inv = 1.0f - w_frac;
+
+            float weight_nw = (h0_valid && w0_valid) ? (h_frac_inv * w_frac_inv) : 0.0f;  // North-West
+            float weight_ne = (h0_valid && w1_valid) ? (h_frac_inv * w_frac) : 0.0f;      // North-East
+            float weight_sw = (h1_valid && w0_valid) ? (h_frac * w_frac_inv) : 0.0f;      // South-West
+            float weight_se = (h1_valid && w1_valid) ? (h_frac * w_frac) : 0.0f;          // South-East
+
+            weight_nw_bf = float_to_bfloat16(weight_nw);
+            weight_ne_bf = float_to_bfloat16(weight_ne);
+            weight_sw_bf = float_to_bfloat16(weight_sw);
+            weight_se_bf = float_to_bfloat16(weight_se);
 #endif
 
-        cb_reserve_back(scalar_cb_index, 1);
+            // Boundary checks (needed for both modes for reading input sticks)
+            bool h0_valid = (h0 >= 0) && (h0 < static_cast<int32_t>(input_height));
+            bool h1_valid = (h1 >= 0) && (h1 < static_cast<int32_t>(input_height));
+            bool w0_valid = (w0 >= 0) && (w0 < static_cast<int32_t>(input_width));
+            bool w1_valid = (w1 >= 0) && (w1 < static_cast<int32_t>(input_width));
 
-        fill_four_val(get_write_ptr(scalar_cb_index), weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
+            // Reserve CB space for 4 corner input sticks for this grid
+            cb_reserve_back(input_cb_index, 1);
+            uint32_t l1_write_input_addr = get_write_ptr(input_cb_index);
 
-        cb_push_back(scalar_cb_index, 1);
+            // Read 4 corner input sticks
+            if (h0_valid && w0_valid) {
+                uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
+                uint64_t dram_read_addr = s1.get_noc_addr(north_west_stick_index);
+                noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+            }
+            l1_write_input_addr += input_stick_nbytes;
 
-        noc_async_read_barrier();
+            if (h0_valid && w1_valid) {
+                uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
+                uint64_t dram_read_addr = s1.get_noc_addr(north_east_stick_index);
+                noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+            }
+            l1_write_input_addr += input_stick_nbytes;
 
-        cb_push_back(input_cb_index, 1);
+            if (h1_valid && w0_valid) {
+                uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
+                uint64_t dram_read_addr = s1.get_noc_addr(south_west_stick_index);
+                noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+            }
+            l1_write_input_addr += input_stick_nbytes;
+
+            if (h1_valid && w1_valid) {
+                uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
+                uint64_t dram_read_addr = s1.get_noc_addr(south_east_stick_index);
+                noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+            }
+
+            // Store bilinear interpolation weights for this grid
+            cb_reserve_back(scalar_cb_index, 1);
+            fill_four_val(get_write_ptr(scalar_cb_index), weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
+            cb_push_back(scalar_cb_index, 1);
+
+            noc_async_read_barrier();
+            cb_push_back(input_cb_index, 1);
+        }
     }
 }
