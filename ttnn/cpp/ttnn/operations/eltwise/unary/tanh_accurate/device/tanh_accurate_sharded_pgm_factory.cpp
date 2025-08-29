@@ -20,6 +20,7 @@ TanhAccurateShardedProgramFactory::cached_program_t TanhAccurateShardedProgramFa
     using namespace tt::tt_metal;
 
     const auto& input = tensor_args.input;
+    const auto& ops_chain = args.op_chain;
 
     tt::tt_metal::Program program = CreateProgram();
 
@@ -163,6 +164,9 @@ TanhAccurateShardedProgramFactory::cached_program_t TanhAccurateShardedProgramFa
         unary_defines["TANH_BF16"] = "1";
     }
     auto path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanh_accurate.cpp";
+    if (ops_chain[0].op_type == UnaryOpType::TANHSHRINK) {
+        path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanhshrink.cpp";
+    }
 
     tt::tt_metal::CreateKernel(
         program,
