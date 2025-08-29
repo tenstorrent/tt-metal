@@ -52,6 +52,7 @@ There's an attribute named asic_id that will show up if your FW is new enough.  
  #include <cstdlib>
  #include <array>
  #include <memory>
+#include <thread>
 
 #include "impl/context/metal_context.hpp"
 #include <telemetry/ethernet/ethernet_endpoint.hpp>
@@ -177,12 +178,16 @@ static ChipIdentifier get_chip_identifier_from_umd_chip_id(tt::umd::TTDevice* de
      std::cout << "Connections: " << cluster->get_cluster_description()->get_ethernet_connections().size() << std::endl;
     //  std::unordered_map<tt::umd::chip_id_t, std::unique_ptr<tt::umd::TTDevice>> pcie_devices_by_chip_id =
     //      get_pcie_devices(cluster_descriptor);
-     auto endpoint_by_chip = get_ethernet_endpoints_by_chip(cluster);
-     for (auto& [chip_id, endpoints] : endpoint_by_chip) {
-         std::cout << chip_id << ":" << std::endl;
-         for (auto& endpoint : endpoints) {
-             std::cout << "  " << endpoint << " = " << (is_link_up(cluster, endpoint) ? "UP" : "DOWN") << std::endl;
+     while (true) {
+         auto endpoint_by_chip = get_ethernet_endpoints_by_chip(cluster);
+         for (auto& [chip_id, endpoints] : endpoint_by_chip) {
+             std::cout << chip_id << ":" << std::endl;
+             for (auto& endpoint : endpoints) {
+                 std::cout << "  " << endpoint << " = " << (is_link_up(cluster, endpoint) ? "UP" : "DOWN") << std::endl;
+             }
          }
+         std::cout << "--" << std::endl;
+         std::this_thread::sleep_for(std::chrono::seconds(5));
      }
      std::cout << "Finished" << std::endl;
      return;
