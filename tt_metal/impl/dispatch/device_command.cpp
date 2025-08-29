@@ -395,6 +395,10 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_linear_h(
     }
 }
 
+// Explicit template instantiations for add_dispatch_write_linear_h
+template void DeviceCommand<true>::add_dispatch_write_linear_h<false, false>(
+    uint8_t, uint32_t, uint32_t, uint32_t, const void*, uint32_t);
+
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
     uint32_t wait_count,
