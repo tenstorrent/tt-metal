@@ -417,8 +417,11 @@ set_target_properties(
             "default" # FIXME: Export the symbols we want, and use hidden visibility instead of default
         ADDITIONAL_CLEAN_FILES
             "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_'${LIBRARY_NAME}'.so;${PROJECT_SOURCE_DIR}/ttnn/'${LIBRARY_NAME}'.egg-info" # FIXME: Confirm this is a relic of the past and can be deleted; No generated files should land in the source tree!
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
+file(GLOB_RECURSE ttnn_kernels cpp/ttnn/operations/copy/typecast/device/kernels/*)
 file(GLOB_RECURSE api api/*)
 target_sources(
     ttnncpp
@@ -428,13 +431,18 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_SOURCE_DIR}/cpp
         FILES
             ${api}
+            cpp/ttnn/operations/copy/typecast/typecast.hpp
             cpp/ttnn/operations/creation.hpp
             cpp/ttnn/operations/functions.hpp
-            cpp/ttnn/operations/cb_utils.hpp
             cpp/ttnn/operations/compute_throttle_utils.hpp
+            cpp/ttnn/operations/cb_utils.hpp
             cpp/ttnn/operations/math.hpp
             cpp/ttnn/operations/sharding_utilities.hpp
             cpp/ttnn/operations/trace.hpp
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${ttnn_kernels}
     PRIVATE
         # FIXME: Move these out to appropriate sub targets
         cpp/ttnn/operations/compute_throttle_utils.cpp
@@ -534,8 +542,6 @@ target_link_libraries(
         TTNN::Ops::Rand
 )
 if(TT_INSTALL)
-    install(TARGETS ttnncpp LIBRARY COMPONENT ttnn-runtime)
-
     install(
         TARGETS
             ttnncpp
@@ -543,7 +549,20 @@ if(TT_INSTALL)
             DESTINATION ${CMAKE_INSTALL_LIBDIR}
             COMPONENT tar
     )
-    install(TARGETS ttnncpp EXPORT TT-NN LIBRARY COMPONENT ttnn-runtime FILE_SET api COMPONENT ttnn-dev)
+    install(
+        TARGETS
+            ttnncpp
+        EXPORT TT-NN
+        FILE_SET
+        api
+            COMPONENT ttnn-dev
+        FILE_SET
+        kernels
+            DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn
+            COMPONENT ttnn-runtime
+        LIBRARY
+            COMPONENT ttnn-runtime
+    )
 endif()
 
 if(WITH_PYTHON_BINDINGS)
