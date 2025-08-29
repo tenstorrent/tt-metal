@@ -37,6 +37,8 @@ public:
             uint32_t value{0};
             bool operator==(const StateId& other) const noexcept { return value == other.value; }
             bool operator!=(const StateId& other) const noexcept { return value != other.value; }
+            bool operator<(const StateId& other) const noexcept { return value < other.value; }
+            bool operator>(const StateId& other) const noexcept { return value > other.value; }
         };
 
         using AdjacencyList = tt::stl::SmallVector<tt::stl::SmallVector<StateId>>;

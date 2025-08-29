@@ -54,8 +54,17 @@ TEST_P(StateDependenciesParamTest, BuildsAdjacencyAndInfersAllowedStates) {
 
     // Validate dependencies
     EXPECT_EQ(state_dependencies.dependencies, params.expected_dependencies);
-    // Validate dependents
-    EXPECT_EQ(state_dependencies.dependents, params.expected_dependents);
+
+    // Validate dependents (order-insensitive per state)
+    // Dependents are not guaranteed to be sorted since it is built directly from unordered map
+    // So, we sort the returned dependents for testing
+    auto sort_nested_vector = [](BankManager::StateDependencies::AdjacencyList a) {
+        for (auto& v : a) {
+            std::sort(v.begin(), v.end());
+        }
+        return a;
+    };
+    EXPECT_EQ(sort_nested_vector(state_dependencies.dependents), params.expected_dependents);
 }
 
 INSTANTIATE_TEST_SUITE_P(

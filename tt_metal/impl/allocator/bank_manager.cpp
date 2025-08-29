@@ -190,9 +190,11 @@ BankManager::StateDependencies::StateDependencies(
             dependencies[kv.first.value] = kv.second;
         }
         // Build dependents list: for each state s, which states depend on s
-        for (size_t from = 0; from < dependencies.size(); ++from) {
-            for (const auto dep : dependencies[from]) {
-                dependents[dep.value].push_back(StateId{from});
+        // Note: Dependents are not sorted because dependencies_map is unordered
+        // If we want to sort it, we can build it directly from dependencies
+        for (const auto& kv : dependencies_map) {
+            for (const auto dep_state : kv.second) {
+                dependents[dep_state.value].push_back(kv.first);
             }
         }
     }
