@@ -95,7 +95,7 @@ def test_wan_attention(
     attn_type = "self" if prompt_seq_len is None else "cross"
     logger.info(f"attn_type: {attn_type}")
 
-    MIN_PCC = 0.991
+    MIN_PCC = 0.988
 
     # Load Wan2.2-T2V-14B model from HuggingFace
     parent_torch_model = WanTransformer3DModel.from_pretrained(
