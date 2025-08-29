@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,9 +10,7 @@
 
 namespace ckernel {
 
-inline void llk_math_welfords_sfpu_init() {
-    _llk_math_welfords_sfpu_init_();
-}
+inline void llk_math_welfords_sfpu_init() { _llk_math_welfords_sfpu_init_(); }
 
 inline void llk_math_welfords_sfpu(
     uint32_t dst_index0,
