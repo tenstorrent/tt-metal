@@ -82,7 +82,7 @@ class EthCore(ABC):
                 self.location, self.eth_core_definitions.port_status, context=self.context
             )
             port_status_str = self.port_status_to_string(port_status)
-            if port_status_str == "Unknown":
+            if port_status_str == None:
                 log_check(
                     False, f"{self.location.to_user_str()} port_status is unknown: {port_status} ({port_status_str})"
                 )
@@ -99,7 +99,11 @@ class EthCore(ABC):
             utils.INFO(f"{self.location.to_user_str()} retrain_count: {retrain_count}")
 
         # RX LINK UP
-        rx_link_up = read_word_from_device(self.location, self.eth_core_definitions.rx_link_up, context=self.context)
+        rx_link_up = (
+            "Up"
+            if read_word_from_device(self.location, self.eth_core_definitions.rx_link_up, context=self.context)
+            else "Down"
+        )
         utils.INFO(f"{self.location.to_user_str()} rx_link_up: {rx_link_up}")
 
         # MAILBOX
@@ -138,8 +142,9 @@ class WormholeEthCore(EthCore):
 
     def port_status_to_string(self, port_status: int) -> str:
         """Convert Wormhole port status to readable string."""
+        # Undefined right now for Wormhole. Need to find the mapping
         status_map = {0: "Undefined", 1: "Undefined", 2: "Undefined", 3: "Undefined"}
-        return status_map.get(port_status, f"Unknown({port_status})")
+        return status_map.get(port_status, None)
 
 
 class BlackholeEthCore(EthCore):
@@ -158,8 +163,8 @@ class BlackholeEthCore(EthCore):
 
     def port_status_to_string(self, port_status: int) -> str:
         """Convert Blackhole port status to readable string."""
-        status_map = {0: "Unknown", 1: "Up", 2: "Down", 3: "Unused"}
-        return status_map.get(port_status, f"Unknown({port_status})")
+        status_map = {0: None, 1: "Up", 2: "Down", 3: "Unused"}
+        return status_map.get(port_status, None)
 
 
 def get_eth_core_data(device: Device, location: OnChipCoordinate, context: Context):
