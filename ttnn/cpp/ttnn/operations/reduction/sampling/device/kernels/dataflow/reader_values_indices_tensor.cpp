@@ -40,25 +40,21 @@ void kernel_main() {
     constexpr uint32_t input_indices_cb_index = get_compile_time_arg_val(1);
     constexpr uint32_t cb_intermed_index = get_compile_time_arg_val(2);
 
-    constexpr bool input_values_is_dram = get_compile_time_arg_val(3);
-    constexpr bool input_indices_is_dram = get_compile_time_arg_val(4);
-    constexpr uint32_t Ht = get_compile_time_arg_val(5);
-    constexpr uint32_t Wt = get_compile_time_arg_val(6);
-    constexpr uint32_t input_indices_page_size = get_compile_time_arg_val(7);
+    constexpr uint32_t Ht = get_compile_time_arg_val(3);
+    constexpr uint32_t Wt = get_compile_time_arg_val(4);
+    constexpr uint32_t input_indices_page_size = get_compile_time_arg_val(5);
+
+    constexpr auto s0_args = TensorAccessorArgs<6>();
+    constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     constexpr uint32_t TILE_HEIGHT = 32;
     constexpr uint32_t tile_bytes_input_values = get_tile_size(input_values_cb_index);
-    constexpr DataFormat data_format_input_values = get_dataformat(input_values_cb_index);
 
-    const InterleavedAddrGenFast<input_values_is_dram> s0 = {
-        .bank_base_address = values_addr,
-        .page_size = tile_bytes_input_values,
-        .data_format = data_format_input_values};
+    const auto s0 = TensorAccessor(s0_args, values_addr, tile_bytes_input_values);
 
-    const InterleavedAddrGen<input_indices_is_dram> s1 = {
-        .bank_base_address = indices_addr, .page_size = input_indices_page_size};
+    const auto s1 = TensorAccessor(s1_args, indices_addr, input_indices_page_size);
 
     uint32_t tile_id_input_values = 0;
     uint32_t tile_id_input_indices = 0;

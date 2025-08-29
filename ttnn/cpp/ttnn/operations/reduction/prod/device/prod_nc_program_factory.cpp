@@ -150,7 +150,6 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
              num_tiles_per_core,
              input_tile_offset,
              tile_offset,
-             static_cast<uint32_t>(ttnn::operations::is_dram(input)),
              HtWt,
              CHtWt,
              static_cast<uint32_t>(dim)});
