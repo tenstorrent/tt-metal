@@ -16,19 +16,19 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "input_shape, grid_shape",
     [
-        # ((1, 256, 12, 40), (1, 7, 25281, 2)),
-        # ((1, 256, 24, 80), (1, 7, 25281, 2)),
+        ((1, 256, 12, 40), (1, 7, 25281, 2)),
+        ((1, 256, 24, 80), (1, 7, 25281, 2)),
         ((1, 256, 48, 160), (1, 7, 25281, 2)),
-        # ((16, 32, 100, 100), (16, 10000, 4, 2)),
-        # ((48, 32, 12, 20), (48, 3567, 8, 2)),
-        # ((8, 32, 100, 100), (8, 300, 4, 2)),
-        # ((8, 32, 100, 100), (8, 2000, 4, 2)),
-        # ((16, 32, 50, 50), (16, 10000, 1, 2)),
-        # ((48, 32, 80, 45), (48, 4832, 1, 2)),
-        # ((48, 32, 40, 23), (48, 4832, 1, 2)),
-        # ((48, 32, 20, 12), (48, 4832, 1, 2)),
-        # ((48, 32, 10, 6), (48, 4832, 1, 2)),
-        # ((8, 32, 50, 50), (8, 3604, 1, 2)),
+        ((16, 32, 100, 100), (16, 10000, 4, 2)),
+        ((48, 32, 12, 20), (48, 3567, 8, 2)),
+        ((8, 32, 100, 100), (8, 300, 4, 2)),
+        ((8, 32, 100, 100), (8, 2000, 4, 2)),
+        ((16, 32, 50, 50), (16, 10000, 1, 2)),
+        ((48, 32, 80, 45), (48, 4832, 1, 2)),
+        ((48, 32, 40, 23), (48, 4832, 1, 2)),
+        ((48, 32, 20, 12), (48, 4832, 1, 2)),
+        ((48, 32, 10, 6), (48, 4832, 1, 2)),
+        ((8, 32, 50, 50), (8, 3604, 1, 2)),
     ],
 )
 def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape, use_precomputed_grid):
@@ -83,25 +83,17 @@ def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape, use_prec
     logger.info(pcc_message)
 
 
-@pytest.mark.parametrize("use_precomputed_grid", [False, True])
+@pytest.mark.parametrize("use_precomputed_grid", [True, False])
 @pytest.mark.parametrize(
     "input_shape, grid_shape, channel_extent_factor",
     [
         ((1, 256, 48, 160), (1, 25281, 7, 2), 7),
-        # ((1, 32, 16, 16), (1, 8, 8, 2), 1),
-        # ((2, 64, 24, 24), (2, 12, 12, 2), 2),
-        # ((2, 64, 24, 24), (2, 12, 12, 2), 3),
-        # ((1, 128, 32, 32), (1, 16, 16, 2), 2),
-        # ((1, 128, 32, 32), (1, 16, 16, 2), 4),
-        # ((4, 64, 20, 20), (4, 10, 10, 2), 2),
-        # ((4, 64, 20, 20), (4, 10, 10, 2), 5),
-        # ((1, 96, 24, 24), (1, 12, 12, 2), 3),
-        # ((1, 96, 24, 24), (1, 12, 12, 2), 6),
+        ((1, 128, 32, 32), (1, 16, 16, 2), 4),
     ],
 )
 def test_grid_sample_channel_extending(device, input_shape, grid_shape, channel_extent_factor, use_precomputed_grid):
     """Test grid sample with channel extending functionality (multiple coordinate sets)"""
-    torch.manual_seed(0)
+    torch.manual_seed(523)
 
     batch_size, channels, height, width = input_shape
     grid_n, grid_h, grid_w, grid_coords = grid_shape
@@ -137,23 +129,20 @@ def test_grid_sample_channel_extending(device, input_shape, grid_shape, channel_
         ttnn_grid_reshaped = ttnn.reshape(ttnn_grid_host, (batch_size, grid_h, new_grid_w, new_last_dim))
         ttnn_grid_device = ttnn.to_device(ttnn_grid_reshaped, device)
 
-    # Convert input to device
-    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_input = ttnn.from_torch(
+        torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
 
-    # Run grid sample
     ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid_device, use_precomputed_grid=use_precomputed_grid)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    # For torch comparison, just do regular grid sample and reshape the output
     torch_output_nchw = F.grid_sample(
         torch_input_nchw, grid_tensor, mode="bilinear", padding_mode="zeros", align_corners=False
     )
     torch_output_nhwc_ = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
-    # Reshape the torch output to match ttnn output: divide width by channel_extent_factor, multiply channels by channel_extent_factor
     torch_expected_nhwc = (
         torch_output_nhwc_.view(batch_size, grid_h, new_grid_w, channel_extent_factor, channels)
-        .permute(0, 1, 2, 4, 3)
         .contiguous()
         .view(batch_size, grid_h, new_grid_w, channels * channel_extent_factor)
     )
@@ -161,13 +150,6 @@ def test_grid_sample_channel_extending(device, input_shape, grid_shape, channel_
     # Check output shape
     expected_shape = (batch_size, grid_h, new_grid_w, channels * channel_extent_factor)
     assert ttnn_output_torch.shape == expected_shape, f"Expected {expected_shape}, got {ttnn_output_torch.shape}"
-
-    # pcc, pcc_message = assert_with_pcc(torch_output_nhwc_.contiguous(), torch_expected_nhwc.contiguous())
-    # logger.info(pcc_message)
-    # print(f"TTNN output shape: {ttnn_output_torch.shape}")
-    # print(f"Expected shape: {torch_expected_nhwc.shape}")
-
-    # # Check numerical accuracy
     pcc_passed, pcc_message = assert_with_pcc(torch_expected_nhwc, ttnn_output_torch, pcc=0.99)
     logger.info(
         f"Channel extending test (extent_factor={channel_extent_factor}, precomputed={use_precomputed_grid}): {pcc_message}"

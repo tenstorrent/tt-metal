@@ -86,8 +86,15 @@ std::vector<TensorSpec> GridSample::compute_output_specs(const std::vector<Tenso
     uint32_t grid_last_dim = grid_shape[-1];
 
     // Calculate number of grids and output channels
-    uint32_t num_grids = use_precomputed_grid_ ? (grid_last_dim / 6) : (grid_last_dim / 2);
-    uint32_t C_out = C * num_grids;
+
+    // Calculate the number of batched grid points per grid row
+
+    const uint32_t num_of_elements_per_grid_point = use_precomputed_grid_ ? 6 : 2;
+    uint32_t grid_batching_factor = grid_last_dim / num_of_elements_per_grid_point;
+
+    // The channels get extended by grid_batching_factor
+    uint32_t channel_extend_factor = grid_batching_factor;
+    uint32_t C_out = C * channel_extend_factor;
 
     // Define output shape: (N, H_out, W_out, C_out) where C_out = C * num_grids
     const ttnn::Shape output_shape({N, H_out, W_out, C_out});

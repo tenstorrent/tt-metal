@@ -28,13 +28,17 @@ void bind_grid_sample(py::module& module) {
 
         Args:
             input_tensor (ttnn.Tensor): Input tensor of shape (N, H_in, W_in, C) - channel last format
-            grid (ttnn.Tensor): Sampling grid with two possible formats:
-                               * Standard mode (use_precomputed_grid=False): Shape (N, H_out, W_out, 2) containing
-                                 normalized coordinates in range [-1, 1]. The last dimension contains (x, y) coordinates where:
-                                 - x=-1 corresponds to leftmost input column, x=+1 to rightmost input column
-                                 - y=-1 corresponds to topmost input row, y=+1 to bottommost input row
-                               * Precomputed mode (use_precomputed_grid=True): Shape (N, H_out, W_out, 6) containing
-                                 precomputed pixel coordinates and bilinear interpolation weights from ttnn.prepare_grid_sample_grid()
+            grid (ttnn.Tensor): Sampling grid with flexible batching support:
+                               * Standard mode (use_precomputed_grid=False):
+                                 - Shape (N, H_out, W_out, 2*K) where K is the grid batching factor
+                                 - Contains K sets of normalized coordinates in range [-1, 1]
+                                 - Each coordinate pair (x, y): x=-1 (leftmost), x=+1 (rightmost), y=-1 (topmost), y=+1 (bottommost)
+                                 - When K=1: standard single coordinate per location (maps 1:1 to PyTorch F.grid_sample behavior)
+                                 - When K>1: multiple coordinate sets batched per grid location for channel extension
+                               * Precomputed mode (use_precomputed_grid=True):
+                                 - Shape (N, H_out, W_out, 6*K) containing K sets of precomputed data
+                                 - Each set has 6 elements: pixel coordinates and bilinear interpolation weights
+                                 - Generated using ttnn.prepare_grid_sample_grid() for K=1, then ttnn.reshape() for K>1
 
         Keyword Args:
             mode (str): Interpolation mode. Currently only "bilinear" is supported.
@@ -45,7 +49,9 @@ void bind_grid_sample(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation.
 
         Returns:
-            ttnn.Tensor: Output tensor of shape (N, H_out, W_out, C) - channel last format
+            ttnn.Tensor: Output tensor of shape (N, H_out, W_out, C*K) where K is the grid batching factor
+                        The channels are extended by the batching factor since each coordinate set produces
+                        a full set of sampled channels. When K=1, output shape matches PyTorch F.grid_sample.
 
         Example:
             >>> # Create input tensor (N=1, H=4, W=4, C=32) - channel last format
@@ -111,6 +117,9 @@ void bind_prepare_grid_sample_grid(py::module& module) {
 
         Args:
             grid (ttnn.Tensor): Grid tensor of shape (N, H_out, W_out, 2) with normalized coordinates in [-1, 1]
+                               Note: This function only supports unbatched grids (batching factor K=1).
+                               For grid batching (K>1), use ttnn.reshape() to convert the output to
+                               (N, H_out, W_out//K, 6*K) format for use with ttnn.grid_sample().
             input_shape (List[int]): Input tensor dimensions [N, H_in, W_in, C] in NHWC format
 
         Keyword Args:
