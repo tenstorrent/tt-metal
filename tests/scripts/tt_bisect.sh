@@ -15,11 +15,32 @@ fi
 
 
 
-./create_venv.sh
+
 # Make in-tree modules win and avoid user site interference
 export PYTHONNOUSERSITE=1
 export PYTHONFAULTHANDLER=1
 export PYTHONMALLOC="debug"
+echo "TT_METAL_HOME: $TT_METAL_HOME"
+echo "PYTHONPATH: $PYTHONPATH"
+echo "ARCH_NAME: ${ARCH_NAME:-}"
+echo "pwd: $(pwd)"
+./create_venv.sh
+./build_metal.sh \
+  --build-all \
+  --enable-ccache || build_rc=$?
+
+echo "Checking environment variables:"
+echo "TT_METAL_HOME: $TT_METAL_HOME"
+echo "PYTHONPATH: $PYTHONPATH"
+echo "ARCH_NAME: ${ARCH_NAME:-}"
+echo "pwd: $(pwd)"
+echo "ls: $(ls -la)"
+
+python - <<'PY'
+import ttnn, sys
+print(ttnn.get_arch_name())
+print("ttnn imported from:", ttnn.__file__)
+PY
 
 : << 'END'
 Usage:
