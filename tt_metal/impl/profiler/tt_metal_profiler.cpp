@@ -686,11 +686,6 @@ bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& vir
     return true;
 }
 
-bool skipReadingDeviceProfilerResults(const ProfilerReadState state) {
-    return !tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores() &&
-           state == ProfilerReadState::ONLY_DISPATCH_CORES;
-}
-
 bool onlyProfileDispatchCores(const ProfilerReadState state) {
     return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores() &&
            state == ProfilerReadState::ONLY_DISPATCH_CORES;
@@ -708,10 +703,6 @@ void ReadDeviceProfilerResults(
         auto profiler_it = tt_metal_device_profiler_map.find(device->id());
         TT_ASSERT(profiler_it != tt_metal_device_profiler_map.end());
         DeviceProfiler& profiler = profiler_it->second;
-
-        if (skipReadingDeviceProfilerResults(state)) {
-            return;
-        }
 
         if (onlyProfileDispatchCores(state)) {
             TT_ASSERT(areAllCoresDispatchCores(device, virtual_cores));
@@ -755,11 +746,7 @@ void ReadDeviceProfilerResults(
             !tt::tt_metal::MetalContext::instance().dprint_server(),
             "Debug print server is running, cannot read device profiler data");
 
-        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only()) {
-            profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
-        } else {
-            profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
-        }
+        profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
     }
 #endif
 }
@@ -796,15 +783,7 @@ void ProcessDeviceProfilerResults(
         TT_ASSERT(profiler_it != tt_metal_device_profiler_map.end());
         DeviceProfiler& profiler = profiler_it->second;
 
-        if (skipReadingDeviceProfilerResults(state)) {
-            return;
-        }
-
-        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only()) {
-            profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
-        } else {
-            profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
-        }
+        profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
 
         if (pushToTracyMidRun(state)) {
             profiler.pushTracyDeviceResults();
@@ -820,16 +799,13 @@ std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const 
     const uint8_t device_num_hw_cqs = device->num_hw_cqs();
     const auto& dispatch_core_config = get_dispatch_core_config();
 
-    if (!onlyProfileDispatchCores(state)) {
-        for (const CoreCoord& core :
-             tt::get_logical_compute_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
-            const CoreCoord curr_core = device->worker_core_from_logical_core(core);
-            virtual_cores.push_back(curr_core);
-        }
-        for (const CoreCoord& core : device->get_active_ethernet_cores(true)) {
-            const CoreCoord curr_core = device->virtual_core_from_logical_core(core, CoreType::ETH);
-            virtual_cores.push_back(curr_core);
-        }
+    for (const CoreCoord& core : tt::get_logical_compute_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
+        const CoreCoord curr_core = device->worker_core_from_logical_core(core);
+        virtual_cores.push_back(curr_core);
+    }
+    for (const CoreCoord& core : device->get_active_ethernet_cores(false)) {
+        const CoreCoord curr_core = device->virtual_core_from_logical_core(core, CoreType::ETH);
+        virtual_cores.push_back(curr_core);
     }
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores()) {

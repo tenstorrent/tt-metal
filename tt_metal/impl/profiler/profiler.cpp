@@ -1114,6 +1114,7 @@ void DeviceProfiler::readRiscProfilerResults(
     if (!rtoptions.get_profiler_trace_only()) {
         if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
             (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
+            ZoneScopedN("No new profiler data in DRAM buffer");
             return;
         }
     }

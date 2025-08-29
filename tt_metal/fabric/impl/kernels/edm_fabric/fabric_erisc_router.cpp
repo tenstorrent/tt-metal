@@ -2526,18 +2526,22 @@ void kernel_main() {
     //        MAIN LOOP
     //////////////////////////////
     //////////////////////////////
-    run_fabric_edm_main_loop<enable_packet_header_recording, NUM_RECEIVER_CHANNELS>(
-        local_receiver_channels,
-        local_sender_channels,
-        local_sender_channel_worker_interfaces,
-        downstream_edm_noc_interfaces,
-        remote_receiver_channels,
-        termination_signal_ptr,
-        sender_channel_packet_recorders,
-        receiver_channel_0_trid_tracker,
-        receiver_channel_1_trid_tracker,
-        port_direction_table,
-        local_sender_channel_free_slots_stream_ids_ordered);
+
+    {
+        DeviceZoneScopedN("FABRIC_ROUTER");
+        run_fabric_edm_main_loop<enable_packet_header_recording, NUM_RECEIVER_CHANNELS>(
+            local_receiver_channels,
+            local_sender_channels,
+            local_sender_channel_worker_interfaces,
+            downstream_edm_noc_interfaces,
+            remote_receiver_channels,
+            termination_signal_ptr,
+            sender_channel_packet_recorders,
+            receiver_channel_0_trid_tracker,
+            receiver_channel_1_trid_tracker,
+            port_direction_table,
+            local_sender_channel_free_slots_stream_ids_ordered);
+    }
     WAYPOINT("LPDN");
 
     // we force these values to a non-zero value so that if we run the fabric back to back,
