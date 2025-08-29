@@ -279,9 +279,9 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                 stride = cmd->debug.stride;
                 break;
             // These commands don't have any additional data to dump.
-            case CQ_PREFETCH_CMD_ILLEGAL: break;
-            case CQ_PREFETCH_CMD_STALL: break;
-            case CQ_PREFETCH_CMD_TERMINATE: break;
+            case CQ_PREFETCH_CMD_ILLEGAL:
+            case CQ_PREFETCH_CMD_STALL:
+            case CQ_PREFETCH_CMD_TERMINATE:
             default: break;
         }
     }
