@@ -126,9 +126,8 @@ class CLIPEncoder:
             weight=self.final_layer_norm,
             bias=self.final_layer_norm_bias,
             epsilon=self.config.layer_norm_eps,
+            compute_kernel_config=compute_kernel_config,
         )
-
-        encoder_output.append(normalized_final_state)
 
         # gather eos
         if self.eos_token_id is None:
@@ -143,7 +142,9 @@ class CLIPEncoder:
             if self.text_projection is None:
                 raise ValueError("projection weights are not loaded")
             text_projection_transposed = ttnn.transpose(self.text_projection, -2, -1)
-            projected_output = ttnn.matmul(pooled_output, text_projection_transposed)
+            projected_output = ttnn.matmul(
+                pooled_output, text_projection_transposed, compute_kernel_config=compute_kernel_config
+            )
             # sequence embedding, pooled embedding with projection
             return encoder_output, projected_output
         else:
@@ -307,14 +308,22 @@ class CLIPEncoderLayer:
     ) -> ttnn.Tensor:
         residual = hidden_states
         hidden_states = ttnn.layer_norm(
-            hidden_states, weight=self.layer_norm1, bias=self.layer_norm1_bias, epsilon=self.layer_norm_eps
+            hidden_states,
+            weight=self.layer_norm1,
+            bias=self.layer_norm1_bias,
+            epsilon=self.layer_norm_eps,
+            compute_kernel_config=compute_kernel_config,
         )
         attn_output = self.self_attn(hidden_states, causal_attention_mask)
         hidden_states = residual + attn_output
 
         residual = hidden_states
         hidden_states = ttnn.layer_norm(
-            hidden_states, weight=self.layer_norm2, bias=self.layer_norm2_bias, epsilon=self.layer_norm_eps
+            hidden_states,
+            weight=self.layer_norm2,
+            bias=self.layer_norm2_bias,
+            epsilon=self.layer_norm_eps,
+            compute_kernel_config=compute_kernel_config,
         )
         mlp_output_fractured = self.mlp(
             hidden_states, compute_kernel_config=compute_kernel_config
@@ -427,14 +436,16 @@ class CLIPAttention:
         k = ttnn.transpose(k, 1, 2)
         v = ttnn.transpose(v, 1, 2)
 
-        scores = ttnn.matmul(q, ttnn.transpose(k, -2, -1))  # [batch_size, num_heads, seq_length, seq_length]
+        scores = ttnn.matmul(
+            q, ttnn.transpose(k, -2, -1), compute_kernel_config=compute_kernel_config
+        )  # [batch_size, num_heads, seq_length, seq_length]
 
         if causal_attention_mask is not None:
             scores = scores + causal_attention_mask
 
-        attn_weights = ttnn.softmax(scores, dim=-1)
+        attn_weights = ttnn.softmax(scores, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=True)
 
-        attn_output = ttnn.matmul(attn_weights, v)
+        attn_output = ttnn.matmul(attn_weights, v, compute_kernel_config=compute_kernel_config)
 
         attn_output = ttnn.transpose(attn_output, 1, 2)  # [batch_size, seq_length, num_heads, head_dim]
         attn_output = ttnn.reshape(attn_output, (1, batch_size, seq_length, self.embed_dim // num_devices))
