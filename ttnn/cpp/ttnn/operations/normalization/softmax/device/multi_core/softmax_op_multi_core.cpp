@@ -207,14 +207,14 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         program,
         reader_kernel_path,
         all_device_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, softmax_defines));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, softmax_defines));
 
     auto writer_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/dataflow/"
         "writer_unary_interleaved_start_id_blocked_sm.cpp",
         all_device_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_defines));
 
     // for broadcasting in H direction we need to
     // NCHt, Nt, Wt
@@ -764,7 +764,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
         program,
         reader_kernel_path,
         all_device_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, softmax_defines));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, softmax_defines));
     // compute kernel compile time args
     std::vector<uint32_t> compute_compile_time_args = {
         block_ht,

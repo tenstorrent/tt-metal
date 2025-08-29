@@ -477,7 +477,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
                     "minimal_default_reader.cpp",
                     {core},
-                    tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, reader_compute_defines));
+                    tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, {}, reader_compute_defines));
                 reader_kernel_ids.push_back(worker_sender_reader_kernel_id);
 
                 std::vector<uint32_t> reader_rt_args = {
@@ -573,7 +573,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
                     "minimal_default_writer.cpp",
                     {core},
-                    tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
+                    tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, {}, writer_compute_defines));
                 writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
 
                 std::vector<uint32_t> writer_rt_args = {

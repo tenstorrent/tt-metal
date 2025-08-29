@@ -67,7 +67,7 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
         program,
         "ttnn/cpp/ttnn/operations/experimental/plusone/device/kernels/reader_plusone_interleaved.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, kernel_defines));
 
     auto cores = corerange_to_cores(all_cores, num_cores, true);
 

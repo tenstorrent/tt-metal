@@ -186,13 +186,14 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, mm_kernel_in0_reader_defines));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, mm_kernel_in0_reader_defines));
 
     tt::tt_metal::KernelHandle mm_kernel_in1_reader_writer_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(reader_writer_compile_time_args, mm_kernel_in1_reader_writer_defines));
+        tt::tt_metal::WriterDataMovementConfig(
+            reader_writer_compile_time_args, {}, mm_kernel_in1_reader_writer_defines));
 
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         in0_block_w,             // in0_block_w

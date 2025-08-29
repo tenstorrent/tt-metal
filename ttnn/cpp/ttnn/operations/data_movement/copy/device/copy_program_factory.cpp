@@ -104,7 +104,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
         tilized ? "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/reader_unary_start_id.cpp"
                 : reader_rm_path,
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, kernel_defines));
 
     std::string writer_rm_path =
         sharded ? "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/writer_unary_stick_start_id.cpp"
@@ -114,7 +114,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
         tilized ? "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/writer_unary_start_id.cpp"
                 : writer_rm_path,
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, kernel_defines));
 
     if (convert_dtype) {
         std::vector<uint32_t> compute_kernel_args_group_1 = {num_units_per_core_group_1};

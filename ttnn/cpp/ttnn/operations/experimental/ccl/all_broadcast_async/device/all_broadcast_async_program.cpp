@@ -192,7 +192,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
                 : "ttnn/cpp/ttnn/operations/experimental/ccl/all_broadcast_async/device/kernels/"
                   "all_broadcast_rm_reader.cpp",
         sender_worker_core_range,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_args, kernel_defines));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_args, {}, kernel_defines));
 
     // Writer
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -202,7 +202,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
                 : "ttnn/cpp/ttnn/operations/experimental/ccl/all_broadcast_async/device/kernels/"
                   "all_broadcast_rm_writer.cpp",
         sender_worker_core_range,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_args, kernel_defines));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_args, {}, kernel_defines));
 
     // Kernel Runtime Args
     CoreCoord drain_sync_core;  // the first worker of each chip is the drain sync core, which contains the output ready

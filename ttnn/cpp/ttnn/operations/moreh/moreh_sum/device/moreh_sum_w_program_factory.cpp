@@ -134,7 +134,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_w_impl_kernels/reader_moreh_sum_w.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_defines));
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,

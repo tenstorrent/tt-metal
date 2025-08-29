@@ -91,8 +91,8 @@ Kernel::Kernel(
     const KernelSource& kernel_src,
     const CoreRangeSet& core_range_set,
     const std::vector<uint32_t>& compile_args,
-    const std::map<std::string, std::string>& defines,
-    const std::unordered_map<std::string, uint32_t>& named_compile_time_args) :
+    const std::unordered_map<std::string, uint32_t>& named_compile_time_args,
+    const std::map<std::string, std::string>& defines) :
     programmable_core_type_(programmable_core_type),
     processor_class_(processor_class),
     kernel_src_(kernel_src),

@@ -104,8 +104,8 @@ TEST_F(MeshDeviceFixture, TensixTestNamedCompileTimeArgs) {
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
                 .compile_args = compile_time_args,
-                .defines = defines,
-                .named_compile_time_args = named_compile_time_args});
+                .named_compile_time_args = named_compile_time_args,
+                .defines = defines});
         distributed::EnqueueMeshWorkload(cq, workload, false);
 
         std::vector<uint32_t> results;

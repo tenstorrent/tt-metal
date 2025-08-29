@@ -164,14 +164,14 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
             "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
             "reader_bcast_hw_interleaved_partitioned.cpp",
             all_device_cores,
-            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_defines));
     } else {
         binary_reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
             "reader_bcast_scalar_interleaved_partitioned.cpp",
             all_device_cores,
-            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_defines));
     }
 
     std::map<std::string, std::string> writer_defines;
@@ -184,7 +184,7 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_device_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_defines));
 
     auto bcast_kernel_id = tt_metal::CreateKernel(
         program,
