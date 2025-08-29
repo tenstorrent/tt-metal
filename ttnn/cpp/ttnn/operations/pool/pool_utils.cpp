@@ -28,6 +28,7 @@ uint32_t get_bf16_pool_scalar(
             break;
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
+    // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
     return bfloat16::truncate(value).to_packed() << 16;
 }
 
@@ -39,6 +40,7 @@ uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
         case Pool2DType::AVG_POOL2D: value = 0.; break;
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
+    // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
     return bfloat16::truncate(value).to_packed();
 }
 
