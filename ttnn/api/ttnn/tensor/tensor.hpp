@@ -271,6 +271,7 @@ private:
         DistributedTensorConfig distributed_tensor_config,
         TensorTopology tensor_topology);
     void deallocate_impl(bool force);
+    void assign_id();
 };
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
