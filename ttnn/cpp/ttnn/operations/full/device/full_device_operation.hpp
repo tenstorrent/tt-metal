@@ -30,8 +30,8 @@ struct FullOperation {
     struct ProgramFactory {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle writer_id;
-            std::size_t num_cores;
-            std::size_t core_h;
+            std::optional<tt::tt_metal::KernelHandle> reader_id;
+            std::vector<tt::tt_metal::CoreCoord> cores;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
