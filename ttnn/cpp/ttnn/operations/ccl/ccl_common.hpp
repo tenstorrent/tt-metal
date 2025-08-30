@@ -65,6 +65,13 @@ std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor);
 // to run a CCL over the unit-meshes.
 std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& tensor_shards);
 
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    CoreCoord core_grid_offset = CoreCoord(0, 0));
+
 class EriscDatamoverBuilder;
 
 std::vector<ttnn::Tensor> unpad_output_tensor(
