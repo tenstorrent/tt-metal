@@ -82,12 +82,10 @@ void MAIN {
     if constexpr (fuse_pre_add) {
         // Init for x = in + b
         binary_op_init_common(cb_in, cb_inb, rms_norm ? cb_ex2 : cb_interm_pre_add);
-        pack_reconfig_data_format(rms_norm ? cb_ex2 : cb_interm_pre_add);
     } else {
         // Init for transpose (layernorm) or square (rms)
         constexpr auto first_out_cb = layernorm ? cb_ex : cb_ex2;
         unary_op_init_common(cb_in, first_out_cb);
-        pack_reconfig_data_format(cb_ex);
     }
 
     cb_wait_front(cb_scaler, 1);  // comes from the reader
@@ -134,62 +132,37 @@ void MAIN {
 
                 tile_regs_acquire();
                 if (wt > 0) {
-                    // Copy previous accumulated (transposed)
+                    // Copy previous accumulated (row tiles)
                     // mean and variance to dest regs
                     cb_wait_front(cb_welford.read(), twotiles);
-                    if (wt == blk) {
-                        DPRINT << "Packed read tiles second block" << ENDL();
+
+                    if (wt == 1 * blk) {
+                        DPRINT << "cb_welford.read() 0 after first block" << ENDL();
                         tt::compute::common::print_full_tile(cb_welford.read(), 0);
-                        // tt::compute::common::print_full_tile(cb_welford.read(), 1);
+                        DPRINT << "cb_welford.read() 1 after first block" << ENDL();
+                        tt::compute::common::print_full_tile(cb_welford.read(), 1);
                     }
+
+                    reconfig_data_format_srca(cb_welford.read());
                     copy_tile_to_dst_init_short(cb_welford.read());
-                    reconfig_data_format(cb_welford.read(), cb_welford.read());
                     copy_tile(cb_welford.read(), 0, dst1);
                     copy_tile(cb_welford.read(), 1, dst2);
-
-                    // if (wt == blk) {
-                    //     DPRINT << "dst1 after reading second block" << ENDL();
-                    //     dprint_tensix_dest_reg(dst1);
-                    //     DPRINT << "dst2 after reading second block" << ENDL();
-                    //     dprint_tensix_dest_reg(dst2);
-                    // }
 
                     cb_pop_front(cb_welford.read(), twotiles);
                 }
 
                 // Process block of Welford's
-                reconfig_data_format(cb_result_or_input, cb_result_or_input);
-
                 // Shouldn't need a full init, but there's a bug
                 // in short init that causes accuracy to drop
+                reconfig_data_format_srca(cb_result_or_input);
                 transpose_wh_init(cb_result_or_input, cb_result_or_input);
                 for (uint32_t j = 0; j < blk; j++) {
                     cb_wait_front(cb_result_or_input, j + 1);
                     transpose_wh_tile(cb_result_or_input, j, dst0);
-                    // if (wt == 2 * blk && j == 0) {
-                    //     DPRINT << "dst0 going into welford" << ENDL();
-                    //     dprint_tensix_dest_reg(dst0);
-                    //     DPRINT << "dst1 going into welford" << ENDL();
-                    //     dprint_tensix_dest_reg(dst1);
-                    //     DPRINT << "dst2 going into welford" << ENDL();
-                    //     dprint_tensix_dest_reg(dst2);
-                    // }
                     welford_init();
                     welford(dst0, dst1, dst2, (wt + j) * tile_width, W);
-                    // if (wt == 2 * blk && j == 0) {
-                    //     DPRINT << "dst0 after first welford" << ENDL();
-                    //     dprint_tensix_dest_reg(dst0);
-                    //     DPRINT << "dst1 after first welford" << ENDL();
-                    //     dprint_tensix_dest_reg(dst1);
-                    //     DPRINT << "dst2 after first welford" << ENDL();
-                    //     dprint_tensix_dest_reg(dst2);
-                    // }
                 }
                 tile_regs_commit();
-                // if (wt == 0) {
-                //     dprint_tensix_dest_reg(dst1);
-                //     dprint_tensix_dest_reg(dst2);
-                // }
 
                 // Pop the input or result CB
                 if constexpr (fuse_pre_add) {
@@ -199,7 +172,8 @@ void MAIN {
                     cb_pop_front(cb_in, blk);
                 }
 
-                // Pack dst1 and dst2 into ping pong CB
+                // Pack dst1 and dst2 into CBs
+                // Leave as row tiles
                 tile_regs_wait();
                 cb_reserve_back(cb_welford.write(), twotiles);
                 pack_reconfig_data_format(cb_welford.write());
@@ -208,13 +182,6 @@ void MAIN {
 
                 cb_push_back(cb_welford.write(), twotiles);
 
-                // if (wt == 0) {
-                //     cb_wait_front(cb_welford.write(), twotiles);
-                //     UNPACK(DPRINT << "The two buffers after pack" << ENDL());
-                //     UNPACK(tt::compute::common::print_full_tile(cb_welford.write(), 0));
-                //     UNPACK(tt::compute::common::print_full_tile(cb_welford.write(), 1));
-                // }
-
                 cb_welford.swap();
             }
 
@@ -222,7 +189,7 @@ void MAIN {
             // columns and pack back to CBs
             cb_wait_front(cb_welford.read(), twotiles);
             transpose_wh_init_short(cb_welford.read());
-            reconfig_data_format(cb_welford.read(), cb_welford.read());
+            reconfig_data_format_srca(cb_welford.read());
             tile_regs_acquire();
             transpose_wh_tile(cb_welford.read(), 0, dst1);
             transpose_wh_tile(cb_welford.read(), 1, dst2);
@@ -239,14 +206,8 @@ void MAIN {
             cb_push_back(cb_ex, onetile);
             cb_push_back(cb_ex2, onetile);
             tile_regs_release();
-
-            cb_wait_front(cb_ex, onetile);
-            cb_wait_front(cb_ex2, onetile);
-
-            DPRINT << "cb_ex" << ENDL();
-            tt::compute::common::print_full_tile(cb_ex);
-            DPRINT << "cb_ex2" << ENDL();
-            tt::compute::common::print_full_tile(cb_ex2);
+        } else {
+            // RMS norm
         }
 
         // =====================================
