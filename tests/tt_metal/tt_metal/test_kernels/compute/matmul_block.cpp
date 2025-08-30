@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -19,33 +20,24 @@ void MAIN {
 #if (TEST_INIT_SHORT == 1)
 #if (WITH_DT == 1)
     // Intentionally wrong init with different data formats
-    mm_block_init(
-        tt::CBIndex::c_0,
-        tt::CBIndex::c_2,
-        tt::CBIndex::c_16,
-        false,
-        dst_tile_cols - 1,
-        dst_tile_rows - 1,
-        block_tile_dim - 1);
+    matmul_block_init(
+        tt::CBIndex::c_0, tt::CBIndex::c_2, false, dst_tile_cols - 1, dst_tile_rows - 1, block_tile_dim - 1);
     // Corrected init short with dt
-    mm_block_init_short_with_dt(
+    matmul_block_init_reconfig_data_format_srca(
         tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #elif (WITH_DT == 0)
     // Intentionally wrong init with same data formats
-    mm_block_init(
-        tt::CBIndex::c_1,
-        tt::CBIndex::c_0,
-        tt::CBIndex::c_16,
-        false,
-        dst_tile_cols - 1,
-        dst_tile_rows - 1,
-        block_tile_dim - 1);
+    matmul_block_init(
+        tt::CBIndex::c_1, tt::CBIndex::c_0, false, dst_tile_cols - 1, dst_tile_rows - 1, block_tile_dim - 1);
     // Corrected init short
-    mm_block_init_short(tt::CBIndex::c_0, tt::CBIndex::c_1, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
+    matmul_block_init(tt::CBIndex::c_0, tt::CBIndex::c_1, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #endif
 #elif (TEST_INIT_SHORT == 0)
-    mm_block_init(
-        tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+
+    // Initialize matmul block operation
+    matmul_block_init(tt::CBIndex::c_0, tt::CBIndex::c_1, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #endif
 
     acquire_dst();

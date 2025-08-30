@@ -8,6 +8,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -36,7 +37,11 @@ void MAIN {
     const uint32_t my_seq_tiles = seq_t_end - seq_t_start;
     const uint32_t my_cos_sin_tiles = my_seq_tiles * Wt;
 
-    mm_init(in_cb, trans_mat_cb, out_cb);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(in_cb, trans_mat_cb, out_cb);
+
+    // Initialize matmul operation
+    matmul_init(in_cb, trans_mat_cb);
     binary_op_init_common(rotated_in_interm_cb, cos_cb, out_cb);  // General Init for all binary ops
 
     // Get the trans_mat
@@ -67,10 +72,10 @@ void MAIN {
                 cb_reserve_back(out_cb, Wt);
 
                 // // rotated = x @ trans_mat
-                mm_init_short(in_cb, trans_mat_cb);
+                matmul_init(in_cb, trans_mat_cb);
                 ACQ();
                 for (uint32_t j = 0; j < Wt; ++j) {
-                    matmul_tiles(in_cb, trans_mat_cb, j, in1_index, j, false);
+                    matmul_tile(in_cb, trans_mat_cb, j, in1_index, j, false);
                     pack_tile(j, rotated_in_interm_cb, j);
                 }
                 REL();

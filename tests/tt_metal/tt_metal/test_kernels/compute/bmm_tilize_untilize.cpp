@@ -14,6 +14,7 @@
 #endif
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 
 #define DEBUG_PRINT 0
 
@@ -136,7 +137,11 @@ void MAIN {
     init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(out_for_bias_cb_id, bias_cb_id, out_cb_id);
 #endif
 
-    mm_init(in0_cb_id, in1_cb_id, out_cb_id);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(in0_cb_id, in1_cb_id, out_cb_id);
+
+    // Initialize matmul operation
+    matmul_init(in0_cb_id, in1_cb_id);
     for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
 #ifdef FUSE_BIAS
         uint32_t bias_block_offset = 0;
@@ -147,7 +152,8 @@ void MAIN {
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
                 if (tilize_in0) {
                     tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
-                    mm_init_short(tilized_in0_cb_id, in1_cb_id);
+                    // Initialize matmul operation
+                    matmul_init(tilized_in0_cb_id, in1_cb_id);
                     cb_wait_front(tilized_in0_cb_id, in0_block_num_tiles);
                 } else {
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
@@ -167,7 +173,7 @@ void MAIN {
                             }
                             cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
                             // Reconfigure srcA back
-                            mm_init_short_with_dt(
+                            matmul_init_reconfig_data_format_srca(
                                 tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id, matmul_partials_cb);
                         }  // enable_reload
                         // Compute output sub-block from in0_subblock x in1_subblock
@@ -177,7 +183,7 @@ void MAIN {
                             for (uint32_t w = 0; w < out_subblock_w; ++w) {
                                 int in1_index_inner_dim_offset = 0;
                                 for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-                                    matmul_tiles(
+                                    matmul_tile(
                                         tilize_in0 ? tilized_in0_cb_id : in0_cb_id,                  // in0_cb
                                         in1_cb_id,                                                   // in1_cb
                                         in0_index_subblock_offset + in0_index_h_offset + inner_dim,  // in0 tile
@@ -217,9 +223,7 @@ void MAIN {
                             // do not pop front bias as it may be used again for subsequent blocks
                             cb_pop_front(out_for_bias_cb_id, out_subblock_num_tiles);
                             // reconfig for matmul
-                            mm_init_short(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
-                            // reconfig unpacker df for srcB
-                            // reconfig_data_format(in1_cb_id, in0_cb_id);
+                            matmul_init(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
                         }
 #endif
 
@@ -251,7 +255,8 @@ void MAIN {
                             untilize_mode_final_matmul_partials_cb,
                             untilize_mode_reblock_cb,
                             out_cb_id);
-                        mm_init_short(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
+                        // Initialize matmul operation
+                        matmul_init(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
                     }  // last_out
 #endif
                     in0_index_subblock_offset += in0_subblock_num_tiles;
@@ -263,7 +268,7 @@ void MAIN {
 
                 cb_pop_front(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in0_block_num_tiles);
                 cb_pop_front(in1_cb_id, in1_block_num_tiles);
-            }  // for in0_num_blocks_w
+    }  // for in0_num_blocks_w
 #ifdef FUSE_BIAS
             bias_block_offset += in1_block_w;
 #endif
