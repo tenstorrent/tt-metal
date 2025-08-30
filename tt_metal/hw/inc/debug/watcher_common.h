@@ -26,16 +26,22 @@ inline uint32_t debug_get_which_riscv() {
     return DebugBrisc;
 #elif defined(COMPILE_FOR_NCRISC)
     return DebugNCrisc;
+#elif (defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0)
+    return DebugErisc;
+#elif (defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 1)
+    return DebugSubordinateErisc;
+#elif (defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 0)
+    return DebugIErisc;
+#elif (defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 1)
+    return DebugSubordinateIErisc;
 #elif defined(COMPILE_FOR_ERISC)
     return DebugErisc;
-#elif defined(COMPILE_FOR_IDLE_ERISC)
-    return DebugIErisc;
 #else
     return DebugTrisc0 + COMPILE_FOR_TRISC;
 #endif
 }
 
-void clear_previous_launch_message_entry_for_watcher() {
+inline void clear_previous_launch_message_entry_for_watcher() {
     uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     // Before the read pointer has been incremented, clear the watcher info 1 entries before to ensure that we don't
     // report stale data

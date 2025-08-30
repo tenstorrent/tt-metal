@@ -57,6 +57,7 @@ const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
         case DebugBrisc: return " brisc";
         case DebugNCrisc: return "ncrisc";
         case DebugErisc: return "erisc";
+        case DebugSubordinateErisc: return "subordinate_erisc";
         case DebugIErisc: return "ierisc";
         case DebugSubordinateIErisc: return "subordinate_ierisc";
         case DebugTrisc0: return "trisc0";
@@ -196,6 +197,9 @@ WatcherDeviceReader::WatcherDeviceReader(FILE* f, chip_id_t device_id, const std
             logical_core_to_eth_link_retraining_count[eth_core] = read_data[0];
         }
     }
+
+    num_erisc_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 }
 
 WatcherDeviceReader::~WatcherDeviceReader() {
@@ -1082,6 +1086,12 @@ void WatcherDeviceReader::LogRunningKernels(CoreDescriptor& core, const launch_m
             tt::LogMetal,
             " erisc : {}",
             kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]]);
+        if (num_erisc_cores > 1) {
+            log_info(
+                tt::LogMetal,
+                " erisc1 : {}",
+                kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]]);
+        }
     } else {
         log_info(
             tt::LogMetal,
@@ -1103,6 +1113,7 @@ string WatcherDeviceReader::GetKernelName(CoreDescriptor& core, const launch_msg
         case DebugBrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]];
         case DebugErisc:
         case DebugIErisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]];
+        case DebugSubordinateErisc:
         case DebugSubordinateIErisc:
             return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]];
         case DebugNCrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]];

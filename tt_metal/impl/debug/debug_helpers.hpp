@@ -89,23 +89,21 @@ inline uint64_t GetDprintBufAddr(chip_id_t device_id, const CoreCoord& virtual_c
     return reinterpret_cast<uint64_t>(&(buf->data[risc_id]));
 }
 
-// TODO(#17275): Move this and others to the HAL
-#define DPRINT_NRISCVS 5
-#define DPRINT_NRISCVS_ETH 1
-
 inline int GetNumRiscs(chip_id_t device_id, const CoreDescriptor& core) {
     if (core.type == CoreType::ETH) {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
-            // TODO: Update this to be `DPRINT_NRISCVS_ETH + 1` when active erisc0 is running Metal FW
-            auto logical_active_eths =
-                tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
-            CoreCoord logical_eth(core.coord.x, core.coord.y);
-            return (logical_active_eths.find(logical_eth) != logical_active_eths.end()) ? DPRINT_NRISCVS_ETH
-                                                                                        : DPRINT_NRISCVS_ETH + 1;
+        auto logical_active_eths =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
+        CoreCoord logical_eth(core.coord.x, core.coord.y);
+        if (logical_active_eths.contains(logical_eth)) {
+            return tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
+                tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+        } else {
+            return tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
+                tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
         }
-        return DPRINT_NRISCVS_ETH;
     } else {
-        return DPRINT_NRISCVS;
+        return tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX);
     }
 }
 
