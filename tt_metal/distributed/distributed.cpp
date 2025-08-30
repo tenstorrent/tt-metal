@@ -56,10 +56,14 @@ void EventSynchronize(const MeshEvent& event) {
 }
 
 bool EventQuery(const MeshEvent& event) {
-    const auto& mesh_device = event.device();
-    const auto& device_range = event.device_range();
-    auto& sysmem_manager = mesh_device->get_device(*(device_range.begin()))->sysmem_manager();
-    bool event_completed = sysmem_manager.get_last_completed_event(event.mesh_cq_id()) >= event.id();
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        return true;
+    }
+    bool event_completed = true;
+    for (const auto& coord : event.device_range()) {
+        auto physical_device = event.device()->get_device(coord);
+        event_completed &= physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) >= event.id();
+    }
     return event_completed;
 }
 
