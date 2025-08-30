@@ -31,7 +31,8 @@ std::string get_mobo_name() {
 
     return motherboard;
 }
-
+// TODO: Once ASIC Location is exposed through a UMD API, code generating the asic location
+// here can be removed.
 // TODO: UBB specific code here is duplicated. This needs to be exposed as a UMD API.
 const std::unordered_map<tt::ARCH, std::vector<std ::uint16_t>> ubb_bus_ids = {
     {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
