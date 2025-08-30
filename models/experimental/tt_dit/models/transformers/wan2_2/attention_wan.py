@@ -107,7 +107,7 @@ class WanAttention:
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.sdpa_worker_grid,
             q_chunk_size=256,
-            k_chunk_size=512,
+            k_chunk_size=256,
             exp_approx_mode=False,  # NOTE: False is more correct
         )
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -319,6 +319,7 @@ class WanAttention:
                     q_BHNE,
                     k_BHNE,
                     v_BHNE,
+                    is_causal=False,
                     program_config=self.sdpa_program_config,
                     compute_kernel_config=self.sdpa_compute_kernel_config,
                 )
