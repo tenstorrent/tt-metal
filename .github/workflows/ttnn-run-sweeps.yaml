@@ -554,6 +554,10 @@ on:
   # schedule:
   #   - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
+concurrency:
+  group: ttnn-sweeps-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
@@ -564,6 +568,7 @@ jobs:
       build-wheel: true
       version: "22.04"
   ttnn-generate-sweeps:
+    name: Generate sweeps vectors
     needs: build-artifact
     strategy:
       matrix:
@@ -609,10 +614,35 @@ jobs:
           path: /work/tests/sweep_framework/vectors_export/
           retention-days: 1
 
-  ttnn-run-sweeps:
+  ttnn-compute-module-matrix:
+    name: Compute module matrix
+    needs: ttnn-generate-sweeps
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sweeps-vectors
+          path: /tmp/vectors
+      - id: set-matrix
+        shell: bash
+        run: |
+          python - <<'PY' > /tmp/matrix.json
+          import os, json
+          d = '/tmp/vectors'
+          modules = [f[:-5] for f in os.listdir(d) if f.endswith('.json')]
+          print(json.dumps({"module": modules}))
+          PY
+          echo "matrix=$(cat /tmp/matrix.json)" >> "$GITHUB_OUTPUT"
+
+  ttnn-run-single-sweep:
+    name: Run single sweep
     needs:
       - ttnn-generate-sweeps
       - build-artifact
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -669,11 +699,7 @@ jobs:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export/
       - name: Run ttnn sweeps (single sweep)
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
         run: python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary
-      - name: Run ttnn sweeps (all sweeps, nightly)
-        if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
-        run: python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout
       - name: Upload sweep results
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -682,7 +708,90 @@ jobs:
           path: /work/tests/sweep_framework/results_export/
           retention-days: 1
       - name: Upload sweep results to SFTP server
-        if: ${{ always() && github.event.inputs.upload_results }}
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs.upload_results }}
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/optest_batchfile.txt
+          username: ml-kernel-op-test-writer
+          hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
+          path: /work
+
+  ttnn-run-sweeps-parallel:
+    name: Run sweeps in parallel
+    needs:
+      - ttnn-generate-sweeps
+      - build-artifact
+      - ttnn-compute-module-matrix
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        test-group:
+          [
+            {
+              name: "Wormhole N150 Sweeps",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+              tt-smi-cmd: "tt-smi -r"
+            },
+            # {
+            #   name: "Wormhole N300 Sweeps",
+            #   arch: wormhole_b0,
+            #   runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+            #   tt-smi-cmd: "tt-smi-metal -r 0"
+            # }
+          ]
+        module: ${{ fromJSON(needs.ttnn-compute-module-matrix.outputs.matrix).module }}
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
+        ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
+        TT_SMI_RESET_COMMAND: ${{ matrix.test-group.tt-smi-cmd }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    timeout-minutes: 720
+    runs-on: ${{ matrix.test-group.runs-on }}
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Download sweep vectors
+        uses: actions/download-artifact@v4
+        with:
+          name: sweeps-vectors
+          path: /work/tests/sweep_framework/vectors_export/
+      - name: Run ttnn sweeps (module)
+        run: python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ matrix.module }} --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout
+      - name: Upload sweep results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweeps-results-${{ matrix.test-group.name }}-${{ matrix.module }}
+          path: /work/tests/sweep_framework/results_export/
+          retention-days: 1
+      - name: Upload sweep results to SFTP server
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs.upload_results }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
