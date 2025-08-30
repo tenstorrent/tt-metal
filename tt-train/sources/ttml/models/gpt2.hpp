@@ -7,8 +7,8 @@
 #include <yaml-cpp/yaml.h>
 
 #include "autograd/module_base.hpp"
+#include "models/base_transformer.hpp"
 #include "models/common/transformer_common.hpp"
-
 namespace ttml::models::gpt2 {
 
 using RunnerType = common::transformer::RunnerType;
@@ -36,7 +36,7 @@ struct TransformerConfig {
     Experimental experimental;
 };
 
-class Transformer : public ttml::autograd::ModuleBase {
+class Transformer : public BaseTransformer {
 private:
     RunnerType runner_type = RunnerType::Default;
     std::shared_ptr<ttml::autograd::ModuleBase> tok_emb;
@@ -47,8 +47,10 @@ private:
 
 public:
     explicit Transformer(const TransformerConfig& config);
-
-    ttml::autograd::TensorPtr operator()(const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask);
+    virtual ~Transformer() = default;
+    void load_from_safetensors(const std::filesystem::path& model_path) override;
+    ttml::autograd::TensorPtr operator()(
+        const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) override;
 };
 
 [[nodiscard]] TransformerConfig read_config(const YAML::Node& config);
@@ -56,4 +58,5 @@ public:
 [[nodiscard]] std::shared_ptr<Transformer> create(const TransformerConfig& config);
 [[nodiscard]] std::shared_ptr<Transformer> create(const YAML::Node& config);
 
+void load_model_from_safetensors(const std::filesystem::path& path, serialization::NamedParameters& parameters);
 }  // namespace ttml::models::gpt2

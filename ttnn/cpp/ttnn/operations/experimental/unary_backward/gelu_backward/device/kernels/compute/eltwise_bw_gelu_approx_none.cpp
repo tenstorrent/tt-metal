@@ -54,14 +54,14 @@ void MAIN {
 
             // Step 1: erf(x / sqrt(2))
             fill_tile(3, kAlpha);
-            mul_binary_tile(1, 3);  // tile[1] = x / sqrt(2)
+            mul_binary_tile(1, 3, 1);  // tile[1] = x / sqrt(2)
             erf_tile(1);            // tile[1] = erf( x / sqrt(2) )
 
             // cdf_term = 0.5 * (1.0 + erf(x / sqrt(2)))
             fill_tile(3, 1.0f);
-            add_binary_tile(1, 3);  // tile[1] += 1.0
+            add_binary_tile(1, 3, 1);  // tile[1] += 1.0
             fill_tile(3, 0.5f);
-            mul_binary_tile(1, 3);  // tile[1] *= 0.5
+            mul_binary_tile(1, 3, 1);  // tile[1] *= 0.5
 
             // Now tile[1] holds cdf_term
 
@@ -69,25 +69,25 @@ void MAIN {
             //   tile[2] will hold exp(- x^2 / 2)
             square_tile(2);  // tile[2] = x^2
             fill_tile(3, -0.5f);
-            mul_binary_tile(2, 3);  // tile[2] = -0.5 * x^2
+            mul_binary_tile(2, 3, 2);  // tile[2] = -0.5 * x^2
             exp_tile(2);            // tile[2] = exp(- x^2 / 2)
 
             // multiply by (1 / sqrt(2π))
             fill_tile(3, kBeta);
-            mul_binary_tile(2, 3);  // tile[2] *= 1 / sqrt(2π)
+            mul_binary_tile(2, 3, 2);  // tile[2] *= 1 / sqrt(2π)
 
             // multiply by x
-            mul_binary_tile(2, 4);  // tile[2] *= x
+            mul_binary_tile(2, 4, 2);  // tile[2] *= x
 
             // tile[2] now has pdf_term
 
             // Step 3: cdf_term + pdf_term
-            add_binary_tile(1, 2);
+            add_binary_tile(1, 2, 1);
 
             // Step 4: multiply by grad => tile[0]
             //   tile[0] = grad
             //   tile[1] = cdf_term + pdf_term
-            mul_binary_tile(0, 1);
+            mul_binary_tile(0, 1, 0);
             pack_tile(0, cb_grad_in);
 
             // // store to output

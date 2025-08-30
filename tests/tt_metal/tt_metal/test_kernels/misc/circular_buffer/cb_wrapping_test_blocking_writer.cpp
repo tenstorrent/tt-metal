@@ -2,11 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ *
+ * Two possible invokation locations:
+ * 1. Reader at UNPACKER core as Compute Kernel
+ * 2. Reader at a Dataflow Kernel
+ *
+ * Test will be performed in both cases.
+ *
+ */
+
+void core_agnostic_main();
+
+#ifdef COMPILE_FOR_TRISC
 #include "compute_kernel_api/common.h"
-
+namespace NAMESPACE {
+void MAIN {
 #ifdef TRISC_PACK
+    core_agnostic_main();
+#endif
+}
+}  // namespace NAMESPACE
+#else
+#include "dataflow_api.h"
+void kernel_main() { core_agnostic_main(); }
+#endif
 
-#include <algorithm>
 #include "debug/debug.h"
 #include "circular_buffer.h"
 
@@ -34,10 +55,13 @@ static constexpr DataT WRAP_WRITE_VALUE = 0xAAAA;
 static constexpr DataT WRITE_OVER_VALUE = 0xBBBB;
 
 void fill_page(DataT value) {
-    static constexpr auto wr_ptr_page_shift = 4;
+#ifdef COMPILE_FOR_TRISC
+    auto ptr = (get_local_cb_interface(CB_ID).fifo_wr_ptr) << cb_addr_shift;
+#else
+    auto ptr = get_write_ptr(CB_ID);
+#endif
 
-    auto ptr = (get_local_cb_interface(CB_ID).fifo_wr_ptr) << wr_ptr_page_shift;
-    auto page_start = reinterpret_cast<volatile tt_l1_ptr DataT*>(ptr);
+    auto page_start = reinterpret_cast<DataT*>(ptr);
     std::fill(page_start, page_start + PAGE_SIZE, value);
 }
 
@@ -47,8 +71,7 @@ void fill_step(DataT value) {
     }
 }
 
-namespace NAMESPACE {
-void MAIN {
+void core_agnostic_main() {
     for (auto i = 0ul; i < CHURN_LOOP_COUNT; i++) {
         cb_reserve_back(CB_ID, CB_STEP_SIZE);
         fill_step(CHURN_LOOP_VALUE);
@@ -93,9 +116,3 @@ void MAIN {
     fill_step(WRITE_OVER_VALUE);
     cb_push_back(CB_ID, CB_STEP_SIZE);
 }
-}  // namespace NAMESPACE
-#else
-namespace NAMESPACE {
-void MAIN {}
-}  // namespace NAMESPACE
-#endif
