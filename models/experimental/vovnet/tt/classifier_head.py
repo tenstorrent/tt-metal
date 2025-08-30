@@ -31,6 +31,12 @@ class TtClassifierHead:
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             core_grid=ttnn.CoreGrid(y=x.shape[0], x=8),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                packer_l1_acc=False,
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+            ),
         )
 
         x = ttnn.reshape(x, [x.shape[0], 1000])
