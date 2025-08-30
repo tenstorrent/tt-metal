@@ -245,6 +245,7 @@ class C3k2(nn.Module):
             )
 
         else:
+            import pdb; pdb.set_trace()
             self.cv1 = Conv(
                 in_channel[0],
                 out_channel[0],
