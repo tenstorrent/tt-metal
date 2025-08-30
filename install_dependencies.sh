@@ -204,6 +204,8 @@ init_packages() {
                 "libcapstone-dev"
                 "libc++-17-dev"
                 "libc++abi-17-dev"
+                "protobuf-compiler"
+                "libprotobuf-dev"
                 "wget"
                 "curl"
             )
@@ -231,6 +233,8 @@ init_packages() {
                 "boost-devel"
                 "tbb-devel"
                 "capstone-devel"
+                "protobuf-compiler"
+                "protobuf-devel"
                 "wget"
                 "curl"
             )
