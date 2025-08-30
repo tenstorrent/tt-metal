@@ -14,6 +14,15 @@ This codebase was designed for the model: [deepseek-ai/DeepSeek-R1-0528](https:/
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
 ## How to Run
+
+If you are not running on Tenstorrent internal infrastructure, you need to set the following environment variables:
+
+- `DEEPSEEK_V3_CACHE`: Path to a directory where cached data such as converted weights and test inputs/outputs will be stored.
+
+- `DEEPSEEK_V3_HF_MODEL`: Path to a directory containing the DeepSeek-V3 Hugging Face model weights. Defaults to `models/demos/deepseek_v3/reference`. Download the model from Hugging Face set this to the model directory.
+
+These variables are used in scripts for generating test data and running tests.
+
 This codebase separates model execution into three distinct stages, each of which can be run independently:
 1. Convert PyTorch weights to TTNN tensor files and generate the WeightConfig
 2. Generate ModelConfigs for prefill and decode modes
