@@ -89,7 +89,6 @@ def load_reference_model(hf_config):
 def test_forward_pass(
     module_path, mode, seq_len, batch_size, hf_config, tmp_path, mesh_device, model_path, ccl, reset_seeds, weights_type
 ):
-    mesh_device.disable_and_clear_program_cache()
     mesh_shape = list(mesh_device.shape)
     num_rows, sdpa_dp_factor = mesh_shape
 
