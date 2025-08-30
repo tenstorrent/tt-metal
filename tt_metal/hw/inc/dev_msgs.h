@@ -272,9 +272,11 @@ enum riscv_id_t {
     DebugTrisc1 = 3,
     DebugTrisc2 = 4,
     DebugErisc = 5,
-    DebugIErisc = 6,
-    DebugSubordinateIErisc = 7,
-    DebugNumUniqueRiscs
+    DebugSubordinateErisc = 6,
+    DebugIErisc = 7,
+    DebugSubordinateIErisc = 8,
+    DebugNumUniqueRiscs = 9,
+    DebugDebugMaxRiscvId = 15,  // For alignment requirements
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };

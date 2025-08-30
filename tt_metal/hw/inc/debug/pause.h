@@ -17,12 +17,12 @@ void watcher_pause() {
 
     // Wait for the pause flag to be cleared.
     WAYPOINT("PASW");
-    while (pause_msg->flags[PROCESSOR_INDEX]) {
+    do {
         invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
         internal_::risc_context_switch();
 #endif
-    }
+    } while (pause_msg->flags[PROCESSOR_INDEX]);
     WAYPOINT("PASD");
 }
 

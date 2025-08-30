@@ -74,8 +74,16 @@ const char* get_riscv_name(HalProgrammableCoreType core_type, uint32_t processor
                 core_type);
             return names[processor_index];
         }
-        case HalProgrammableCoreType::ACTIVE_ETH: return "erisc";
-        case HalProgrammableCoreType::IDLE_ETH:
+        case HalProgrammableCoreType::ACTIVE_ETH: {
+            static const char* const names[] = {"erisc", "subordinate_erisc"};
+            TT_FATAL(
+                processor_index < 2,
+                "Watcher data corrupted, unexpected processor index {} on core {}",
+                processor_index,
+                core_type);
+            return names[processor_index];
+        }
+        case HalProgrammableCoreType::IDLE_ETH: {
             static const char* const names[] = {"ierisc", "subordinate_ierisc"};
             TT_FATAL(
                 processor_index < 2,
@@ -83,6 +91,7 @@ const char* get_riscv_name(HalProgrammableCoreType core_type, uint32_t processor
                 processor_index,
                 core_type);
             return names[processor_index];
+        }
         case HalProgrammableCoreType::COUNT: TT_THROW("unsupported core type");
     }
     TT_THROW("unreachable");
@@ -283,6 +292,9 @@ WatcherDeviceReader::WatcherDeviceReader(FILE* f, chip_id_t device_id, const std
             logical_core_to_eth_link_retraining_count[eth_core] = read_data[0];
         }
     }
+
+    num_erisc_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 }
 
 WatcherDeviceReader::~WatcherDeviceReader() {
@@ -1128,6 +1140,12 @@ void WatcherDeviceReader::Core::LogRunningKernels() const {
             tt::LogMetal,
             " erisc : {}",
             reader_.kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]]);
+        if (reader_.num_erisc_cores > 1) {
+            log_info(
+                tt::LogMetal,
+                " erisc1 : {}",
+                reader_.kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]]);
+        }
     } else {
         log_info(
             tt::LogMetal,
