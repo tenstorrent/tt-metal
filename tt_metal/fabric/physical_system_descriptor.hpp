@@ -17,7 +17,7 @@ namespace tt::tt_metal {
 
 using AsicID = tt::stl::StrongType<uint64_t, struct AsicIDTag>;
 using TrayID = tt::stl::StrongType<uint32_t, struct TrayIDTag>;
-using NID = tt::stl::StrongType<uint32_t, struct NIDTag>;
+using ASICLocation = tt::stl::StrongType<uint32_t, struct ASICLocationTag>;
 using RackID = tt::stl::StrongType<uint32_t, struct RackIDTag>;
 using UID = tt::stl::StrongType<uint32_t, struct UIDTag>;
 using HallID = tt::stl::StrongType<uint32_t, struct HallIDTag>;
@@ -26,7 +26,7 @@ using AisleID = tt::stl::StrongType<uint32_t, struct AisleIDTag>;
 // Specify Physical ASIC Attributes
 struct ASICDescriptor {
     TrayID tray_id;
-    NID n_id;
+    ASICLocation asic_location;
     BoardType board_type = BoardType::UNKNOWN;
     AsicID unique_id;
     std::string host_name;
@@ -98,7 +98,7 @@ public:
     std::vector<EthConnection> get_eth_connections(AsicID src_asic_id, AsicID dst_asic_id) const;
     const AsicTopology& get_asic_topology(const std::string& hostname) const;
     TrayID get_tray_id(AsicID asic_id) const;
-    NID get_n_id(AsicID asic_id) const;
+    ASICLocation get_asic_location(AsicID asic_id) const;
     std::vector<AsicID> get_asics_connected_to_host(std::string hostname) const;
 
     // Host Topology Query APIs
@@ -135,7 +135,7 @@ private:
     void generate_cross_host_connections();
     void remove_unresolved_nodes();
     void resolve_hostname_uniqueness();
-
+    void validate_graphs();
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;
     std::unordered_map<std::string, std::string> host_to_mobo_name_;
