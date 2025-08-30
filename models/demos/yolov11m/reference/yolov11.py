@@ -177,7 +177,6 @@ class C3k(nn.Module):
             dilation=dilation[2],
             groups=groups[2],
         )
-        import pdb; pdb.set_trace()
         self.m = nn.Sequential(
             Bottleneck(
                 in_channel[3:5],
