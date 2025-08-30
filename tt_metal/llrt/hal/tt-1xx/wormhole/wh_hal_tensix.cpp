@@ -22,6 +22,11 @@ namespace tt::tt_metal::wormhole {
 // Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
 #include "core_config.h"
 
+// This file is intended to be wrapped inside arch/core-specific namespace.
+namespace tensix_dev_msgs {
+#include "llrt/hal/generated_headers/dev_msgs_impl.hpp"
+}
+
 HalCoreInfoType create_tensix_mem_map() {
     constexpr std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
@@ -141,7 +146,8 @@ HalCoreInfoType create_tensix_mem_map() {
         mem_map_sizes,
         fw_mailbox_addr,
         true /*supports_cbs*/,
-        true /*supports_receiving_multicast_cmds*/};
+        true /*supports_receiving_multicast_cmds*/,
+        tensix_dev_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::wormhole
