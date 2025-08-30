@@ -633,7 +633,7 @@ jobs:
           import os, json, math
           d = '/tmp/vectors'
           modules = sorted([f[:-5] for f in os.listdir(d) if f.endswith('.json')])
-          BATCH_SIZE = 50
+          BATCH_SIZE = 10
           batches = [",".join(modules[i:i+BATCH_SIZE]) for i in range(0, len(modules), BATCH_SIZE)]
           print(json.dumps({"module": modules, "batches": batches}))
           PY
