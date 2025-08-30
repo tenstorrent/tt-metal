@@ -84,12 +84,7 @@ uint32_t BankManager::num_banks() const { return bank_id_to_bank_offset_.size();
 
 DeviceAddr BankManager::bank_size() const {
     TT_ASSERT(bool(allocator_), "Allocator not initialized!");
-    DeviceAddr max_size_bytes_u64 = allocator_->max_size_bytes();
-    if (max_size_bytes_u64 > std::numeric_limits<DeviceAddr>::max()) {
-        TT_THROW("Bank size {} overflows DeviceAddr", max_size_bytes_u64);
-    }
-    DeviceAddr max_size_bytes = (DeviceAddr)max_size_bytes_u64;
-    return max_size_bytes;
+    return allocator_->max_size_bytes();
 }
 
 int64_t BankManager::bank_offset(uint32_t bank_id) const {
@@ -134,11 +129,12 @@ uint64_t BankManager::allocate_buffer(
     if (not address.has_value()) {
         TT_THROW(
             "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
-            "store {} B",
+            "store {} B, but bank size is only {} B",
             size,
             enchantum::to_string(buffer_type_),
             num_banks,
-            size_per_bank);
+            size_per_bank,
+            bank_size());
     }
     allocated_buffers_.insert(address.value());
     return address.value();
