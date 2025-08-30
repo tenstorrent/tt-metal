@@ -248,6 +248,11 @@ def get_padded_vision_seq_len(N, chunk_size_lcm, num_devices):
 
     # Calculate padding needed to make seq_len divisible by both tile size and num_devices
     padded_seq_len = math.ceil(N / divisor) * divisor
+    padding = padded_seq_len - N
+    shard_size = padded_seq_len // num_devices
+    assert (
+        padding < shard_size
+    ), f"Given sequence length {N} and chunk size {chunk_size_lcm} and num_devices {num_devices}, the padding {padding} is greater than the shard size {shard_size}. This is not allowed since the final device contains only padded data. Adjust the chunk size to resolve this."
     return padded_seq_len
 
 
