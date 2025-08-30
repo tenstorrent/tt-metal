@@ -297,7 +297,7 @@ def run(test_module, input_queue, output_queue, config: SweepsConfig):
     try:
         try:
             while True:
-                test_vector = input_queue.get(block=True, timeout=1)
+                test_vector = input_queue.get(block=True, timeout=5)
                 test_vector = deserialize_vector_structured(test_vector)
                 try:
                     results = test_module.run(**test_vector, device=device)
@@ -372,6 +372,11 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
             try:
                 if config.measure_perf:
                     # Run one time before capturing result to deal with compile-time slowdown of perf measurement
+                    # Ensure a worker process is running if we're in child mode
+                    child_mode = (len(test_vectors) > 1) and (not config.dry_run)
+                    if child_mode and (p is None or not p.is_alive()):
+                        p = Process(target=run, args=(test_module, input_queue, output_queue, config))
+                        p.start()
                     input_queue.put(test_vector)
                     if p is None:
                         logger.info(
@@ -379,6 +384,11 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                         )
                         run(test_module, input_queue, output_queue, config)
                     output_queue.get(block=True, timeout=timeout)
+                # Ensure a worker process is running if we're in child mode (re-check in case prior step killed it)
+                child_mode = (len(test_vectors) > 1) and (not config.dry_run)
+                if child_mode and (p is None or not p.is_alive()):
+                    p = Process(target=run, args=(test_module, input_queue, output_queue, config))
+                    p.start()
                 input_queue.put(test_vector)
                 if p is None:
                     logger.info(
