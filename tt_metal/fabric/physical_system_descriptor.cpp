@@ -489,7 +489,7 @@ void PhysicalSystemDescriptor::validate_graphs() {
                 // All connections on this edge must be local or global.
                 TT_FATAL(
                     all_connections_local || all_connections_global,
-                    "Physical Discover Error: All ethernet connections should either be local or global. Please reset "
+                    "Physical Discovery Error: All ethernet connections should either be local or global. Please reset "
                     "the system and try again.");
                 // If all connections are local, then the src_host and dst_host should be the same
                 if (all_connections_local) {
