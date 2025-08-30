@@ -27,6 +27,7 @@
 #include "control_plane.hpp"
 #include "core_coord.hpp"
 #include "compressed_routing_table.hpp"
+#include "compressed_routing_path.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "distributed_context.hpp"
 #include "fabric_types.hpp"
@@ -1703,7 +1704,9 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
         this->write_routing_tables_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
         this->write_fabric_connections_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
         this->write_routing_tables_to_eth_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+
     }
+    this->write_all_to_all_routing_fields_1D(16);
 }
 
 // TODO: remove this after TG is deprecated
@@ -2211,6 +2214,22 @@ void ControlPlane::populate_fabric_connection_info(
             tensix_config.get_buffer_index_semaphore_address(physical_chip_id, eth_channel_id, sender_channel);
         tensix_connection_info.worker_free_slots_stream_id =
             tensix_config.get_channel_credits_stream_id(physical_chip_id, eth_channel_id, sender_channel);
+    }
+}
+
+void ControlPlane::write_all_to_all_routing_fields_1D(uint8_t num_chips) const {
+    compressed_routing_path_t<1> routing_path;
+    for (uint8_t src_chip_id = 0; src_chip_id < num_chips; ++src_chip_id) {
+        routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips);
+        // TODO copy
+    }
+}
+
+void ControlPlane::write_all_to_all_routing_fields_2D(uint16_t num_chips, uint16_t ew_dim) const {
+    compressed_routing_path_t<2> routing_path;
+    for (uint16_t src_chip_id = 0; src_chip_id < num_chips; ++src_chip_id) {
+        routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips, ew_dim);
+        // TODO copy
     }
 }
 
