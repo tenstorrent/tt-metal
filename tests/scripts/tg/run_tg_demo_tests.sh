@@ -134,6 +134,17 @@ run_tg_sd35_demo_tests() {
   fi
 }
 
+run_tg_sentence_bert_tests() {
+  fail=0
+
+  pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py --timeout=1500 ; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    echo "LOG_METAL: run_tg_sentence_bert_tests failed"
+    exit 1
+  fi
+}
+
 run_tg_demo_tests() {
 
   if [[ "$1" == "falcon7b" ]]; then
@@ -150,6 +161,8 @@ run_tg_demo_tests() {
     run_tg_llama3_70b_dp_tests
   elif [[ "$1" == "sd35" ]]; then
     run_tg_sd35_demo_tests
+  elif [[ "$1" == "sentence_bert" ]]; then
+    run_tg_sentence_bert_tests
   else
     echo "LOG_METAL: Unknown model type: $1"
     return 1
