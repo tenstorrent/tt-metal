@@ -74,6 +74,7 @@ void append_routing_plane_connection_manager_rt_args(
     tt::tt_metal::Program& worker_program,
     tt::tt_metal::KernelHandle& kernel_id,
     const CoreCoord& worker_core,
+    const std::unordered_map<eth_chan_directions, std::pair<uint8_t, uint8_t>>& hops_per_dir,
     std::vector<uint32_t>& worker_args,
     CoreType core_type = CoreType::WORKER,
     const std::vector<uint32_t>& connection_link_indices = std::vector<uint32_t>{});

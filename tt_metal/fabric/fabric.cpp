@@ -223,6 +223,7 @@ void append_routing_plane_connection_manager_rt_args(
     tt::tt_metal::Program& worker_program,
     tt::tt_metal::KernelHandle& kernel_id,
     const CoreCoord& worker_core,
+    const std::unordered_map<eth_chan_directions, std::pair<uint8_t, uint8_t>>& hops_per_dir,
     std::vector<uint32_t>& worker_args,
     CoreType core_type,
     const std::vector<uint32_t>& connection_link_indices) {
@@ -280,16 +281,10 @@ void append_routing_plane_connection_manager_rt_args(
     if (fabric_context.is_2D_routing_enabled()) {
         auto kernel = tt::tt_metal::detail::GetKernel(worker_program, kernel_id);
         kernel->add_defines({{"FABRIC_2D", "1"}});
-        if (fabric_context.is_dynamic_routing_enabled()) {
-            kernel->add_defines({{"FABRIC_2D_DYNAMIC", "1"}});
-        }
-
         auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-        uint32_t ew_dim = mesh_shape[1];
-        uint32_t my_dev_id = src_fabric_node_id.chip_id;
-
-        worker_args.push_back(ew_dim);
-        worker_args.push_back(my_dev_id);
+        worker_args.push_back(mesh_shape[1]);                     // ew_dim
+        worker_args.push_back(src_fabric_node_id.chip_id);        // my_chip_id
+        worker_args.push_back(src_fabric_node_id.mesh_id.get());  // my_mesh_id
 
         // For each target, append dst_dev_id and dst_mesh_id (per-header)
         for (const auto& next_hop_node : next_hop_nodes) {
