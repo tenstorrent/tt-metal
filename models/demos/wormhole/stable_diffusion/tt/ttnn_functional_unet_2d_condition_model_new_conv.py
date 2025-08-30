@@ -385,6 +385,14 @@ class UNet2DConditionModel:
             dtype=ttnn.bfloat8_b,
             return_weights_and_bias=True,
         )
+        is_bs = sample.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        xdim = sample.memory_config().shard_spec.grid.bounding_box().grid_size().x
+        if is_bs:
+            out_channels_tiles = out_channels // (ttnn.TILE_SIZE)
+            xdim = sample.memory_config().shard_spec.grid.bounding_box().grid_size().x
+            if out_channels_tiles % xdim != 0:
+                print(f"xdim: {xdim}, mem cfg: {sample.memory_config()}, conv_shortcut_out_channels: {out_channels}")
+                assert False, "invalid output"
         sample = ttnn.reallocate(sample)  # TODO: Test remove
 
         # con_in completes
@@ -652,6 +660,17 @@ class UNet2DConditionModel:
             dtype=ttnn.bfloat8_b,
             return_weights_and_bias=True,
         )
+        is_bs = sample.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        xdim = sample.memory_config().shard_spec.grid.bounding_box().grid_size().x
+        if is_bs:
+            out_channels_tiles = self.conv_out_out_channels // (ttnn.TILE_SIZE)
+            xdim = sample.memory_config().shard_spec.grid.bounding_box().grid_size().x
+            if out_channels_tiles % xdim != 0:
+                print(
+                    f"xdim: {xdim}, mem cfg: {sample.memory_config()}, conv_shortcut_out_channels: {self.conv_out_out_channels}"
+                )
+                assert False, "invalid output"
+
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.clone(sample, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
         sample = ttnn.reshape(

@@ -156,5 +156,24 @@ class downsample_2d:
             dtype=ttnn.bfloat8_b,
             return_weights_and_bias=True,
         )
+        is_bs = hidden_states.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        xdim = hidden_states.memory_config().shard_spec.grid.bounding_box().grid_size().x
+
+        print(f"xdim: {xdim}, is_bs: {is_bs}")
+        if self.out_channels == 640 and xdim == 7 and is_bs:
+            mem_cfg = ttnn.create_sharded_memory_config(
+                hidden_states.shape, ttnn.CoreGrid(x=5, y=8), ttnn.ShardStrategy.BLOCK
+            )
+            print(f"target hs mem cfg: {mem_cfg}")
+            hidden_states = ttnn.reshard(hidden_states, mem_cfg)
+
+        if is_bs:
+            out_channels_tiles = self.out_channels // (ttnn.TILE_SIZE)
+            xdim = hidden_states.memory_config().shard_spec.grid.bounding_box().grid_size().x
+            if out_channels_tiles % xdim != 0:
+                print(
+                    f"xdim: {xdim}, mem cfg: {hidden_states.memory_config()}, conv_shortcut_out_channels: {self.out_channels}"
+                )
+                assert False, "invalid output"
 
         return hidden_states
