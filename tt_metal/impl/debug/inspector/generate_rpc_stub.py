@@ -15,7 +15,9 @@ from typing import Any
 try:
     import capnp
 except:
-    print("Cannot generate stub file for Inspector. If you need python autocomplete/static analysis, install with: pip install pycapnp")
+    print(
+        "Cannot generate stub file for Inspector. If you need python autocomplete/static analysis, install with: pip install pycapnp"
+    )
     sys.exit(0)
 
 CAPNP_TYPE_TO_PYTHON = {
@@ -35,14 +37,18 @@ CAPNP_TYPE_TO_PYTHON = {
     "data": "bytes",
 }
 
+
 def get_display_name(schema) -> str:
-    return schema.node.displayName[schema.node.displayNamePrefixLength:]
+    return schema.node.displayName[schema.node.displayNamePrefixLength :]
+
 
 def quote(string: str) -> str:
-    return f"\"{string}\""
+    return f'"{string}"'
+
 
 def print_indented(f, indent: int, text: str):
     f.write("    " * indent + text + "\n")
+
 
 def get_type_hint(type, type_ids: dict[int, str]) -> str:
     slot_type = type.which()
@@ -58,19 +64,26 @@ def get_type_hint(type, type_ids: dict[int, str]) -> str:
         assert slot_type == "anyPointer"
         raise NotImplementedError("AnyPointer type is not supported in stub generation")
 
+
 def print_type(f, node_schema, type_ids: dict[int, str], indent: int = 0, name: str | None = None):
     if name is None:
         name = get_display_name(node_schema)
     node_type = node_schema.node.which()
     f.write("\n")
     if node_type == "enum":
-        print_indented(f, indent, f"{name}: TypeAlias = Literal[{', '.join(quote(v.name) for v in node_schema.node.enum.enumerants)}]")
+        print_indented(
+            f,
+            indent,
+            f"{name}: TypeAlias = Literal[{', '.join(quote(v.name) for v in node_schema.node.enum.enumerants)}]",
+        )
     elif node_type == "struct":
         print_indented(f, indent, f"class {name}:")
         indent += 1
 
         # Nested types
-        nested_types: list[tuple[Any, str | None]] = [(node_schema.get_nested(n.name), None) for n in node_schema.node.nestedNodes]
+        nested_types: list[tuple[Any, str | None]] = [
+            (node_schema.get_nested(n.name), None) for n in node_schema.node.nestedNodes
+        ]
 
         # Print fields
         for field, raw_field in zip(node_schema.node.struct.fields, node_schema.as_struct().fields_list):
@@ -90,7 +103,9 @@ def print_type(f, node_schema, type_ids: dict[int, str], indent: int = 0, name: 
 
         # Print unnamed union members
         if node_schema.node.struct.discriminantCount:
-            field_names = [f'"{field.name}"' for field in node_schema.node.struct.fields if field.discriminantValue != 65535]
+            field_names = [
+                f'"{field.name}"' for field in node_schema.node.struct.fields if field.discriminantValue != 65535
+            ]
             print_indented(f, indent, f"def which(self) -> Literal[{', '.join(field_names)}]: ...")
 
         # Print nested types
@@ -103,7 +118,10 @@ def print_type(f, node_schema, type_ids: dict[int, str], indent: int = 0, name: 
             method_name_cap = method_name[0].upper() + method_name[1:]
             method_result = f"{method_name_cap}Results"
             param_fields = method.param_type.fields
-            params = ["self"] + [f"{param_name}: {get_type_hint(param.proto.slot.type, type_ids)}" for param_name, param in param_fields.items()]
+            params = ["self"] + [
+                f"{param_name}: {get_type_hint(param.proto.slot.type, type_ids)}"
+                for param_name, param in param_fields.items()
+            ]
             print_indented(f, indent, f"def {method_name}({', '.join(params)}) -> {name}.{method_result}: ...")
         for method_name, method in node_schema.as_interface().methods.items():
             method_name_cap = method_name[0].upper() + method_name[1:]
@@ -111,6 +129,7 @@ def print_type(f, node_schema, type_ids: dict[int, str], indent: int = 0, name: 
             print_type(f, method.result_type, type_ids, indent, method_result)
     else:
         print(f" warning: {node_type} type is not supported in stub generation")
+
 
 def fill_type_ids(schema, type_ids: dict[int, str], prefix: str = ""):
     for node in schema.node.nestedNodes:
@@ -121,11 +140,12 @@ def fill_type_ids(schema, type_ids: dict[int, str], prefix: str = ""):
         type_ids[node.id] = name
         fill_type_ids(node_schema, type_ids, name)
 
+
 def main():
     if len(sys.argv) != 3:
         print("Usage: generate_rpc_stub.py <capnp_file> <output_stub_file>")
         sys.exit(1)
-    
+
     capnp_file = sys.argv[1]
     output_stub_file = sys.argv[2]
 
@@ -136,13 +156,15 @@ def main():
         parser = capnp.SchemaParser()
         module = parser.load(capnp_file, imports=[os.path.dirname(p) for p in capnp.__path__])
 
-        with open(output_stub_file, 'w') as f:
-            f.write(f'''# Auto-generated RPC stub from {capnp_file}
+        with open(output_stub_file, "w") as f:
+            f.write(
+                f"""# Auto-generated RPC stub from {capnp_file}
 
 from __future__ import annotations
 
 from typing import Literal, Sequence, TypeAlias
-''')
+"""
+            )
             type_ids: dict[int, str] = {}
             fill_type_ids(module.schema, type_ids)
 

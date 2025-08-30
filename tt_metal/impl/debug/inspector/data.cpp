@@ -14,7 +14,7 @@ namespace tt::tt_metal::inspector {
 
 Data::Data()
     : logger(MetalContext::instance().rtoptions().get_inspector_log_path()) {
-    
+
     // Initialize RPC server if enabled
     const auto& rtoptions = MetalContext::instance().rtoptions();
     if (rtoptions.get_inspector_rpc_server_enabled()) {
@@ -35,7 +35,7 @@ Data::Data()
     }
 }
 
-Data::~Data() { 
+Data::~Data() {
     rpc_server_controller.stop();
 }
 
@@ -51,17 +51,17 @@ void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results
     std::lock_guard<std::mutex> lock(programs_mutex);
     auto programs = results.initPrograms(programs_data.size());
     uint32_t i = 0;
-    
+
     for (const auto& [program_id, program_data] : programs_data) {
         auto program = programs[i++];
-        
+
         // Set basic program info
         program.setProgramId(program_id);
-        
+
         // Check if program is compiled (has finished compilation)
         bool compiled = program_data.compile_finished_timestamp != inspector::time_point{};
         program.setCompiled(compiled);
-        
+
         // Set binary status per device
         auto binary_status_list = program.initBinaryStatusPerDevice(program_data.binary_status_per_device.size());
         uint32_t j = 0;
@@ -70,7 +70,7 @@ void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results
             device_status.setDeviceId(static_cast<uint64_t>(device_id));
             device_status.setStatus(convert_binary_status(status));
         }
-        
+
         // Set kernels
         auto kernels_list = program.initKernels(program_data.kernels.size());
         j = 0;

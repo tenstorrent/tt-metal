@@ -33,11 +33,14 @@ script_config = ScriptConfig(
 
 InspectorData = inspector_capnp.Inspector
 
+
 class InspectorException(Exception):
     pass
 
+
 class InspectorRpcRemoteException(InspectorException):
     pass
+
 
 class InspectorRpcController(InspectorData):
     def __init__(self, host, port):
@@ -56,7 +59,7 @@ class InspectorRpcController(InspectorData):
                 exception = self.task.exception()
                 assert exception is not None
                 raise exception
-    
+
     def __del__(self):
         if self.running:
             self.stop()
@@ -102,8 +105,9 @@ class InspectorRpcController(InspectorData):
                 return asyncio.run_coroutine_threadsafe(self.__call_rpc(name, *args, **kwargs), self.loop).result()
             except capnp.lib.capnp.KjException as e:
                 if e.description.startswith(InspectorRpcController.REMOTE_EXCEPTION_TEXT_START):
-                    message = e.description[len(InspectorRpcController.REMOTE_EXCEPTION_TEXT_START):]
+                    message = e.description[len(InspectorRpcController.REMOTE_EXCEPTION_TEXT_START) :]
                     raise InspectorRpcRemoteException(message)
+
         return method
 
     async def __async_stop(self):
@@ -114,8 +118,10 @@ class InspectorRpcController(InspectorData):
             asyncio.run_coroutine_threadsafe(self.__async_stop(), self.loop).result()
             self.background_thread.join()
 
+
 class InspectorUnserializedMethod(InspectorException):
     pass
+
 
 class InspectorRpcSerialized(InspectorData):
     def __init__(self, directory: str):
@@ -128,14 +134,16 @@ class InspectorRpcSerialized(InspectorData):
         if method_name in self.__methods:
             serialized_path = os.path.join(self.__directory, f"{method_name}.capnp.bin")
             if not os.path.exists(serialized_path):
-                raise InspectorUnserializedMethod(f"Serialized file for method {method_name} not found at {serialized_path}")
+                raise InspectorUnserializedMethod(
+                    f"Serialized file for method {method_name} not found at {serialized_path}"
+                )
             method_name_cap = method_name[0].upper() + method_name[1:]
             with open(serialized_path, "rb") as f:
                 results_schema = self.__methods[method_name].result_type
                 results_name = f"{method_name_cap}Results"
                 results_struct = capnp.lib.capnp._StructModule(results_schema, results_name)
                 message = results_struct.read_packed(f)
-                method = lambda : message
+                method = lambda: message
                 setattr(self, method_name, method)
                 return method
         else:
@@ -144,6 +152,7 @@ class InspectorRpcSerialized(InspectorData):
     def stop(self):
         # Do nothing
         pass
+
 
 # TODO: parse_inspector_logs types should have different field names and different return types (not dictionary, but named tuple with array of elements)
 
@@ -171,6 +180,7 @@ def run(args, context) -> InspectorData:
     except:
         # Fall back to reading Inspector logs
         return get_logs_data(log_directory)
+
 
 if __name__ == "__main__":
     run_script()

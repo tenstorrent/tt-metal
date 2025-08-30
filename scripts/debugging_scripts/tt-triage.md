@@ -120,7 +120,7 @@ If you set `disabled` to `True`, your script will not be executed (and all scrip
 
 ## Additional pip requirements
 
-If your `tt-triage` script requires extra Python libraries, add the package name (and version if needed) to `scripts/debugging_scripts/requirements.txt`.  
+If your `tt-triage` script requires extra Python libraries, add the package name (and version if needed) to `scripts/debugging_scripts/requirements.txt`.
 After updating `requirements.txt`, also update `triage.py` in the section "Check if requirements are installed" to ensure your dependency is checked and installed automatically.
 
 ## Enabling standalone script execution

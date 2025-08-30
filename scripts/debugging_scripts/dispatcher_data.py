@@ -51,11 +51,7 @@ class DispatcherData:
         self.programs = inspector_data.getPrograms().programs
         if self.programs is None or len(self.programs) == 0:
             raise TTTriageError("No programs found in inspector data.")
-        self.kernels = {
-            kernel.watcherKernelId: kernel
-            for program in self.programs
-            for kernel in program.kernels
-        }
+        self.kernels = {kernel.watcherKernelId: kernel for program in self.programs for kernel in program.kernels}
         self.use_rpc_kernel_find = True
         if len(self.kernels) == 0:
             raise TTTriageError("No kernels found in inspector data.")

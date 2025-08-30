@@ -36,7 +36,7 @@ void RpcServerController::stop() {
     }
 
     should_stop = true;
-    
+
     if (server_thread.joinable()) {
         server_thread.join();
     }

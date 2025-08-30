@@ -89,13 +89,15 @@ class MeshWorkloadData:
 
     @cached_property
     def binaryStatusPerMeshDevice(self) -> list[MeshDeviceBinaryStatus]:
-        return [MeshDeviceBinaryStatus(meshId=mesh_id, status=status) for mesh_id, status in self.binary_status_per_mesh_device.items()]
+        return [
+            MeshDeviceBinaryStatus(meshId=mesh_id, status=status)
+            for mesh_id, status in self.binary_status_per_mesh_device.items()
+        ]
 
     binary_status_per_mesh_device: dict[int, BinaryStatus]
 
     def get_device_binary_status(self, mesh_id: int) -> BinaryStatus:
         return self.binary_status_per_mesh_device.get(mesh_id, "notSent")
-
 
 
 @dataclass
@@ -165,7 +167,6 @@ class StartupData:
 
 
 def get_kernels(log_directory: str) -> dict[int, KernelData]:
-
     yaml_path = os.path.join(log_directory, "kernels.yaml")
     data = read_yaml(yaml_path)
 
@@ -203,7 +204,6 @@ def get_startup_data(log_directory: str) -> StartupData:
 
 
 def get_programs(log_directory: str, verbose: bool = False) -> dict[int, ProgramData]:
-
     yaml_path = os.path.join(log_directory, "programs_log.yaml")
     data = read_yaml(yaml_path)
     if verbose:
@@ -331,7 +331,9 @@ def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, M
             info = entry["mesh_workload_created"]
             mesh_workload_id = int(info.get("mesh_workload_id"))
             mesh_workloads[mesh_workload_id] = MeshWorkloadData(
-                meshWorkloadId=mesh_workload_id, programs=[], binary_status_per_mesh_device={}, binaryStatusPerMeshDevice=[]
+                meshWorkloadId=mesh_workload_id,
+                programs=[],
+                binary_status_per_mesh_device={},
             )
             if verbose:
                 startup.print_log(int(info.get("timestamp_ns")), f"Mesh workload {mesh_workload_id} created")
@@ -423,7 +425,7 @@ class InspectorLogsData:
     @cached_property
     def mesh_devices(self):
         GetMeshDeviceResults = namedtuple("GetMeshDeviceResults", ["meshDevices"])
-        return GetMeshDeviceResults(meshDevices = list(get_mesh_devices(self.log_directory).values()))
+        return GetMeshDeviceResults(meshDevices=list(get_mesh_devices(self.log_directory).values()))
 
     def getMeshDevices(self):
         return self.mesh_devices
@@ -431,7 +433,7 @@ class InspectorLogsData:
     @cached_property
     def mesh_workloads(self):
         GetMeshWorkloadResults = namedtuple("GetMeshWorkloadResults", ["meshWorkloads"])
-        return GetMeshWorkloadResults(meshWorkloads = list(get_mesh_workloads(self.log_directory).values()))
+        return GetMeshWorkloadResults(meshWorkloads=list(get_mesh_workloads(self.log_directory).values()))
 
     def getMeshWorkloads(self):
         return self.mesh_workloads
@@ -447,7 +449,7 @@ class InspectorLogsData:
         update_programs_with_mesh_workloads(programs, self.mesh_workloads.meshWorkloads, self.mesh_devices.meshDevices)
         for program in programs.values():
             program.kernels = [self.kernels[kid] for kid in program.watcherKernelIds if kid in self.kernels]
-        return GetProgramsResults(programs = list(programs.values()))
+        return GetProgramsResults(programs=list(programs.values()))
 
     def getPrograms(self):
         return self.programs
@@ -455,7 +457,7 @@ class InspectorLogsData:
     @cached_property
     def devices_in_use(self):
         GetDevicesInUseResults = namedtuple("GetDevicesInUseResults", ["deviceIds"])
-        return GetDevicesInUseResults(deviceIds = list(get_devices_in_use(self.getPrograms().programs)))
+        return GetDevicesInUseResults(deviceIds=list(get_devices_in_use(self.getPrograms().programs)))
 
     def getDevicesInUse(self):
         return self.devices_in_use
