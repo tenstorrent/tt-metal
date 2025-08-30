@@ -30,8 +30,9 @@ inline Tensor unary_impl(
         (op_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(op_chain[0].params[1]) : input_dtype;
     bool preserve_fp32_precision = input_dtype == DataType::FLOAT32;
     bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
-                            output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
-                            input_dtype == DataType::UINT32 or input_dtype == DataType::INT32;
+                            output_dtype == DataType::INT32 or output_dtype == DataType::UINT16 or
+                            output_dtype == DataType::FLOAT32 or input_dtype == DataType::UINT32 or
+                            input_dtype == DataType::INT32 or input_dtype == DataType::UINT16;
     bool bfp8_pack_precise = (op_chain[0].op_type == UnaryOpType::TYPECAST && output_dtype == DataType::BFLOAT8_B);
 
     auto output_memory_config = optional_output_tensor.has_value()
