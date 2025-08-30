@@ -159,7 +159,6 @@ Result conv_transpose2d(
         sliding_window_config.snap_to_tile = true;
 
         halo_output = ttnn::halo(
-            DefaultQueueId,
             input_tensor_post_tm,
             sliding_window_config,
             0,
@@ -312,7 +311,6 @@ Result conv_transpose2d(
 }
 
 Result ConvTranpose2dOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,

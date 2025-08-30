@@ -119,7 +119,7 @@ public:
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
 
     SystemMemoryManager& sysmem_manager() override { return *sysmem_manager_; }
-    CommandQueue& command_queue(size_t cq_id = 0) override;
+    CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) override;
 
     // Metal trace device capture mode
     uint32_t get_trace_buffers_size() const override { return trace_buffers_size_; }

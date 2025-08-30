@@ -359,5 +359,4 @@ def create_sharded_memory_config_(
 dump_memory_config = ttnn._ttnn.tensor.dump_memory_config
 load_memory_config = ttnn._ttnn.tensor.load_memory_config
 
-
 __all__ = []

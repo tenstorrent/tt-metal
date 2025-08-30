@@ -13,7 +13,6 @@ namespace data_movement {
 
 struct IndexedFillOperation {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& batch_id,
         const ttnn::Tensor& input_tensor_a,
         const ttnn::Tensor& input_tensor_b,

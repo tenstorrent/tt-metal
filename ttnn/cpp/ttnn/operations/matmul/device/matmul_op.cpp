@@ -1436,7 +1436,6 @@ Tensor matmul(
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias,
     const struct Matmul& parameters,
-    const QueueId queue_id,
     const std::optional<Tensor>& optional_output_tensor) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     if (bias.has_value()) {
@@ -1449,8 +1448,7 @@ Tensor matmul(
                create_matmul_struct(input_tensor_a, input_tensor_b, parameters, {optional_output_tensor}),
                {input_tensor_a, input_tensor_b},
                optional_input_tensors,
-               {optional_output_tensor},
-               queue_id)
+               {optional_output_tensor})
         .at(0);
 }
 
@@ -1459,7 +1457,6 @@ std::vector<Tensor> matmul_batched_weights(
     const std::vector<Tensor>& input_tensors_b,
     const std::optional<const Tensor>& bias,
     const struct Matmul& parameters,
-    const QueueId queue_id,
     const std::optional<Tensor>& optional_output_tensor) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     if (bias.has_value()) {
@@ -1475,8 +1472,7 @@ std::vector<Tensor> matmul_batched_weights(
         create_matmul_struct(input_tensor_a, input_tensors_b[0], parameters, {optional_output_tensor}),
         input_tensors,
         optional_input_tensors,
-        {optional_output_tensor},
-        queue_id);
+        {optional_output_tensor});
 }
 
 ttnn::Shape compute_sparse_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
@@ -1554,15 +1550,13 @@ Tensor sparse_matmul(
     const Tensor& input_tensor_b,
     const Tensor& sparsity,
     const struct SparseMatmul& parameters,
-    const QueueId queue_id,
     const std::optional<Tensor>& optional_output_tensor) {
     return operation::run(
                create_sparse_matmul_struct(
                    input_tensor_a, input_tensor_b, sparsity, parameters, {optional_output_tensor}),
                {input_tensor_a, input_tensor_b, sparsity},
                {},
-               {optional_output_tensor},
-               queue_id)
+               {optional_output_tensor})
         .at(0);
 }
 

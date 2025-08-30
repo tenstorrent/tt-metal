@@ -39,7 +39,6 @@ void bind_slice_write(py::module& module) {
 
             Keyword Args:
                 memory_config Memory Config of the output tensor
-                queue_id (uint8, optional) command queue id
 
             Returns:
                 ttnn.Tensor: the output tensor after writing the input tensor to it.
@@ -61,15 +60,12 @@ void bind_slice_write(py::module& module) {
                const ttnn::Tensor& output_tensor,
                const std::array<uint32_t, 4>& start,
                const std::array<uint32_t, 4>& end,
-               const std::array<uint32_t, 4>& step,
-               QueueId queue_id) { return self(queue_id, input_tensor, output_tensor, start, end, step); },
+               const std::array<uint32_t, 4>& step) { return self(input_tensor, output_tensor, start, end, step); },
             py::arg("input_tensor"),
             py::arg("output_tensor"),
             py::arg("start"),
             py::arg("end"),
             py::arg("step"),
-            py::kw_only(),
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::kw_only()});
 }
 }  // namespace ttnn::operations::experimental::slice_write
