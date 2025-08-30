@@ -98,7 +98,11 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     const ttnn::Shape& tensor_shape, const sliding_window::ParallelConfig& parallel_config, uint32_t tile_size);
 
 OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
-    const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw, uint32_t num_cores_c);
+    const MemoryConfig& conv_output_mem_config,
+    uint32_t num_cores_nhw_in,
+    uint32_t num_cores_c_in,
+    uint32_t num_cores_nhw_out,
+    uint32_t num_cores_c_out);
 
 ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
     OptimizedConvParallelizationConfig conv_parallelization_config,

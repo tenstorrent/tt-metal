@@ -315,14 +315,20 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
 }
 
 OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
-    const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw, uint32_t num_cores_c) {
+    const MemoryConfig& conv_output_mem_config,
+    uint32_t num_cores_nhw_in,
+    uint32_t num_cores_c_in,
+    uint32_t num_cores_nhw_out,
+    uint32_t num_cores_c_out) {
     TT_ASSERT(conv_output_mem_config.shard_spec().has_value());
     const auto& shard_spec = conv_output_mem_config.shard_spec().value();
     const auto& shard_shape = shard_spec.shape;
     return {
         .grid_size = shard_spec.grid.bounding_box().grid_size(),
-        .num_cores_nhw = num_cores_nhw,
-        .num_cores_c = num_cores_c,
+        .num_cores_nhw_in = num_cores_nhw_in,
+        .num_cores_c_in = num_cores_c_in,
+        .num_cores_nhw_out = num_cores_nhw_out,
+        .num_cores_c_out = num_cores_c_out,
         .per_core_out_matrix_height_ntile = tt::div_up(shard_shape[0], tt::constants::TILE_HEIGHT),
         .per_core_out_matrix_width_ntile = tt::div_up(shard_shape[1], tt::constants::TILE_WIDTH),
     };
@@ -462,13 +468,16 @@ bool is_1d_deptwise_conv(
 
 SkipMcast conv_skip_mcast(
     const OptimizedConvParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout) {
-    if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        return SkipMcast{
-            .skip_activation_mcast = parallelization_config.num_cores_c == 1,
-            .skip_weights_mcast = parallelization_config.num_cores_nhw == 1};
+    bool skip_act_mcast = false;
+    bool skip_weights_mcast = false;
+    if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED || memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        skip_act_mcast = parallelization_config.num_cores_c_out == 1 && parallelization_config.num_cores_c_in == 1;
+        skip_weights_mcast = parallelization_config.num_cores_nhw_out == 1;
+    } else {
+        skip_act_mcast = (parallelization_config.num_cores_nhw_out * parallelization_config.num_cores_c_out) == 1;
+        skip_weights_mcast = skip_act_mcast;
     }
-    const bool skip_mcast = parallelization_config.num_cores_c * parallelization_config.num_cores_nhw == 1;
-    return SkipMcast{.skip_activation_mcast = skip_mcast, .skip_weights_mcast = skip_mcast};
+    return SkipMcast{skip_act_mcast, skip_weights_mcast};
 }
 
 DeviceComputeKernelConfig get_conv_default_compute_kernel_config(MeshDevice* device) {
@@ -1017,13 +1026,12 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
         out_channels, get_num_cores_channels_from_parallel_config(output_parallel_config) * tt::constants::TILE_WIDTH);
     MemoryConfig conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         ttnn::Shape({1, 1, nhw_out, out_channels_padded}), output_parallel_config, round_up_size);
-    // ParallelConfig largest_parallel_config =
-    //     output_parallel_config.grid.num_cores() > input_parallel_config.grid.num_cores() ? output_parallel_config
-    //                                                                                      : input_parallel_config;
 
     OptimizedConvParallelizationConfig opt_conv_op_parallel_config =
         determine_conv_op_parallel_config_from_conv_output_mem_config(
             conv_out_memory_config,
+            get_num_cores_nhw_from_parallel_config(input_parallel_config),
+            get_num_cores_channels_from_parallel_config(input_parallel_config),
             get_num_cores_nhw_from_parallel_config(output_parallel_config),
             get_num_cores_channels_from_parallel_config(output_parallel_config));
 

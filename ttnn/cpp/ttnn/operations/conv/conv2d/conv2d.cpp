@@ -719,7 +719,7 @@ Result conv2d_L1(
             .stride_hw = {stride[0], stride[1]},
             .padding = {{padding_n4[0], padding_n4[1], padding_n4[2], padding_n4[3]}},
             .dilation_hw = {dilation[0], dilation[1]},
-            .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw,
+            .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw_out,
             .core_range_set = input_tensor_post_tm.memory_config().shard_spec().value().grid,
             .snap_to_tile = true,
         };
