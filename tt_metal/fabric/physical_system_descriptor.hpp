@@ -101,6 +101,7 @@ public:
     PhysicalSystemDescriptor(bool run_discovery = true, const std::string& fsd_path = "");
     void run_discovery(bool run_global_discovery = true);
     void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt);
+    void emit_to_text_proto(const std::string& file_path) const;
 
     // ASIC Topology Query APIs
     std::vector<AsicID> get_asic_neighbors(AsicID asic_id) const;

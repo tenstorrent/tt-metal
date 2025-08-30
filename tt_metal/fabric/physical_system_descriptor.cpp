@@ -10,6 +10,7 @@
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/fabric/serialization/physical_desc.hpp"
+#include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include "factory_system_descriptor.pb.h"
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
@@ -638,6 +639,10 @@ HallID PhysicalSystemDescriptor::get_hall_id(const std::string& hostname) {
         return host_deployment_descriptors_.at(hostname).hall;
     }
     TT_THROW("Host Deployment Descriptor not found for hostname {}", hostname);
+}
+
+void PhysicalSystemDescriptor::emit_to_text_proto(const std::string& file_path) const {
+    serialization::emit_physical_system_descriptor_to_text_proto(*this, file_path);
 }
 
 }  // namespace tt::tt_metal

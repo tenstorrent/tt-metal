@@ -43,6 +43,7 @@ target_sources(
         compressed_routing_table.cpp
         serialization/intermesh_link_table.cpp
         serialization/physical_desc.cpp
+        serialization/physical_system_descriptor_serialization.cpp
         erisc_datamover_builder_helper.cpp
         ccl/ccl_common.cpp
         physical_system_descriptor.cpp
@@ -50,10 +51,7 @@ target_sources(
 
 # Include helper functions and generate headers from flatbuffer schemas
 include(flatbuffers)
-set(FLATBUFFER_SCHEMAS
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/intermesh_link_table.fbs
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/physical_desc.fbs
-)
+set(FLATBUFFER_SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/serialization/intermesh_link_table.fbs)
 
 # Collect all generated headers
 set(GENERATED_FBS_HEADERS)
@@ -78,12 +76,21 @@ protobuf_generate_cpp(
     ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_fabric/factory_system_descriptor/deployment/deployment.proto
 )
 
+# Generate C++ code from physical system descriptor protobuf definitions
+protobuf_generate_cpp(
+    PSD_PROTO_SRCS
+    PSD_PROTO_HDRS
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/physical_system_descriptor.proto
+)
+
 # Add the generated protobuf headers to the target
 target_sources(
     fabric
     PRIVATE
         ${FSD_PROTO_SRCS}
         ${FSD_PROTO_HDRS}
+        ${PSD_PROTO_SRCS}
+        ${PSD_PROTO_HDRS}
 )
 
 target_include_directories(

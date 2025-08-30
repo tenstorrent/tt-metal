@@ -28,7 +28,7 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
     auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor();
-
+    physical_system_desc.emit_to_text_proto("physical_system_descriptor.textproto");
     auto hostnames = physical_system_desc.get_all_hostnames();
     // Validate number of hosts discovered
     EXPECT_EQ(hostnames.size(), *(distributed_context.size()));
