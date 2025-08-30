@@ -397,6 +397,22 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
     return nullptr;
 }
 
+std::vector<std::shared_ptr<Kernel>> Program::kernels() const {
+    return internal_->kernels();
+}
+
+std::vector<std::shared_ptr<Kernel>> ProgramImpl::kernels() const {
+    std::vector<std::shared_ptr<Kernel>> result;
+    result.reserve(this->num_kernels());
+    for (const auto& m : this->kernels_) {
+        for (const auto& [id, kernel] : m) {
+            result.push_back(kernel);
+        }
+    }
+    return result;
+}
+
+
 KernelGroup::KernelGroup() : core_ranges(CoreRangeSet()) {}
 
 KernelGroup::KernelGroup(
