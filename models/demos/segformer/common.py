@@ -23,9 +23,13 @@ def load_config(config_name="configs/segformer_semantic_config.json"):
 def load_torch_model(reference_model, target_prefix, module="semantic_sub", model_location_generator=None):
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
         if module == "image_classification":
-            torch_model = SegformerForImageClassification.from_pretrained("nvidia/mit-b0")
+            torch_model = SegformerForImageClassification.from_pretrained(
+                "nvidia/mit-b0", local_files_only=os.getenv("CI") == "true"
+            )
         elif module == "semantic_sub":
-            torch_model = SegformerForSemanticSegmentation.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
+            torch_model = SegformerForSemanticSegmentation.from_pretrained(
+                "nvidia/segformer-b0-finetuned-ade-512-512", local_files_only=os.getenv("CI") == "true"
+            )
         state_dict = torch_model.state_dict()
     else:
         if module == "image_classification":

@@ -63,7 +63,9 @@ def run_demo_semantic_segmentation(device, model_location_generator, device_batc
         reference_model, target_prefix, module="semantic_sub", model_location_generator=model_location_generator
     )
     reference_model.eval()
-    image_processor = AutoImageProcessor.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
+    image_processor = AutoImageProcessor.from_pretrained(
+        "nvidia/segformer-b0-finetuned-ade-512-512", local_files_only=os.getenv("CI") == "true"
+    )
     dataset_path = "segformer-segmentation"
     dataset_name = "validation_data_ade20k"
     weights_path = download_and_unzip_dataset(model_location_generator, dataset_path, dataset_name)
