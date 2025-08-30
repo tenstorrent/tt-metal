@@ -1474,3 +1474,49 @@ def test_unary_threshold_ttnn(input_shapes, threshold, value, device):
     golden_tensor = golden_function(in_data1, threshold, value)
 
     assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([64, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "min_val, max_val",
+    [
+        (None, None),
+        (-29.4, None),
+        (None, 18.0),
+        (-10.5, 34.5),
+        (12.5, 82.5),
+        (1, -1),
+        (0, 0),
+        (0, 1),
+    ],
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+    ],
+)
+def test_unary_clamp_tss_float_ttnn(input_shapes, min_val, max_val, torch_dtype, ttnn_dtype, device):
+    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    min = min_val
+    max = max_val
+    if min is None and max is None:
+        with pytest.raises(RuntimeError, match="Only one of 'min' or 'max' can be None. Please provide one value"):
+            ttnn.clamp(input_tensor1, min, max)
+    else:
+        output_tensor = ttnn.clamp(input_tensor1, min, max)
+        golden_function = ttnn.get_golden_function(ttnn.clamp)
+        golden_tensor = golden_function(in_data1, min, max)
+        assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
+        assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor)
