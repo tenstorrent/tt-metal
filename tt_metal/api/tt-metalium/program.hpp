@@ -7,12 +7,14 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <vector>
 
 namespace tt::tt_metal {
 
 // Fwd declares
 class ProgramDescriptor;
 class CircularBuffer;
+class Kernel;
 
 namespace detail {
 class ProgramImpl;
@@ -46,6 +48,10 @@ public:
 
     // Used in ops.
     std::span<const std::shared_ptr<CircularBuffer>> circular_buffers() const;
+
+    // Only Used in op_profiler, we might want to expose this via a tooling interface instead of through here.
+    // Return type should be any_range
+    std::vector<std::shared_ptr<Kernel>> kernels() const;
 
     // debug/test/internal usage.
     detail::ProgramImpl& impl() { return *internal_; }
