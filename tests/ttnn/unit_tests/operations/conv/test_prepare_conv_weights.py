@@ -416,8 +416,8 @@ def test_prepare_bias(
     assert passing
 
 
-SliceHeight = ttnn.Conv2dSliceHeight
-SliceWidth = ttnn.Conv2dSliceWidth
+SliceHeight = ttnn.Conv2dDRAMSliceHeight
+SliceWidth = ttnn.Conv2dDRAMSliceWidth
 
 
 @skip_for_blackhole("#26435: Not fully tested on Blackhole")

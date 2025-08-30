@@ -66,9 +66,10 @@ ttnn::Tensor PaddedSliceOperation::invoke(
         }
         return ret_input_tensor;
     });
-
+    auto shard_shape = memory_config.shard_spec().value().shape;
+    bool no_pad = (shard_shape[1] == input_tensor.padded_shape()[3]);
     // No-op check
-    if (no_step && starts_zero && ends_max) {
+    if (no_step && starts_zero && ends_max && no_pad) {
         return ret_adjustment(input_tensor);
     }
 
