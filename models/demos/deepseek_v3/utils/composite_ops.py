@@ -62,8 +62,8 @@ def mesh_scatter(
         for row_scatter_idx in range(num_mesh_rows):
             ttnn.point_to_point(
                 tensor,
-                ttnn.MeshCoordinate(to_col_scatter_idx, row_scatter_idx),
-                ttnn.MeshCoordinate(from_col_scatter_idx, row_scatter_idx),
+                ttnn.MeshCoordinate(row_scatter_idx, to_col_scatter_idx),
+                ttnn.MeshCoordinate(row_scatter_idx, from_col_scatter_idx),
                 ttnn.Topology.Linear,
                 per_row_semaphore,
                 optional_output_tensor=tensor,
