@@ -351,6 +351,7 @@ class Attention(nn.Module):
 class PSABlock(nn.Module):
     def __init__(self, in_channel, out_channel, kernel, stride, padding, dilation, groups):
         super().__init__()
+        import pdb; pdb.set_trace()
         self.attn = Attention(
             in_channel[0:3], out_channel[0:3], kernel[0:3], stride[0:3], padding[0:3], dilation[0:3], groups[0:3]
         )
