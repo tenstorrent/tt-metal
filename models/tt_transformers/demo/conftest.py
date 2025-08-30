@@ -52,3 +52,10 @@ def pytest_addoption(parser):
         type=bool,
         help="Run stress test (same decode iteration over a large number of iterations",
     )
+    parser.addoption(
+        "--enable_trace",
+        action="store",
+        default=None,
+        type=bool,
+        help="Whether to enable tracing",
+    )

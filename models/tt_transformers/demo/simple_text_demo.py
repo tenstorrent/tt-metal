@@ -30,17 +30,16 @@ class TokenAccuracy:
     def __init__(self, model_name):
         self.gt_pos = -1
         self.store_predicted_tokens = []
-        file_list = [str(path) for path in Path("models/tt_transformers/tests/reference_outputs/").glob("*.refpt")]
-        reference_data_file = [f for f in file_list if model_name in f][0]
+        reference_data_file = os.path.join("models/tt_transformers/tests/reference_outputs/", model_name) + ".refpt"
         assert os.path.exists(reference_data_file)
         logger.info(f"Loading reference data from {reference_data_file}")
         reference_data = torch.load(reference_data_file)
-        self.reference_tokens = reference_data["reference_tokens"]
-        split_point = self.reference_tokens.shape[-1] // 2 + 1
-        self.input_prompt = self.reference_tokens[0, :split_point]
-        self.gt_tokens = self.reference_tokens[0, split_point:]
+        reference_tokens = reference_data["reference_tokens"]
+        split_point = reference_tokens.shape[-1] // 2
+        self.input_prompt = reference_tokens[0, :split_point]
+        self.reference_tokens = reference_tokens[0, split_point:]
         self.top5_tokens = reference_data["top5_tokens"][split_point - 1 :, :]
-        self.maxindex = len(self.gt_tokens) - 1
+        self.maxindex = len(self.reference_tokens) - 1
 
     def prepare_ref_tokens(self, tokenizer):
         text_data = tokenizer.decode(self.input_prompt.tolist())
@@ -49,14 +48,14 @@ class TokenAccuracy:
     def collect_predicted_tokens(self, tokens):
         self.store_predicted_tokens.append(tokens)
         self.gt_pos += 1
-        return self.gt_tokens[min(self.gt_pos, self.maxindex)].unsqueeze(-1).unsqueeze(-1)
+        return self.reference_tokens[min(self.gt_pos, self.maxindex)].unsqueeze(-1).unsqueeze(-1)
 
     def compute_accuracy(self):
         count = 0
         count_t5 = 0
-        matching_sz = min(len(self.gt_tokens), len(self.store_predicted_tokens))
+        matching_sz = min(len(self.reference_tokens), len(self.store_predicted_tokens))
         for i in range(matching_sz):
-            if self.gt_tokens[i].item() == self.store_predicted_tokens[i]:
+            if self.top5_tokens[i, 0].item() == self.store_predicted_tokens[i]:
                 count += 1
             if self.store_predicted_tokens[i] in self.top5_tokens[i, :]:
                 count_t5 += 1
@@ -218,7 +217,7 @@ def prepare_generator_args(
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel, token_accuracy, stress_test",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel, token_accuracy, stress_test, enable_trace",
     [
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -235,6 +234,7 @@ def prepare_generator_args(
             1,
             False,  # token_accuracy
             False,  # stress_test
+            True,  # enable_trace
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -251,6 +251,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            True,  # enable_trace
         ),
         (  # long-context-64k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
@@ -267,6 +268,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            True,  # enable_trace
         ),
         (  # Long-context-32k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
@@ -283,6 +285,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            True,  # enable_trace
         ),
         (  # Long-context-16k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
@@ -299,6 +302,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            True,  # enable_trace
         ),
         (  # reasoning-1 - single user, small prompt, long thinking time
             "models/tt_transformers/demo/input_data_questions_reasoning.json",  # input_prompts
@@ -318,6 +322,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            True,  # enable_trace
         ),
         (  # ci-1 [CI-only] - Measures the performance of a single user over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -334,6 +339,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            True,  # enable_trace
         ),
         (  # ci-32 [CI-only] - Measures the performance of 32 users over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -350,6 +356,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            True,  # enable_trace
         ),
         (  # DP-4-b1 - single user, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -366,6 +373,7 @@ def prepare_generator_args(
             4,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            True,  # enable_trace
         ),
         (  # DP-8-b1 - single user, data-parallel=8, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -382,6 +390,7 @@ def prepare_generator_args(
             8,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            True,  # enable_trace
         ),
         (  # DP-4-b32 - 32 users, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -398,6 +407,7 @@ def prepare_generator_args(
             4,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            True,  # enable_trace
         ),
         (  # ci-b1-DP-4 [CI-Only] - single user, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -414,6 +424,7 @@ def prepare_generator_args(
             4,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            True,  # enable_trace
         ),
         (  # ci-b1-DP-8 [CI-Only] - single user, data-parallel=8, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -430,6 +441,7 @@ def prepare_generator_args(
             8,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            True,  # enable_trace
         ),
         (  # ci-b1-DP-16 [CI-Only] - single user, data-parallel=16, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -446,6 +458,7 @@ def prepare_generator_args(
             16,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            True,  # enable_trace
         ),
         (  # ci-b1-DP-32 [CI-Only] - single user, data-parallel=32, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -462,6 +475,7 @@ def prepare_generator_args(
             32,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
+            True,  # enable_trace
         ),
         (  # ci-stress-1 [CI-only] stress test - Runs a short prefill (128) and loops the same iteration over 50000 times
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -478,6 +492,24 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             True,  # stress_test
+            True,  # enable_trace
+        ),
+        (  # CI Batch-1 run - Measures token matching accuracy of a single user over 500 iterations
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            False,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            1,  # batch_size
+            500,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            True,  # token_accuracy
+            False,  # stress_test
+            False,  # enable_trace -> Teacher forcing does not work if it is on
         ),
     ],
     ids=[
@@ -497,6 +529,7 @@ def prepare_generator_args(
         "ci-b1-DP-16",  # CI DP 16 batch 1
         "ci-b1-DP-32",  # CI DP 32 batch 1
         "ci-stress-1",  # CI Stress test batch-1
+        "ci-token-matching",  # CI performs token accuracy matching with reference procomputed tokens
     ],
 )
 @pytest.mark.parametrize(
@@ -547,19 +580,22 @@ def test_demo_text(
     request,
     token_accuracy,
     stress_test,
+    enable_trace,
 ):
     """
     Simple demo with limited dependence on reference code.
     """
     test_id = request.node.callspec.id
-    if is_ci_env and (("accuracy" in test_id) or not ci_only):
-        pytest.skip("CI only runs the CI-only tests")
+    if is_ci_env:
+        if not ci_only:
+            pytest.skip("CI only runs the CI-only tests")
+        if "accuracy" in test_id and "ci-token-matching" not in test_id:
+            pytest.skip("CI only runs the tests with performance optimizations except for ci-token-matching case")
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
-    enable_trace = True  # Use tracing for better perf
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
     # Override parameters from command line if they are provided
@@ -582,6 +618,7 @@ def test_demo_text(
     json_config_file = request.config.getoption("--decoder_config_file")
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
     stress_test = request.config.getoption("--stress_test") or stress_test
+    enable_trace = request.config.getoption("--enable_trace") or enable_trace
 
     if stress_test and token_accuracy:
         pytest.skip("Stress test cannot be run with token accuracy mode")
@@ -788,6 +825,7 @@ def test_demo_text(
             # Get the next token
             if device_sampling_params is not None:
                 out_tok = logits.unsqueeze(1)
+
             else:
                 # TODO Fix use case with temperature > 0
                 _, out_tok = sample_host(
@@ -1053,7 +1091,25 @@ def test_demo_text(
             step_warm_up_num_iterations=None,
             target=None,
         )
-
+        if token_accuracy:
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                "inference_decode",
+                "top1_token_accuracy",
+                acc[0] * 100,
+                step_warm_up_num_iterations=None,
+                target=None,
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                "inference_decode",
+                "top5_token_accuracy",
+                acc[1] * 100,
+                step_warm_up_num_iterations=None,
+                target=None,
+            )
         benchmark_data.save_partial_run_json(
             profiler,
             run_type=f"{tt_device_name}-demo",
