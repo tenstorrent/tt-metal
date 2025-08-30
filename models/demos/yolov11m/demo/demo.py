@@ -19,9 +19,9 @@ from models.demos.utils.common_demo_utils import (
     preprocess,
     save_yolo_predictions_by_model,
 )
-from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE, load_torch_model
-from models.demos.yolov11.reference import yolov11
-from models.demos.yolov11.runner.performant_runner import YOLOv11PerformantRunner
+from models.demos.yolov11m.common import YOLOV11_L1_SMALL_SIZE, load_torch_model
+from models.demos.yolov11m.reference import yolov11
+from models.demos.yolov11m.runner.performant_runner import YOLOv11PerformantRunner
 from models.utility_functions import disable_persistent_kernel_cache
 
 

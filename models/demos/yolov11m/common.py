@@ -7,7 +7,7 @@ import os
 import torch
 from ultralytics import YOLO
 
-from models.demos.yolov11.reference import yolov11
+from models.demos.yolov11m.reference import yolov11
 
 YOLOV11_L1_SMALL_SIZE = 24576
 

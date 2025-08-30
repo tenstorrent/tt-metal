@@ -5,11 +5,11 @@
 import math
 
 import ttnn
-from models.demos.yolov11.tt.common import TtnnConv, deallocate_tensors, sharded_concat, sharded_concat_2
-from models.demos.yolov11.tt.ttnn_yolov11_c2psa import TtnnC2PSA
-from models.demos.yolov11.tt.ttnn_yolov11_c3k2 import TtnnC3k2
-from models.demos.yolov11.tt.ttnn_yolov11_detect import TtnnDetect
-from models.demos.yolov11.tt.ttnn_yolov11_sppf import TtnnSPPF
+from models.demos.yolov11m.tt.common import TtnnConv, deallocate_tensors, sharded_concat, sharded_concat_2
+from models.demos.yolov11m.tt.ttnn_yolov11_c2psa import TtnnC2PSA
+from models.demos.yolov11m.tt.ttnn_yolov11_c3k2 import TtnnC3k2
+from models.demos.yolov11m.tt.ttnn_yolov11_detect import TtnnDetect
+from models.demos.yolov11m.tt.ttnn_yolov11_sppf import TtnnSPPF
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 
 
