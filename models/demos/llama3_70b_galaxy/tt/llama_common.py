@@ -208,7 +208,7 @@ def num_to_core_range_set(x):
     )
 
 
-def copy_host_to_device(host_tensors, device_tensors=None, shard_specs=None, mesh_device=None):
+def copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
     """
     Helper function which copies host tensors to device tensors.
     If no device_tensors are provided, it creates new device tensors and returns them.
@@ -217,10 +217,7 @@ def copy_host_to_device(host_tensors, device_tensors=None, shard_specs=None, mes
         assert mesh_device is not None, "mesh_device is required when device_tensors is None"
         ret = []
         for i in range(len(host_tensors)):
-            if shard_specs and shard_specs[i] is not None:
-                on_device = host_tensors[i].to(mesh_device, shard_specs[i]) if host_tensors[i] else None
-            else:
-                on_device = ttnn.to_device(host_tensors[i], device=mesh_device) if host_tensors[i] else None
+            on_device = ttnn.to_device(host_tensors[i], device=mesh_device) if host_tensors[i] else None
             ret.append(on_device)
         return ret
     else:
