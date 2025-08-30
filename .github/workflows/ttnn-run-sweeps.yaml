@@ -622,6 +622,11 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
+      - name: Show run identifiers
+        run: |
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Run Number: ${{ github.run_number }}"
+          echo "Run Attempt: ${{ github.run_attempt }}"
       - uses: actions/download-artifact@v4
         with:
           name: sweeps-vectors
