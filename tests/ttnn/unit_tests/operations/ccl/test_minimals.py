@@ -68,7 +68,7 @@ def run_allgather_only_with_trace(
             tt_out_tensor = ttnn.experimental.all_gather_async(
                 input_tensor_mesh,
                 dim,
-                multi_device_global_semaphore=multi_device_global_semaphore,
+                multi_device_global_semaphore=ccl_semaphore_handles[i],
                 num_links=num_links,
                 memory_config=output_mem_config,
                 topology=all_gather_topology,
