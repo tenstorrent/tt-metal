@@ -630,10 +630,12 @@ jobs:
         shell: bash
         run: |
           python - <<'PY' > /tmp/matrix.json
-          import os, json
+          import os, json, math
           d = '/tmp/vectors'
-          modules = [f[:-5] for f in os.listdir(d) if f.endswith('.json')]
-          print(json.dumps({"module": modules}))
+          modules = sorted([f[:-5] for f in os.listdir(d) if f.endswith('.json')])
+          BATCH_SIZE = 50
+          batches = [",".join(modules[i:i+BATCH_SIZE]) for i in range(0, len(modules), BATCH_SIZE)]
+          print(json.dumps({"module": modules, "batches": batches}))
           PY
           echo "matrix=$(cat /tmp/matrix.json)" >> "$GITHUB_OUTPUT"
 
@@ -745,7 +747,7 @@ jobs:
             #   tt-smi-cmd: "tt-smi-metal -r 0"
             # }
           ]
-        module: ${{ fromJSON(needs.ttnn-compute-module-matrix.outputs.matrix).module }}
+        batch: ${{ fromJSON(needs.ttnn-compute-module-matrix.outputs.matrix).batches }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -781,13 +783,17 @@ jobs:
         with:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export/
-      - name: Run ttnn sweeps (module)
-        run: python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ matrix.module }} --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout
+      - name: Run ttnn sweeps (batch)
+        run: python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ matrix.batch }} --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout
+      - name: Compute artifact suffix
+        shell: bash
+        run: |
+          echo "BATCH_SUFFIX=$(echo -n '${{ matrix.batch }}' | sha256sum | cut -d' ' -f1 | cut -c1-12)" >> $GITHUB_ENV
       - name: Upload sweep results
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: sweeps-results-${{ matrix.test-group.name }}-${{ matrix.module }}
+          name: sweeps-results-${{ matrix.test-group.name }}-batch-${{ env.BATCH_SUFFIX }}
           path: /work/tests/sweep_framework/results_export/
           retention-days: 1
       - name: Upload sweep results to SFTP server
