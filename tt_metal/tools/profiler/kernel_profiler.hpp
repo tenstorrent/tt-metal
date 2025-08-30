@@ -74,8 +74,17 @@ volatile tt_l1_ptr uint32_t (*profiler_data_buffer)[kernel_profiler::PROFILER_L1
     reinterpret_cast<volatile tt_l1_ptr uint32_t (*)[kernel_profiler::PROFILER_L1_VECTOR_SIZE]>(
         GET_MAILBOX_ADDRESS_DEV(profiler.buffer));
 
-#if (PROFILE_KERNEL & PROFILER_OPT_DO_TRACE_ONLY) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC)
+#if (PROFILE_KERNEL & PROFILER_OPT_DO_TRACE_ONLY) || defined(COMPILE_FOR_BRISC)
+constexpr uint32_t myRiscID = 0;
+#elif defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
+constexpr uint32_t myRiscID = 0;
+#elif defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 1
+constexpr uint32_t myRiscID = 1;
+#elif defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 0
+constexpr uint32_t myRiscID = 0;
+#elif defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 1
+constexpr uint32_t myRiscID = 1;
+#elif defined(COMPILE_FOR_ERISC)
 constexpr uint32_t myRiscID = 0;
 #elif defined(COMPILE_FOR_NCRISC)
 constexpr uint32_t myRiscID = 1;
