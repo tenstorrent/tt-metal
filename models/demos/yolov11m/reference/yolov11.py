@@ -351,7 +351,6 @@ class Attention(nn.Module):
 class PSABlock(nn.Module):
     def __init__(self, in_channel, out_channel, kernel, stride, padding, dilation, groups):
         super().__init__()
-        import pdb; pdb.set_trace()
         self.attn = Attention(
             in_channel[0:3], out_channel[0:3], kernel[0:3], stride[0:3], padding[0:3], dilation[0:3], groups[0:3]
         )
@@ -783,7 +782,7 @@ class YoloV11(nn.Module):
             SPPF([512, 1024], [256, 512], [1, 1], [1, 1]),  # 9
             C2PSA(
                 [512, 512, 256, 256, 256, 256, 512],  # 10
-                [512, 512, 512, 256, 256, 512, 256],
+                [512, 512, 1024, 256, 256, 512, 256],
                 [1, 1, 1, 1, 3, 1, 1],
                 [1, 1, 1, 1, 1, 1, 1],
                 [0, 0, 0, 0, 1, 0, 0],
