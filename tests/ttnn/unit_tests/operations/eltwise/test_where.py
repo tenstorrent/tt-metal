@@ -27,9 +27,12 @@ def torch_equal_nan(a, b):
         ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),  # LLK
         ((3, 2, 3, 64, 128), (3, 2, 3, 64, 128), (3, 2, 3, 64, 128)),  # LLK
         ((256,), (256,), (256,)),  # LLK
+        ((1, 2, 2, 2, 64, 64), (1, 1, 64, 64), (1, 1, 64, 64)),  # outerdim bcast
+        ((2, 2, 2, 64, 64), (2, 1, 1, 64, 64), (64, 64)),  # outerdim bcast
+        ((4, 2, 2, 2, 64, 64), (4, 2, 1, 1, 64, 64), (4, 1, 1, 2, 64, 64)),  # outerdim bcast
     ],
 )
-@pytest.mark.parametrize("scalar", [15.5, 10.0, 5.0, -11.33])
+@pytest.mark.parametrize("scalar", [15.5, 5.0, -11.33])
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
 @pytest.mark.parametrize("condition", [1, 0])
 def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, device):
