@@ -27,6 +27,7 @@
 #include "ops/binary_ops.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
+#include "optimizers/no_op.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "utils.hpp"
@@ -374,6 +375,7 @@ struct TrainingConfig {
     uint32_t max_steps = 5000;
     float learning_rate = 3e-4F;
     float weight_decay = 1e-2F;
+    bool use_no_op = false;
     bool use_moreh_adamw = false;
     // works only for AdamW
     bool use_kahan_summation = false;
@@ -406,6 +408,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.max_steps = training_config["max_steps"].as<uint32_t>();
     config.learning_rate = training_config["learning_rate"].as<float>();
     config.weight_decay = training_config["weight_decay"].as<float>();
+    config.use_no_op = training_config["use_no_op"].as<bool>(config.use_no_op);
     config.use_moreh_adamw = training_config["use_moreh_adamw"].as<bool>(config.use_moreh_adamw);
     config.use_kahan_summation = training_config["use_kahan_summation"].as<bool>(config.use_kahan_summation);
     config.gradient_accumulation_steps =
@@ -859,19 +862,20 @@ int main(int argc, char **argv) {
 
     fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
 
-    auto select_optimizer =
-        [&model, &adamw_params, &config](bool use_moreh_adamw) -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
+    auto select_optimizer = [&model, &adamw_params, &config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
         if (config.enable_mpi) {
             return std::make_unique<RemoteOptimizer>(
                 get_model_parameters(model), config.num_mh_workers, config.socket_type);
-        } else if (use_moreh_adamw) {
+        } else if (config.use_moreh_adamw) {
             return std::make_unique<ttml::optimizers::MorehAdamW>(get_model_parameters(model), adamw_params);
+        } else if (config.use_no_op) {
+            return std::make_unique<ttml::optimizers::NoOp>(get_model_parameters(model));
         } else {
             return std::make_unique<ttml::optimizers::AdamW>(get_model_parameters(model), adamw_params);
         }
     };
 
-    auto optimizer = select_optimizer(config.use_moreh_adamw);
+    auto optimizer = select_optimizer();
     auto scheduler = schedule_func(optimizer.get(), config.max_steps);
 
     if (config.enable_mpi) {
