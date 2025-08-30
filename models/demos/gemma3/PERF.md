@@ -13,7 +13,7 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 |-------------------|-------------|-----------|-----------|---------------|-----------|
 | gemma-3-4b-it     | N150        | 85        | 96        | 34            | 64        |
 | gemma-3-4b-it     | N300        | 85        | 96        | 36.02         | 89.95     |
-| gemma-3-27b-it    | T3K         | 92        | 99        | 16.91         | 466.7     |
+| gemma-3-27b-it    | T3K         | 91        | 99        | 16.91         | 466.7     |
 
 ## Vision Performance
 
