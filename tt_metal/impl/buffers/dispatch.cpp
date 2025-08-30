@@ -453,11 +453,39 @@ InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_
     return dispatch_params;
 }
 
+// Copy with conversion between data formats.
+static void copy_with_conversion(
+    const void* src,
+    size_t src_offset,  // Offset in units of destination data format bytes.
+    tt::DataFormat src_data_format,
+    void* dst,
+    tt::DataFormat data_format,
+    size_t dst_bytes) {
+    if (src_data_format == data_format) {
+        std::memcpy(dst, (const char*)src + src_offset, dst_bytes);
+    } else {
+        if (src_data_format == tt::DataFormat::Float32 && data_format == tt::DataFormat::Float16_b) {
+            constexpr uint32_t src_dst_ratio = sizeof(float) / sizeof(uint16_t);
+            TT_ASSERT(src_offset % sizeof(uint16_t) == 0, "src_offset must be a multiple of sizeof(uint16_t)");
+
+            const float* src_float = reinterpret_cast<const float*>(reinterpret_cast<const char*>(src) + src_offset * src_dst_ratio);
+            uint16_t* dst_uint16 = (uint16_t*)dst;
+            for (size_t i = 0; i < dst_bytes / 2; i++) {
+                dst_uint16[i] = bfloat16(src_float[i]).to_packed();
+            }
+        } else {
+            TT_FATAL(false, "Conversion from {} to {} is not supported", src_data_format, data_format);
+        }
+    }
+}
+
 // Populate/Assemble dispatch commands for writing buffer data
 void populate_interleaved_buffer_write_dispatch_cmds(
     const void* src,
+    tt::DataFormat src_data_format,
     HugepageDeviceCommand& command_sequence,
     Buffer& buffer,
+    tt::DataFormat data_format,
     InterleavedBufferWriteDispatchParams& dispatch_params) {
     const uint8_t is_dram = uint8_t(buffer.is_dram());
     TT_ASSERT(
@@ -487,8 +515,9 @@ void populate_interleaved_buffer_write_dispatch_cmds(
                 num_full_pages_written * buffer.page_size() +
                 num_partial_pages_written_per_curr_full_pages * dispatch_params.partial_page_size() +
                 num_partial_pages_written_curr_txn * buffer.page_size();
-            command_sequence.add_data(
-                (char*)src + src_address_offset, dispatch_params.data_size_to_copy, dispatch_params.page_size_to_write);
+            void* dst = command_sequence.reserve_space<void*, true>(dispatch_params.page_size_to_write);
+            copy_with_conversion(
+                src, src_address_offset, src_data_format, dst, data_format, dispatch_params.data_size_to_copy);
             num_partial_pages_written_curr_txn += 1;
         }
     } else {
@@ -497,25 +526,30 @@ void populate_interleaved_buffer_write_dispatch_cmds(
             // If page size is not aligned, we cannot do a contiguous write
             for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
                  sysmem_address_offset += dispatch_params.page_size_to_write) {
-                command_sequence.add_data(
-                    (char*)src + src_address_offset,
-                    dispatch_params.data_size_to_copy,
-                    dispatch_params.page_size_to_write);
+                void* dst = command_sequence.reserve_space<void*, true>(dispatch_params.page_size_to_write);
+                copy_with_conversion(
+                    src, src_address_offset, src_data_format, dst, data_format, dispatch_params.data_size_to_copy);
                 src_address_offset += dispatch_params.data_size_to_copy;
             }
         } else {
-            command_sequence.add_data(
-                (char*)src + src_address_offset,
-                dispatch_params.data_size_to_copy * dispatch_params.pages_per_txn,
-                data_size_bytes);
+            void* dst = command_sequence.reserve_space<void*, true>(data_size_bytes);
+            copy_with_conversion(
+                src,
+                src_address_offset,
+                src_data_format,
+                dst,
+                data_format,
+                dispatch_params.data_size_to_copy * dispatch_params.pages_per_txn);
         }
     }
 }
 
 void populate_sharded_buffer_write_dispatch_cmds(
     const void* src,
+    tt::DataFormat src_data_format,
     HugepageDeviceCommand& command_sequence,
     Buffer& buffer,
+    tt::DataFormat data_format,
     ShardedBufferWriteDispatchParams& dispatch_params) {
     const uint32_t data_size_bytes = dispatch_params.pages_per_txn * dispatch_params.page_size_to_write;
     const CoreCoord virtual_core =
@@ -540,8 +574,8 @@ void populate_sharded_buffer_write_dispatch_cmds(
                 (*cur_host_page * buffer.page_size()) +
                 (dispatch_params.num_partial_pages_written_for_current_transaction_full_page() + i) *
                     dispatch_params.partial_page_size();
-            command_sequence.update_cmd_sequence(
-                dst_offset, (char*)(src) + src_offset, dispatch_params.data_size_to_copy);
+            void* dst = (char*)command_sequence.data() + dst_offset;
+            copy_with_conversion(src, src_offset, src_data_format, dst, data_format, dispatch_params.data_size_to_copy);
             dst_offset += dispatch_params.page_size_to_write;
         }
     } else if (buffer.page_size() == dispatch_params.page_size_to_write) {
@@ -552,9 +586,14 @@ void populate_sharded_buffer_write_dispatch_cmds(
             if (range.num_pages == 0) {
                 break;
             }
-            command_sequence.update_cmd_sequence(
-                dst_offset + (range.device_page_offset - start_device_page_offset) * dispatch_params.page_size_to_write,
-                (char*)(src) + range.host_page_start * dispatch_params.page_size_to_write,
+            void* dst = (char*)command_sequence.data() + dst_offset +
+                        (range.device_page_offset - start_device_page_offset) * dispatch_params.page_size_to_write;
+            copy_with_conversion(
+                src,
+                range.host_page_start * dispatch_params.page_size_to_write,
+                src_data_format,
+                dst,
+                data_format,
                 range.num_pages * dispatch_params.page_size_to_write);
         }
     } else {
@@ -566,7 +605,8 @@ void populate_sharded_buffer_write_dispatch_cmds(
                 continue;
             }
             const uint32_t src_offset = *cur_host_page * buffer.page_size();
-            command_sequence.update_cmd_sequence(dst_offset, (char*)(src) + src_offset, buffer.page_size());
+            void* dst = (char*)command_sequence.data() + dst_offset;
+            copy_with_conversion(src, src_offset, src_data_format, dst, data_format, buffer.page_size());
             dst_offset += dispatch_params.page_size_to_write;
         }
     }
@@ -576,7 +616,9 @@ void populate_sharded_buffer_write_dispatch_cmds(
 template <typename T>
 void issue_buffer_dispatch_command_sequence(
     const void* src,
+    tt::DataFormat src_data_format,
     Buffer& buffer,
+    tt::DataFormat data_format,
     T& dispatch_params,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     CoreType dispatch_core_type) {
@@ -607,9 +649,11 @@ void issue_buffer_dispatch_command_sequence(
         }
     }
     if constexpr (std::is_same_v<T, ShardedBufferWriteDispatchParams>) {
-        populate_sharded_buffer_write_dispatch_cmds(src, command_sequence, buffer, dispatch_params);
+        populate_sharded_buffer_write_dispatch_cmds(
+            src, src_data_format, command_sequence, buffer, data_format, dispatch_params);
     } else {
-        populate_interleaved_buffer_write_dispatch_cmds(src, command_sequence, buffer, dispatch_params);
+        populate_interleaved_buffer_write_dispatch_cmds(
+            src, src_data_format, command_sequence, buffer, data_format, dispatch_params);
     }
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
@@ -620,8 +664,10 @@ void issue_buffer_dispatch_command_sequence(
 // Top level helper functions to write buffer data
 void write_interleaved_buffer_to_device(
     const void* src,
+    tt::DataFormat src_data_format,
     InterleavedBufferWriteDispatchParams& dispatch_params,
     Buffer& buffer,
+    tt::DataFormat data_format,
     const BufferDispatchConstants& buf_dispatch_constants,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     CoreType dispatch_core_type) {
@@ -649,16 +695,19 @@ void write_interleaved_buffer_to_device(
         log_debug(tt::LogDispatch, "EnqueueWriteBuffer for command queue {}", dispatch_params.cq_id);
 
         dispatch_params.calculate_num_pages_for_write_transaction(num_pages_available_in_cq);
-        issue_buffer_dispatch_command_sequence(src, buffer, dispatch_params, sub_device_ids, dispatch_core_type);
+        issue_buffer_dispatch_command_sequence(
+            src, src_data_format, buffer, data_format, dispatch_params, sub_device_ids, dispatch_core_type);
         dispatch_params.update_params_after_write_transaction();
     }
 }
 
 void write_sharded_buffer_to_core(
     const void* src,
+    tt::DataFormat src_data_format,
     uint32_t core_id,
     const BufferCorePageMapping& core_page_mapping,
     Buffer& buffer,
+    tt::DataFormat data_format,
     ShardedBufferWriteDispatchParams& dispatch_params,
     const BufferDispatchConstants& buf_dispatch_constants,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
@@ -694,7 +743,8 @@ void write_sharded_buffer_to_core(
         log_debug(tt::LogDispatch, "EnqueueWriteBuffer for command queue {}", dispatch_params.cq_id);
 
         dispatch_params.calculate_params_for_write_transaction(num_pages_available_in_cq);
-        issue_buffer_dispatch_command_sequence(src, buffer, dispatch_params, sub_device_ids, dispatch_core_type);
+        issue_buffer_dispatch_command_sequence(
+            src, src_data_format, buffer, data_format, dispatch_params, sub_device_ids, dispatch_core_type);
         dispatch_params.update_params_after_write_transaction();
     }
 }
@@ -702,7 +752,9 @@ void write_sharded_buffer_to_core(
 // Main API to write buffer data
 void write_to_device_buffer(
     const void* src,
+    tt::DataFormat src_data_format,
     Buffer& buffer,
+    tt::DataFormat data_format,
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
@@ -729,9 +781,11 @@ void write_to_device_buffer(
                  dispatch_params.buffer_page_mapping->core_page_mappings[core_id]) {
                 write_sharded_buffer_to_core(
                     src,
+                    src_data_format,
                     core_id,
                     core_page_mapping,
                     buffer,
+                    data_format,
                     dispatch_params,
                     buf_dispatch_constants,
                     sub_device_ids,
@@ -755,7 +809,14 @@ void write_to_device_buffer(
         TT_ASSERT(dispatch_params != nullptr);
 
         write_interleaved_buffer_to_device(
-            src, *dispatch_params, *root_buffer, buf_dispatch_constants, sub_device_ids, dispatch_core_type);
+            src,
+            src_data_format,
+            *dispatch_params,
+            *root_buffer,
+            data_format,
+            buf_dispatch_constants,
+            sub_device_ids,
+            dispatch_core_type);
     }
 }
 
@@ -1150,9 +1211,21 @@ tt::stl::Span<const SubDeviceId> select_sub_device_ids(
 }
 
 template void issue_buffer_dispatch_command_sequence<InterleavedBufferWriteDispatchParams>(
-    const void*, Buffer&, InterleavedBufferWriteDispatchParams&, tt::stl::Span<const SubDeviceId>, CoreType);
+    const void*,
+    tt::DataFormat,
+    Buffer&,
+    tt::DataFormat,
+    InterleavedBufferWriteDispatchParams&,
+    tt::stl::Span<const SubDeviceId>,
+    CoreType);
 template void issue_buffer_dispatch_command_sequence<ShardedBufferWriteDispatchParams>(
-    const void*, Buffer&, ShardedBufferWriteDispatchParams&, tt::stl::Span<const SubDeviceId>, CoreType);
+    const void*,
+    tt::DataFormat,
+    Buffer&,
+    tt::DataFormat,
+    ShardedBufferWriteDispatchParams&,
+    tt::stl::Span<const SubDeviceId>,
+    CoreType);
 
 template void issue_read_buffer_dispatch_command_sequence<BufferReadDispatchParams>(
     Buffer&, BufferReadDispatchParams&, tt::stl::Span<const SubDeviceId>, CoreType);

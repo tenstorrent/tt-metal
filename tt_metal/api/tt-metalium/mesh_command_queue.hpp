@@ -103,6 +103,125 @@ public:
     virtual void enqueue_write(
         const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) = 0;
 
+    /**
+     * @brief Enqueue a write operation to a sub-grid of devices with data format conversion
+     *
+     * Writes host data to a specific sub-grid range of devices within a MeshBuffer,
+     * performing data format conversion from the source format to the target buffer format.
+     * This allows writing data in one format (e.g., Float32) to a buffer that stores
+     * data in a different format (e.g., BFloat16).
+     *
+     * Only a limited number of data formats are supported for conversion, including:
+     * - Float32 to Float16_b
+     * - Identity conversion (Float32 to Float32, Float16_b to Float16_b, etc.)
+     *
+     * @param buffer The MeshBuffer to write data to
+     * @param data_format The target data format for the buffer
+     * @param host_data Pointer to the source data on the host
+     * @param src_data_format The source data format of the host data
+     * @param device_range If the buffer is replicated, the range of mesh coordinates defining the sub-grid to write to.
+     * If the buffer is sharded, this is ignored.
+     * @param blocking If true, the operation blocks until completion; if false, it's asynchronous
+     * @param region Optional buffer region to write to; if not provided, writes to the entire buffer area
+     *
+     * @note If the identity conversion is not used, the region specified must be a multiple of the buffer data format
+     * element size, and the corresponding source size must be a multiple of the source data format element size.
+     */
+    virtual void enqueue_write_shard_to_sub_grid_with_conversion(
+        const MeshBuffer& buffer,
+        tt::DataFormat data_format,
+        const void* host_data,
+        tt::DataFormat src_data_format,
+        const MeshCoordinateRange& device_range,
+        bool blocking,
+        std::optional<BufferRegion> region = std::nullopt) = 0;
+
+    /**
+     * @brief Enqueue a write operation to multiple shards with data format conversion
+     *
+     * Writes data to multiple specific shards of a MeshBuffer, performing data format
+     * conversion from the source format to the target buffer format. Each shard can
+     * receive different data, allowing for fine-grained control over distributed data placement.
+     *
+     * Only a limited number of data formats are supported for conversion, including:
+     * - Float32 to Float16_b
+     * - Identity conversion (Float32 to Float32, Float16_b to Float16_b, etc.)
+     *
+     * @param mesh_buffer Shared pointer to the MeshBuffer to write data to
+     * @param data_format The target data format for the buffer
+     * @param shard_data_transfers Vector of ShardDataTransfer objects, each specifying
+     *                            a shard coordinate, host data pointer, and optional buffer region
+     * @param src_data_format The source data format of all host data
+     * @param blocking If true, the operation blocks until completion; if false, it's asynchronous
+     *
+     * @note All host data in the shard_data_transfers must be in the same source format
+     * @note The data conversion is performed during the write operation for each shard
+     *
+     * @note If the identity conversion is not used, each region specified in the shard_data_transfers must be a
+     * multiple of the buffer data format element size, and the corresponding source size must be a multiple of the
+     * source data format element size.
+     * @see ShardDataTransfer for details on specifying per-shard data and regions
+     */
+    virtual void enqueue_write_shards_with_conversion(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        tt::DataFormat data_format,
+        const std::vector<ShardDataTransfer>& shard_data_transfers,
+        tt::DataFormat src_data_format,
+        bool blocking) = 0;
+
+    /**
+     * @brief Enqueue a write operation to an entire MeshBuffer with data format conversion
+     *
+     * Writes host data to all devices in a MeshBuffer, performing data format conversion from the source format to the
+     * target buffer format. This operation writes the data using the sharding specification in the buffer.
+     *
+     * Only a limited number of data formats are supported for conversion, including:
+     * - Float32 to Float16_b
+     * - Identity conversion (Float32 to Float32, Float16_b to Float16_b, etc.)
+     *
+     * @param buffer Shared pointer to the MeshBuffer to write data to
+     * @param data_format The target data format for the buffer
+     * @param host_data Pointer to the source data on the host
+     * @param src_data_format The source data format of the host data
+     * @param blocking If true, the operation blocks until completion; if false, it's asynchronous
+     *
+     * @note The data conversion is performed during the write operation
+     */
+    virtual void enqueue_write_mesh_buffer_with_conversion(
+        const std::shared_ptr<MeshBuffer>& buffer,
+        tt::DataFormat data_format,
+        const void* host_data,
+        tt::DataFormat src_data_format,
+        bool blocking) = 0;
+
+    /**
+     * @brief Enqueue a write operation using a DistributedHostBuffer with data format conversion
+     *
+     * Writes data from a DistributedHostBuffer to a MeshBuffer, performing data format
+     * conversion from the source format to the target buffer format. The DistributedHostBuffer
+     * provides per-shard data distribution, allowing different data to be written to each
+     * shard in the mesh while maintaining format conversion capabilities.
+     *
+     * Only a limited number of data formats are supported for conversion, including:
+     * - Float32 to Float16_b
+     * - Identity conversion (Float32 to Float32, Float16_b to Float16_b, etc.)
+     *
+     * @param mesh_buffer Shared pointer to the MeshBuffer to write data to
+     * @param data_format The target data format for the buffer
+     * @param host_buffer Reference to the DistributedHostBuffer containing the source data
+     *                    with per-shard data distribution
+     * @param src_data_format The source data format of the data in the DistributedHostBuffer
+     * @param blocking If true, the operation blocks until completion; if false, it's asynchronous
+     *
+     * @see DistributedHostBuffer for details on distributed data management
+     */
+    virtual void enqueue_write_with_conversion(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        tt::DataFormat data_format,
+        const DistributedHostBuffer& host_buffer,
+        tt::DataFormat src_data_format,
+        bool blocking) = 0;
+
     // MeshBuffer Read APIs
     virtual void enqueue_read_mesh_buffer(
         void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) = 0;

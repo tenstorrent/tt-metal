@@ -13,7 +13,9 @@ protected:
     void write_shard_to_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
+        tt::DataFormat data_format,
         const void* src,
+        tt::DataFormat src_data_format,
         const std::optional<BufferRegion>& region,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void read_shard_from_device(

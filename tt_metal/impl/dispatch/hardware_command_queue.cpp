@@ -332,7 +332,14 @@ void HWCommandQueue::enqueue_write_buffer(
 
     auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     buffer_dispatch::write_to_device_buffer(
-        data, *buffer_obj, this->id_, this->expected_num_workers_completed_, dispatch_core_type, sub_device_ids);
+        data,
+        tt::DataFormat::UInt8,
+        *buffer_obj,
+        tt::DataFormat::UInt8,
+        this->id_,
+        this->expected_num_workers_completed_,
+        dispatch_core_type,
+        sub_device_ids);
 
     if (blocking) {
         this->finish(sub_device_ids);

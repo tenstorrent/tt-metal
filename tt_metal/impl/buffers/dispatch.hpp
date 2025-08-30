@@ -17,6 +17,7 @@
 #include "core_coord.hpp"
 #include <tt_stl/span.hpp>
 #include "dispatch/system_memory_manager.hpp"
+#include "tt_backend_api_types.hpp"
 
 enum class CoreType;
 namespace tt {
@@ -105,7 +106,9 @@ struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
 
 void write_to_device_buffer(
     const void* src,
+    tt::DataFormat src_data_format,
     Buffer& buffer,
+    tt::DataFormat data_format,
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,

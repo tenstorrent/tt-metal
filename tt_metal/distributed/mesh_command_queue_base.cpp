@@ -21,11 +21,19 @@
 
 namespace tt::tt_metal::distributed {
 
-void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const void* src) {
+void MeshCommandQueueBase::write_sharded_buffer(
+    const MeshBuffer& buffer, tt::DataFormat data_format, const void* src, tt::DataFormat src_data_format) {
     auto global_buffer_shape = buffer.global_shard_spec().global_buffer_shape;
 
     auto shard_shape = buffer.physical_shard_shape();
-    auto datum_size_bytes = buffer.datum_size_bytes();
+    auto dst_datum_size_bytes = buffer.datum_size_bytes();
+    size_t datum_size_bytes = dst_datum_size_bytes;
+
+    if (data_format != src_data_format) {
+        size_t temp_datum_size = dst_datum_size_bytes * datum_size(src_data_format);
+        TT_FATAL(temp_datum_size % datum_size(data_format) == 0, "Data format conversion must use integer ratios.");
+        datum_size_bytes = temp_datum_size / datum_size(data_format);
+    }
 
     auto stride_size_bytes = datum_size_bytes * global_buffer_shape.width();
     auto single_read_size = datum_size_bytes * shard_shape.width();
@@ -62,7 +70,9 @@ void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const 
                         this->write_shard_to_device(
                             buffer,
                             MeshCoordinate(replicated_device_y, replicated_device_x),
+                            data_format,
                             shard_data.data(),
+                            src_data_format,
                             /*region=*/std::nullopt);
                     }
                 }
@@ -72,7 +82,9 @@ void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const 
                         this->write_shard_to_device(
                             buffer,
                             MeshCoordinate(replicated_device_y, device_x),
+                            data_format,
                             shard_data.data(),
+                            src_data_format,
                             /*region=*/std::nullopt);
                     }
                     device_x++;
@@ -81,14 +93,21 @@ void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const 
                         this->write_shard_to_device(
                             buffer,
                             MeshCoordinate(device_y, replicated_device_x),
+                            data_format,
                             shard_data.data(),
+                            src_data_format,
                             /*region=*/std::nullopt);
                     }
                     device_y++;
                 }
             } else {
                 this->write_shard_to_device(
-                    buffer, MeshCoordinate(device_y, device_x), shard_data.data(), /*region=*/std::nullopt);
+                    buffer,
+                    MeshCoordinate(device_y, device_x),
+                    data_format,
+                    shard_data.data(),
+                    src_data_format,
+                    /*region=*/std::nullopt);
                 if (buffer.global_shard_spec().shard_orientation == ShardOrientation::ROW_MAJOR) {
                     if (++device_x == num_devices_x) {
                         device_x = 0;
@@ -173,7 +192,7 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
         // Currently not supported when doing TT-Mesh Native sharding, since we
         // rely on TTNN to perform sharding and call enqueue_write_shards
         auto dispatch_lambda = [this, &buffer, host_data, &region](const MeshCoordinate& coord) {
-            this->write_shard_to_device(buffer, coord, host_data, region);
+            this->write_shard_to_device(buffer, coord, tt::DataFormat::UInt8, host_data, tt::DataFormat::UInt8, region);
         };
         for (const auto& coord : device_range) {
             if (mesh_device_->is_local(coord)) {
@@ -183,7 +202,7 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
         }
         dispatch_thread_pool_->wait();
     } else {
-        this->write_sharded_buffer(buffer, host_data);
+        this->write_sharded_buffer(buffer, tt::DataFormat::UInt8, host_data, tt::DataFormat::UInt8);
     }
 
     if (blocking) {
@@ -191,10 +210,48 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
     }
 }
 
+void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid_with_conversion(
+    const MeshBuffer& buffer,
+    tt::DataFormat data_format,
+    const void* host_data,
+    tt::DataFormat src_data_format,
+    const MeshCoordinateRange& device_range,
+    bool blocking,
+    std::optional<BufferRegion> region) {
+    auto lock = lock_api_function_();
+    if (buffer.global_layout() == MeshBufferLayout::REPLICATED) {
+        // Multi-Threaded writes supported for Replicated buffers.
+        // Currently not supported when doing TT-Mesh Native sharding, since we
+        // rely on TTNN to perform sharding and call enqueue_write_shards
+        auto dispatch_lambda =
+            [this, &buffer, host_data, &region, data_format, src_data_format](const MeshCoordinate& coord) {
+                this->write_shard_to_device(buffer, coord, data_format, host_data, src_data_format, region);
+            };
+        for (const auto& coord : device_range) {
+            dispatch_thread_pool_->enqueue(
+                [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->get_device(coord)->id());
+        }
+        dispatch_thread_pool_->wait();
+    } else {
+        this->write_sharded_buffer(buffer, data_format, host_data, src_data_format);
+    }
+}
+
 void MeshCommandQueueBase::enqueue_write_mesh_buffer(
     const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) {
     MeshCoordinateRange mesh_device_extent(buffer->device()->shape());
     this->enqueue_write_shard_to_sub_grid(*buffer, host_data, mesh_device_extent, blocking);
+}
+
+void MeshCommandQueueBase::enqueue_write_mesh_buffer_with_conversion(
+    const std::shared_ptr<MeshBuffer>& buffer,
+    tt::DataFormat data_format,
+    const void* host_data,
+    tt::DataFormat src_data_format,
+    bool blocking) {
+    MeshCoordinateRange mesh_device_extent(buffer->device()->shape());
+    this->enqueue_write_shard_to_sub_grid_with_conversion(
+        *buffer, data_format, host_data, src_data_format, mesh_device_extent, blocking);
 }
 
 void MeshCommandQueueBase::enqueue_read_mesh_buffer(
@@ -209,14 +266,21 @@ void MeshCommandQueueBase::enqueue_read_mesh_buffer(
 
 void MeshCommandQueueBase::enqueue_write_shards_nolock(
     const std::shared_ptr<MeshBuffer>& buffer,
+    tt::DataFormat data_format,
     const std::vector<ShardDataTransfer>& shard_data_transfers,
+    tt::DataFormat src_data_format,
     bool blocking) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
-    auto dispatch_lambda = [&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
+    auto dispatch_lambda = [&shard_data_transfers, &buffer, this, data_format, src_data_format](uint32_t shard_idx) {
         auto& shard_data_transfer = shard_data_transfers[shard_idx];
         this->write_shard_to_device(
-            *buffer, shard_data_transfer.shard_coord, shard_data_transfer.host_data, shard_data_transfer.region);
+            *buffer,
+            shard_data_transfer.shard_coord,
+            data_format,
+            shard_data_transfer.host_data,
+            src_data_format,
+            shard_data_transfer.region);
     };
 
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
@@ -239,7 +303,31 @@ void MeshCommandQueueBase::enqueue_write_shards(
     const std::vector<ShardDataTransfer>& shard_data_transfers,
     bool blocking) {
     auto lock = lock_api_function_();
-    this->enqueue_write_shards_nolock(mesh_buffer, shard_data_transfers, blocking);
+    this->enqueue_write_shards_nolock(
+        mesh_buffer, tt::DataFormat::UInt8, shard_data_transfers, tt::DataFormat::UInt8, blocking);
+}
+
+void MeshCommandQueueBase::enqueue_write_shards_with_conversion(
+    const std::shared_ptr<MeshBuffer>& mesh_buffer,
+    tt::DataFormat data_format,
+    const std::vector<ShardDataTransfer>& shard_data_transfers,
+    tt::DataFormat src_data_format,
+    bool blocking) {
+    auto lock = lock_api_function_();
+    this->enqueue_write_shards_nolock(mesh_buffer, data_format, shard_data_transfers, src_data_format, blocking);
+}
+
+static BufferRegion buffer_region_from_host_buffer(
+    const HostBuffer& host_buffer, tt::DataFormat data_format, tt::DataFormat src_data_format) {
+    size_t src_element_size = datum_size(src_data_format);
+    size_t dst_element_size = datum_size(data_format);
+    size_t src_size = host_buffer.view_bytes().size();
+    TT_FATAL(
+        src_size % src_element_size == 0,
+        "Source size {} must be a multiple of source element size {}",
+        src_size,
+        src_element_size);
+    return BufferRegion(0, src_size * dst_element_size / src_element_size);
 }
 
 void MeshCommandQueueBase::enqueue_write(
@@ -257,7 +345,30 @@ void MeshCommandQueueBase::enqueue_write(
         }
     }
 
-    this->enqueue_write_shards_nolock(mesh_buffer, shard_data_transfers, blocking);
+    this->enqueue_write_shards_nolock(
+        mesh_buffer, tt::DataFormat::UInt8, shard_data_transfers, tt::DataFormat::UInt8, blocking);
+}
+
+void MeshCommandQueueBase::enqueue_write_with_conversion(
+    const std::shared_ptr<MeshBuffer>& mesh_buffer,
+    tt::DataFormat data_format,
+    const DistributedHostBuffer& host_buffer,
+    tt::DataFormat src_data_format,
+    bool blocking) {
+    auto lock = lock_api_function_();
+    // Iterate over global coordinates; skip host-remote coordinates, as per `host_buffer` configuration.
+    std::vector<ShardDataTransfer> shard_data_transfers;
+    for (const auto& host_buffer_coord : host_buffer.shard_coords()) {
+        auto buf = host_buffer.get_shard(host_buffer_coord);
+        if (buf.has_value()) {
+            shard_data_transfers.push_back(
+                {.shard_coord = host_buffer_coord,
+                 .host_data = buf->view_bytes().data(),
+                 .region = buffer_region_from_host_buffer(*buf, data_format, src_data_format)});
+        }
+    }
+
+    this->enqueue_write_shards_nolock(mesh_buffer, data_format, shard_data_transfers, src_data_format, blocking);
 }
 
 void MeshCommandQueueBase::enqueue_read_shards_nolock(
