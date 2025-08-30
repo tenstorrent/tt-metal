@@ -117,7 +117,7 @@ jobs:
           docker_image: ${{ inputs.docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -v /mnt/MLPerf:/mnt/MLPerf
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-info.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
