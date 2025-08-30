@@ -4,7 +4,7 @@
 
 #include <vector>
 #include "tt_metal/fabric/serialization/physical_desc.hpp"
-#include "physical_desc_generated.h"
+#include "flatbuffers/physical_desc_generated.h"
 
 namespace tt::tt_metal {
 
