@@ -46,12 +46,20 @@ void fabric_set_route(
         case eth_chan_directions::EAST:
             local_packet = LowLatencyMeshRoutingFields::FORWARD_WEST;
             forward_packet = LowLatencyMeshRoutingFields::FORWARD_EAST;
-            packet_header->routing_fields.branch_east_offset = start_hop;
+            if constexpr (mcast) {
+                packet_header->routing_fields.branch_east_offset = start_hop;
+            } else {
+                packet_header->routing_fields.branch_east_offset = start_hop + 1;
+            }
             break;
         case eth_chan_directions::WEST:
             local_packet = LowLatencyMeshRoutingFields::FORWARD_EAST;
             forward_packet = LowLatencyMeshRoutingFields::FORWARD_WEST;
-            packet_header->routing_fields.branch_west_offset = start_hop;
+            if constexpr (mcast) {
+                packet_header->routing_fields.branch_west_offset = start_hop;
+            } else {
+                packet_header->routing_fields.branch_west_offset = start_hop + 1;
+            }
             break;
         case eth_chan_directions::NORTH:
             local_packet = LowLatencyMeshRoutingFields::FORWARD_SOUTH;
@@ -166,13 +174,12 @@ void fabric_set_unicast_route(
         // determine the east/west hops
         uint32_t turn_direction = my_dev < target_dev ? eth_chan_directions::EAST : eth_chan_directions::WEST;
         uint32_t ew_hops = (my_dev < target_dev) ? target_dev - my_dev : my_dev - target_dev;
+        fabric_set_route(
+            packet_header, (eth_chan_directions)outgoing_direction, 0, 0, ns_hops - bool(ew_hops), ew_hops == 0);
         if (ew_hops) {
-            ns_hops--;
-            ew_hops++;
-        }
-        fabric_set_route(packet_header, (eth_chan_directions)outgoing_direction, 0, 0, ns_hops, ew_hops == 0);
-        if (ew_hops) {
-            fabric_set_route(packet_header, (eth_chan_directions)turn_direction, 0, ns_hops, ew_hops, true);
+            // +1 because this branch is now implementing the turn
+            fabric_set_route(
+                packet_header, (eth_chan_directions)turn_direction, 0, ns_hops - bool(ew_hops), ew_hops + 1, true);
         }
     }
 }
