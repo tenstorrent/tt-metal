@@ -71,7 +71,7 @@ RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::Progr
     }
 
     KernelHandle writer_kernel_id = tt_metal::CreateKernel(
-        program, writer_file_path, all_cores, WriterDataMovementConfig(writer_compile_time_args, writer_defines));
+        program, writer_file_path, all_cores, WriterDataMovementConfig(writer_compile_time_args, {}, writer_defines));
 
     KernelHandle compute_kernel_id = CreateKernel(
         program,
