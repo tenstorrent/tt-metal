@@ -188,6 +188,7 @@ class Generator:
                     chunk_start_idx=chunk_start,
                     get_last_token=(last_token_idx_in_chunk // 32) * 32,
                     kv_cache=kv_cache,
+                    **kwargs,
                 )
 
                 if chunk_start == last_chunk_start:
