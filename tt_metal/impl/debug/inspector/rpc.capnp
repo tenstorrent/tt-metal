@@ -75,6 +75,9 @@ interface Inspector {
     # Get mesh workloads currently alive
     getMeshWorkloads @2 () -> (meshWorkloads :List(MeshWorkloadData));
 
+    # Get list of local devices that are being used by this Metal runtime
+    getDevicesInUse @3 () -> (deviceIds :List(UInt64));
+
     # Search for a kernel
-    getKernel @3 (watcherKernelId :Int32) -> (kernel :KernelData);
+    getKernel @4 (watcherKernelId :Int32) -> (kernel :KernelData);
 }

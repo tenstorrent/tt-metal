@@ -48,10 +48,18 @@ class DispatcherCoreData:
 class DispatcherData:
     def __init__(self, inspector_data: InspectorData, context: Context):
         self.inspector_data = inspector_data
-        if inspector_data.kernels is None or len(inspector_data.kernels) == 0:
+        self.programs = inspector_data.getPrograms().programs
+        if self.programs is None or len(self.programs) == 0:
+            raise TTTriageError("No programs found in inspector data.")
+        self.kernels = {
+            kernel.watcherKernelId: kernel
+            for program in self.programs
+            for kernel in program.kernels
+        }
+        self.use_rpc_kernel_find = True
+        if len(self.kernels) == 0:
             raise TTTriageError("No kernels found in inspector data.")
-
-        self._a_kernel_path = next(iter(inspector_data.kernels.values())).path
+        self._a_kernel_path = next(iter(self.kernels.values())).path
         brisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "brisc")
         idle_erisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "idle_erisc")
 
@@ -134,6 +142,17 @@ class DispatcherData:
         except:
             pass
 
+    def find_kernel(self, watcher_kernel_id):
+        try:
+            if self.use_rpc_kernel_find:
+                return self.inspector_data.getKernel(watcher_kernel_id).kernel
+        except:
+            pass
+        if watcher_kernel_id in self.kernels:
+            self.use_rpc_kernel_find = False
+            return self.kernels[watcher_kernel_id]
+        raise TTTriageError(f"Kernel {watcher_kernel_id} not found in inspector data.")
+
     def get_core_data(self, location: OnChipCoordinate, risc_name: str) -> DispatcherCoreData:
         loc_mem_reader = ELF.get_mem_reader(location)
         if location._device.get_block_type(location) == "functional_workers":
@@ -192,7 +211,7 @@ class DispatcherData:
                 & 0xFFFF
             )
 
-            kernel = self.inspector_data.kernels.get(watcher_kernel_id)
+            kernel = self.find_kernel(watcher_kernel_id)
             go_message_index = mem_access(fw_elf, f"mailboxes->go_message_index", loc_mem_reader)[0][0]
             go_data = mem_access(fw_elf, f"mailboxes->go_messages[{go_message_index}]", loc_mem_reader)[0][0]
             preload = (

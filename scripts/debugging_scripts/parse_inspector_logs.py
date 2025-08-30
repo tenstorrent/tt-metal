@@ -14,28 +14,101 @@ Arguments:
 
 Description:
     This script parses inspector logs and transfers them into a structured format.
+    Logs are in yaml format and unrelated to RPC data formats.
 """
 
-from typing import TYPE_CHECKING
+from collections import namedtuple
 from dataclasses import dataclass
-from functools import cache, cached_property
+from functools import cached_property
 import os
 import sys
+from typing import Literal, TypeAlias
 import yaml
 from datetime import datetime, timedelta, timezone
 from docopt import docopt
 import utils
 
-if TYPE_CHECKING:
-    from inspector_data import (
-        InspectorData,
-        KernelData,
-        MeshCoordinate,
-        MeshDeviceData,
-        MeshWorkloadProgramData,
-        MeshWorkloadData,
-        ProgramData,
-    )
+
+@dataclass
+class KernelData:
+    watcherKernelId: int
+    name: str
+    path: str
+    source: str
+    programId: int
+
+
+@dataclass
+class MeshCoordinate:
+    coordinates: list[int]
+
+
+@dataclass
+class MeshDeviceData:
+    meshId: int
+    devices: list[int]
+    shape: list[int]
+    parentMeshId: int | None = None
+    initialized: bool = False
+
+    def get_device_id(self, coordinate: MeshCoordinate) -> int:
+        assert len(coordinate.coordinates) == len(
+            self.shape
+        ), f"Coordinate {coordinate.coordinates} does not match mesh shape {self.shape}"
+        linear_index = 0
+        for dim in range(len(coordinate.coordinates)):
+            linear_index = linear_index + coordinate.coordinates[dim] * (1 if dim == 0 else self.shape[dim - 1])
+        return self.devices[linear_index]
+
+
+BinaryStatus: TypeAlias = Literal["notSent", "inFlight", "committed"]
+
+
+@dataclass
+class DeviceBinaryStatus:
+    deviceId: int
+    status: BinaryStatus
+
+
+@dataclass
+class MeshWorkloadProgramData:
+    programId: int
+    coordinates: list[MeshCoordinate]
+
+
+@dataclass
+class MeshDeviceBinaryStatus:
+    meshId: int
+    status: BinaryStatus
+
+
+@dataclass
+class MeshWorkloadData:
+    meshWorkloadId: int
+    programs: list[MeshWorkloadProgramData]
+
+    @cached_property
+    def binaryStatusPerMeshDevice(self) -> list[MeshDeviceBinaryStatus]:
+        return [MeshDeviceBinaryStatus(meshId=mesh_id, status=status) for mesh_id, status in self.binary_status_per_mesh_device.items()]
+
+    binary_status_per_mesh_device: dict[int, BinaryStatus]
+
+    def get_device_binary_status(self, mesh_id: int) -> BinaryStatus:
+        return self.binary_status_per_mesh_device.get(mesh_id, "notSent")
+
+
+
+@dataclass
+class ProgramData:
+    id: int
+    compiled: bool
+    binary_status_per_device: dict[int, str]
+    kernels: list[KernelData]
+
+    watcherKernelIds: list[int]
+
+    def get_device_binary_status(self, device_id: int) -> str:
+        return self.binary_status_per_device.get(device_id, "NotSet")
 
 
 # Note: This method is parsing entry by entry and should be used only for debugging large log files.
@@ -91,8 +164,7 @@ class StartupData:
         print(f"  {self.convert_timestamp(timestamp_ns).strftime('%Y-%m-%d %H:%M:%S.%f')}: {message}")
 
 
-def get_kernels(log_directory: str) -> dict[int, "KernelData"]:
-    from inspector_data import KernelData
+def get_kernels(log_directory: str) -> dict[int, KernelData]:
 
     yaml_path = os.path.join(log_directory, "kernels.yaml")
     data = read_yaml(yaml_path)
@@ -101,13 +173,13 @@ def get_kernels(log_directory: str) -> dict[int, "KernelData"]:
     for entry in data:
         kernel_info = entry.get("kernel", {})
         kernel_data = KernelData(
-            watcher_kernel_id=int(kernel_info.get("watcher_kernel_id")),
+            watcherKernelId=int(kernel_info.get("watcher_kernel_id")),
             name=kernel_info.get("name"),
             path=kernel_info.get("path"),
             source=kernel_info.get("source"),
-            program_id=int(kernel_info.get("program_id")),
+            programId=int(kernel_info.get("program_id")),
         )
-        kernels[kernel_data.watcher_kernel_id] = kernel_data
+        kernels[kernel_data.watcherKernelId] = kernel_data
     return kernels
 
 
@@ -130,8 +202,7 @@ def get_startup_data(log_directory: str) -> StartupData:
     raise ValueError("No startup time found in startup.yaml")
 
 
-def get_programs(log_directory: str, verbose: bool = False) -> dict[int, "ProgramData"]:
-    from inspector_data import ProgramData
+def get_programs(log_directory: str, verbose: bool = False) -> dict[int, ProgramData]:
 
     yaml_path = os.path.join(log_directory, "programs_log.yaml")
     data = read_yaml(yaml_path)
@@ -145,7 +216,7 @@ def get_programs(log_directory: str, verbose: bool = False) -> dict[int, "Progra
             info = entry["program_created"]
             program_id = int(info.get("id"))
             programs[program_id] = ProgramData(
-                id=program_id, compiled=False, watcher_kernel_ids=[], binary_status_per_device={}
+                id=program_id, compiled=False, watcherKernelIds=[], binary_status_per_device={}, kernels=[]
             )
             if verbose:
                 startup.print_log(int(info.get("timestamp_ns")), f"Program {program_id} created")
@@ -166,7 +237,7 @@ def get_programs(log_directory: str, verbose: bool = False) -> dict[int, "Progra
             program_id = int(info.get("id"))
             watcher_kernel_id = int(info.get("watcher_kernel_id"))
             if program_id in programs:
-                programs[program_id].watcher_kernel_ids.append(watcher_kernel_id)
+                programs[program_id].watcherKernelIds.append(watcher_kernel_id)
             if verbose:
                 startup.print_log(
                     int(info.get("timestamp_ns")),
@@ -204,9 +275,7 @@ def get_programs(log_directory: str, verbose: bool = False) -> dict[int, "Progra
     return programs
 
 
-def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, "MeshDeviceData"]:
-    from inspector_data import MeshDeviceData
-
+def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, MeshDeviceData]:
     yaml_path = os.path.join(log_directory, "mesh_devices_log.yaml")
     data = read_yaml(yaml_path)
     if verbose:
@@ -219,16 +288,16 @@ def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, "Me
             info = entry["mesh_device_created"]
             mesh_id = int(info.get("mesh_id"))
             mesh_device = MeshDeviceData(
-                mesh_id=mesh_id,
+                meshId=mesh_id,
                 devices=[int(device_id) for device_id in info.get("devices", [])],
                 shape=[int(dim) for dim in info.get("shape", [])],
-                parent_mesh_id=int(info.get("parent_mesh_id")) if info.get("parent_mesh_id") is not None else None,
+                parentMeshId=int(info.get("parent_mesh_id")) if info.get("parent_mesh_id") is not None else None,
             )
             mesh_devices[mesh_id] = mesh_device
             if verbose:
                 startup.print_log(
                     int(info.get("timestamp_ns")),
-                    f"Mesh device {mesh_id} created. Devices: {mesh_device.devices}, Shape: {mesh_device.shape}, Parent: {mesh_device.parent_mesh_id}",
+                    f"Mesh device {mesh_id} created. Devices: {mesh_device.devices}, Shape: {mesh_device.shape}, Parent: {mesh_device.parentMeshId}",
                 )
         elif "mesh_device_destroyed" in entry:
             info = entry["mesh_device_destroyed"]
@@ -249,9 +318,7 @@ def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, "Me
     return mesh_devices
 
 
-def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, "MeshWorkloadData"]:
-    from inspector_data import MeshCoordinate, MeshWorkloadProgramData, MeshWorkloadData
-
+def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, MeshWorkloadData]:
     yaml_path = os.path.join(log_directory, "mesh_workloads_log.yaml")
     data = read_yaml(yaml_path)
     if verbose:
@@ -264,7 +331,7 @@ def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, "
             info = entry["mesh_workload_created"]
             mesh_workload_id = int(info.get("mesh_workload_id"))
             mesh_workloads[mesh_workload_id] = MeshWorkloadData(
-                mesh_workload_id=mesh_workload_id, programs=[], binary_status_per_mesh_device={}
+                meshWorkloadId=mesh_workload_id, programs=[], binary_status_per_mesh_device={}, binaryStatusPerMeshDevice=[]
             )
             if verbose:
                 startup.print_log(int(info.get("timestamp_ns")), f"Mesh workload {mesh_workload_id} created")
@@ -284,7 +351,7 @@ def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, "
             ]
             if mesh_workload_id in mesh_workloads:
                 mesh_workloads[mesh_workload_id].programs.append(
-                    MeshWorkloadProgramData(program_id=program_id, coordinates=coordinates)
+                    MeshWorkloadProgramData(programId=program_id, coordinates=coordinates)
                 )
             if verbose:
                 startup.print_log(
@@ -308,26 +375,27 @@ def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, "
 
 
 def update_programs_with_mesh_workloads(
-    programs: dict[int, "ProgramData"],
-    mesh_workloads: dict[int, "MeshWorkloadData"],
-    mesh_devices: dict[int, "MeshDeviceData"],
+    programs: dict[int, ProgramData],
+    mesh_workloads: list[MeshWorkloadData],
+    mesh_devices: list[MeshDeviceData],
 ):
-    for mesh_workload in mesh_workloads.values():
+    mesh_devices_map = {device.meshId: device for device in mesh_devices}
+    for mesh_workload in mesh_workloads:
         for mesh_id, binary_status in mesh_workload.binary_status_per_mesh_device.items():
             if binary_status != "NotSet":
                 for program_data in mesh_workload.programs:
-                    program_id = program_data.program_id
+                    program_id = program_data.programId
                     if program_id not in programs:
                         continue  # Skip if the program is not found
                     program = programs[program_id]
                     for coordinate in program_data.coordinates:
-                        device_id = mesh_devices[mesh_id].get_device_id(coordinate)
+                        device_id = mesh_devices_map[mesh_id].get_device_id(coordinate)
                         program.binary_status_per_device[device_id] = binary_status
 
 
-def get_devices_in_use(programs: dict[int, "ProgramData"]) -> set[int]:
+def get_devices_in_use(programs: list[ProgramData]) -> set[int]:
     used_devices = set()
-    for program in programs.values():
+    for program in programs:
         # Only include devices with status "Committed"
         committed_devices = {
             device_id for device_id, status in program.binary_status_per_device.items() if status == "Committed"
@@ -348,55 +416,52 @@ def get_log_directory(log_directory: str | None = None) -> str:
     return log_directory
 
 
-def get_data(log_directory: str | None = None) -> "InspectorData":
-    from inspector_data import InspectorData, KernelData, MeshDeviceData, MeshWorkloadData, ProgramData
+class InspectorLogsData:
+    def __init__(self, log_directory: str):
+        self.log_directory = log_directory
 
-    class InspectorLogsData(InspectorData):
-        def __init__(self, log_directory: str):
-            self.log_directory = log_directory
+    @cached_property
+    def mesh_devices(self):
+        GetMeshDeviceResults = namedtuple("GetMeshDeviceResults", ["meshDevices"])
+        return GetMeshDeviceResults(meshDevices = list(get_mesh_devices(self.log_directory).values()))
 
-        @cached_property
-        def __mesh_devices(self) -> dict[int, MeshDeviceData]:
-            return get_mesh_devices(self.log_directory)
+    def getMeshDevices(self):
+        return self.mesh_devices
 
-        @property
-        def mesh_devices(self) -> dict[int, MeshDeviceData]:
-            return self.__mesh_devices
+    @cached_property
+    def mesh_workloads(self):
+        GetMeshWorkloadResults = namedtuple("GetMeshWorkloadResults", ["meshWorkloads"])
+        return GetMeshWorkloadResults(meshWorkloads = list(get_mesh_workloads(self.log_directory).values()))
 
-        @cached_property
-        def __mesh_workloads(self) -> dict[int, MeshWorkloadData]:
-            return get_mesh_workloads(self.log_directory)
+    def getMeshWorkloads(self):
+        return self.mesh_workloads
 
-        @property
-        def mesh_workloads(self) -> dict[int, MeshWorkloadData]:
-            return self.__mesh_workloads
+    @cached_property
+    def kernels(self) -> dict[int, KernelData]:
+        return get_kernels(self.log_directory)
 
-        @cached_property
-        def __kernels(self) -> dict[int, KernelData]:
-            return get_kernels(self.log_directory)
+    @cached_property
+    def programs(self):
+        GetProgramsResults = namedtuple("GetProgramsResults", ["programs"])
+        programs = get_programs(self.log_directory)
+        update_programs_with_mesh_workloads(programs, self.mesh_workloads.meshWorkloads, self.mesh_devices.meshDevices)
+        for program in programs.values():
+            program.kernels = [self.kernels[kid] for kid in program.watcherKernelIds if kid in self.kernels]
+        return GetProgramsResults(programs = list(programs.values()))
 
-        @property
-        def kernels(self) -> dict[int, KernelData]:
-            return self.__kernels
+    def getPrograms(self):
+        return self.programs
 
-        @cached_property
-        def __programs(self) -> dict[int, ProgramData]:
-            programs = get_programs(self.log_directory)
-            update_programs_with_mesh_workloads(programs, self.mesh_workloads, self.mesh_devices)
-            return programs
+    @cached_property
+    def devices_in_use(self):
+        GetDevicesInUseResults = namedtuple("GetDevicesInUseResults", ["deviceIds"])
+        return GetDevicesInUseResults(deviceIds = list(get_devices_in_use(self.getPrograms().programs)))
 
-        @property
-        def programs(self) -> dict[int, ProgramData]:
-            return self.__programs
+    def getDevicesInUse(self):
+        return self.devices_in_use
 
-        @cached_property
-        def __devices_in_use(self) -> set[int]:
-            return get_devices_in_use(self.programs)
 
-        @property
-        def devices_in_use(self) -> set[int]:
-            return self.__devices_in_use
-
+def get_data(log_directory: str | None = None) -> InspectorLogsData:
     log_directory = get_log_directory(log_directory)
     if os.path.exists(log_directory):
         return InspectorLogsData(log_directory)
@@ -416,20 +481,20 @@ def main():
     for program in programs.values():
         print(f"  Program ID {program.id}, compiled: {program.compiled}")
         print(f"    Binary status per device: {program.binary_status_per_device}")
-        print(f"    Watcher Kernel IDs: {program.watcher_kernel_ids}")
+        print(f"    Watcher Kernel IDs: {program.watcherKernelIds}")
     print()
 
     kernels = get_kernels(log_directory)
     print("Kernels:")
     for kernel in kernels.values():
-        print(f"  {kernel.watcher_kernel_id}, pid {kernel.program_id}: {kernel.name} ({kernel.path})")
+        print(f"  {kernel.watcherKernelId}, pid {kernel.programId}: {kernel.name} ({kernel.path})")
     print()
 
     mesh_devices = get_mesh_devices(log_directory, verbose=True)
     print("Mesh Devices:")
     for mesh_device in mesh_devices.values():
         print(
-            f"  Mesh ID {mesh_device.mesh_id}, Parent Mesh ID: {mesh_device.parent_mesh_id}, Initialized: {mesh_device.initialized}"
+            f"  Mesh ID {mesh_device.meshId}, Parent Mesh ID: {mesh_device.parentMeshId}, Initialized: {mesh_device.initialized}"
         )
         print(f"    Devices: {mesh_device.devices}")
         print(f"    Shape: {mesh_device.shape}")
@@ -438,22 +503,22 @@ def main():
     mesh_workloads = get_mesh_workloads(log_directory, verbose=True)
     print("Mesh Workloads:")
     for mesh_workload in mesh_workloads.values():
-        print(f"  Mesh Workload ID {mesh_workload.mesh_workload_id}")
+        print(f"  Mesh Workload ID {mesh_workload.meshWorkloadId}")
         print(f"    Programs:")
         for program in mesh_workload.programs:
-            print(f"      {program.program_id}: {program.coordinates}")
+            print(f"      {program.programId}: {program.coordinates}")
         print(f"    Binary status per mesh device: {mesh_workload.binary_status_per_mesh_device}")
     print()
 
-    update_programs_with_mesh_workloads(programs, mesh_workloads, mesh_devices)
+    update_programs_with_mesh_workloads(programs, list(mesh_workloads.values()), list(mesh_devices.values()))
     print("Programs after updating with mesh workloads:")
     for program in programs.values():
         print(f"  Program ID {program.id}, compiled: {program.compiled}")
         print(f"    Binary status per device: {program.binary_status_per_device}")
-        print(f"    Watcher Kernel IDs: {program.watcher_kernel_ids}")
+        print(f"    Watcher Kernel IDs: {program.watcherKernelIds}")
     print()
 
-    devices_in_use = get_devices_in_use(programs)
+    devices_in_use = get_devices_in_use(list(programs.values()))
     print(f"Devices in use: {devices_in_use}")
     print()
 

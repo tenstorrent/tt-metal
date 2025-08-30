@@ -21,6 +21,7 @@ private:
     void rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results);
     void rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& results);
     void rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Builder& results);
+    void rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builder& results);
     void rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::Inspector::GetKernelResults::Builder results);
 
     static rpc::BinaryStatus convert_binary_status(ProgramBinaryStatus status);

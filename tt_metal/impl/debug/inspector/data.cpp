@@ -27,6 +27,7 @@ Data::Data()
             get_rpc_server().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
             get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
             get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
+            get_rpc_server().setGetDevicesInUseCallback([this](auto result) { this->rpc_get_devices_in_use(result); });
             get_rpc_server().setGetKernelCallback([this](auto params, auto result) { this->rpc_get_kernel(params, result); });
         } catch (const std::exception& e) {
             TT_INSPECTOR_THROW("Failed to start Inspector RPC server: {}", e.what());
@@ -143,6 +144,44 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
             binary_status.setMeshId(mesh_id);
             binary_status.setStatus(convert_binary_status(status));
         }
+    }
+}
+
+void Data::rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builder& results) {
+    std::lock_guard<std::mutex> lock_programs(programs_mutex);
+    std::lock_guard<std::mutex> lock_mesh_device(mesh_devices_mutex);
+    std::lock_guard<std::mutex> lock_mesh_workload(mesh_workloads_mutex);
+    std::set<uint64_t> device_ids;
+
+    // First add all devices from mesh workloads
+    for (const auto& [mesh_workload_id, mesh_workload_data] : mesh_workloads_data) {
+        for (const auto& [mesh_device_id, status] : mesh_workload_data.binary_status_per_device) {
+            if (status != ProgramBinaryStatus::NotSent) {
+                auto mesh_device_it = mesh_devices_data.find(mesh_device_id);
+                if (mesh_device_it != mesh_devices_data.end()) {
+                    auto* mesh_device = mesh_device_it->second.mesh_device;
+                    for (auto& device : mesh_device->get_devices()) {
+                        device_ids.insert(static_cast<uint64_t>(device->id()));
+                    }
+                }
+            }
+        }
+    }
+
+    // Add all devices from programs
+    for (const auto& [program_id, program_data] : programs_data) {
+        for (const auto& [device_id, status] : program_data.binary_status_per_device) {
+            if (status != ProgramBinaryStatus::NotSent) {
+                device_ids.insert(static_cast<uint64_t>(device_id));
+            }
+        }
+    }
+
+    // Write result
+    auto result_device_ids = results.initDeviceIds(device_ids.size());
+    size_t i = 0;
+    for (const auto& device_id : device_ids) {
+        result_device_ids.set(i++, device_id);
     }
 }
 
