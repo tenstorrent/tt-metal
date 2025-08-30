@@ -197,12 +197,12 @@ inline __attribute__((always_inline)) void flush_erisc_icache() {
 #ifdef ARCH_BLACKHOLE
 #pragma GCC unroll 2048
     for (int i = 0; i < 2048; i++) {
-        asm("nop");
+        __asm__ volatile("nop");
     }
 #else
 #pragma GCC unroll 128
     for (int i = 0; i < 128; i++) {
-        asm("nop");
+        __asm__ volatile("nop");
     }
 #endif
 }
