@@ -293,6 +293,7 @@ class CMakeBuild(build_ext):
             "api/tt-metalium/edm_fabric_counters.hpp",
             "core_descriptors/*.yaml",
             "fabric/hw/**/*",
+            "lite_fabric/hw/**/*",
             "fabric/mesh_graph_descriptors/*.yaml",
             "fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
             "fabric/impl/kernels/tt_fabric_mux.cpp",

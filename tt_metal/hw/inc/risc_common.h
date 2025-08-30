@@ -52,12 +52,6 @@ inline uint32_t READ_REG(uint32_t addr) {
     return ptr[0];
 }
 
-// This enum is used to specify the dest location type for inline writes.
-// It is needed because inline writes use all 4 memory ports and may hang on Blackhole when there is back-pressure.
-// This hang only manifests when the inline writes are issued to a L1 location. The workaround on BH is for inline
-// writes to L1 to use noc async writes.
-enum class InlineWriteDst : uint8_t { DEFAULT = 0, L1 = 1, REG = 2 };
-
 inline uint32_t dram_io_incr_ptr(uint32_t curr_ptr, uint32_t incr, uint32_t buf_size_q_slots) {
     uint32_t next_ptr = curr_ptr + incr;
     uint32_t double_buf_size_q_slots = 2 * buf_size_q_slots;
