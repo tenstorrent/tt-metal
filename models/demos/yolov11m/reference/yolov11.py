@@ -45,7 +45,7 @@ class Conv(nn.Module):
                 groups=groups,
                 bias=False,
             )
-            self.bn = nn.BatchNorm2d(out_channel, eps=0.001, momentum=0.03)
+            self.bn = nn.BatchNorm2d(out_channel // 2, eps=0.001, momentum=0.03)
             self.act = nn.SiLU(inplace=True)
         else:
             self.conv = nn.Conv2d(
