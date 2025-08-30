@@ -57,7 +57,7 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
+        is_padding_layer: tuple[bool, ...] | None,
     ) -> ModelPrefillConfig:
         assert mesh_device.shape[0] == len(
             is_padding_layer
@@ -89,7 +89,7 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
+        is_padding_layer: tuple[bool, ...] | None,
     ) -> ModelDecodeConfig:
         assert mesh_device.shape[0] == len(
             is_padding_layer
