@@ -67,9 +67,10 @@ jobs:
             mesh-device: P150x4,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 4}",
-            owner_id: U08GELBB1AP, # Ambrose Ling
+            owner_id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
-          # { Removing this until #26734 is resolved
+          # {
+          #   Removing this until #26734 is resolved
           #   name: "[RB] Llama-3.1-8B-Instruct",
           #   model: "meta-llama/Llama-3.1-8B-Instruct",
           #   server-timeout: 35,
@@ -100,6 +101,18 @@ jobs:
             runner-label: config-tg,
             mesh-device: TG,
             override-tt-config: "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D\"}",
+            tt-llama-text-ver: tt_transformers,
+            co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
+            co-owner-2-id: U08BH66EXAL, # Radoica Draskic
+          },
+          {
+            name: "[T3K] Gemma3-27B",
+            model: "google/gemma-3-27b-it",
+            server-timeout: 10,
+            benchmark-timeout: 5,
+            runner-label: config-t3000,
+            mesh-device: T3K,
+            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"l1_small_size\": 768}",
             tt-llama-text-ver: tt_transformers,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08BH66EXAL, # Radoica Draskic
