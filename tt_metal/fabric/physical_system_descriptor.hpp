@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <memory>
 
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <tt_stl/strong_type.hpp>
@@ -20,8 +21,16 @@ using TrayID = tt::stl::StrongType<uint32_t, struct TrayIDTag>;
 using NID = tt::stl::StrongType<uint32_t, struct NIDTag>;
 using RackID = tt::stl::StrongType<uint32_t, struct RackIDTag>;
 using UID = tt::stl::StrongType<uint32_t, struct UIDTag>;
-using HallID = tt::stl::StrongType<uint32_t, struct HallIDTag>;
-using AisleID = tt::stl::StrongType<uint32_t, struct AisleIDTag>;
+using HallID = tt::stl::StrongType<std::string, struct HallIDTag>;
+using AisleID = tt::stl::StrongType<std::string, struct AisleIDTag>;
+
+// Host location information from Factory System Descriptor
+struct HostDeploymentDescriptor {
+    HallID hall;
+    AisleID aisle;
+    RackID rack;
+    UID shelf_u;
+};
 
 // Specify Physical ASIC Attributes
 struct ASICDescriptor {
@@ -89,7 +98,7 @@ struct PhysicalConnectivityGraph {
 
 class PhysicalSystemDescriptor {
 public:
-    PhysicalSystemDescriptor(bool run_discovery = true);
+    PhysicalSystemDescriptor(bool run_discovery = true, const std::string& fsd_path = "");
     void run_discovery(bool run_global_discovery = true);
     void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt);
 
@@ -120,16 +129,23 @@ public:
     const std::unordered_map<std::string, std::string>& get_host_mobo_name_map() const { return host_to_mobo_name_; }
     const std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() const { return host_to_rank_; }
     const ExitNodeConnectionTable& get_exit_node_connection_table() const { return exit_node_connection_table_; }
+    const std::unordered_map<std::string, HostDeploymentDescriptor>& get_host_deployment_descriptors() const {
+        return host_deployment_descriptors_;
+    }
 
     PhysicalConnectivityGraph& get_system_graph() { return system_graph_; }
     std::unordered_map<AsicID, ASICDescriptor>& get_asic_descriptors() { return asic_descriptors_; }
     std::unordered_map<std::string, std::string>& get_host_mobo_name_map() { return host_to_mobo_name_; }
     std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() { return host_to_rank_; }
     ExitNodeConnectionTable& get_exit_node_connection_table() { return exit_node_connection_table_; }
+    std::unordered_map<std::string, HostDeploymentDescriptor>& get_host_deployment_descriptors() {
+        return host_deployment_descriptors_;
+    }
 
 private:
     void run_local_discovery();
     void run_global_discovery();
+    void load_host_deployment_descriptors_from_fsd(const std::string& fsd_path);
     void merge(PhysicalSystemDescriptor&& other);
     void exchange_metadata(bool issue_gather);
     void generate_cross_host_connections();
@@ -140,6 +156,7 @@ private:
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;
     std::unordered_map<std::string, std::string> host_to_mobo_name_;
     std::unordered_map<std::string, uint32_t> host_to_rank_;
+    std::unordered_map<std::string, HostDeploymentDescriptor> host_deployment_descriptors_;
     ExitNodeConnectionTable exit_node_connection_table_;
     bool all_hostnames_unique_ = true;
 };

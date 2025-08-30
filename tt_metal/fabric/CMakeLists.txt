@@ -65,11 +65,33 @@ endforeach()
 # Add the generated headers to your target
 target_sources(fabric PRIVATE ${GENERATED_FBS_HEADERS})
 
+# Find protobuf package
+find_package(Protobuf REQUIRED)
+
+# Generate C++ code from factory system descriptor protobuf definitions
+protobuf_generate_cpp(
+    FSD_PROTO_SRCS
+    FSD_PROTO_HDRS
+    ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_fabric/factory_system_descriptor/cabling_descriptors/schemas/factory_system_descriptor.proto
+    ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_fabric/factory_system_descriptor/cabling_descriptors/schemas/pod_config.proto
+    ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_fabric/factory_system_descriptor/cabling_descriptors/schemas/cluster_config.proto
+    ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_fabric/factory_system_descriptor/deployment/deployment.proto
+)
+
+# Add the generated protobuf headers to the target
+target_sources(
+    fabric
+    PRIVATE
+        ${FSD_PROTO_SRCS}
+        ${FSD_PROTO_HDRS}
+)
+
 target_include_directories(
     fabric
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
+        ${CMAKE_CURRENT_BINARY_DIR} # For generated protobuf headers
 )
 
 target_link_libraries(
@@ -84,6 +106,7 @@ target_link_libraries(
         Metalium::Metal::Impl
         TT::Metalium::HostDevCommon
         FlatBuffers::FlatBuffers
+        ${Protobuf_LIBRARIES} # Link against protobuf libraries
 )
 
 target_precompile_headers(fabric REUSE_FROM TT::CommonPCH)

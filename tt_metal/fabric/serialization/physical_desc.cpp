@@ -67,6 +67,17 @@ std::vector<uint8_t> serialize_physical_descriptor_to_bytes(
         exit_node_tables.push_back(exit_table);
     }
 
+    // Serialize host deployment descriptors
+    std::vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::HostDeploymentDescriptor>> host_deployment_descriptors;
+    for (const auto& [host_name, descriptor] : physical_descriptor.get_host_deployment_descriptors()) {
+        auto host_str = builder.CreateString(host_name);
+        auto hall_str = builder.CreateString(*descriptor.hall);
+        auto aisle_str = builder.CreateString(*descriptor.aisle);
+        auto host_deployment_desc = tt::tt_metal::flatbuffer::CreateHostDeploymentDescriptor(
+            builder, host_str, hall_str, aisle_str, *descriptor.rack, *descriptor.shelf_u);
+        host_deployment_descriptors.push_back(host_deployment_desc);
+    }
+
     // Serialize ASIC connectivity graph
     std::vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::HostAsicConnectivity>> host_asic_connectivities;
     for (const auto& [host_name, asic_topology] : physical_descriptor.get_system_graph().asic_connectivity_graph) {
@@ -259,6 +270,17 @@ tt_metal::PhysicalSystemDescriptor deserialize_physical_descriptor_from_bytes(co
 
                 result.get_system_graph().host_connectivity_graph[fb_host_conn->src_host_name()->str()] = host_edges;
             }
+        }
+    }
+    // Deserialize host deployment descriptors
+    if (fb_desc->host_deployment_descriptors()) {
+        for (auto fb_host_desc : *fb_desc->host_deployment_descriptors()) {
+            HostDeploymentDescriptor desc{
+                .hall = HallID{fb_host_desc->hall()->str()},
+                .aisle = AisleID{fb_host_desc->aisle()->str()},
+                .rack = RackID{fb_host_desc->rack()},
+                .shelf_u = UID{fb_host_desc->shelf_u()}};
+            result.get_host_deployment_descriptors()[fb_host_desc->host_name()->str()] = desc;
         }
     }
     return result;

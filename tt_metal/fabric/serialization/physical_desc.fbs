@@ -1,10 +1,19 @@
 namespace tt.tt_metal.flatbuffer;
 
+table HostDeploymentDescriptor {
+    host_name: string;
+    hall: string;
+    aisle: string;
+    rack: uint32;
+    shelf_u: uint32;
+}
+
 table EthConnection {
     src_chan: uint64;
     dst_chan: uint64;
     is_local: bool;
 }
+
 table AsicConnectionEdge {
     dst_asic_id: uint64;
     eth_connections: [EthConnection];
@@ -79,6 +88,7 @@ table PhysicalSystemDescriptor {
     host_to_mobo_name: [HostToMoboMap];
     host_to_rank: [HostToRankMap];
     exit_node_connection_table: [ExitNodeConnectionTable];
+    host_deployment_descriptors: [HostDeploymentDescriptor];
 }
 
 root_type PhysicalSystemDescriptor;
