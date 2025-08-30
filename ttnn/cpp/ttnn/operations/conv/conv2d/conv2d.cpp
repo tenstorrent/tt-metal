@@ -409,35 +409,25 @@ Result conv2d_DRAM(
 
         TT_FATAL(conv_config.shard_layout.has_value(), " Conv2D DRAM Slicing must have a shard layout set.");
 
-        Tensor sliced_input_tensor;
-        if (conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED) {
-            sliced_input_tensor = ttnn::slice(
-                queue_id,
-                input_tensor_on_device,
-                ttnn::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
-                ttnn::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
-                ttnn::SmallVector<uint32_t>{1, 1, 1, 1}  // Step
-            );
-        } else {
-            auto sliced_input_tensor_memory_config = std::get<1>(determine_input_memory_config(
-                conv_config,
-                batch_size,
-                ttnn::Shape({batch_size, input_slice_height, input_slice_width, in_channels}),
-                ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}),
-                mm_conv,
-                compute_grid_size,
-                // Setting layout to TILE forces input_channels_alignment to 32.
-                //  The padded_slice op needs aligned reads from L1.
-                Layout::TILE));
+        auto sliced_input_tensor_memory_config = std::get<1>(determine_input_memory_config(
+            conv_config,
+            batch_size,
+            ttnn::Shape({batch_size, input_slice_height, input_slice_width, in_channels}),
+            ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}),
+            mm_conv,
+            compute_grid_size,
+            // Setting layout to TILE forces input_channels_alignment to 32.
+            //  The padded_slice op needs aligned reads from L1.
+            Layout::TILE));
 
-            sliced_input_tensor = ttnn::experimental::padded_slice(
-                queue_id,
-                input_tensor_on_device,
-                ttnn::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
-                ttnn::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
-                ttnn::SmallVector<uint32_t>{1, 1, 1, 1},  // Step
-                sliced_input_tensor_memory_config);
-        }
+        Tensor sliced_input_tensor = ttnn::experimental::padded_slice(
+            queue_id,
+            input_tensor_on_device,
+            ttnn::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
+            ttnn::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
+            ttnn::SmallVector<uint32_t>{1, 1, 1, 1},  // Step
+            sliced_input_tensor_memory_config);
+
         auto conv_config_l1 = conv_config;
         conv_config_l1.deallocate_activation = true;
         conv_config_l1.reallocate_halo_output = true;
