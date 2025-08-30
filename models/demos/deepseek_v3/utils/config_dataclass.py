@@ -147,7 +147,6 @@ class PointToPointConfig(OpConfigBase):
     receiver_coord: ttnn.MeshCoordinate | None = None
     sender_coord: ttnn.MeshCoordinate | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
-    semaphore: ttnn._ttnn.global_semaphore.global_sempahore | None = None
     optional_output_tensor: ttnn.Tensor | None = None
 
 

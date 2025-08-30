@@ -20,7 +20,6 @@ struct ExecutePointToPoint {
         const MeshCoordinate& receiver_coord,
         const MeshCoordinate& sender_coord,
         ccl::Topology topology,
-        const GlobalSemaphore& semaphore,
         const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt);
 };
 }  // namespace operations::point_to_point
