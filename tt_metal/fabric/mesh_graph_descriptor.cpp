@@ -633,57 +633,37 @@ std::string MeshGraphDescriptor::get_instance_type(const std::shared_ptr<NodeIns
 }
 
 // Accessor method implementations
-std::shared_ptr<MeshGraphDescriptor::NodeInstance> MeshGraphDescriptor::get_instance_by_global_id(uint32_t global_id) const {
+MeshGraphDescriptor::NodeInstance* MeshGraphDescriptor::get_instance_by_global_id(uint32_t global_id) const {
     auto it = all_instances_.find(global_id);
-    return it != all_instances_.end() ? it->second : nullptr;
+    return it != all_instances_.end() ? it->second.get() : nullptr;
 }
 
-std::vector<std::shared_ptr<MeshGraphDescriptor::NodeInstance>> MeshGraphDescriptor::get_instances_by_type(const std::string& type) const {
-    std::vector<std::shared_ptr<NodeInstance>> result;
+std::vector<uint32_t> MeshGraphDescriptor::get_ids_by_type(const std::string& type) const {
     auto it = instances_by_type_.find(type);
-    if (it != instances_by_type_.end()) {
-        result.reserve(it->second.size());
-        for (uint32_t global_id : it->second) {
-            auto instance_it = all_instances_.find(global_id);
-            if (instance_it != all_instances_.end()) {
-                result.push_back(instance_it->second);
-            }
-        }
-    }
-    return result;
+    return it != instances_by_type_.end() ? it->second : std::vector<uint32_t>{};
 }
 
-std::vector<std::shared_ptr<MeshGraphDescriptor::NodeInstance>> MeshGraphDescriptor::get_instances_by_name(const std::string& name) const {
-    std::vector<std::shared_ptr<NodeInstance>> result;
+std::vector<uint32_t> MeshGraphDescriptor::get_ids_by_name(const std::string& name) const {
     auto it = instances_by_name_.find(name);
-    if (it != instances_by_name_.end()) {
-        result.reserve(it->second.size());
-        for (uint32_t global_id : it->second) {
-            auto instance_it = all_instances_.find(global_id);
-            if (instance_it != all_instances_.end()) {
-                result.push_back(instance_it->second);
-            }
-        }
-    }
-    return result;
+    return it != instances_by_name_.end() ? it->second : std::vector<uint32_t>{};
 }
 
-std::vector<std::shared_ptr<MeshGraphDescriptor::NodeInstance>> MeshGraphDescriptor::get_all_instances() const {
-    std::vector<std::shared_ptr<NodeInstance>> result;
+std::vector<uint32_t> MeshGraphDescriptor::get_all_ids() const {
+    std::vector<uint32_t> result;
     result.reserve(all_instances_.size());
     for (const auto& [global_id, instance] : all_instances_) {
-        result.push_back(instance);
+        result.push_back(global_id);
     }
     return result;
 }
 
-void MeshGraphDescriptor::print_node_instance(const std::shared_ptr<NodeInstance>& node_instance, int indent_level) {
+void MeshGraphDescriptor::print_node_instance(const NodeInstance* node_instance, int indent_level) {
     std::string indent(indent_level * 2, ' ');
     std::stringstream ss;
     
     // Determine the type based on the descriptor variant
     if (std::holds_alternative<const proto::MeshDescriptor*>(node_instance->descriptor)) {
-        auto mesh_instance = std::static_pointer_cast<MeshInstance>(node_instance);
+        auto mesh_instance = static_cast<const MeshInstance*>(node_instance);
         // Print Mesh Instance details
         ss << indent << "=== MESH INSTANCE ===" << std::endl;
         ss << indent << "Global ID: " << mesh_instance->global_id << std::endl;
@@ -736,7 +716,7 @@ void MeshGraphDescriptor::print_node_instance(const std::shared_ptr<NodeInstance
         }
         
     } else if (std::holds_alternative<const proto::GraphDescriptor*>(node_instance->descriptor)) {
-        auto graph_instance = std::static_pointer_cast<GraphInstance>(node_instance);
+        auto graph_instance = static_cast<const GraphInstance*>(node_instance);
         // Print Graph Instance details
         ss << indent << "=== GRAPH INSTANCE ===" << std::endl;
         ss << indent << "ID: " << graph_instance->id << std::endl;
@@ -757,7 +737,7 @@ void MeshGraphDescriptor::print_node_instance(const std::shared_ptr<NodeInstance
         if (!graph_instance->sub_instances.empty()) {
             ss << indent << "Sub-instances:" << std::endl;
             for (const auto& sub_instance : graph_instance->sub_instances) {
-                print_node_instance(sub_instance, indent_level + 1);
+                print_node_instance(sub_instance.get(), indent_level + 1);
             }
         }
     } else {
@@ -778,16 +758,10 @@ void MeshGraphDescriptor::print_all_nodes() {
     ss << "=====================================" << std::endl;
     log_debug(tt::LogFabric, "{}", ss.str());
     
-    // Print all instances using the new accessor method
-    auto all_instances = get_all_instances();
-    for (const auto& instance : all_instances) {
-        print_node_instance(instance, 0);
-    }
-    
     ss.str(std::string());
     ss << "\n=== TOP LEVEL INSTANCE ===" << std::endl;
     if (top_level_instance_) {
-        print_node_instance(top_level_instance_, 0);
+        print_node_instance(top_level_instance_.get(), 0);
     } else {
         ss << "No top level instance found." << std::endl;
         log_debug(tt::LogFabric, "{}", ss.str());

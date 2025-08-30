@@ -31,6 +31,8 @@ enum TorusTopology_Type : int;
 
 class MeshGraphDescriptor {
 
+// TODO: Find a way to do this without subclassing or something
+// Or find a way to make return values good without having to dynamic cast all the time
 struct NodeInstance {
     const uint32_t id;
     const std::string descriptor_name;
@@ -64,23 +66,23 @@ public:
     ~MeshGraphDescriptor();
 
     // Print functions for debugging and inspection
-    void print_node_instance(const std::shared_ptr<NodeInstance>& node_instance, int indent_level = 0);
+    void print_node_instance(const NodeInstance* node_instance, int indent_level = 0);
     void print_all_nodes();
     
     // Accessor methods - all lookups go through the global ID map
-    std::shared_ptr<NodeInstance> get_instance_by_global_id(uint32_t global_id) const;
-    std::vector<std::shared_ptr<NodeInstance>> get_instances_by_type(const std::string& type) const;
-    std::vector<std::shared_ptr<NodeInstance>> get_instances_by_name(const std::string& name) const;
-    std::vector<std::shared_ptr<NodeInstance>> get_all_instances() const;
+    NodeInstance* get_instance_by_global_id(uint32_t global_id) const;
+    std::vector<uint32_t> get_ids_by_type(const std::string& type) const;
+    std::vector<uint32_t> get_ids_by_name(const std::string& name) const;
+    std::vector<uint32_t> get_all_ids() const;
 
 private:
     std::unique_ptr<const proto::MeshGraphDescriptor> proto_;
-
 
     std::unordered_map<std::string, const proto::MeshDescriptor*> mesh_descriptors_by_name_;
     std::unordered_map<std::string, const proto::GraphDescriptor*> graph_descriptors_by_name_;
     std::unordered_map<std::string, std::unordered_set<const proto::GraphDescriptor*>> graph_descriptors_by_type_;
 
+    // TODO: Change this to a unique pointer
     // Single source of truth - all instances by global ID
     std::unordered_map<uint32_t, std::shared_ptr<NodeInstance>> all_instances_;
     
@@ -89,8 +91,6 @@ private:
     std::unordered_map<std::string, std::vector<uint32_t>> instances_by_type_;
     std::unordered_map<std::string, std::vector<uint32_t>> instances_by_name_;
     
-
-
     // Static methods for setting defaults and validation
     static void set_defaults(proto::MeshGraphDescriptor& proto);
 
