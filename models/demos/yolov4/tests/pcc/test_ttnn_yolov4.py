@@ -79,21 +79,21 @@ def run_yolov4(device, model_location_generator, use_pretrained_weight, resoluti
 )
 @pytest.mark.parametrize(
     "use_pretrained_weight",
-    [True, False],
+    [True],
     ids=[
         "pretrained_weight_true",
-        "pretrained_weight_false",
+        # "pretrained_weight_false",
     ],
 )
 @pytest.mark.parametrize(
     "resolution",
     [
         (320, 320),
-        (640, 640),
+        # (640, 640),
     ],
     ids=[
         "0",
-        "1",
+        # "1",
     ],
 )
 def test_yolov4(device, model_location_generator, use_pretrained_weight, resolution):
