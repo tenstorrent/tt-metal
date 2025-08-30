@@ -1161,7 +1161,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     CoreCoord grid_size,
     bool inplace,
     uint32_t num_out_blocks,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool use_welford) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     if (gamma.has_value()) {
@@ -1208,6 +1209,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t W = shape[3];
     uint32_t Wt = W / TILE_WIDTH;
+    uint32_t group_size = W / num_groups;
 
     // Compute optimal core grid
     TT_FATAL(W % TILE_WIDTH == 0, "W (channels): {} must be divisible by {}", W, TILE_WIDTH);
@@ -1437,7 +1439,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t x_CB_size_group_2 = 0;
     uint32_t xmm_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t xmm_CB_size_group_2 = 0;
-    uint32_t ex_partial_CB_size = single_tile_size;   // partial Ex
+    uint32_t ex_partial_CB_size = single_tile_size * (use_welford ? 2 : 1);  // partial Ex
     uint32_t ex2_partial_CB_size = single_tile_size;  // partial Ex2
     uint32_t ex_global_CB_size = ex_partial_CB_size;  // the final result Ex
     uint32_t ex2_global_CB_size = ex2_partial_CB_size;  // the final result Ex2
@@ -1774,8 +1776,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     // reader kernel
     auto reader_mcast_sender_kernels_id_group_1 = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
-        "reader_mcast_sender_unary_gn.cpp",
+        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                       "welford_reader_mcast_sender_unary_gn.cpp"
+                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                       "reader_mcast_sender_unary_gn.cpp"),
         mcast_sender_cores_group_1,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1784,8 +1788,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             .defines = reader_mcast_sender_defines});
     auto reader_mcast_sender_kernels_id_group_2 = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
-        "reader_mcast_sender_unary_gn.cpp",
+        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                       "welford_reader_mcast_sender_unary_gn.cpp"
+                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                       "reader_mcast_sender_unary_gn.cpp"),
         mcast_sender_cores_group_2,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1797,8 +1803,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     if (use_mcast) {
         reader_mcast_receiver_kernels_id_group_1 = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
-            "reader_mcast_receiver_unary_gn.cpp",
+            (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                           "welford_reader_mcast_receiver_unary_gn.cpp"
+                         : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                           "reader_mcast_receiver_unary_gn.cpp"),
             mcast_receiver_cores_group_1,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1807,8 +1815,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                 .defines = reader_mcast_receiver_defines});
         reader_mcast_receiver_kernels_id_group_2 = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
-            "reader_mcast_receiver_unary_gn.cpp",
+            (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                           "welford_reader_mcast_receiver_unary_gn.cpp"
+                         : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                           "reader_mcast_receiver_unary_gn.cpp"),
             mcast_receiver_cores_group_2,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1957,6 +1967,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
         (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
+        (std::uint32_t)group_size,
     };
     std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_2 = {
         (std::uint32_t)1,
@@ -1988,6 +1999,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
         (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
+        (std::uint32_t)group_size,
     };
 
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_1 = {
@@ -2020,6 +2032,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
         (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
+        (std::uint32_t)group_size,
     };
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_2 = {
         (std::uint32_t)0,
@@ -2051,13 +2064,15 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
         (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
+        (std::uint32_t)group_size,
     };
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     auto mcast_sender_compute_kernels_id_group_1 = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
+        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
+                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp"),
         mcast_sender_cores_group_1,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -2067,7 +2082,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             .defines = eltwise_binary_defines});
     auto mcast_sender_compute_kernels_id_group_2 = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
+        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
+                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp"),
         mcast_sender_cores_group_2,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -2077,7 +2093,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             .defines = eltwise_binary_defines});
     auto mcast_receiver_compute_kernels_id_group_1 = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
+        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
+                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp"),
         mcast_receiver_cores_group_1,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -2087,7 +2104,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             .defines = eltwise_binary_defines});
     auto mcast_receiver_compute_kernels_id_group_2 = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
+        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
+                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp"),
         mcast_receiver_cores_group_2,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -2239,11 +2257,25 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             .set_page_size(ex_cb_partial_index, single_tile_size);
     auto cb_ex_partial = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_partial_config);
     // ex2_partial
-    uint32_t ex2_cb_partial_index = tt::CBIndex::c_21;
-    tt::tt_metal::CircularBufferConfig ex2_cb_partial_config =
-        tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex2_cb_partial_index, cb_data_format}})
-            .set_page_size(ex2_cb_partial_index, single_tile_size);
-    auto cb_ex2_partial = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_partial_config);
+    if (use_welford) {
+        // Make two buffers for ping-pong exchange (one is read and one is written to)
+        uint32_t ex_cb_ping_index = tt::CBIndex::c_11;
+        tt::tt_metal::CircularBufferConfig ex_cb_ping_config =
+            tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_ping_index, cb_data_format}})
+                .set_page_size(ex_cb_ping_index, single_tile_size);
+        auto cb_ex_ping = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_ping_config);
+        uint32_t ex_cb_pong_index = tt::CBIndex::c_12;
+        tt::tt_metal::CircularBufferConfig ex_cb_pong_config =
+            tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_pong_index, cb_data_format}})
+                .set_page_size(ex_cb_pong_index, single_tile_size);
+        auto cb_ex_pong = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_pong_config);
+    } else {
+        uint32_t ex2_cb_partial_index = tt::CBIndex::c_21;
+        tt::tt_metal::CircularBufferConfig ex2_cb_partial_config =
+            tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex2_cb_partial_index, cb_data_format}})
+                .set_page_size(ex2_cb_partial_index, single_tile_size);
+        auto cb_ex2_partial = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_partial_config);
+    }
     // ex_external
     uint32_t ex_cb_external_index = tt::CBIndex::c_10;
     tt::tt_metal::CircularBufferConfig ex_cb_external_config =
@@ -2261,14 +2293,17 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                                    .set_page_size(ex_cb_index, single_tile_size);
     auto cb_ex_global = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_global_cb_config);
     // ex2_global
-    uint32_t ex2_cb_index = tt::CBIndex::c_13;
-    uint32_t ex2_global_cb_index = tt::CBIndex::c_14;
-    std::map<uint8_t, tt::DataFormat> ex2_global_cb_data_format_spec{
-        {ex2_global_cb_index, cb_data_format}, {ex2_cb_index, cb_data_format}};
-    auto ex2_global_cb_config = tt::tt_metal::CircularBufferConfig(ex2_global_CB_size, ex2_global_cb_data_format_spec)
-                                    .set_page_size(ex2_global_cb_index, single_tile_size)
-                                    .set_page_size(ex2_cb_index, single_tile_size);
-    auto cb2_ex_global = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_global_cb_config);
+    if (!use_welford) {
+        uint32_t ex2_cb_index = tt::CBIndex::c_13;
+        uint32_t ex2_global_cb_index = tt::CBIndex::c_14;
+        std::map<uint8_t, tt::DataFormat> ex2_global_cb_data_format_spec{
+            {ex2_global_cb_index, cb_data_format}, {ex2_cb_index, cb_data_format}};
+        auto ex2_global_cb_config =
+            tt::tt_metal::CircularBufferConfig(ex2_global_CB_size, ex2_global_cb_data_format_spec)
+                .set_page_size(ex2_global_cb_index, single_tile_size)
+                .set_page_size(ex2_cb_index, single_tile_size);
+        auto cb2_ex_global = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_global_cb_config);
+    }
     // ex2pe
     uint32_t cb_ex2pe_index;
     cb_ex2pe_index = tt::CBIndex::c_27;

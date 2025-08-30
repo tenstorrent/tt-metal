@@ -257,7 +257,8 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
                     program_config.compute_with_storage_grid_size,
                     inplace,
                     num_out_blocks,
-                    this->compute_kernel_config);
+                    this->compute_kernel_config,
+                    this->use_welford);
             }
         },
         this->program_config);

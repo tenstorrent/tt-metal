@@ -42,7 +42,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     CoreCoord grid_size,
     bool inplace,
     uint32_t num_out_blocks,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool use_welford);
 
 operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     const Tensor& a,
@@ -65,6 +66,7 @@ struct GroupNorm {
     MemoryConfig output_mem_config;
     GroupNormProgramConfig program_config;
     const DeviceComputeKernelConfig compute_kernel_config;
+    bool use_welford;
 
     void validate(
         const std::vector<Tensor>& input_tensors,
