@@ -58,8 +58,9 @@ auto postprocess_vector(std::vector<U>&& data, const tt::tt_metal::Tensor& input
                 tt::stl::make_const_span(data));
         }
         return tt::tt_metal::HostBuffer(
-            std::is_same_v<DstType, bfloat8_tag> ? pack_fp32_vec_as_bfp8_tiles(data, row_major_input, is_exp_a)
-                                                 : pack_fp32_vec_as_bfp4_tiles(data, row_major_input, is_exp_a));
+            std::is_same_v<DstType, bfloat8_tag>
+                ? pack_as_bfp8_tiles(tt::stl::make_const_span(data), row_major_input, is_exp_a)
+                : pack_as_bfp4_tiles(tt::stl::make_const_span(data), row_major_input, is_exp_a));
     }
     return tt::tt_metal::HostBuffer(std::move(data));
 }
