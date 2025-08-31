@@ -16,7 +16,7 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_identity() {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
@@ -26,7 +26,7 @@ inline void calculate_identity() {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_identity_uint() {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
