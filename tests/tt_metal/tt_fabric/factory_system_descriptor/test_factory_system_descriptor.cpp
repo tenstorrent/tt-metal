@@ -24,6 +24,7 @@
 #include "pod_config.pb.h"
 #include "cluster_config.pb.h"
 #include "deployment.pb.h"
+#include "physical_system_descriptor.pb.h"
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 
@@ -31,7 +32,7 @@
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt_stl/reflection.hpp>
 #include "board/board.hpp"
-#include <yaml-cpp/yaml.h>
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
 
 namespace tt::tt_fabric {
 namespace fsd_tests {
@@ -709,20 +710,25 @@ void validate_fsd_against_gsd(
 
     const auto& hosts = generated_fsd.hosts();
 
-    // Read the discovered GSD (Global System Descriptor) - still using YAML
-    YAML::Node discovered_gsd = YAML::LoadFile(gsd_filename);
+    // Read the discovered GSD (Physical System Descriptor) - now using text proto
+    tt::fabric::proto::PhysicalSystemDescriptor discovered_gsd;
+    std::ifstream gsd_file(gsd_filename);
+    if (!gsd_file.is_open()) {
+        throw std::runtime_error("Failed to open GSD file: " + gsd_filename);
+    }
+
+    std::string gsd_content((std::istreambuf_iterator<char>(gsd_file)), std::istreambuf_iterator<char>());
+    gsd_file.close();
+
+    if (!google::protobuf::TextFormat::ParseFromString(gsd_content, &discovered_gsd)) {
+        throw std::runtime_error("Failed to parse GSD protobuf from file: " + gsd_filename);
+    }
 
     // Compare the FSD with the discovered GSD
     // First, compare hostnames from the hosts field
     if (generated_fsd.hosts().empty()) {
         throw std::runtime_error("FSD missing hosts");
     }
-
-    // Handle the new GSD structure with compute_node_specs
-    if (!discovered_gsd["compute_node_specs"]) {
-        throw std::runtime_error("GSD missing compute_node_specs");
-    }
-    YAML::Node asic_info_node = discovered_gsd["compute_node_specs"];
 
     // Check that all discovered hostnames are present in the generated FSD hosts
     std::set<std::string> generated_hostnames;
@@ -731,8 +737,9 @@ void validate_fsd_against_gsd(
     }
 
     std::set<std::string> discovered_hostnames;
-    for (const auto& hostname_entry : asic_info_node) {
-        discovered_hostnames.insert(hostname_entry.first.as<std::string>());
+    // Get hostnames from asic_descriptors
+    for (const auto& asic_desc_map : discovered_gsd.asic_descriptors()) {
+        discovered_hostnames.insert(asic_desc_map.asic_descriptor().host_name());
     }
 
     if (strict_validation) {
@@ -768,43 +775,39 @@ void validate_fsd_against_gsd(
     }
 
     // Compare board types between GSD and FSD
-    for (const auto& host_entry : asic_info_node) {
-        std::string hostname = host_entry.first.as<std::string>();
-        YAML::Node host_node = host_entry.second;
-        if (!host_node["asic_info"]) {
-            throw std::runtime_error("Host " + hostname + " missing asic_info");
-        }
+    for (const auto& asic_desc_map : discovered_gsd.asic_descriptors()) {
+        const auto& asic_desc = asic_desc_map.asic_descriptor();
+        std::string hostname = asic_desc.host_name();
+        uint32_t tray_id = asic_desc.tray_id();
 
-        for (const auto& asic_info : host_node["asic_info"]) {
-            uint32_t tray_id = asic_info["tray_id"].as<uint32_t>();
-            std::string gsd_board_type = asic_info["board_type"].as<std::string>();
+        // Convert board type enum to string
+        std::string gsd_board_type = std::string(enchantum::to_string(static_cast<BoardType>(asic_desc.board_type())));
 
-            auto fsd_key = std::make_pair(hostname, tray_id);
-            if (strict_validation) {
-                auto fsd_board_type = fsd_board_types.extract(fsd_key);
+        auto fsd_key = std::make_pair(hostname, tray_id);
+        if (strict_validation) {
+            auto fsd_board_type = fsd_board_types.extract(fsd_key);
 
-                if (fsd_board_type.empty()) {
-                    throw std::runtime_error(
-                        "Board type not found in FSD for host " + hostname + ", tray " + std::to_string(tray_id));
-                }
+            if (fsd_board_type.empty()) {
+                throw std::runtime_error(
+                    "Board type not found in FSD for host " + hostname + ", tray " + std::to_string(tray_id));
+            }
 
-                if (fsd_board_type.mapped() != gsd_board_type) {
+            if (fsd_board_type.mapped() != gsd_board_type) {
+                throw std::runtime_error(
+                    "Board type mismatch for host " + hostname + ", tray " + std::to_string(tray_id) +
+                    ": FSD=" + fsd_board_type.mapped() + ", GSD=" + gsd_board_type);
+            }
+        } else {
+            auto fsd_board_type = fsd_board_types.find(fsd_key);
+            if (fsd_board_type != fsd_board_types.end()) {
+                if (fsd_board_type->second != gsd_board_type) {
                     throw std::runtime_error(
                         "Board type mismatch for host " + hostname + ", tray " + std::to_string(tray_id) +
-                        ": FSD=" + fsd_board_type.mapped() + ", GSD=" + gsd_board_type);
+                        ": FSD=" + fsd_board_type->second + ", GSD=" + gsd_board_type);
                 }
             } else {
-                auto fsd_board_type = fsd_board_types.find(fsd_key);
-                if (fsd_board_type != fsd_board_types.end()) {
-                    if (fsd_board_type->second != gsd_board_type) {
-                        throw std::runtime_error(
-                            "Board type mismatch for host " + hostname + ", tray " + std::to_string(tray_id) +
-                            ": FSD=" + fsd_board_type->second + ", GSD=" + gsd_board_type);
-                    }
-                } else {
-                    throw std::runtime_error(
-                        "Board type not found in FSD for host " + hostname + ", tray " + std::to_string(tray_id));
-                }
+                throw std::runtime_error(
+                    "Board type not found in FSD for host " + hostname + ", tray " + std::to_string(tray_id));
             }
         }
     }
@@ -817,16 +820,7 @@ void validate_fsd_against_gsd(
         throw std::runtime_error("FSD missing eth_connections");
     }
 
-    // Determine which connection types exist in the discovered GSD
-    bool has_local_eth_connections =
-        discovered_gsd["local_eth_connections"] && !discovered_gsd["local_eth_connections"].IsNull();
-    bool has_global_eth_connections =
-        discovered_gsd["global_eth_connections"] && !discovered_gsd["global_eth_connections"].IsNull();
-
-    // At least one connection type should exist
-    if (!has_local_eth_connections && !has_global_eth_connections) {
-        throw std::runtime_error("No connection types found in discovered GSD");
-    }
+    // In the protobuf format, connections are stored in the system_graph
 
     // Convert generated connections to a comparable format
     std::set<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>> generated_connections;
@@ -883,82 +877,76 @@ void validate_fsd_against_gsd(
     std::set<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>> discovered_connections;
     std::set<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>> duplicate_discovered_connections;
 
-    // Process local connections if they exist
-    if (has_local_eth_connections) {
-        for (const auto& connection_pair : discovered_gsd["local_eth_connections"]) {
-            if (connection_pair.size() != 2) {
-                throw std::runtime_error("Each connection should have exactly 2 endpoints");
-            }
-
-            const auto& first_conn = connection_pair[0];
-            const auto& second_conn = connection_pair[1];
-
-            std::string hostname_1 = first_conn["host_name"].as<std::string>();
-            uint32_t chan_id_1 = first_conn["chan_id"].as<uint32_t>();
-            uint32_t tray_id_1 = first_conn["tray_id"].as<uint32_t>();
-            uint32_t asic_location_1 = first_conn["asic_location"].as<uint32_t>();
-
-            std::string hostname_2 = second_conn["host_name"].as<std::string>();
-            uint32_t chan_id_2 = second_conn["chan_id"].as<uint32_t>();
-            uint32_t tray_id_2 = second_conn["tray_id"].as<uint32_t>();
-            uint32_t asic_location_2 = second_conn["asic_location"].as<uint32_t>();
-
-            PhysicalChannelConnection conn_1{hostname_1, tray_id_1, asic_location_1, chan_id_1};
-            PhysicalChannelConnection conn_2{hostname_2, tray_id_2, asic_location_2, chan_id_2};
-
-            // Sort to ensure consistent ordering
-            std::pair<PhysicalChannelConnection, PhysicalChannelConnection> connection_pair_sorted;
-            if (conn_1 < conn_2) {
-                connection_pair_sorted = std::make_pair(conn_1, conn_2);
-            } else {
-                connection_pair_sorted = std::make_pair(conn_2, conn_1);
-            }
-
-            // Check for duplicates before inserting
-            if (discovered_connections.find(connection_pair_sorted) != discovered_connections.end()) {
-                duplicate_discovered_connections.insert(connection_pair_sorted);
-            } else {
-                discovered_connections.insert(connection_pair_sorted);
-            }
-        }
+    // Process connections from the PhysicalSystemDescriptor
+    // First, we need to build a map from asic_id to hostname and tray_id
+    std::unordered_map<uint64_t, std::pair<std::string, uint32_t>> asic_id_to_host_tray;
+    for (const auto& asic_desc_map : discovered_gsd.asic_descriptors()) {
+        uint64_t asic_id = asic_desc_map.asic_id();
+        const auto& asic_desc = asic_desc_map.asic_descriptor();
+        asic_id_to_host_tray[asic_id] = std::make_pair(asic_desc.host_name(), asic_desc.tray_id());
     }
 
-    // Process global_eth_connections if they exist (for 5WHGalaxyYTorusSuperpod)
-    if (has_global_eth_connections) {
-        for (const auto& connection_pair : discovered_gsd["global_eth_connections"]) {
-            if (connection_pair.size() != 2) {
-                throw std::runtime_error("Each connection should have exactly 2 endpoints");
+    // Process ASIC connections from the system graph
+    for (const auto& host_asic_conn : discovered_gsd.system_graph().asic_connectivity_graph()) {
+        for (const auto& asic_graph : host_asic_conn.asic_topologies()) {
+            uint64_t src_asic_id = asic_graph.asic_id();
+
+            // Get source host and tray info
+            auto src_it = asic_id_to_host_tray.find(src_asic_id);
+            if (src_it == asic_id_to_host_tray.end()) {
+                continue;  // Skip if we don't have info for this ASIC
             }
 
-            auto first_conn = connection_pair[0];
-            auto second_conn = connection_pair[1];
+            const std::string& src_hostname = src_it->second.first;
+            uint32_t src_tray_id = src_it->second.second;
 
-            std::string hostname_1 = first_conn["host_name"].as<std::string>();
-            uint32_t chan_id_1 = first_conn["chan_id"].as<uint32_t>();
-            uint32_t tray_id_1 = first_conn["tray_id"].as<uint32_t>();
-            uint32_t asic_location_1 = first_conn["asic_location"].as<uint32_t>();
+            // Process each connection edge
+            for (const auto& edge : asic_graph.topology().asic_connections()) {
+                uint64_t dst_asic_id = edge.dst_asic_id();
 
-            std::string hostname_2 = second_conn["host_name"].as<std::string>();
-            uint32_t chan_id_2 = second_conn["chan_id"].as<uint32_t>();
-            uint32_t tray_id_2 = second_conn["tray_id"].as<uint32_t>();
-            uint32_t asic_location_2 = second_conn["asic_location"].as<uint32_t>();
+                // Get destination host and tray info
+                auto dst_it = asic_id_to_host_tray.find(dst_asic_id);
+                if (dst_it == asic_id_to_host_tray.end()) {
+                    continue;  // Skip if we don't have info for this ASIC
+                }
 
-            PhysicalChannelConnection conn_1{hostname_1, tray_id_1, asic_location_1, chan_id_1};
-            PhysicalChannelConnection conn_2{hostname_2, tray_id_2, asic_location_2, chan_id_2};
+                const std::string& dst_hostname = dst_it->second.first;
+                uint32_t dst_tray_id = dst_it->second.second;
 
-            // Sort to ensure consistent ordering
-            std::pair<PhysicalChannelConnection, PhysicalChannelConnection> connection_pair_sorted;
-            if (conn_1 < conn_2) {
-                connection_pair_sorted = std::make_pair(conn_1, conn_2);
-            } else {
-                connection_pair_sorted = std::make_pair(conn_2, conn_1);
-            }
+                // Process each ethernet connection
+                for (const auto& eth_conn : edge.eth_connections()) {
+                    // Get n_id from the asic descriptors to use as asic_location
+                    uint32_t src_asic_location = 0;
+                    uint32_t dst_asic_location = 0;
 
-            // Check for duplicates before inserting
-            if (discovered_connections.find(connection_pair_sorted) != discovered_connections.end()) {
-                duplicate_discovered_connections.insert(connection_pair_sorted);
-            } else {
-                discovered_connections.insert(connection_pair_sorted);
+                    // Find the n_id for source and destination ASICs
+                    for (const auto& asic_desc_map : discovered_gsd.asic_descriptors()) {
+                        if (asic_desc_map.asic_id() == src_asic_id) {
+                            src_asic_location = asic_desc_map.asic_descriptor().n_id();
+                        }
+                        if (asic_desc_map.asic_id() == dst_asic_id) {
+                            dst_asic_location = asic_desc_map.asic_descriptor().n_id();
+                        }
+                    }
+
+                    PhysicalChannelConnection conn_1{src_hostname, src_tray_id, src_asic_location, eth_conn.src_chan()};
+                    PhysicalChannelConnection conn_2{dst_hostname, dst_tray_id, dst_asic_location, eth_conn.dst_chan()};
+
+                    // Sort to ensure consistent ordering
+                    std::pair<PhysicalChannelConnection, PhysicalChannelConnection> connection_pair_sorted;
+                    if (conn_1 < conn_2) {
+                        connection_pair_sorted = std::make_pair(conn_1, conn_2);
+                    } else {
+                        connection_pair_sorted = std::make_pair(conn_2, conn_1);
+                    }
+
+                    // Check for duplicates before inserting
+                    if (discovered_connections.find(connection_pair_sorted) != discovered_connections.end()) {
+                        duplicate_discovered_connections.insert(connection_pair_sorted);
+                    } else {
+                        discovered_connections.insert(connection_pair_sorted);
+                    }
+                }
             }
         }
     }
@@ -1148,7 +1136,7 @@ TEST(Cluster, TestFactorySystemDescriptor16LB) {
     // Validate the FSD against the discovered GSD using the common utility function
     validate_fsd_against_gsd(
         "fsd/factory_system_descriptor_16_n300_lb.textproto",
-        "tests/tt_metal/tt_fabric/factory_system_descriptor/global_system_descriptors/16_lb_physical_desc.yaml");
+        "tests/tt_metal/tt_fabric/factory_system_descriptor/global_system_descriptors/16_lb_physical_desc.textproto");
 }
 
 TEST(Cluster, TestFactorySystemDescriptor5LB) {
@@ -1170,7 +1158,7 @@ TEST(Cluster, TestFactorySystemDescriptor5LB) {
     // Validate the FSD against the discovered GSD using the common utility function
     validate_fsd_against_gsd(
         "fsd/factory_system_descriptor_5_n300_lb.textproto",
-        "tests/tt_metal/tt_fabric/factory_system_descriptor/global_system_descriptors/5_lb_physical_desc.yaml");
+        "tests/tt_metal/tt_fabric/factory_system_descriptor/global_system_descriptors/5_lb_physical_desc.textproto");
 }
 
 TEST(Cluster, TestFactorySystemDescriptor5WHGalaxyYTorus) {
@@ -1198,7 +1186,7 @@ TEST(Cluster, TestFactorySystemDescriptor5WHGalaxyYTorus) {
                 validate_fsd_against_gsd(
                     "fsd/factory_system_descriptor_5_wh_galaxy_y_torus.textproto",
                     "tests/tt_metal/tt_fabric/factory_system_descriptor/global_system_descriptors/"
-                    "5_wh_galaxy_y_torus_physical_desc.yaml");
+                    "5_wh_galaxy_y_torus_physical_desc.textproto");
             } catch (const std::runtime_error& e) {
                 std::cout << e.what() << std::endl;
                 throw;

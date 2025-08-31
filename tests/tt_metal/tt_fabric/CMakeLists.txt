@@ -217,23 +217,15 @@ target_sources(test_fabric_1d_bw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test_fabric
 # Find protobuf package
 find_package(Protobuf REQUIRED)
 
-# Generate C++ code from protobuf definitions
-protobuf_generate_cpp(
-    PROTO_SRCS
-    PROTO_HDRS
-    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/schemas/factory_system_descriptor.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/schemas/pod_config.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/schemas/cluster_config.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/deployment/deployment.proto
-)
-
 add_executable(test_factory_system_descriptor)
 target_include_directories(
     test_factory_system_descriptor
     PRIVATE
         ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR} # For tt_metal/fabric/physical_system_descriptor.hpp
         ${CMAKE_CURRENT_BINARY_DIR} # For generated protobuf headers
+        ${PROJECT_BINARY_DIR}/tt_metal/fabric # For physical_system_descriptor.pb.h
 )
 set_target_properties(
     test_factory_system_descriptor
@@ -251,6 +243,8 @@ target_link_libraries(
         fmt::fmt-header-only
         yaml-cpp::yaml-cpp
         gmock_main
+        tt_metal # Link against tt_metal library for all Metal symbols
+        fabric # Link against fabric library for PhysicalSystemDescriptor
         ${Protobuf_LIBRARIES} # Link against protobuf libraries
 )
 target_sources(
@@ -258,6 +252,4 @@ target_sources(
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/test_factory_system_descriptor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/board/board.cpp
-        ${PROTO_SRCS} # Add generated protobuf source files
-        ${PROTO_HDRS} # Add generated protobuf header files
 )
