@@ -773,7 +773,7 @@ void validate_fsd_against_gsd(
         const std::string& board_type_name = board_location.board_type();
         fsd_board_types[std::make_pair(hosts[host_id].hostname(), tray_id)] = board_type_name;
     }
-
+    std::map<std::pair<std::string, uint32_t>, std::string> processed_fsd_board_types;
     // Compare board types between GSD and FSD
     for (const auto& asic_desc_map : discovered_gsd.asic_descriptors()) {
         const auto& asic_desc = asic_desc_map.asic_descriptor();
@@ -785,17 +785,23 @@ void validate_fsd_against_gsd(
 
         auto fsd_key = std::make_pair(hostname, tray_id);
         if (strict_validation) {
-            auto fsd_board_type = fsd_board_types.extract(fsd_key);
-
-            if (fsd_board_type.empty()) {
-                throw std::runtime_error(
-                    "Board type not found in FSD for host " + hostname + ", tray " + std::to_string(tray_id));
+            auto fsd_board_type_node = fsd_board_types.extract(fsd_key);
+            std::string fsd_board_type = "";
+            if (!fsd_board_type_node.empty()) {
+                fsd_board_type = fsd_board_type_node.mapped();
+                processed_fsd_board_types.insert({fsd_key, fsd_board_type});
+            } else {
+                if (processed_fsd_board_types.find(fsd_key) == processed_fsd_board_types.end()) {
+                    throw std::runtime_error(
+                        "Board type not found in FSD for host " + hostname + ", tray " + std::to_string(tray_id));
+                }
+                fsd_board_type = processed_fsd_board_types.find(fsd_key)->second;
             }
 
-            if (fsd_board_type.mapped() != gsd_board_type) {
+            if (fsd_board_type != gsd_board_type) {
                 throw std::runtime_error(
                     "Board type mismatch for host " + hostname + ", tray " + std::to_string(tray_id) +
-                    ": FSD=" + fsd_board_type.mapped() + ", GSD=" + gsd_board_type);
+                    ": FSD=" + fsd_board_type + ", GSD=" + gsd_board_type);
             }
         } else {
             auto fsd_board_type = fsd_board_types.find(fsd_key);
@@ -874,8 +880,10 @@ void validate_fsd_against_gsd(
     }
 
     // Convert discovered GSD connections to the same format
+    // Additionally, count the number of instances of each connection. Used to validate that all discovered connections
+    // are bidirectional.
+    std::map<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>, std::size_t> num_connection_instances;
     std::set<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>> discovered_connections;
-    std::set<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>> duplicate_discovered_connections;
 
     // Process connections from the PhysicalSystemDescriptor
     // First, we need to build a map from asic_id to hostname and tray_id
@@ -939,25 +947,29 @@ void validate_fsd_against_gsd(
                     } else {
                         connection_pair_sorted = std::make_pair(conn_2, conn_1);
                     }
-
-                    // Check for duplicates before inserting
-                    if (discovered_connections.find(connection_pair_sorted) != discovered_connections.end()) {
-                        duplicate_discovered_connections.insert(connection_pair_sorted);
-                    } else {
-                        discovered_connections.insert(connection_pair_sorted);
-                    }
+                    discovered_connections.insert(connection_pair_sorted);
+                    num_connection_instances[connection_pair_sorted]++;
                 }
             }
         }
     }
 
     // Report any duplicates found in discovered GSD connections
-    if (!duplicate_discovered_connections.empty()) {
-        std::string error_msg = "Duplicate connections found in discovered GSD:\n";
-        for (const auto& dup : duplicate_discovered_connections) {
-            std::ostringstream oss;
-            oss << "  - " << dup.first << " <-> " << dup.second;
-            error_msg += oss.str() + "\n";
+    // Report any non-bidirectional connections found in discovered GSD
+    bool non_bidectional_connection_found =
+        std::any_of(num_connection_instances.begin(), num_connection_instances.end(), [](const auto& pair) {
+            return pair.second != 2;
+        });
+
+    if (non_bidectional_connection_found) {
+        std::string error_msg = "Non-bidirectional connection found in discovered GSD graph:\n";
+        for (const auto& [conn, num_instances] : num_connection_instances) {
+            if (num_instances != 2) {
+                std::ostringstream oss;
+
+                oss << "  - " << conn.first << " <-> " << conn.second << ". Num Instances: " << num_instances;
+                error_msg += oss.str() + "\n";
+            }
         }
         throw std::runtime_error(error_msg);
     }
