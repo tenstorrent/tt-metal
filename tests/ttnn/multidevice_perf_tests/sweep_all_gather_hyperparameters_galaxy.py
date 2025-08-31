@@ -11,24 +11,78 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 
 
 CONFIGS = [
-    ([1, 1, 11264, 3072], 1, 3, 4, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-    ([1, 1, 3072, 8192], 1, 2, 4, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-    ([1, 1, 11264, 12288], 0, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-    ([1, 1, 22528, 3072], 1, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-    ([1, 1, 12288, 4096], 0, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-    ([1, 1, 3072, 16384], 1, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ([1, 1, 11264, 12288], 0, 3),
+    ([1, 1, 22528, 3072], 1, 3),
+    ([1, 1, 12288, 4096], 0, 2),
+    ([1, 1, 3072, 16384], 1, 2),
+    ([1, 1, 12288, 3072], 0, 2),
+    ([1, 1, 3072, 12288], 1, 2),
+    ([1, 1, 11264, 3072], 1, 3),
+    ([1, 1, 12288, 2304], 0, 2),
+    ([1, 1, 3072, 9216], 1, 2),
+    ([1, 1, 3072, 8192], 1, 2),
+    ([1, 1, 2048, 12288], 0, 3),
+    ([1, 1, 8192, 3072], 1, 3),
+    ([1, 1, 3072, 8192], 1, 2),
+    ([1, 1, 3072, 6144], 1, 2),
+    ([1, 1, 12288, 1536], 0, 2),
+    ([1, 1, 3072, 6144], 1, 2),
+    ([1, 1, 5632, 3072], 0, 3),
+    ([1, 1, 5632, 3072], 0, 3),
+    ([1, 1, 3072, 4608], 1, 2),
+    ([1, 1, 1536, 9216], 1, 2),
+    ([1, 1, 6144, 2304], 0, 2),
+    ([1, 1, 4096, 3072], 1, 3),
+    ([1, 1, 1536, 8192], 1, 2),
+    ([1, 1, 6144, 2048], 0, 2),
+    ([1, 1, 4096, 3072], 1, 3),
+    ([1, 1, 3072, 3072], 1, 2),
+    ([1, 1, 12288, 768], 0, 2),
+    ([1, 1, 3072, 3072], 1, 2),
+    ([1, 1, 1536, 4608], 1, 2),
+    ([1, 1, 1536, 4608], 1, 2),
+    ([1, 1, 3072, 2304], 1, 2),
+    ([1, 1, 1536, 4096], 1, 2),
+    ([1, 1, 1024, 6144], 0, 3),
+    ([1, 1, 4096, 1536], 1, 3),
+    ([1, 1, 1536, 4096], 1, 2),
+    ([1, 1, 3072, 1536], 1, 2),
+    ([1, 1, 12288, 384], 0, 2),
+    ([1, 1, 3072, 1536], 1, 2),
+    ([1, 1, 3072, 1152], 0, 2),
+    ([1, 1, 1536, 2304], 1, 2),
+    ([1, 1, 2048, 1536], 1, 3),
+    ([1, 1, 1536, 2048], 1, 2),
+    ([1, 1, 2048, 1536], 1, 3),
+    ([1, 1, 3072, 768], 1, 2),
+    ([1, 1, 3072, 768], 1, 2),
+    ([1, 1, 1536, 1152], 0, 2),
+    ([1, 1, 128, 12288], 0, 3),
+    ([1, 1, 32, 49152], 0, 3),
+    ([1, 1, 1536, 1024], 0, 2),
+    ([1, 1, 1024, 1536], 1, 3),
+    ([1, 1, 3072, 384], 0, 2),
+    ([1, 1, 3072, 384], 1, 2),
+    ([1, 1, 512, 1536], 0, 3),
+    ([1, 1, 3072, 192], 0, 2),
+    ([1, 1, 128, 3072], 1, 3),
+    ([1, 1, 32, 12288], 1, 3),
+    ([1, 1, 128, 1536], 1, 3),
+    ([1, 1, 32, 6144], 1, 3),
+    ([1, 1, 128, 1536], 1, 3),
+    ([1, 1, 32, 6144], 1, 3),
 ]
 
-CONFIGS_IDS = [f"ag_output_shape{i}" for i in range(len(CONFIGS))]
-WORKERS_PER_LINK = [4, 1]  # [4, 2, 1]
+CONFIGS_IDS = [f"ag_output_shape{i}_" for i in range(len(CONFIGS))]
+WORKERS_PER_LINK = [None, 1]  # [4, 2, 1]
 WORKERS_PER_LINK_IDS = [f"{worker}-workers" for worker in WORKERS_PER_LINK]
-CHUNKS_PER_SYNC = ["MAX", 160]  # ["MAX", 320, 160, 80, 40, 20, 10]
+CHUNKS_PER_SYNC = [None, "MAX"]  # ["MAX", 320, 160, 80, 40, 20, 10]
 CHUNKS_PER_SYNC_IDS = [f"{chunk}-chunks" for chunk in CHUNKS_PER_SYNC]
 TOPOLOGY = ["ring", "linear"]
 
 
 @pytest.mark.parametrize(
-    "ag_output_shape, cluster_axis, dim, num_links, layout, ag_input_dtype",
+    "ag_output_shape, cluster_axis, dim",
     CONFIGS,
     ids=CONFIGS_IDS,
 )
@@ -60,6 +114,9 @@ TOPOLOGY = ["ring", "linear"]
 @pytest.mark.parametrize("chunks_per_sync", CHUNKS_PER_SYNC, ids=CHUNKS_PER_SYNC_IDS)
 @pytest.mark.parametrize("num_workers_per_link", WORKERS_PER_LINK, ids=WORKERS_PER_LINK_IDS)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("ag_input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("num_links", [4], ids=["4link"])
 def test_all_gather_chunks_per_sync(
     mesh_device,
     ag_output_shape,

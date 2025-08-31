@@ -32,6 +32,7 @@ def test_all_gather_chunk_perf():
     benchmark_data = BenchmarkData()
     rows = []
 
+    num_links = 4
     subdir = "ag_perf"
     file = f"pytest tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_galaxy.py"
 
@@ -40,9 +41,13 @@ def test_all_gather_chunk_perf():
     chunks_per_sync_list = CHUNKS_PER_SYNC
     num_workers_per_link_list = WORKERS_PER_LINK
     topology_list = TOPOLOGY
+    start_time = time.time()
+    # create subdirectory for this run
+    results_subdir = f"AllGather_{start_time}"
+    os.makedirs(results_subdir, exist_ok=True)
     for topology in topology_list:
         for i, config in enumerate(CONFIGS):
-            ag_output_shape, cluster_axis, dim, num_links, layout, ag_input_dtype = config
+            ag_output_shape, cluster_axis, dim = config
             elements = total_elems(ag_output_shape)
             total_bytes = elements * 2
             if cluster_axis == 0:
@@ -63,9 +68,9 @@ def test_all_gather_chunk_perf():
             best_num_workers_per_link = None
             for j, chunks_per_sync in enumerate(chunks_per_sync_list):
                 for k, num_workers_per_link in enumerate(num_workers_per_link_list):
-                    if chunks_per_sync == "MAX" and num_workers_per_link == 4:
+                    if chunks_per_sync == "MAX" and num_workers_per_link == None:
                         continue
-                    elif chunks_per_sync == 160 and num_workers_per_link == 1:
+                    elif chunks_per_sync == None and num_workers_per_link == 1:
                         continue
 
                     cols = ["DEVICE KERNEL"]
@@ -106,9 +111,16 @@ def test_all_gather_chunk_perf():
                     )
 
                     # Append row for CSV output
+                    current_bandwidth_gbps = (
+                        total_bytes_moved / measured_avg / 2 if topology == "ring" else total_bytes_moved / measured_avg
+                    )
                     rows.append(
                         {
                             "Output Shape": str(ag_output_shape),
+                            "Dim": dim,
+                            "Cluster Axis": cluster_axis,
+                            "Num Devices": num_devices,
+                            "Num Links": num_links,
                             "Topology": topology,
                             "Chunks Per Sync": final_chunks_per_sync,
                             "Num Workers Per Link": num_workers_per_link,
@@ -117,13 +129,11 @@ def test_all_gather_chunk_perf():
                             "Measured Average (us)": measured_avg / 1000.0,
                             "Measured Max (us)": measured_max / 1000.0,
                             "Standard deviation (us)": measured_std / 1000.0,
-                            "Bandwidth (GB/s)": total_bytes_moved / measured_avg,
-                            "Dim": dim,
+                            "Bandwidth (GB/s)": current_bandwidth_gbps,
                         }
                     )
 
                     # Update best bandwidth trackers for this shape
-                    current_bandwidth_gbps = total_bytes_moved / measured_avg
                     if current_bandwidth_gbps > best_bandwidth_gbps:
                         best_bandwidth_gbps = current_bandwidth_gbps
                         best_chunks_per_sync = final_chunks_per_sync
@@ -159,7 +169,7 @@ def test_all_gather_chunk_perf():
                         measured_std,
                     )
             curr_time = time.strftime("%Y_%m_%d_%H%M%S")
-            csv_path = f"AllGatherPerformance_{curr_time}_{ag_output_shape}_{topology}.csv"
+            csv_path = f"{results_subdir}/AllGatherPerformance_{curr_time}_{ag_output_shape}_{topology}.csv"
             logger.info(f"Saving performance table to {csv_path}")
             if len(rows) > 0:
                 df = pd.DataFrame(rows)
@@ -180,7 +190,7 @@ def test_all_gather_chunk_perf():
 
     # Save aggregated CSV
     curr_time = time.strftime("%Y_%m_%d_%H%M%S")
-    csv_path = f"AllGatherPerformance_{curr_time}.csv"
+    csv_path = f"{results_subdir}/AllGatherPerformance_{curr_time}.csv"
     logger.info(f"Saving performance table to {csv_path}")
     if len(rows) > 0:
         df = pd.DataFrame(rows)
