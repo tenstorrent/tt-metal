@@ -137,6 +137,10 @@ void AllGatherAsync::validate_with_output_tensors(
     if (!this->do_sync) {
         TT_FATAL(output_tensors.size() > 0, "Persistent buffers are required when not synchronizing");
         TT_FATAL(this->semaphore.has_value(), "Persistent semaphores are required when not synchronizing");
+        uint32_t semaphore_size = this->semaphore.value().size();
+        if (!this->use_all_gather_async_llama_sharded) {
+            TT_FATAL(semaphore_size == 2, "Default implementation requires 2 semaphores");
+        }
     }
 }
 
@@ -158,7 +162,6 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     if (this->use_all_gather_async_llama_sharded) {
         return AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED;
     } else {
-        TT_FATAL(this->semaphore.size() == 2, "Default implementation requires 2 semaphores");
         return AllGatherAsyncVersion::MINIMAL_DEFAULT;
     }
 }
@@ -285,7 +288,6 @@ tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::ve
     auto input_memory_layout = input_tensors[0].layout();
     auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
-    uint32_t semaphore_address = this->semaphore.at(0).address();
     return tt::tt_metal::operation::hash_operation<AllGatherAsync>(
         this->dim,
         this->num_links,

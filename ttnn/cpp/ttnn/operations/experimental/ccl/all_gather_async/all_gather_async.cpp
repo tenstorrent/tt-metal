@@ -294,8 +294,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
             num_preferred_links,
             subdevice_id,
             all_gather_async_llama_sharded_case,
-            use_optimal_ccl_for_llama,
-            barrier_semaphore);
+            use_optimal_ccl_for_llama);
     }
 }
 
