@@ -8,33 +8,41 @@
 
 namespace tt::tt_fabric {
 
-template <>
-inline std::uint8_t compressed_routing_path_t<2>::get_path(std::uint16_t index) const {
-    return 0;
+// Common helper function for both 1D and 2D routing
+template <uint8_t dim>
+inline void decode_route_to_buffer_common(
+    const compressed_routing_path_t<dim>& routing_path,
+    uint16_t dst_chip_id,
+    uint8_t* out_route_buffer,
+    uint16_t max_chips,
+    uint16_t route_size) {
+    if (dst_chip_id >= max_chips) {
+        // Out of bounds - fill buffer with NOOPs/zeros
+        for (uint16_t i = 0; i < route_size; ++i) {
+            out_route_buffer[i] = 0;
+        }
+        return;
+    }
+
+    const uint8_t* packed_route = &routing_path.packed_paths[dst_chip_id * route_size];
+    // Copy packed data directly to output buffer
+    for (uint16_t i = 0; i < route_size; ++i) {
+        out_route_buffer[i] = packed_route[i];
+    }
 }
 
+// Device-side decoder function for 2D routing
 template <>
-inline std::uint8_t compressed_routing_path_t<2>::decompress_path(std::uint8_t compressed_value) const {
-    return 0;
-}
-p
-template <>
-inline std::uint8_t compressed_routing_path_t<2>::get_original_path(std::uint16_t index) const {
-    return decompress_path(get_path(index));
+inline void compressed_routing_path_t<2>::decode_route_to_buffer(
+    uint16_t dst_chip_id, uint8_t* out_route_buffer) const {
+    decode_route_to_buffer_common(*this, dst_chip_id, out_route_buffer, MAX_CHIPS_LOWLAT, SINGLE_ROUTE_SIZE);
 }
 
+// Device-side decoder function for 1D routing
 template <>
-inline std::uint8_t compressed_routing_path_t<1>::get_path(std::uint16_t index) const {
-}
-
-template <>
-inline std::uint8_t compressed_routing_path_t<1>::decompress_path(std::uint8_t compressed_value) const {
-    return 0;
-}
-
-template <>
-inline std::uint8_t compressed_routing_path_t<1>::get_original_path(std::uint16_t index) const {
-    return decompress_path(get_path(index));
+inline void compressed_routing_path_t<1>::decode_route_to_buffer(
+    uint16_t dst_chip_id, uint8_t* out_route_buffer) const {
+    decode_route_to_buffer_common(*this, dst_chip_id, out_route_buffer, MAX_CHIPS_LOWLAT, SINGLE_ROUTE_SIZE);
 }
 
 }  // namespace tt::tt_fabric

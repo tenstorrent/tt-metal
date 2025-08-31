@@ -97,9 +97,13 @@ struct __attribute__((packed)) compressed_routing_table_t {
 template <uint8_t dim>
 struct __attribute__((packed)) compressed_routing_path_t {
     static_assert(dim == 1 || dim == 2, "dim must be 1 or 2");
+    static const uint16_t MAX_CHIPS_LOWLAT_1D = 16;
+    static const uint16_t MAX_CHIPS_LOWLAT_2D = 1024;
+    static const uint16_t SINGLE_ROUTE_SIZE_1D = 4;
+    static const uint16_t SINGLE_ROUTE_SIZE_2D = 32;
 
-    static constexpr uint16_t MAX_CHIPS_LOWLAT = (dim == 1) ? 16 : 64;
-    static constexpr uint16_t SINGLE_ROUTE_SIZE = (dim == 1) ? 4 : 16;
+    static constexpr uint16_t MAX_CHIPS_LOWLAT = (dim == 1) ? MAX_CHIPS_LOWLAT_1D : MAX_CHIPS_LOWLAT_2D;
+    static constexpr uint16_t SINGLE_ROUTE_SIZE = (dim == 1) ? SINGLE_ROUTE_SIZE_1D : SINGLE_ROUTE_SIZE_2D;
 
     std::uint8_t packed_paths[MAX_CHIPS_LOWLAT * SINGLE_ROUTE_SIZE] = {}; // 64 or 1024
 
@@ -107,10 +111,8 @@ struct __attribute__((packed)) compressed_routing_path_t {
     // Routing calculation methods
     void calculate_chip_to_all_routing_fields(uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim = 0);
 #else
-    // Device-side methods (declared here, implemented in fabric_routing_table_interface.h):
-    inline std::uint8_t get_path(std::uint16_t index) const;
-    inline std::uint8_t decompress_path(std::uint8_t compressed_value) const;
-    inline std::uint8_t get_original_path(std::uint16_t index) const;
+    // Device-side methods (declared here, implemented in fabric_routing_path_interface.h):
+    inline void decode_route_to_buffer(uint16_t dst_chip_id, uint8_t* out_route_buffer) const;
 #endif
 };
 
