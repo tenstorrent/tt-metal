@@ -300,7 +300,7 @@ class Attention(nn.Module):
         super().__init__()
         self.num_heads = 2
         self.key_dim = 32
-        self.head_dim = 128
+        self.head_dim = 192
         self.scale = self.key_dim**-0.5
 
         self.qkv = Conv(
