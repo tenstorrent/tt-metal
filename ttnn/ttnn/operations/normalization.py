@@ -269,7 +269,7 @@ def dram_group_norm_params_from_torch(
     tt_params = tt_params[0] if isinstance(torch_params, torch.Tensor) else tt_params
     if return_mask:
         torch_mask = ttnn.create_group_norm_input_mask(channels_per_device, groups_per_device, num_virtual_cols)
-        tt_mask = ttnn.from_torch(torch_mask, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_mask = ttnn.from_torch(torch_mask, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.DataType.BFLOAT8_B)
         return tt_params, tt_mask
     else:
         return tt_params
