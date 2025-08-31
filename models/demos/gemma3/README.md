@@ -1,9 +1,5 @@
 # Gemma3
 
-Note: This model is currently functional with vLLM integration on branch pending merging PRs in tt-metal and vLLM. The branches are:
-- [tt-metal:handrews/gemma3-27b-demo-PR](https://github.com/tenstorrent/tt-metal/tree/handrews/gemma3-27b-demo-PR)
-- [vllm:03cb300](https://github.com/tenstorrent/vllm/commit/03cb30064575c7dbda6f62f18d7889758531bcfd)
-
 ## Platforms:
     Wormhole (n150, n300, t3k)
 
