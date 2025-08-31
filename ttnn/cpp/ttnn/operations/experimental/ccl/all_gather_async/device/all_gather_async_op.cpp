@@ -167,7 +167,7 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherAsync::create_mesh_w
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = input_tensors[0].mesh_device();
+    auto mesh_device = input_tensors[0].device();
     auto sub_device_id = this->sub_device_id;
 
     auto subdevice = sub_device_id.has_value() ? *sub_device_id : mesh_device->get_sub_device_ids().at(0);

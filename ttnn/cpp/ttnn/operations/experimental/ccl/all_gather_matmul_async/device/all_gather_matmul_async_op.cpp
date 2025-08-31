@@ -109,7 +109,7 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherMatmulAsync::create_
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = input_tensors[0].mesh_device();
+    auto mesh_device = input_tensors[0].device();
     auto sub_device_id = this->all_gather_async_struct.sub_device_id;
 
     auto subdevice = sub_device_id.has_value() ? *sub_device_id : mesh_device->get_sub_device_ids().at(0);

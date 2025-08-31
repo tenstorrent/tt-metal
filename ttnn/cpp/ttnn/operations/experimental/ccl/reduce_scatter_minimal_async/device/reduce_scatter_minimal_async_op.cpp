@@ -220,7 +220,7 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks ReduceScatterMinimalAsync::cr
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = input_tensors[0].mesh_device();
+    auto mesh_device = input_tensors[0].device();
     auto sub_device_id = this->sub_device_id;
 
     auto subdevice = sub_device_id.has_value() ? *sub_device_id : mesh_device->get_sub_device_ids().at(0);
@@ -324,7 +324,6 @@ tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(
                   tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
             : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         this->do_sync,
-        this->sub_device_id,
         this->cluster_axis,
         this->chunks_per_sync,
         this->num_workers_per_link,
