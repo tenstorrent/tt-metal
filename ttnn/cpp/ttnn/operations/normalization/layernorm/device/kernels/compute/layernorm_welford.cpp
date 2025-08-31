@@ -21,7 +21,6 @@
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/welford.h"
 #include "compute_kernel_api/transpose_wh.h"
-#include "layernorm_compute_utils.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -133,8 +132,6 @@ void MAIN {
             // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm
             ACQ();
 
-            cb_reserve_back(cb_ex, onetile);
-            cb_reserve_back(cb_ex2, onetile);
             uint32_t start_N = 0;
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
                 cb_wait_front(cb_x, wt + blk);
@@ -147,8 +144,47 @@ void MAIN {
                     start_N += tile_width;
                 }
             }
+
             // Transpose dst1 and dst2 back to columns
-            layernorm::compute::utils::transpose_pack_mean_and_variance(cb_ex, cb_ex2, dst1, dst2);
+            cb_reserve_back(cb_ex, onetile);
+            cb_reserve_back(cb_ex2, onetile);
+
+            pack_reconfig_data_format(cb_ex);
+            pack_tile(dst1, cb_ex);
+            pack_reconfig_data_format(cb_ex2);
+            pack_tile(dst2, cb_ex2);
+
+            tile_regs_commit();
+            tile_regs_release();
+
+            cb_push_back(cb_ex, onetile);
+            cb_push_back(cb_ex2, onetile);
+
+            cb_wait_front(cb_ex, onetile);
+            cb_wait_front(cb_ex2, onetile);
+            reconfig_data_format_srca(cb_ex);
+            transpose_wh_init_short(cb_ex);
+
+            tile_regs_acquire();
+            transpose_wh_tile(cb_ex, 0, dst1);
+            transpose_wh_tile(cb_ex2, 0, dst2);
+            tile_regs_commit();
+
+            cb_pop_front(cb_ex, onetile);
+            cb_pop_front(cb_ex2, onetile);
+
+            cb_reserve_back(cb_ex, onetile);
+            cb_reserve_back(cb_ex2, onetile);
+            pack_reconfig_data_format(cb_ex);
+
+            tile_regs_wait();
+            pack_tile(dst1, cb_ex);
+            pack_reconfig_data_format(cb_ex2);
+            pack_tile(dst2, cb_ex2);
+            tile_regs_release();
+
+            cb_push_back(cb_ex, onetile);
+            cb_push_back(cb_ex2, onetile);
             REL();
 
             // x - E[x]
