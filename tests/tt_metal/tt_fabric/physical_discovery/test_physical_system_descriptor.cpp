@@ -28,7 +28,11 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
     auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor();
-    physical_system_desc.emit_to_text_proto("physical_system_descriptor.textproto");
+    if (*(distributed_context.rank()) == 0) {
+        // Dump the Generated Physical System Descriptor
+        physical_system_desc.emit_to_text_proto("physical_system_descriptor.textproto");
+    }
+
     auto hostnames = physical_system_desc.get_all_hostnames();
     // Validate number of hosts discovered
     EXPECT_EQ(hostnames.size(), *(distributed_context.size()));
@@ -124,11 +128,6 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
             EXPECT_NE(
                 std::find(my_host_neighbors.begin(), my_host_neighbors.end(), remote_host), my_host_neighbors.end());
         }
-    }
-
-    if (*(distributed_context.rank()) == 0) {
-        // Dump the Generated Physical System Descriptor
-        physical_system_desc.dump_to_yaml();
     }
 }
 
