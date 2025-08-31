@@ -354,6 +354,7 @@ target_sources(
             inc/remote_circular_buffer_api.h
             inc/risc_attribs.h
             inc/risc_common.h
+            inc/sync_primitives.h
             inc/tensix_functions.h
             inc/utils/bfloat16.h
             inc/utils/float32.h
