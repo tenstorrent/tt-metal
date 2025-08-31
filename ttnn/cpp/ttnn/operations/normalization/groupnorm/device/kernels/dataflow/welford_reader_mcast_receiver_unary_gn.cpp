@@ -87,7 +87,7 @@ void kernel_main() {
     constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(19);
     constexpr uint32_t num_rows_per_group = get_compile_time_arg_val(20);
 
-    constexpr auto src0_args = TensorAccessorArgs<19>();
+    constexpr auto src0_args = TensorAccessorArgs<21>();
     constexpr auto out_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
@@ -167,9 +167,11 @@ void kernel_main() {
     for (uint32_t b = 0; b < num_batches; ++b) {
         index_g_offset = 0;
         row_offset = num_cols_per_group;
+        DPRINT << "Batch: " << b << " out of " << num_batches << ENDL();
 
         // Start Group Loop:
         for (uint32_t i = 0; i < num_groups; ++i) {
+            DPRINT << "Group: " << i << " out of " << num_groups << ENDL();
             //The following loop is for the 3 passes of input tensor required for GroupNorm
             //First Pass: Calculates average and variance value
             //Second Pass: Do nothing
@@ -205,6 +207,7 @@ void kernel_main() {
                             }
                         }
                         cb_push_back(cb_in0, out_block_hw_normal);
+                        DPRINT << "input sent for iteration: " << cur_read_iteration << " out_block_index: " << out_block_index << " out of " << num_out_blocks_padded << ENDL();
                     }
 #endif
                     if (cur_read_iteration == 2) {
@@ -230,6 +233,7 @@ void kernel_main() {
                             }
                         }
                         cb_push_back(cb_reread_out, out_block_hw_normal);
+                        DPRINT << "output sent for iteration: " << cur_read_iteration << " out_block_index: " << out_block_index << " out of " << num_out_blocks_padded << ENDL();
                     }
                     out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                 }
@@ -242,20 +246,8 @@ void kernel_main() {
                     auto p_local_means = reinterpret_cast<volatile uint16_t*>(get_read_ptr(cb_ex_partial));
                     auto p_local_vars = p_local_means + TILE_WIDTH * TILE_HEIGHT;
 
-                    // TODO: Make transpose work to avoid having to do this manually here
-                    // Doing this for two faces,  face 0 is the first 16 values, face 2 is the last 16 values
-                    for (uint32_t face_h = 0; face_h < 2; ++face_h) {
-                        auto face_mean_addr = p_local_means + face_h * (single_tile_size_bytes >> 2);
-                        auto face_var_addr = p_local_vars + face_h * (single_tile_size_bytes >> 2);
-                        // Copy 16 values from face_addr to p_local_means and p_local_vars
-                        for (uint32_t i = 0; i < 16; i++) {
-                            p_local_means[(face_h << 4) + i] = face_mean_addr[i << 4];
-                            p_local_vars[(face_h << 4) + i] = face_var_addr[i << 4];
-                        }
-                    }
-
-                    auto local_result = combine_welford<32, num_channels_per_group * num_rows_per_group / 32, 1>(p_local_means, p_local_vars);
-                    DPRINT << "local mean: " << local_result.mean << " local var: " << local_result.variance << " local count: " << local_result.count << ENDL();
+                    auto local_result = combine_welford<32, num_channels_per_group * num_rows_per_group / 32, 2>(p_local_means, p_local_vars);
+                    DPRINT << "local mean: " << BF16(local_result.mean) << " local var: " << BF16(local_result.variance) << " local count: " << local_result.count << ENDL();
 
                     // Write this to cb_ex_global
                     auto p_global_means = reinterpret_cast<volatile uint16_t*>(get_write_ptr(cb_ex_global));
@@ -270,8 +262,7 @@ void kernel_main() {
                     noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
                     noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
 
-                    // Print the entire tile
-                    DPRINT << "global mean: " << p_global_means[0] << " global var: " << p_global_vars[0] << ENDL();
+                    DPRINT << "global mean: " << BF16(p_global_means[0]) << " global var: " << BF16(p_global_vars[0]) << ENDL();
 
                     cb_pop_front(cb_ex_partial, 2);
                     cb_push_back(cb_ex_global, 2);
