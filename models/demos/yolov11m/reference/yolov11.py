@@ -298,9 +298,9 @@ class C3k2(nn.Module):
 class Attention(nn.Module):
     def __init__(self, in_channel, out_channel, kernel, stride, padding, dilation, groups):
         super().__init__()
-        self.num_heads = 2
-        self.key_dim = 32
-        self.head_dim = 192
+        self.num_heads = 8
+        self.key_dim = 16
+        self.head_dim = 32
         self.scale = self.key_dim**-0.5
 
         self.qkv = Conv(
