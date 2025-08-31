@@ -6,7 +6,7 @@ Authors: Vishal Shenoy, Mohamed Bahnas
   - [1. Overview](#1-overview)
   - [2. ViT TT-NN Optimization Techniques](#2-vit-tt-nn-optimization-techniques)
     - [2.1 Sharding on all relevant OPs](#21-sharding-on-all-relevant-ops)
-    - [2.2 Matmul sharding variants in ViT](#22-matmul-sharding-variants-in-vit) 
+    - [2.2 Matmul sharding variants in ViT](#22-matmul-sharding-variants-in-vit)
     - [2.3 Transformer optimizations](#23-transformer-optimizations)
   - [3. ViT TT-NN Code Structure](#3-vit-tt-nn-code-structure)
     - [3.1 Top-level modules](#31-top-level-modules)
@@ -39,21 +39,21 @@ For more details on the architecture, please refer to the [References](#7-refere
 
 The implemented optimization techniques in TT-NN compared to the conventional flow are:
 ### 2.1 Sharding on all relevant OPs
-  - Applying sharding techniques to harvest the optimum utilization of the computation OPs, by eliminating the need for data movement inter-tensix-cores between the consecutive OPs. 
-  - For more details, please refer to the [related tech-report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md#42-sharding) 
+  - Applying sharding techniques to harvest the optimum utilization of the computation OPs, by eliminating the need for data movement inter-tensix-cores between the consecutive OPs.
+  - For more details, please refer to the [related tech-report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md#42-sharding)
   - Sharding Concepts
-![Sharding Concept](images/sharding_concept.png) 
-  - Illustrative example 
-![Sharding Example](images/sharding_example.png)   
+![Sharding Concept](images/sharding_concept.png)
+  - Illustrative example
+![Sharding Example](images/sharding_example.png)
 ### 2.2 Matmul sharding variants in ViT
 #### 2.2.1 Matmul Reuse (BMM)
 The batch Matmul(BMM) Reuse case used in ViT model is in the Multi-head Self Attention module, where both inputs (in0 and in1) as well as the output are height sharded. There no multi-cast (mcast) technique applied on the inputs here. Each core will be responsible for the Matmul of single head of one image of the batch.
 
-![BMM Height](images/bmm_height.png) 
+![BMM Height](images/bmm_height.png)
 #### 2.2.2 Matmul Reuse Mcast (2D)
 The Reuse Mcast case used in ViT model is the block sharded Matmul cases in QKV generation as well as the Feed-Forward Network.
   - The implemented config is Block sharded orientation is Row_Major, where the in0 outer dimension (M) is sharded along the y-axis of the core grid. On the inner dimension of in0, the sharded slices are mcasted along the x-direction of the core grid. The mcast process is done in turn from one core to all other cores in the row, so the whole inner dimension of in0 exists per each core during its Matmul operation.
-  - Please note that the Row_Major term mentioned here is referring to the sharded blocks placement on the core grid. It's different than the Row_Major data layout that is compared to the Tile layout in the report [tensor_layouts](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md)  
+  - Please note that the Row_Major term mentioned here is referring to the sharded blocks placement on the core grid. It's different than the Row_Major data layout that is compared to the Tile layout in the report [tensor_layouts](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md)
   - The in1 is interleaved (on L1 or DRAM) and its slices along the N (outer) dimension are mcasted along the cores in the same column, where each slide has the full inner dimension (K). This is aligned with the previously mentioned mcast of in0 slices.
   - Worth to mention that in some cases it may be better to implement the Column_Major (and mcast transposed = True) config, where the in0 M dimension is sharded along the x-axis of the core as shown in the figure. All the mcast techniques in the Column_Major will be transposed with respect to the Row_Major config mentioned in the previous paragraph.
 
@@ -69,8 +69,8 @@ The other Reuse Mcast case (not used in ViT) is the height sharded on in0, while
   - Pre-processing of model weights, to apply the data format conversion as well as merging and transposing to match the OP configuration.
   - Fusing GeLU OP with its preceding Linear OP
 
-    ![Multi-Head Attention in TT-NN](images/mha_ttnn_1.png) 
-  ![](images/mha_ttnn_2.png)  
+    ![Multi-Head Attention in TT-NN](images/mha_ttnn_1.png)
+  ![](images/mha_ttnn_2.png)
 
 
 
@@ -273,7 +273,7 @@ This diagram is representing the TT-NN module `vit_layer()`
 
 The graph legend:
 ![legend](images/legend.png)
-### 4.1 Input 
+### 4.1 Input
 The input to the Vision Transformer consists of image patches that are flattened and embedded into a higher-dimensional space. The input is represented as:
 
 `b × seqL × dim`
@@ -283,7 +283,7 @@ Where:
 - `seqL` is the sequence length (corresponding to the number of patches).
 - `dim` is the embedding dimension.
 
-### 4.2 Sharding parametrization 
+### 4.2 Sharding parametrization
 The input and output of each OP is either sharded or interleaved, and there is a sharding config for each OP. Optimally, the consecutive OPs will have the same sharding scheme, so the intermediate results are stored in the local Tensix L1 to minimize the data movement between OPs.
 Here are the parameters used in the OP sharding scheme:
 ```python
@@ -292,7 +292,7 @@ Here are the parameters used in the OP sharding scheme:
     dim_t = 768 // 32  # 24  ## inner dimension
     dim_t__x = dim_t // core_grid.x  # 2  ## slicing/sharding the inner dimension by the core count in x direction
     head_num = 12  ## Encoder head count
-    head_seqL_t = (head_num * seqL_t) // core_grid.x  # 7  
+    head_seqL_t = (head_num * seqL_t) // core_grid.x  # 7
     head_size_t__x = dim_t // head_num  # 2  ## dividing the inner dimension by head count = the head size
     class__x = (1152 // 32) // core_grid.x  # 3  ## classification dimension sharding
 ```
@@ -372,7 +372,7 @@ query_key_value = ttnn.linear(
 - The output block width (per_core_N) = output shape[1] / core_grid.x = 3*dim / core_grid.x
 - The in1_block_height is the same size of (dim)
 - The in1_block_width = per_core_N , and each in1 block will be multi-casted along the same column of cores.
-  
+
 ```python
 "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
@@ -396,7 +396,7 @@ The input embeddings are then split into **Query** (Q), **Key** (K), and **Value
 
 `b x head_count × seqL × head_size`
 
-where 
+where
 - `b` is the batch size
 - `head_count` is the number of attention heads
 - `seqL` is the sequence length
@@ -420,14 +420,14 @@ The attention mechanism begins by calculating the dot product between the Query 
 **Optimized Code**:
 
 ```python
-attention_scores = ttnn.matmul(query, key, 
-                    memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, 
-                    dtype=ttnn.bfloat8_b, 
+attention_scores = ttnn.matmul(query, key,
+                    memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat8_b,
                     program_config=config.program_configs["query_by_key_matmul_program_config"])
 
-attention_probs = ttnn.transformer.attention_softmax_(attention_scores, 
-                    attention_mask=attention_mask, 
-                    head_size=head_size, 
+attention_probs = ttnn.transformer.attention_softmax_(attention_scores,
+                    attention_mask=attention_mask,
+                    head_size=head_size,
                     program_config=config.program_configs["softmax_program_config"])
 ```
 
@@ -467,9 +467,9 @@ The normalized attention scores are then multiplied by the Value matrix to produ
 **Optimized Code**:
 
 ```python
-context_layer = ttnn.matmul(attention_probs, value, 
-                        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, 
-                        dtype=ttnn.bfloat8_b, 
+context_layer = ttnn.matmul(attention_probs, value,
+                        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+                        dtype=ttnn.bfloat8_b,
                         program_config=config.program_configs["attention_probabilities_by_value_matmul_program_config"])
 ```
 
@@ -500,7 +500,7 @@ context_layer = ttnn.matmul(attention_probs, value,
 #### 4.4.5 Concatenating Heads and Self-Output Linear OP
 The outputs from all attention heads are concatenated back together. This creates a unified representation of the attention across all heads:
 
-` seqL × head_count × head_size` 
+` seqL × head_count × head_size`
 
 This step aggregates the outputs from the different heads into a single vector representation for each position in the sequence. The following step is the Linear OP to calculate the self output, which is the output of the self multi-head attention module.
 
@@ -687,7 +687,7 @@ For FF2:
         per_core_N=dim_t__x,  # 2,
         transpose_mcast=False,
         fused_activation=None,
-    ),  
+    ),
 ```
 **FFN Diagram**:
 

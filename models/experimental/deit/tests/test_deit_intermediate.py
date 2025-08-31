@@ -17,9 +17,6 @@ from models.utility_functions import (
 )
 
 
-
-
-
 def test_deit_intermediate_inference(device, pcc=0.99):
     # setup pytorch model
     model = DeiTModel.from_pretrained("facebook/deit-base-distilled-patch16-224")

@@ -29,15 +29,15 @@
 2024-09-02T07:15:23.7609585Z ##[endgroup]
 2024-09-02T07:15:23.7886293Z Current date / time is Mon Sep 2 07:15:23 UTC 2024
 2024-09-02T07:15:24.3192790Z tt-smi reset was successful
-2024-09-02T07:15:24.7719046Z 
+2024-09-02T07:15:24.7719046Z
 2024-09-02T07:15:24.7720291Z [95m Detected Chips: [93m1[0m
 2024-09-02T07:15:24.7793248Z [1A[J
 2024-09-02T07:15:24.7793814Z [95m Detected Chips: [93m1[0m
-2024-09-02T07:15:24.7794291Z 
+2024-09-02T07:15:24.7794291Z
 2024-09-02T07:15:24.7794555Z [94m Detecting ARC: [93m|[0m
-2024-09-02T07:15:24.7794928Z 
+2024-09-02T07:15:24.7794928Z
 2024-09-02T07:15:24.7795204Z [94m Detecting DRAM: [93m|[0m
-2024-09-02T07:15:24.7809646Z 
+2024-09-02T07:15:24.7809646Z
 2024-09-02T07:15:24.7811591Z  [95m[][94m ETH: [93m|[0m
 2024-09-02T07:15:24.7873190Z Gathering Information ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
 2024-09-02T07:15:24.7988466Z [95m Saved tt-smi log to: /opt/tt_metal_infra/smi.log [0m
@@ -133,7 +133,7 @@
 
 2024-09-02T07:19:58.0125571Z   prefix: test_reports_
 2024-09-02T07:19:58.0126058Z env:
-2024-09-02T07:19:58.0126471Z   TT_METAL_ENV: 
+2024-09-02T07:19:58.0126471Z   TT_METAL_ENV:
 2024-09-02T07:19:58.0126918Z   ARCH_NAME: grayskull
 2024-09-02T07:19:58.0127391Z   LOGURU_LEVEL: INFO
 2024-09-02T07:19:58.0128514Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
@@ -152,7 +152,7 @@
 2024-09-02T07:19:58.0171405Z [36;1mecho "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"[0m
 2024-09-02T07:19:58.0191315Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
 2024-09-02T07:19:58.0191965Z env:
-2024-09-02T07:19:58.0192341Z   TT_METAL_ENV: 
+2024-09-02T07:19:58.0192341Z   TT_METAL_ENV:
 2024-09-02T07:19:58.0192782Z   ARCH_NAME: grayskull
 2024-09-02T07:19:58.0193221Z   LOGURU_LEVEL: INFO
 2024-09-02T07:19:58.0194298Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
@@ -174,7 +174,7 @@
 2024-09-02T07:19:58.0319248Z   compression-level: 6
 2024-09-02T07:19:58.0319678Z   overwrite: false
 2024-09-02T07:19:58.0320085Z env:
-2024-09-02T07:19:58.0320485Z   TT_METAL_ENV: 
+2024-09-02T07:19:58.0320485Z   TT_METAL_ENV:
 2024-09-02T07:19:58.0321061Z   ARCH_NAME: grayskull
 2024-09-02T07:19:58.0321505Z   LOGURU_LEVEL: INFO
 2024-09-02T07:19:58.0322773Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
@@ -218,7 +218,7 @@
 
 2024-09-02T07:19:58.0125571Z   prefix: test_reports_
 2024-09-02T07:19:58.0126058Z env:
-2024-09-02T07:19:58.0126471Z   TT_METAL_ENV: 
+2024-09-02T07:19:58.0126471Z   TT_METAL_ENV:
 2024-09-02T07:19:58.0126918Z   ARCH_NAME: grayskull
 2024-09-02T07:19:58.0127391Z   LOGURU_LEVEL: INFO
 2024-09-02T07:19:58.0128514Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
@@ -237,7 +237,7 @@
 2024-09-02T07:19:58.0171405Z [36;1mecho "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"[0m
 2024-09-02T07:19:58.0191315Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
 2024-09-02T07:19:58.0191965Z env:
-2024-09-02T07:19:58.0192341Z   TT_METAL_ENV: 
+2024-09-02T07:19:58.0192341Z   TT_METAL_ENV:
 2024-09-02T07:19:58.0192782Z   ARCH_NAME: grayskull
 2024-09-02T07:19:58.0193221Z   LOGURU_LEVEL: INFO
 2024-09-02T07:19:58.0194298Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
@@ -259,7 +259,7 @@
 2024-09-02T07:19:58.0319248Z   compression-level: 6
 2024-09-02T07:19:58.0319678Z   overwrite: false
 2024-09-02T07:19:58.0320085Z env:
-2024-09-02T07:19:58.0320485Z   TT_METAL_ENV: 
+2024-09-02T07:19:58.0320485Z   TT_METAL_ENV:
 2024-09-02T07:19:58.0321061Z   ARCH_NAME: grayskull
 2024-09-02T07:19:58.0321505Z   LOGURU_LEVEL: INFO
 2024-09-02T07:19:58.0322773Z   LD_LIBRARY_PATH: /home/ubuntu/actions-runner/_work/_tool/Python/3.8.18/x64/lib:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/build/lib
