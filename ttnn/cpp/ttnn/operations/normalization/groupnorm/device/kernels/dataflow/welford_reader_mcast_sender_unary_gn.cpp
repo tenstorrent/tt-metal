@@ -86,11 +86,11 @@ void kernel_main() {
     constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(18);
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(19);
     constexpr uint32_t num_out_blocks = get_compile_time_arg_val(20);
-    // These are numbers in absolute terms, on a per group, per batch without tiling
+    // These are numbers in absolute terms, on a per batch, per group, per core basis without tiling
     constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(21);
     constexpr uint32_t num_rows_per_group = get_compile_time_arg_val(22);
 
-    constexpr auto src0_args = TensorAccessorArgs<21>();
+    constexpr auto src0_args = TensorAccessorArgs<23>();
     constexpr auto out_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
@@ -367,8 +367,14 @@ void kernel_main() {
                     auto p_local_means = reinterpret_cast<volatile uint16_t*>(local_read_ptr);
                     auto p_local_vars = p_local_means + TILE_WIDTH * TILE_HEIGHT;
 
+                    // Print local vars
+                    for (uint32_t j = 0; j < 32 * 2; j += 2) {
+                        DPRINT << BF16(p_local_vars[j]) << " ";
+                    }
+                    DPRINT << ENDL();
+
                     auto local_result = combine_welford<32, num_channels_per_group * num_rows_per_group / 32, 2>(p_local_means, p_local_vars);
-                    DPRINT << "local mean: " << local_result.mean << " local var: " << local_result.variance << " local count: " << local_result.count << ENDL();
+                    DPRINT << "local mean: " << BF16(local_result.mean) << " local var: " << BF16(local_result.variance) << " local count: " << local_result.count << ENDL();
 
                     // Write this to cb_ex_global
                     auto global_means_ptr = get_write_ptr(cb_ex_global);
@@ -394,8 +400,8 @@ void kernel_main() {
                     }
 
                     // Read mean and variance arrays from cb_ex_global, then combine using Welford
-                    auto global_result = combine_welford<num_mcast_cores, 32, 16>(p_global_means, p_global_vars);
-                    DPRINT << "global mean: " << global_result.mean << " global var: " << global_result.variance << ENDL();
+                    auto global_result = combine_welford<num_mcast_cores, num_channels_per_group * num_rows_per_group, 16>(p_global_means, p_global_vars);
+                    DPRINT << "global mean: " << BF16(global_result.mean) << " global var: " << BF16(global_result.variance) << ENDL();
 
                     // Write this to cb_ex_global
                     p_global_means[0] = global_result.mean;

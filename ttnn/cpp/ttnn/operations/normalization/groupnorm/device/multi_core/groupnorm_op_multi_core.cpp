@@ -24,13 +24,6 @@ namespace ttnn::operations::normalization {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-inline bool is_dram(const Tensor& input_tensor) {
-    return input_tensor.memory_config().buffer_type() == BufferType::DRAM;
-}
-inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
-    return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
-}
-
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
     if (n <= max_subblock_w) {
         return n;
@@ -2246,19 +2239,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             .set_page_size(ex_cb_partial_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_partial_config);
     // ex2_partial
-    if (use_welford) {
-        // Make two buffers for ping-pong exchange (one is read and one is written to)
-        uint32_t ex_cb_ping_index = tt::CBIndex::c_11;
-        tt::tt_metal::CircularBufferConfig ex_cb_ping_config =
-            tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_ping_index, cb_data_format}})
-                .set_page_size(ex_cb_ping_index, single_tile_size);
-        auto cb_ex_ping = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_ping_config);
-        uint32_t ex_cb_pong_index = tt::CBIndex::c_12;
-        tt::tt_metal::CircularBufferConfig ex_cb_pong_config =
-            tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_pong_index, cb_data_format}})
-                .set_page_size(ex_cb_pong_index, single_tile_size);
-        auto cb_ex_pong = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_pong_config);
-    } else {
+    if (!use_welford) {
         uint32_t ex2_cb_partial_index = tt::CBIndex::c_21;
         tt::tt_metal::CircularBufferConfig ex2_cb_partial_config =
             tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex2_cb_partial_index, cb_data_format}})
