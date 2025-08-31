@@ -137,9 +137,8 @@ void AllGatherAsync::validate_with_output_tensors(
     if (!this->do_sync) {
         TT_FATAL(output_tensors.size() > 0, "Persistent buffers are required when not synchronizing");
         TT_FATAL(this->semaphore.has_value(), "Persistent semaphores are required when not synchronizing");
-        uint32_t semaphore_size = this->semaphore.value().size();
         if (!this->use_all_gather_async_llama_sharded) {
-            TT_FATAL(semaphore_size == 2, "Default implementation requires 2 semaphores");
+            TT_FATAL(this->semaphore.value().size() == 2, "Default implementation requires 2 semaphores");
         }
     }
 }
