@@ -22,8 +22,6 @@
 #include "layernorm_compute_utils.hpp"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/transpose_wh_dest.h"
-#include "dprint_pages.h"
-#include "dprint_tensix.h"
 
 namespace NAMESPACE {
 
@@ -135,13 +133,6 @@ void MAIN {
                     // Copy previous accumulated (row tiles)
                     // mean and variance to dest regs
                     cb_wait_front(cb_welford.read(), twotiles);
-
-                    if (wt == 1 * blk) {
-                        DPRINT << "cb_welford.read() 0 after first block" << ENDL();
-                        tt::compute::common::print_full_tile(cb_welford.read(), 0);
-                        DPRINT << "cb_welford.read() 1 after first block" << ENDL();
-                        tt::compute::common::print_full_tile(cb_welford.read(), 1);
-                    }
 
                     reconfig_data_format_srca(cb_welford.read());
                     copy_tile_to_dst_init_short(cb_welford.read());
