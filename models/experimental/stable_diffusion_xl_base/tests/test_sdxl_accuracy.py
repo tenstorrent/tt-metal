@@ -60,6 +60,12 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
     ],
     ids=("device_encoders", "host_encoders"),
 )
+@pytest.mark.parametrize(
+    "use_tp",
+    [
+        (False),
+    ],
+)
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
 def test_accuracy_sdxl(
@@ -74,6 +80,7 @@ def test_accuracy_sdxl(
     evaluation_range,
     guidance_scale,
     negative_prompt,
+    use_tp,
 ):
     start_from, num_prompts = evaluation_range
 
@@ -96,6 +103,7 @@ def test_accuracy_sdxl(
         capture_trace,
         evaluation_range,
         guidance_scale,
+        use_tp,
     )
 
     clip = CLIPEncoder()
