@@ -16,27 +16,125 @@ on:
         required: false
         type: string
         default: "in-service"
-      stable-models-to-run:
+      models-to-run:
         required: false
         type: string
         default: "all"
-      unstable-models-to-run:
-        required: false
-        type: string
-        default: "stable_diffusion,mamba 5" # Skipping due to issue #15932 (mamba 1, mamba 2, mamba 3, mamba 4, mamba 6)
 jobs:
+  plan:
+  runs-on: ubuntu-latest
+  outputs:
+    stable_matrix:   ${{ steps.mk.outputs.stable_matrix }}
+    unstable_matrix: ${{ steps.mk.outputs.unstable_matrix }}
+    stable_count:    ${{ steps.mk.outputs.stable_count }}
+    unstable_count:  ${{ steps.mk.outputs.unstable_count }}
+  steps:
+    - id: mk
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # ----- Catalogs -----
+        # Stable set (default path; optional per-model timeout)
+        STABLE='[
+          {"model":"common_models"},
+          {"model":"functional_unet"},
+          {"model":"ttt-llama3.2-1B"},
+          {"model":"qwen25_vl-3B"},
+          {"model":"resnet50"},
+          {"model":"whisper"},
+          {"model":"openpdn_mnist"},
+          {"model":"vit"},
+          {"model":"sentence_bert"},
+          {"model":"yolov7"},
+          {"model":"swin_s"},
+          {"model":"yolov6l"},
+          {"model":"swin_v2"},
+          {"model":"mobilenetv2"},
+          {"model":"segformer"},
+          {"model":"vgg_unet"},
+          {"model":"yolov10x"},
+          {"model":"yolov11"},
+          {"model":"yolov8s"},
+          {"model":"yolov8s_world"},
+          {"model":"yolov8x"},
+          {"model":"yolov9c"},
+          {"model":"vanilla_unet"},
+          {"model":"yolov5x"},
+          {"model":"efficientnetb0"},
+          {"model":"vovnet"},
+          {"model":"ufld_v2"},
+          {"model":"yolov12x"},
+          {"model":"gemma-3-4b-it"},
+          {"model":"ttt-mistral-7B-v0.3"},
+          {"model":"stable_diffusion_xl_base","timeout":45}
+        ]'
+
+        # Stable set (CIv2)
+        STABLE_CIv2='[
+          {"model":"yolov8s"},
+          {"model":"vadv2"}
+        ]'
+
+        # Unstable set (explicit commands)
+        UNSTABLE='[
+          {"model":"stable_diffusion","cmd":"TT_MM_THROTTLE_PERF=5 pytest --timeout 1000 -n auto tests/nightly/single_card/stable_diffusion"},
+          {"model":"mamba 1","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 1"},
+          {"model":"mamba 2","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 2"},
+          {"model":"mamba 3","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 3"},
+          {"model":"mamba 4","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 4"},
+          {"model":"mamba 5","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 5"},
+          {"model":"mamba 6","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 6"}
+        ]'
+
+        SEL='${{ inputs.models-to-run }}'
+
+        # ---- Normalize selection to a JSON array (SEL_ARR) ----
+        if [ -z "${SEL}" ] || [ "${SEL}" = "all" ]; then
+          # Keep all (we'll branch later by leaving SEL_ARR empty)
+          SEL_ARR=''
+        else
+          if echo "${SEL}" | jq -e type >/dev/null 2>&1; then
+            # already JSON; expect an array of strings
+            SEL_ARR="$(echo "${SEL}" | jq -c '.')"
+          else
+            # CSV -> JSON array (trim whitespace around items)
+            SEL_ARR="$(echo "${SEL}" | tr ',' '\n' | sed -E 's/^ *| *$//g' | awk 'NF' | jq -R . | jq -s -c '.')"
+          fi
+        fi
+
+        # ---- Filter catalogs by selection (or keep all if SEL_ARR empty) ----
+        if [ -z "${SEL_ARR}" ]; then
+          STABLE_OUT="${STABLE}"
+          STABLE_CIv2_OUT="${STABLE_CIv2}"
+          UNSTABLE_OUT="${UNSTABLE}"
+        else
+          STABLE_OUT="$(jq --argjson sel "${SEL_ARR}" '[.[] | select($sel | index(.model))]' <<< "${STABLE}")"
+          STABLE_CIv2_OUT="$(jq --argjson sel "${SEL_ARR}" '[.[] | select($sel | index(.model))]' <<< "${STABLE_CIv2}")"
+          UNSTABLE_OUT="$(jq --argjson sel "${SEL_ARR}" '[.[] | select($sel | index(.model))]' <<< "${UNSTABLE}")"
+        fi
+
+        STABLE_COUNT="$(jq 'length' <<< "${STABLE_OUT}")"
+        STABLE_CIv2_COUNT="$(jq 'length' <<< "${STABLE_CIv2_OUT}")"
+        UNSTABLE_COUNT="$(jq 'length' <<< "${UNSTABLE_OUT}")"
+
+        echo "stable_matrix=${STABLE_OUT}"     >> "$GITHUB_OUTPUT"
+        echo "unstable_matrix=${UNSTABLE_OUT}" >> "$GITHUB_OUTPUT"
+        echo "stable_count=${STABLE_COUNT}"     >> "$GITHUB_OUTPUT"
+        echo "unstable_count=${UNSTABLE_COUNT}" >> "$GITHUB_OUTPUT"
+        echo "stable_ci_v2_matrix=${STABLE_CIv2_OUT}" >> "$GITHUB_OUTPUT"
+        echo "stable_ci_v2_count=${STABLE_CIv2_COUNT}" >> "$GITHUB_OUTPUT"
+
   nightly-wh-models:
+    needs: plan
+    if: ${{ needs.plan.outputs.stable_count != '0' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: ${{ fromJSON(
-                  inputs.model == 'all' &&
-                  '["common_models","functional_unet","ttt-llama3.2-1B","qwen25_vl-3B","resnet50","whisper","openpdn_mnist","vit","sentence_bert","yolov7","swin_s","yolov6l","swin_v2","mobilenetv2","segformer","vgg_unet","yolov10x","yolov11","yolov8s","yolov8s_world","yolov8x","yolov9c","vanilla_unet","yolov5x","efficientnetb0","vovnet","ufld_v2","yolov12x","gemma-3-4b-it","ttt-mistral-7B-v0.3"]'
-                  || inputs.model)
-               }}
+        test-config: ${{ fromJSON(needs.plan.outputs.stable_matrix) }}
         # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
         include:
           - model: stable_diffusion_xl_base
@@ -45,7 +143,7 @@ jobs:
           - model: stable_diffusion_xl_base
             card: N300
             timeout: 45
-    name: Nightly ${{ matrix.card }} ${{ matrix.model }}
+    name: Nightly ${{ matrix.card }} ${{ matrix.test-config.model }}
     defaults:
       run:
         shell: bash
@@ -81,18 +179,18 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
-            ${{ matrix.model == 'stable_diffusion_xl_base' && '-e HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home -e TT_MM_THROTTLE_PERF=5' || '' }}
+            ${{ matrix.test-config.model== 'stable_diffusion_xl_base' && '-e HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home -e TT_MM_THROTTLE_PERF=5' || '' }}
           # TT-Transformer models have a single ci-dispatch test that contains all tests.
           # Due to host OOM issues in CI vm, we currently only run llama-1B (on TT-Transformers) in the model matrix.
           run_args: |
-            if [[ "${{ matrix.model }}" == *"ttt"* ]]; then
-              pytest tests/nightly/single_card/tt_transformers -k ${{ matrix.model }}
-            elif [[ "${{ matrix.model }}" == *"qwen25_vl"* ]]; then
-              pytest tests/nightly/single_card/qwen25_vl -k ${{ matrix.model }}
-            elif [[ "${{ matrix.model }}" == *"gemma-3"* ]]; then
-              pytest tests/nightly/single_card/gemma3 -k ${{ matrix.model }}
+            if [[ "${{ matrix.test-config.model}}" == *"ttt"* ]]; then
+              pytest tests/nightly/single_card/tt_transformers -k ${{ matrix.test-config.model}}
+            elif [[ "${{ matrix.test-config.model}}" == *"qwen25_vl"* ]]; then
+              pytest tests/nightly/single_card/qwen25_vl -k ${{ matrix.test-config.model}}
+            elif [[ "${{ matrix.test-config.model}}" == *"gemma-3"* ]]; then
+              pytest tests/nightly/single_card/gemma3 -k ${{ matrix.test-config.model}}
             else
-              pytest tests/nightly/single_card/${{ matrix.model }}
+              pytest tests/nightly/single_card/${{ matrix.test-config.model}}
             fi
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
@@ -101,27 +199,14 @@ jobs:
           path: generated/test_reports/
           prefix: "test_reports_"
   nightly-wh-unstable-models:
+    needs: plan
+    if: ${{ needs.plan.outputs.unstable_count != '0' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-config:
-          - model: "stable_diffusion"
-            cmd: TT_MM_THROTTLE_PERF=5 pytest --timeout 1000 -n auto tests/nightly/single_card/stable_diffusion
-              # Skipping due to issue #15932 (mamba 1, mamba 2, mamba 3, mamba 4, mamba 6)
-          - model: "mamba 1"
-            cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 1
-          - model: "mamba 2"
-            cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 2
-          - model: "mamba 3"
-            cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 3
-          - model: "mamba 4"
-            cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 4
-          - model: "mamba 5"
-            cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 5
-          - model: "mamba 6"
-            cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 6
+        test-config: ${{ fromJSON(needs.plan.outputs.unstable_matrix) }}
         card: [N150, N300]
     name: "[Unstable] Nightly ${{ matrix.card }} ${{ matrix.test-config.model }}"
     defaults:
@@ -167,14 +252,17 @@ jobs:
           path: generated/test_reports/
           prefix: "test_reports_"
   nightly-wh-models-civ2:
+    needs: plan
+    if: ${{ needs.plan.outputs.stable_ci_v2_count != '0' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
         card: [N150, N300]
+        test-config: ${{ fromJSON(needs.plan.outputs.stable_ci_v2_matrix) }}
         model: [yolov8s, vadv2]
-    name: Nightly CIv2-compatible ${{ matrix.card }} ${{ matrix.model }}
+    name: Nightly CIv2-compatible ${{ matrix.card }} ${{ matrix.test-config.model }}
     runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', matrix.card) }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
@@ -202,7 +290,7 @@ jobs:
       - name: Run frequent reg tests scripts
         timeout-minutes: ${{ matrix.timeout || 30 }}
         run: |
-          pytest tests/nightly/single_card/${{ matrix.model }}
+          pytest tests/nightly/single_card/${{ matrix.test-config.model }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
