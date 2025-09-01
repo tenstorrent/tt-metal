@@ -84,6 +84,19 @@ void kernel_main() {
         // Read the first two bfloat16 values (grid coordinates) from the L1 buffer
 
         volatile tt_l1_ptr uint16_t* grid_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_grid_addr);
+        uint16_t weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf;
+        int32_t h0, h1, w0, w1;
+
+#ifdef USE_PRECOMPUTED_GRID
+        int16_t h0_raw = *reinterpret_cast<volatile int16_t*>(&grid_ptr[0]);
+        int16_t w0_raw = *reinterpret_cast<volatile int16_t*>(&grid_ptr[1]);
+
+        h0 = static_cast<int32_t>(h0_raw);
+        w0 = static_cast<int32_t>(w0_raw);
+        h1 = h0 + 1;
+        w1 = w0 + 1;
+
+#else
         uint16_t h_coord_raw = grid_ptr[1];
         uint16_t w_coord_raw = grid_ptr[0];
 
@@ -93,10 +106,12 @@ void kernel_main() {
         float h_coord_image = h_coord_rel * height_scale + height_offset;
         float w_coord_image = w_coord_rel * width_scale + width_offset;
 
-        int32_t h0 = static_cast<int32_t>(floor(h_coord_image));
-        int32_t h1 = h0 + 1;
-        int32_t w0 = static_cast<int32_t>(floor(w_coord_image));
-        int32_t w1 = w0 + 1;
+        h0 = static_cast<int32_t>(floor(h_coord_image));
+        h1 = h0 + 1;
+        w0 = static_cast<int32_t>(floor(w_coord_image));
+        w1 = w0 + 1;
+
+#endif
 
         bool h0_valid = (h0 >= 0) && (h0 < static_cast<int32_t>(input_height));
         bool h1_valid = (h1 >= 0) && (h1 < static_cast<int32_t>(input_height));
@@ -139,6 +154,14 @@ void kernel_main() {
         }
 
         // Calculate bilinear interpolation weights
+
+#ifdef USE_PRECOMPUTED_GRID
+        // Weights are already in grid data
+        weight_nw_bf = grid_ptr[2];
+        weight_ne_bf = grid_ptr[3];
+        weight_sw_bf = grid_ptr[4];
+        weight_se_bf = grid_ptr[5];
+#else
         float h0_f = static_cast<float>(h0);
         float w0_f = static_cast<float>(w0);
 
@@ -152,14 +175,15 @@ void kernel_main() {
         float weight_sw = (h1_valid && w0_valid) ? (h_frac * w_frac_inv) : 0.0f;      // South-West
         float weight_se = (h1_valid && w1_valid) ? (h_frac * w_frac) : 0.0f;          // South-East
 
+        weight_nw_bf = float_to_bfloat16(weight_nw);
+        weight_ne_bf = float_to_bfloat16(weight_ne);
+        weight_sw_bf = float_to_bfloat16(weight_sw);
+        weight_se_bf = float_to_bfloat16(weight_se);
+#endif
+
         cb_reserve_back(scalar_cb_index, 1);
 
-        fill_four_val(
-            get_write_ptr(scalar_cb_index),
-            float_to_bfloat16(weight_nw),
-            float_to_bfloat16(weight_ne),
-            float_to_bfloat16(weight_sw),
-            float_to_bfloat16(weight_se));
+        fill_four_val(get_write_ptr(scalar_cb_index), weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
 
         cb_push_back(scalar_cb_index, 1);
 
