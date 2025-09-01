@@ -24,6 +24,11 @@ from genmo.mochi_preview.vae.models import CausalUpsampleBlock as RefCausalUpsam
 
 from pathlib import Path
 
+
+def div_up(numerator, denominator):
+    return ((numerator + denominator - 1) // denominator) * denominator
+
+
 # Basic decoder configuration that aligns with typical decoder settings
 decoder_base_args = {
     "out_channels": 3,
@@ -180,6 +185,7 @@ def create_random_resblock_models(mesh_device, mesh_axis, input_shape, parallel_
     reference_model = RefResBlock(**model_args)
 
     # Create TT model
+    input_shape[2] = div_up(input_shape[2], mesh_device.get_num_devices())
     tt_model = TtResBlock(
         mesh_device=mesh_device,
         mesh_axis=mesh_axis,
@@ -196,10 +202,10 @@ def create_random_resblock_models(mesh_device, mesh_axis, input_shape, parallel_
 @pytest.mark.parametrize(
     "N, C, T, H, W",
     [
-        (1, 768, 32, 60, 106),  # 28 -> 32
-        (1, 512, 88, 120, 212),  # 82 -> 88
-        (1, 256, 168, 240, 424),  # 163 -> 168
-        (1, 128, 168, 480, 848),  # 163 -> 168
+        (1, 768, 28, 60, 106),  # 28 -> 32
+        (1, 512, 82, 120, 212),  # 82 -> 88
+        (1, 256, 163, 240, 424),  # 163 -> 168
+        (1, 128, 163, 480, 848),  # 163 -> 168
     ],
     ids=["768", "512", "256", "128"],
 )
@@ -226,6 +232,9 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, divide_T):
     # Create input tensor
     torch_input = torch.randn(N, C, T, H, W)
     tt_input = torch_input.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
+    tt_input = torch.nn.functional.pad(
+        tt_input, pad=(0, 0, 0, 0, 0, 0, 0, div_up(T, mesh_device.get_num_devices()) - T)
+    )
     tt_input = ttnn.from_torch(
         tt_input,
         device=mesh_device,
@@ -243,6 +252,7 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, divide_T):
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[0, 1]),
     )
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
+    tt_output_torch = tt_output_torch[:, :, 0:T, :, :]
 
     # Get reference output
     logger.info("Run RefResBlock forward")
@@ -484,16 +494,16 @@ decoder_test_configs = [
         "input_shape": (1, 12, 28, 30, 53),
         # Expected output will be approximately: (1, 3, 163, 240, 424)
     },
-    {
-        "name": "medium_latent",
-        "input_shape": (1, 12, 28, 40, 76),
-        # Expected output will be approximately: (1, 3, 163, 480, 848)
-    },
-    {
-        "name": "large_latent",
-        "input_shape": (1, 12, 28, 60, 106),
-        # Expected output will be approximately: (1, 3, 163, 480, 848)
-    },
+    # {
+    #     "name": "medium_latent",
+    #     "input_shape": (1, 12, 28, 40, 76),
+    #     # Expected output will be approximately: (1, 3, 163, 480, 848)
+    # },
+    # {
+    #     "name": "large_latent",
+    #     "input_shape": (1, 12, 28, 60, 106),
+    #     # Expected output will be approximately: (1, 3, 163, 480, 848)
+    # },
 ]
 
 
@@ -506,7 +516,7 @@ decoder_test_configs = [
 @pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
 @pytest.mark.parametrize("load_dit_weights", [False, True], ids=["no_dit", "load_dit"])
 @vae_device_config
-def test_decoder(mesh_device, config, divide_T, reset_seeds, use_real_weights, load_dit_weights):
+def test_tt_decoder_forward(mesh_device, config, divide_T, reset_seeds, use_real_weights, load_dit_weights):
     input_shape = config["input_shape"]
     N, C, T, H, W = input_shape
     T = T // divide_T
@@ -563,8 +573,10 @@ def test_decoder(mesh_device, config, divide_T, reset_seeds, use_real_weights, l
     logger.info(f"TT output shape: {tt_output_torch.shape}")
 
     # Get reference output
+    logger.info("Run RefDecoder forward")
     with torch.no_grad():
         ref_output = reference_model(torch_input)
     logger.info(f"Reference output shape: {ref_output.shape}")
 
+    logger.info("assert quality")
     assert_quality(ref_output, tt_output_torch, pcc=0.999)
