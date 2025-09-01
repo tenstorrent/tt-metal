@@ -12,6 +12,9 @@
 
 namespace ttnn::operations::grid_sample {
 
+constexpr uint32_t PRECOMPUTED_GRID_ELEMENTS_PER_POINT = 6;
+constexpr uint32_t STANDARD_GRID_ELEMENTS_PER_POINT = 2;
+
 struct GridSample {
     const std::string mode_;
     const std::string padding_mode_;

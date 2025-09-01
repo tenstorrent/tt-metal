@@ -11,9 +11,6 @@ namespace ttnn::operations::grid_sample {
 using namespace tt;
 using namespace tt::tt_metal;
 
-constexpr uint32_t PRECOMPUTED_GRID_ELEMENTS_PER_POINT = 6;
-constexpr uint32_t STANDARD_GRID_ELEMENTS_PER_POINT = 2;
-
 void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& grid_tensor = input_tensors.at(1);

@@ -20,9 +20,6 @@
 
 namespace ttnn::operations::grid_sample {
 
-constexpr uint32_t PRECOMPUTED_GRID_ELEMENTS_PER_POINT = 6;
-constexpr uint32_t STANDARD_GRID_ELEMENTS_PER_POINT = 2;
-
 tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const Tensor& input_tensor,
     const Tensor& grid_tensor,
