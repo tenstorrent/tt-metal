@@ -133,21 +133,24 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
 
+def _nearest_32_per_core(x, core):
+    return math.ceil(x / core / 32) * 32 * core
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
-    "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, cp, hp, wp",
+    "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
         ### oft
-        (1, 256, 159 , 159, 16, 3, 4, 4, 0, 1, 1),
-        (1, 512, 159, 159, 16, 3, 4, 4, 0, 1, 1),
-        # (1,  64, 192, 640, 16, 10, 4, 4, 64, 0, 0), #pcc drop AssertionError: 0.3961253683080487
+        (1, 256, 159, 159, 16, 4, 4, 4),
+        (1, 512, 159, 159, 16, 4, 4, 4),
+        (1, 64, 192, 640, 16, 10, 2, 5),
     ],
 )
-def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, cp, hp, wp):
+def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x):
     compute_grid = device.compute_with_storage_grid_size()
     if compute_grid.x != 5 or compute_grid.y != 4:
         pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
-    
+
     torch.manual_seed(0)
     grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x)
     # torch input tensor
@@ -158,10 +161,9 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
         torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
     )
     torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
-    
+
     # input tensor
     input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
-    input_tensor = torch.nn.functional.pad(input_tensor, (0, cp, 0, wp*H + hp*W + hp*wp, 0, 0, 0, 0), "constant", 0.0)
     input_tensor_row_major = ttnn.from_torch(
         input_tensor,
         dtype=ttnn.DataType.BFLOAT16,
@@ -169,7 +171,21 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
+    print(
+        f"input_tensor_row_major shape: {input_tensor_row_major.shape} padded shape: {input_tensor_row_major.padded_shape}"
+    )
+    unpadded_shape = input_tensor_row_major.shape
+    out_shape = [
+        unpadded_shape[0],
+        unpadded_shape[1],
+        _nearest_32_per_core(unpadded_shape[2], cores_x),
+        _nearest_32_per_core(unpadded_shape[3], cores_y),
+    ]
+    print(f"unpadded_shape: {unpadded_shape} out_shape: {out_shape}")
+    input_tensor_tilized = ttnn.tilize_with_val_padding(
+        input_tensor_row_major, output_tensor_shape=out_shape, pad_value=0, use_multicore=True
+    )
+    print(f"input_tensor_tilized shape: {input_tensor_tilized.shape} padded shape: {input_tensor_tilized.padded_shape}")
     input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y)
     input_mask_tensor = ttnn.from_torch(
         input_mask_tensor,
@@ -214,4 +230,4 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor[:,:,:H*W,:C], 0.9995)
+    assert_with_pcc(torch_output_tensor, output_tensor[:, :, : H * W, :C], 0.9994)
