@@ -53,6 +53,7 @@ void kernel_main() {
 
         // Indicate to the coordinator that the core is ready
         noc_semaphore_inc(coordinator_core_addr, 1);
+        noc_async_atomic_barrier();
         noc_semaphore_wait(semaphore_ptr, 0);     // Wait for coordinator to signal to start
         noc_semaphore_set(semaphore_ptr, VALID);  // Reset the semaphore
 
