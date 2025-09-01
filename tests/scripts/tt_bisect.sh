@@ -3,71 +3,12 @@ set -euo pipefail
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-# Detect container (best-effort)
-if [ -f /.dockerenv ] || grep -Eq '(docker|containerd|kubepods)' /proc/1/cgroup 2>/dev/null; then
-  echo "Running inside a container"
-  cid="$(awk -F/ '/(docker|containerd)/{id=$NF} END{print id}' /proc/self/cgroup 2>/dev/null || true)"
-  [ -n "${cid:-}" ] && echo "Container ID: $cid"
-  [ -f /etc/os-release ] && grep '^PRETTY_NAME=' /etc/os-release || true
-else
-  echo "Not running inside Docker"
-fi
-echo "Running pip install tt-smi:"
-pip install git+https://github.com/tenstorrent/tt-smi
-echo "Running tt-smi -r to reset devices:
-tt-smi -r
-echo "Running tt-smi --list to show devices:
-tt-smi --list
 
 # Make in-tree modules win and avoid user site interference
 export PYTHONNOUSERSITE=1
 export PYTHONFAULTHANDLER=1
 export PYTHONMALLOC="debug"
-echo "TT_METAL_HOME: $TT_METAL_HOME"
-echo "PYTHONPATH: $PYTHONPATH"
-echo "ARCH_NAME: ${ARCH_NAME:-}"
-echo "pwd: $(pwd)"
-./create_venv.sh
-./build_metal.sh \
-  --build-all \
-  --build-type RelWithDebInfo \
-  --enable-ccache || build_rc=$?
 
-echo "Checking environment variables:"
-echo "TT_METAL_HOME: $TT_METAL_HOME"
-echo "PYTHONPATH: $PYTHONPATH"
-echo "ARCH_NAME: ${ARCH_NAME:-}"
-echo "pwd: $(pwd)"
-echo "ls: $(ls -la)"
-
-python - <<'PY'
-import ttnn, sys
-print(ttnn.get_arch_name())
-print("ttnn imported from:", ttnn.__file__)
-PY
-
-echo "::group::Testing $rev"
-  timeout_rc=1
-  max_retries=3
-  attempt=1
-  output_file="bisect_test_output.log"
-  while [ $attempt -le $max_retries ]; do
-    echo "Attempt $attempt on $(git rev-parse HEAD)"
-    echo "Run: $test"
-    if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" >"$output_file" 2>&1; then
-      timeout_rc=0
-      break
-    else
-      timeout_rc=$?
-      echo "Test failed (code $timeout_rc), retrying…"
-      echo "--- Logs (attempt $attempt) ---"
-      sed -n '1,200p' "$output_file" || true
-      echo "------------------------------"
-      attempt=$((attempt+1))
-    fi
-  done
-  echo "Final exit code: $timeout_rc"
-  echo "::endgroup::"
 
 : << 'END'
 Usage:
@@ -151,17 +92,6 @@ while [[ "$found" == "false" ]]; do
   ./build_metal.sh \
     --build-all \
     --enable-ccache || build_rc=$?
-
-  echo "Checking environment variables:"
-  echo "TT_METAL_HOME: $TT_METAL_HOME"
-  echo "PYTHONPATH: $PYTHONPATH"
-  echo "ARCH_NAME: ${ARCH_NAME:-}"
-  echo "pwd: $(pwd)"
-  echo "ls: $(ls -la)"
-
-  # Find all ttnn*.so files
-  echo "Searching for ttnn*.so files:"
-  find . -type f -name '*ttnn*.so'
 
   echo "::endgroup::"
 
