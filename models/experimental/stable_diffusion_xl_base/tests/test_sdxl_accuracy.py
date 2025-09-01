@@ -61,10 +61,12 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
     ids=("device_encoders", "host_encoders"),
 )
 @pytest.mark.parametrize(
-    "use_tp",
+    "use_cfg_parallel",
     [
+        (True),
         (False),
     ],
+    ids=("use_cfg_parallel", "no_cfg_parallel"),
 )
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
@@ -80,7 +82,7 @@ def test_accuracy_sdxl(
     evaluation_range,
     guidance_scale,
     negative_prompt,
-    use_tp,
+    use_cfg_parallel,
 ):
     start_from, num_prompts = evaluation_range
 
@@ -103,7 +105,7 @@ def test_accuracy_sdxl(
         capture_trace,
         evaluation_range,
         guidance_scale,
-        use_tp,
+        use_cfg_parallel,
     )
 
     clip = CLIPEncoder()
@@ -166,7 +168,9 @@ def test_accuracy_sdxl(
     trace_flag = "with_trace" if capture_trace else "no_trace"
     vae_flag = "device_vae" if vae_on_device else "host_vae"
     encoders_flag = "device_encoders" if encoders_on_device else "host_encoders"
-    new_file_name = f"sdxl_test_results_{trace_flag}_{vae_flag}_{encoders_flag}_{num_inference_steps}.json"
+    new_file_name = (
+        f"sdxl_test_results_{trace_flag}_{vae_flag}_{encoders_flag}_{use_cfg_parallel}_{num_inference_steps}.json"
+    )
     with open(f"{OUT_ROOT}/{new_file_name}", "w") as f:
         json.dump(data, f, indent=4)
 

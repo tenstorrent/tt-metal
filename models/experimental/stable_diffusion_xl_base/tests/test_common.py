@@ -133,7 +133,7 @@ def batch_encode_prompt_on_device(
     negative_pooled_prompt_embeds: Optional[torch.Tensor] = None,
     lora_scale: Optional[float] = None,
     clip_skip: Optional[int] = None,
-    use_tp: bool = False,
+    use_cfg_parallel: bool = False,
 ):
     r"""
     Encodes the prompt into text encoder hidden states.
@@ -181,7 +181,7 @@ def batch_encode_prompt_on_device(
 
     num_devices = ttnn_device.get_num_devices()
     num_promts = len(prompt)
-    if use_tp and num_promts < num_devices:
+    if use_cfg_parallel and num_promts < num_devices:
         # Pad prompts by cycling through existing ones to match num_devices
         prompt = [prompt[i % len(prompt)] for i in range(num_devices)]
 
@@ -391,7 +391,7 @@ def batch_encode_prompt_on_device(
             bs_embed * num_images_per_prompt, -1
         )
 
-    slice_to = num_promts if use_tp else None
+    slice_to = num_promts if use_cfg_parallel else None
     return (
         prompt_embeds[:slice_to],
         negative_prompt_embeds[:slice_to],
@@ -510,7 +510,7 @@ def run_tt_image_gen(
     tid=None,
     tid_vae=None,
     capture_trace=False,
-    use_tp=False,
+    use_cfg_parallel=False,
 ):
     assert not (capture_trace and len(tt_timesteps) != 1), "Trace should capture only 1 iteration"
     profiler.start("image_gen")
@@ -529,14 +529,14 @@ def run_tt_image_gen(
                     tt_scheduler,
                     latent_model_input,
                     input_shape,
-                    tt_prompt_embeds[unet_slice] if not use_tp else tt_prompt_embeds,
-                    tt_time_ids if use_tp else tt_time_ids[unet_slice],
-                    ttnn.unsqueeze(tt_text_embeds[unet_slice], dim=0) if not use_tp else tt_text_embeds,
+                    tt_prompt_embeds[unet_slice] if not use_cfg_parallel else tt_prompt_embeds,
+                    tt_time_ids if use_cfg_parallel else tt_time_ids[unet_slice],
+                    ttnn.unsqueeze(tt_text_embeds[unet_slice], dim=0) if not use_cfg_parallel else tt_text_embeds,
                 )
 
                 unet_outputs.append(noise_pred)
 
-            if use_tp:
+            if use_cfg_parallel:
                 noise_pred = ttnn.sharded_to_interleaved(noise_pred, ttnn.L1_MEMORY_CONFIG)
                 noise_pred = ttnn.experimental.all_gather_async(
                     noise_pred,
