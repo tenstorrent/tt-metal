@@ -243,7 +243,7 @@ def run_max_pool(
             # C partial tile test
             [1, 16, 12, 12],
             [1, 1, 56, 56],
-            [2, 290, 10, 10],
+            [2, 280, 10, 10],
             # partial grid tests
             [1, 32, 10, 10],  # BH
             [1, 32, 6, 6],  # WH
