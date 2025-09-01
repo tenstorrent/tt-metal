@@ -68,13 +68,20 @@ class TtSpatialCrossAttention:
         indexes = []
         for i, mask_per_img in enumerate(bev_mask):
             index_query_per_img = ttnn.sum(mask_per_img[0], -1)
-            index_query_per_img = ttnn.to_torch(index_query_per_img)
-            index_query_per_img = index_query_per_img.nonzero()
-            index_query_per_img = ttnn.from_torch(index_query_per_img, device=self.device, dtype=ttnn.uint32)
+            index_query_per_img = ttnn.to_layout(index_query_per_img, ttnn.ROW_MAJOR_LAYOUT)
+            index_query_per_img = ttnn.unsqueeze(index_query_per_img, 0)
+            index_query_per_img = ttnn.unsqueeze(index_query_per_img, 0)
+            index_query_per_img = ttnn.unsqueeze(index_query_per_img, 0)
+            output_tensor = ttnn.nonzero(index_query_per_img, queue_id=0)
+            no_of_non_zero_indices = output_tensor[0][..., 0].item()
+            index_query_per_img = output_tensor[1][:, :, :, :no_of_non_zero_indices]
 
-            index_query_per_img = ttnn.squeeze(index_query_per_img, -1)
+            index_query_per_img = ttnn.squeeze(index_query_per_img, 0)
+            index_query_per_img = ttnn.squeeze(index_query_per_img, 0)
+            index_query_per_img = ttnn.squeeze(index_query_per_img, 0)
 
             indexes.append(index_query_per_img)
+
         max_len = max([each.shape[0] for each in indexes])
         query = ttnn.to_torch(query)
         # each camera only interacts with its corresponding BEV queries. This step can  greatly save GPU memory.
@@ -115,6 +122,9 @@ class TtSpatialCrossAttention:
                 index_query_per_img = ttnn.to_torch(index_query_per_img)
 
                 slots[j, index_query_per_img] += queries[j, i, : len(index_query_per_img)]
+        for j in range(bs):
+            for i, index_query_per_img in enumerate(indexes):
+                ttnn.deallocate(index_query_per_img)
 
         count = ttnn.sum(bev_mask, -1) > 0
         count = ttnn.permute(count, (1, 2, 0))

@@ -99,6 +99,9 @@ class TtBEVFormerEncoder:
             ref = ttnn.reshape(ref, (1, num_points_in_pillar, H * W, 3))
 
             ref = ttnn.repeat(ref, (bs, 1, 1, 1))  # [B, P, HW, 3]
+            ttnn.deallocate(x_vals)
+            ttnn.deallocate(y_vals)
+            ttnn.deallocate(z_vals)
             return ref
 
         elif dim == "2d":
@@ -126,6 +129,8 @@ class TtBEVFormerEncoder:
 
             ref = ttnn.repeat(ref, (bs, 1, 1))  # [bs, H*W, 2]
             ref = ttnn.reshape(ref, (bs, H * W, 1, 2))  # [bs, H*W, 1, 2]
+            ttnn.deallocate(x_vals)
+            ttnn.deallocate(y_vals)
 
             return ref
 
@@ -201,6 +206,16 @@ class TtBEVFormerEncoder:
         reference_points_cam = ttnn.permute(reference_points_cam, [2, 1, 3, 0, 4])
         bev_mask = ttnn.permute(bev_mask, [2, 1, 3, 0, 4])
         bev_mask = ttnn.squeeze(bev_mask, dim=-1)
+        ttnn.deallocate(y_gt_0)
+        ttnn.deallocate(y_lt_1)
+        ttnn.deallocate(x_gt_0)
+        ttnn.deallocate(x_lt_1)
+        ttnn.deallocate(a)
+        ttnn.deallocate(b)
+        ttnn.deallocate(x)
+        ttnn.deallocate(y)
+        ttnn.deallocate(lidar2img)
+        ttnn.deallocate(reference_points)
 
         return reference_points_cam, bev_mask
 
