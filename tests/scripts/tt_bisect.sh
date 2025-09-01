@@ -3,13 +3,6 @@ set -euo pipefail
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-
-# Make in-tree modules win and avoid user site interference
-export PYTHONNOUSERSITE=1
-export PYTHONFAULTHANDLER=1
-export PYTHONMALLOC="debug"
-
-
 : << 'END'
 Usage:
   -f TEST        : test command to run (quote if it has spaces)
@@ -37,11 +30,6 @@ done
 [ -n "$test" ] || die "Please specify -f TEST."
 [ -n "$good_commit" ] || die "Please specify -g GOOD_SHA."
 [ -n "$bad_commit" ] || die "Please specify -b BAD_SHA."
-
-echo "TT_METAL_HOME: $TT_METAL_HOME"
-echo "PYTHONPATH: $PYTHONPATH"
-echo "ARCH_NAME: ${ARCH_NAME:-}"
-echo "pwd: $(pwd)"
 
 git cat-file -e "$good_commit^{commit}" 2>/dev/null || die "Invalid good commit: $good_commit"
 git cat-file -e "$bad_commit^{commit}" 2>/dev/null  || die "Invalid bad commit: $bad_commit"
