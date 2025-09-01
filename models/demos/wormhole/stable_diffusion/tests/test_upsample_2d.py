@@ -8,6 +8,7 @@ from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import (
     CROSS_UP_BLOCKS_HIDDEN_STATES_INFO,
@@ -38,7 +39,7 @@ def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
         CROSS_UP_BLOCKS_HIDDEN_STATES_INFO[1] + (2,),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 def test_upsample2d_512x512(device, input_shape, shard_layout, shard_end_core, shard_shape, index):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
