@@ -58,7 +58,7 @@ jobs:
       - ${{ inputs.runner-label }}
       - ${{ inputs.extra-label }}
     container:
-      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:1dec18cfd17d73a2130c1a2eb676bbbaa412fd47
+      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:1dec18cfd17d73a2130c1a2eb676bbbaa412fd47
       env:
 
         ARCH_NAME: ${{ inputs.arch }}
