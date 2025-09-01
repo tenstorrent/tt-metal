@@ -245,9 +245,11 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, divide_T):
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
 
     # Get reference output
+    logger.info("Run RefResBlock forward")
     with torch.no_grad():
         ref_output = reference_model(torch_input)
 
+    logger.info("assert quality")
     assert_quality(ref_output, tt_output_torch, pcc=0.999)
 
 
@@ -263,28 +265,28 @@ upsample_base_args = {
 
 # Test case configurations from decoder
 upsample_test_configs = [
-    # First upsample block (768->512)
-    {
-        "name": "block1_768-512",
-        "in_channels": 768,
-        "out_channels": 512,
-        "num_res_blocks": 6,
-        "temporal_expansion": 3,
-        "spatial_expansion": 2,
-        "input_shape": (1, 768, 32, 60, 106),
-        # "expected_output_shape": (1, 512, 82, 120, 212),
-    },
-    # # Second upsample block (512->256)
+    # # First upsample block (768->512)
     # {
-    #     "name": "block2_512-256",
-    #     "in_channels": 512,
-    #     "out_channels": 256,
-    #     "num_res_blocks": 4,
-    #     "temporal_expansion": 2,
+    #     "name": "block1_768-512",
+    #     "in_channels": 768,
+    #     "out_channels": 512,
+    #     "num_res_blocks": 6,
+    #     "temporal_expansion": 3,
     #     "spatial_expansion": 2,
-    #     "input_shape": (1, 512, 82, 120, 212),
-    #     # "expected_output_shape": (1, 256, 163, 240, 424),
+    #     "input_shape": (1, 768, 32, 60, 106),
+    #     # "expected_output_shape": (1, 512, 82, 120, 212),
     # },
+    # Second upsample block (512->256)
+    {
+        "name": "block2_512-256",
+        "in_channels": 512,
+        "out_channels": 256,
+        "num_res_blocks": 4,
+        "temporal_expansion": 2,
+        "spatial_expansion": 2,
+        "input_shape": (1, 512, 82, 120, 212),
+        # "expected_output_shape": (1, 256, 163, 240, 424),
+    },
     # # Third upsample block (256->128)
     # {
     #     "name": "block3_256-128",
@@ -300,7 +302,7 @@ upsample_test_configs = [
 
 
 def create_random_causalupsampleblock_models(
-    mesh_device, in_channels, out_channels, use_real_weights, input_shape, **model_args
+    mesh_device, in_channels, out_channels, use_real_weights, input_shape, parallel_config, ccl_manager, **model_args
 ):
     """Initialize both reference and TT models with optional real weights."""
     # Create reference model
@@ -352,6 +354,8 @@ def create_random_causalupsampleblock_models(
         out_channels=out_channels,
         input_shape=input_shape,
         torch_ref=reference_model,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
         **model_args,
     )
 
@@ -366,7 +370,7 @@ def create_random_causalupsampleblock_models(
 @pytest.mark.parametrize("divide_T", [8, 1], ids=["T8", "T1"])  # Emulate T fracturing
 @pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
 @vae_device_config
-def test_upsample(mesh_device, config, divide_T, reset_seeds, use_real_weights):
+def test_tt_upsample_forward(mesh_device, config, divide_T, reset_seeds, use_real_weights):
     """Test TtCausalUpsampleBlock against reference implementation."""
     in_channels = config["in_channels"]
     out_channels = config["out_channels"]
@@ -397,12 +401,17 @@ def test_upsample(mesh_device, config, divide_T, reset_seeds, use_real_weights):
         f"use_real_weights={use_real_weights}"
     )
 
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=1)
+    vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=8, mesh_axis=1))
+
     reference_model, tt_model = create_random_causalupsampleblock_models(
         mesh_device,
         in_channels=in_channels,
         out_channels=out_channels,
         use_real_weights=use_real_weights,
         input_shape=input_shape,
+        parallel_config=vae_parallel_config,
+        ccl_manager=ccl_manager,
         **block_args,
     )
 
