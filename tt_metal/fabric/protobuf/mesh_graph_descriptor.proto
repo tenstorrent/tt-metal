@@ -227,7 +227,7 @@ message GraphRef {
     // Instance index of the referenced graph.
     int32 graph_id = 2;
 
-    NodeRef sub_ref = 3;
+    optional NodeRef sub_ref = 3;
 }
 
 message MeshRef {

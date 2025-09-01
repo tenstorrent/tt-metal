@@ -5,14 +5,11 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <filesystem>
 #include <memory>
 #include <vector>
 #include <unordered_map>
-#include <unordered_set>
-#include <atomic>
-#include <utility>
-#include <variant>
 
 // Forward declaration
 namespace tt::tt_fabric {
@@ -30,66 +27,71 @@ enum TorusTopology_Type : int;
 }
 
 class MeshGraphDescriptor {
-
-// TODO: Find a way to do this without subclassing or something
-// Or find a way to make return values good without having to dynamic cast all the time
-struct NodeInstance {
-    const uint32_t id;
-    const std::string descriptor_name;
-    std::variant<const proto::MeshDescriptor*, const proto::GraphDescriptor*> descriptor;
-    std::variant<const proto::MeshRef*, const proto::GraphRef*> ref;
-
-    const uint32_t global_id = generate_next_global_id();
-
-    //virtual ~NodeInstance() = default;   // adds vptr → polymorphic
-private:
-    inline static uint32_t generate_next_global_id() {
-        static std::atomic_uint32_t next_global_id_ = 0;
-        return next_global_id_++;
-    }
-};
-
-struct MeshInstance : public NodeInstance {
-    const proto::Architecture arch;
-    const std::vector<uint32_t> device_ids;
-};
-
-struct GraphInstance : public NodeInstance {
-    std::string type;
-    std::vector<uint32_t> sub_instances = {};
-};
-
-
-
 public:
+    using NodeId = uint32_t;
+
+    enum class NodeKind : uint8_t { Mesh = 0, Graph = 1 };
+
+    struct NodeIndex {
+        NodeKind kind;
+        uint32_t idx; // index into meshes_ or graphs_
+    };
+
+    struct MeshInstanceData {
+        const uint32_t local_id;             // instance id from proto
+        const std::string_view name;         // points into proto_ storage
+        const proto::Architecture arch;
+        const proto::MeshDescriptor* desc; // non-owning pointer into proto_
+    };
+
+    struct GraphInstanceData {
+        const uint32_t local_id;             // instance id from proto
+        const std::string_view name;         // points into proto_ storage
+        const std::string_view type;         // points into proto_ storage
+        const proto::GraphDescriptor* desc; // non-owning pointer into proto_
+        const std::unordered_map<uint32_t, NodeId> sub_instances; // direct list of child NodeIds
+    };
+
     explicit MeshGraphDescriptor(const std::string& text_proto);
     explicit MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path);
     ~MeshGraphDescriptor();
 
-    // Print functions for debugging and inspection
-    void print_node_instance(const NodeInstance* node_instance, int indent_level = 0);
+    // Debugging/inspection
+    void print_node(NodeId id, int indent_level = 0);
     void print_all_nodes();
-    
-    // Accessor methods - all lookups go through the global ID map
-    NodeInstance* get_instance_by_global_id(uint32_t global_id) const;
-    std::vector<uint32_t> get_ids_by_type(const std::string& type) const;
-    std::vector<uint32_t> get_ids_by_name(const std::string& name) const;
-    std::vector<uint32_t> get_all_ids() const;
+
+    // Cast-free API
+    NodeId top_level() const { return top_level_id_; }
+    bool is_mesh(NodeId id) const { return nodes_[id].kind == NodeKind::Mesh; }
+    bool is_graph(NodeId id) const { return nodes_[id].kind == NodeKind::Graph; }
+    const MeshInstanceData& mesh(NodeId id) const { return meshes_[nodes_[id].idx]; }
+    const GraphInstanceData& graph(NodeId id) const { return graphs_[nodes_[id].idx]; }
+
+    // Typed enumeration
+    const std::vector<NodeId>& all_meshes() const { return mesh_ids_; }
+    const std::vector<NodeId>& all_graphs() const { return graph_ids_; }
+
+    // Queries
+    const std::vector<NodeId>& by_name(std::string_view name) const { return name_to_ids_.at(name); }
+    const std::vector<NodeId>& by_type(std::string_view type) const { return type_to_ids_.at(type); } // includes "mesh"
 
 private:
+    // Descriptor fast lookup
     std::unique_ptr<const proto::MeshGraphDescriptor> proto_;
+    std::unordered_map<std::string_view, const proto::MeshDescriptor*> mesh_desc_by_name_;
+    std::unordered_map<std::string_view, const proto::GraphDescriptor*> graph_desc_by_name_;
 
-    std::unordered_map<std::string, const proto::MeshDescriptor*> mesh_descriptors_by_name_;
-    std::unordered_map<std::string, const proto::GraphDescriptor*> graph_descriptors_by_name_;
-    std::unordered_map<std::string, std::unordered_set<const proto::GraphDescriptor*>> graph_descriptors_by_type_;
+    // Global node table and typed stores
+    std::vector<NodeIndex> nodes_;
+    std::vector<MeshInstanceData> meshes_;
+    std::vector<GraphInstanceData> graphs_;
 
-    // Single source of truth - all instances by global ID
-    std::unordered_map<uint32_t, std::unique_ptr<NodeInstance>> all_instances_;
-    
-    // Secondary indices - store only global IDs for memory efficiency
-    NodeInstance* top_level_instance_;
-    std::unordered_map<std::string, std::vector<uint32_t>> instances_by_type_;
-    std::unordered_map<std::string, std::vector<uint32_t>> instances_by_name_;
+    // Indices
+    std::unordered_map<std::string_view, std::vector<NodeId>> name_to_ids_;
+    std::unordered_map<std::string_view, std::vector<NodeId>> type_to_ids_;
+    std::vector<NodeId> mesh_ids_;
+    std::vector<NodeId> graph_ids_;
+    NodeId top_level_id_;
     
     // Static methods for setting defaults and validation
     static void set_defaults(proto::MeshGraphDescriptor& proto);
@@ -110,14 +112,10 @@ private:
 
     // Populate Descriptors and Instances
     void populate();
-    // helper to populate descriptors
     void populate_descriptors();
-
-    uint32_t populate_instances(const proto::NodeRef& node_ref);
-    std::unique_ptr<NodeInstance> construct_node_instance(const proto::NodeRef& node_ref);
-    
-    // Helper function to get instance type
-    std::string get_instance_type(const std::unique_ptr<NodeInstance>& node_instance);
+    NodeId populate_instance(const proto::NodeRef& node_ref);
+    NodeId populate_mesh_instance(const proto::MeshRef& mesh_ref);
+    NodeId populate_graph_instance(const proto::GraphRef& graph_ref);
     
 
 };

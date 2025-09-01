@@ -7,11 +7,8 @@
 #include <sstream>
 #include <filesystem>
 #include <algorithm>
-#include <set>
-#include <iomanip>
 #include <unordered_map>
 #include <unordered_set>
-#include <variant>
 #include <memory>
 #include "assert.hpp"
 
@@ -64,7 +61,7 @@ std::string get_validation_report(const std::vector<std::string>& error_messages
 }
 }  // namespace
 
-MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto) {
+MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto) : top_level_id_(static_cast<NodeId>(-1)) {
     proto::MeshGraphDescriptor temp_proto;
     google::protobuf::TextFormat::Parser parser;
 
@@ -100,12 +97,6 @@ void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
     }
     
     for (auto& graph : *proto.mutable_graph_descriptors()) {
-        // Set default policy for graph topology channels
-        if (graph.has_graph_topology() && graph.graph_topology().has_channels() && 
-            !graph.graph_topology().channels().has_policy()) {
-            graph.mutable_graph_topology()->mutable_channels()->set_policy(proto::Policy::STRICT);
-        }
-        
         // Set default policy for connection channels
         for (auto& connection : *graph.mutable_connections()) {
             if (connection.has_channels() && !connection.channels().has_policy()) {
@@ -168,10 +159,7 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshG
 void MeshGraphDescriptor::populate() {
 
     populate_descriptors();
-    uint32_t top_level_global_id = populate_instances(proto_->top_level_instance());
-    
-    // Get the top level instance from the map
-    top_level_instance_ = all_instances_[top_level_global_id].get();
+    top_level_id_ = populate_instances(proto_->top_level_instance());
 }
 
 
@@ -362,17 +350,7 @@ std::vector<std::string> MeshGraphDescriptor::validate_channels(const proto::Mes
         }
     }
 
-    // Check that channels in graph topology are positive
-    for (const auto& graph : proto.graph_descriptors()) {
-        if (graph.has_graph_topology() && graph.graph_topology().channels().count() <= 0) {
-            error_messages.push_back( 
-                fmt::format(
-                    "Graph topology channel count must be positive (Graph: {})", 
-                    graph.name()
-                )
-            );
-        }
-    }
+    // No graph_topology.channels() in current schema; skip
 
     // Check all channel counts > 0 in graph descriptors and connections
     for (const auto& graph : proto.graph_descriptors()) {
@@ -522,155 +500,123 @@ std::vector<std::string> MeshGraphDescriptor::validate_legacy_requirements(const
 }
 
 void MeshGraphDescriptor::populate_descriptors() {
-    // Save the mesh descriptors
-    for (const auto& mesh : proto_->mesh_descriptors()) {
-        mesh_descriptors_by_name_[mesh.name()] = &mesh;
+    mesh_desc_by_name_.clear();
+    graph_desc_by_name_.clear();
+    // Use string_view into proto_ storage; safe as long as proto_ outlives maps
+    for (int i = 0; i < proto_->mesh_descriptors_size(); ++i) {
+        const auto& mesh = proto_->mesh_descriptors(i);
+        mesh_desc_by_name_.emplace(mesh.name(), &mesh);
     }
-    // Save the graph descriptors
-    for (const auto& graph : proto_->graph_descriptors()) {
-        graph_descriptors_by_name_[graph.name()] = &graph;
-        graph_descriptors_by_type_[graph.type()].insert(&graph);
+    for (int i = 0; i < proto_->graph_descriptors_size(); ++i) {
+        const auto& graph = proto_->graph_descriptors(i);
+        graph_desc_by_name_.emplace(graph.name(), &graph);
     }
 }
 
-uint32_t MeshGraphDescriptor::populate_instances(const proto::NodeRef& node_ref) {
-    auto node_instance = construct_node_instance(node_ref);
-    
-    // Store in the single map by global ID
-    uint32_t global_id = node_instance->global_id;
-    std::string descriptor_name = node_instance->descriptor_name;
-    
-    // Build secondary indices
-    std::string instance_type = get_instance_type(node_instance);
-    instances_by_type_[instance_type].push_back(global_id);
-    instances_by_name_[descriptor_name].push_back(global_id);
-
-    if (auto graph_descriptor = std::get_if<const proto::GraphDescriptor*>(&node_instance->descriptor)) {
-        for (const auto& instance : (*graph_descriptor)->instances()) {
-            uint32_t sub_global_id = populate_instances(instance);
-            static_cast<GraphInstance*>(node_instance.get())->sub_instances.push_back(sub_global_id);
-        }
-    }
-
-    // Store in the map after processing sub-instances
-    all_instances_[global_id] = std::move(node_instance);
-    return global_id;
-}
-
-
-std::unique_ptr<MeshGraphDescriptor::NodeInstance> MeshGraphDescriptor::construct_node_instance(const proto::NodeRef& node_ref) {
-    std::string descriptor_name;
-    uint32_t instance_id;
-
-    std::unique_ptr<NodeInstance> node_instance;
-
+MeshGraphDescriptor::NodeId MeshGraphDescriptor::populate_instance(const proto::NodeRef& node_ref) {
     if (node_ref.has_mesh()) {
-        descriptor_name = node_ref.mesh().mesh_descriptor();
-        instance_id = node_ref.mesh().mesh_id();
-
-        // Check that the descriptor name exists
-        auto it = mesh_descriptors_by_name_.find(descriptor_name);
-        TT_FATAL(it != mesh_descriptors_by_name_.end(), "Mesh descriptor {} not found in instance", descriptor_name);
-
-        auto mesh_descriptor = it->second;
-
-        std::vector<uint32_t> device_ids;
-        int num_devices = 1;
-        for (const auto& dim : mesh_descriptor->device_topology().dims()) {
-            num_devices *= dim;
-        }
-        for (uint32_t i = 0; i < num_devices; i++) {
-            device_ids.push_back(i);
-        }
-
-        // Check that it doesn't have a sub_ref
-        node_instance = std::make_unique<MeshInstance>(MeshInstance{
-            {instance_id, 
-             descriptor_name, 
-             mesh_descriptor, 
-             &node_ref.mesh(),
-            },
-            mesh_descriptor->arch(),
-            device_ids,
-        });
-
+        return populate_mesh_instance(node_ref.mesh());
     } else if (node_ref.has_graph()) {
-        descriptor_name = node_ref.graph().graph_descriptor();
-        instance_id = node_ref.graph().graph_id();
+        auto sub_ref = node_ref.graph().has_sub_ref();
 
-        // Check that the descriptor name exists
-        auto it = graph_descriptors_by_name_.find(descriptor_name);
-        TT_FATAL(it != graph_descriptors_by_name_.end(), "Graph descriptor {} not found in instance", descriptor_name);
+        // Warn if there is a sub reference that it will not be used
+        if (sub_ref) {
+            log_warn(tt::LogFabric, "Sub reference will not be used in this graph instance");
+        }
 
-        auto graph_descriptor = it->second;
 
-        // Check that it doesn't have a sub_ref
-        node_instance = std::make_unique<GraphInstance>(GraphInstance{
-            {
-                instance_id, 
-                descriptor_name, 
-                graph_descriptor, 
-                &node_ref.graph(),
-            },
-            graph_descriptor->type(),
-        });
+        return populate_graph_instance(node_ref.graph());
     }
 
-    return node_instance;
+    TT_FATAL(false, "Invalid NodeRef: neither mesh nor graph set");
+    return static_cast<NodeId>(-1);
 }
 
-// Helper function to get the type of a node instance
-std::string MeshGraphDescriptor::get_instance_type(const std::unique_ptr<NodeInstance>& node_instance) {
-    if (std::holds_alternative<const proto::MeshDescriptor*>(node_instance->descriptor)) {
-        return "mesh";
-    } else if (std::holds_alternative<const proto::GraphDescriptor*>(node_instance->descriptor)) {
-        auto graph_instance = static_cast<GraphInstance*>(node_instance.get());
-        return graph_instance->type;
+MeshGraphDescriptor::NodeId MeshGraphDescriptor::populate_mesh_instance(const proto::MeshRef& mesh_ref) {
+    std::string_view descriptor_name = mesh_ref.mesh_descriptor();
+    auto it = mesh_desc_by_name_.find(descriptor_name);
+    TT_FATAL(it != mesh_desc_by_name_.end(), "Mesh descriptor {} not found in instance", std::string(descriptor_name));
+    const auto* mesh_desc = it->second;
+
+    MeshInstanceData data{
+        mesh_ref.mesh_id(),
+        mesh_desc->name(),
+        mesh_desc->arch(),
+        mesh_desc
+    };
+    uint32_t mesh_idx = static_cast<uint32_t>(meshes_.size());
+    meshes_.push_back(data);
+    NodeId nid = static_cast<NodeId>(nodes_.size());
+    nodes_.push_back(NodeIndex{NodeKind::Mesh, mesh_idx});
+    mesh_ids_.push_back(nid);
+    name_to_ids_[meshes_.back().name].push_back(nid);
+    type_to_ids_[std::string_view("mesh")].push_back(nid);
+    return nid;
+}
+
+MeshGraphDescriptor::NodeId MeshGraphDescriptor::populate_graph_instance(const proto::GraphRef& graph_ref) {
+    std::string_view descriptor_name = graph_ref.graph_descriptor();
+    auto it = graph_desc_by_name_.find(descriptor_name);
+    TT_FATAL(it != graph_desc_by_name_.end(), "Graph descriptor {} not found in instance", std::string(descriptor_name));
+    const auto* graph_desc = it->second;
+
+    std::unordered_map<uint32_t, NodeId> subs;
+    subs.reserve(graph_desc->instances_size());
+
+    std::string_view type;
+    for (const auto& instance : graph_desc->instances()) {
+        uint32_t id;
+
+        if (instance.has_graph()) {
+            id = instance.graph().graph_id();
+        } else if (instance.has_mesh()) {
+            id = instance.mesh().mesh_id();
+        }
+
+        // Check that the instance id is not already in the graph
+        TT_FATAL(!subs.contains(id), "Graph instance id {} already exists in this graph", id);
+
+        NodeId child = populate_instance(instance);
+
+        // Check that the type is the same for all instances
+        if (is_graph(child)) {
+            if (type.empty()) {
+                type = graph(child).type;
+            } else {
+                TT_FATAL(type == graph(child).type, "Graph instance type {} does not match graph descriptor type {}", type, graph(child).type);
+            }
+        }
     }
-    return "unknown";
+
+    uint32_t graph_idx = static_cast<uint32_t>(graphs_.size());
+    graphs_.emplace_back(GraphInstanceData{
+        graph_ref.graph_id(),
+        graph_desc->name(),
+        graph_desc->type(),
+        graph_desc,
+        std::move(subs)
+    });
+    NodeId nid = static_cast<NodeId>(nodes_.size());
+    nodes_.push_back(NodeIndex{NodeKind::Graph, graph_idx});
+    graph_ids_.push_back(nid);
+    name_to_ids_[graphs_.back().name].push_back(nid);
+    type_to_ids_[graphs_.back().type].push_back(nid);
+    return nid;
 }
 
-// Accessor method implementations
-MeshGraphDescriptor::NodeInstance* MeshGraphDescriptor::get_instance_by_global_id(uint32_t global_id) const {
-    auto it = all_instances_.find(global_id);
-    return it != all_instances_.end() ? it->second.get() : nullptr;
-}
 
-std::vector<uint32_t> MeshGraphDescriptor::get_ids_by_type(const std::string& type) const {
-    auto it = instances_by_type_.find(type);
-    return it != instances_by_type_.end() ? it->second : std::vector<uint32_t>{};
-}
-
-std::vector<uint32_t> MeshGraphDescriptor::get_ids_by_name(const std::string& name) const {
-    auto it = instances_by_name_.find(name);
-    return it != instances_by_name_.end() ? it->second : std::vector<uint32_t>{};
-}
-
-std::vector<uint32_t> MeshGraphDescriptor::get_all_ids() const {
-    std::vector<uint32_t> result;
-    result.reserve(all_instances_.size());
-    for (const auto& [global_id, instance] : all_instances_) {
-        result.push_back(global_id);
-    }
-    return result;
-}
-
-void MeshGraphDescriptor::print_node_instance(const NodeInstance* node_instance, int indent_level) {
+void MeshGraphDescriptor::print_node(NodeId id, int indent_level) {
     std::string indent(indent_level * 2, ' ');
     std::stringstream ss;
     
-    // Determine the type based on the descriptor variant
-    if (std::holds_alternative<const proto::MeshDescriptor*>(node_instance->descriptor)) {
-        auto mesh_instance = static_cast<const MeshInstance*>(node_instance);
-        // Print Mesh Instance details
+    if (is_mesh(id)) {
+        const auto& mv = mesh(id);
         ss << indent << "=== MESH INSTANCE ===" << std::endl;
-        ss << indent << "Global ID: " << mesh_instance->global_id << std::endl;
-        ss << indent << "ID: " << mesh_instance->id << std::endl;
-        ss << indent << "Descriptor Name: " << mesh_instance->descriptor_name << std::endl;
+        ss << indent << "Global ID: " << id << std::endl;
+        ss << indent << "ID: " << mv.local_id << std::endl;
+        ss << indent << "Descriptor Name: " << mv.name << std::endl;
         ss << indent << "Architecture: ";
-        
-        // Convert architecture enum to string
-        switch (mesh_instance->arch) {
+        switch (mv.arch) {
             case proto::Architecture::WORMHOLE_B0:
                 ss << "WORMHOLE_B0";
                 break;
@@ -685,64 +631,46 @@ void MeshGraphDescriptor::print_node_instance(const NodeInstance* node_instance,
                 break;
         }
         ss << std::endl;
-        
-        ss << indent << "Device IDs: [";
-        for (size_t i = 0; i < mesh_instance->device_ids.size(); ++i) {
+        const auto* mesh_desc = mv.desc;
+        ss << indent << "Device Topology Dimensions: [";
+        for (int i = 0; i < mesh_desc->device_topology().dims_size(); ++i) {
             if (i > 0) ss << ", ";
-            ss << mesh_instance->device_ids[i];
+            ss << mesh_desc->device_topology().dims(i);
         }
         ss << "]" << std::endl;
-        
-        // Print mesh descriptor details if available
-        if (auto mesh_descriptor = std::get_if<const proto::MeshDescriptor*>(&mesh_instance->descriptor)) {
-            ss << indent << "Device Topology Dimensions: [";
-            for (int i = 0; i < (*mesh_descriptor)->device_topology().dims_size(); ++i) {
-                if (i > 0) ss << ", ";
-                ss << (*mesh_descriptor)->device_topology().dims(i);
-            }
-            ss << "]" << std::endl;
-            
-            ss << indent << "Host Topology Dimensions: [";
-            for (int i = 0; i < (*mesh_descriptor)->host_topology().dims_size(); ++i) {
-                if (i > 0) ss << ", ";
-                ss << (*mesh_descriptor)->host_topology().dims(i);
-            }
-            ss << "]" << std::endl;
-            
-            ss << indent << "Channel Count: " << (*mesh_descriptor)->channels().count() << std::endl;
-            ss << indent << "Express Connections: " << (*mesh_descriptor)->express_connections_size() << std::endl;
+        ss << indent << "Host Topology Dimensions: [";
+        for (int i = 0; i < mesh_desc->host_topology().dims_size(); ++i) {
+            if (i > 0) ss << ", ";
+            ss << mesh_desc->host_topology().dims(i);
         }
+        ss << "]" << std::endl;
+        ss << indent << "Channel Count: " << mesh_desc->channels().count() << std::endl;
+        ss << indent << "Express Connections: " << mesh_desc->express_connections_size() << std::endl;
         
-    } else if (std::holds_alternative<const proto::GraphDescriptor*>(node_instance->descriptor)) {
-        auto graph_instance = static_cast<const GraphInstance*>(node_instance);
-        // Print Graph Instance details
+    } else if (is_graph(id)) {
+        const auto& gv = graph(id);
         ss << indent << "=== GRAPH INSTANCE ===" << std::endl;
-        ss << indent << "ID: " << graph_instance->id << std::endl;
-        ss << indent << "Descriptor Name: " << graph_instance->descriptor_name << std::endl;
-        ss << indent << "Type: " << graph_instance->type << std::endl;
-        ss << indent << "Number of Sub-instances: " << graph_instance->sub_instances.size() << std::endl;
-        
-        // Print graph descriptor details if available
-        if (auto graph_descriptor = std::get_if<const proto::GraphDescriptor*>(&graph_instance->descriptor)) {
-            ss << indent << "Total Instances in Descriptor: " << (*graph_descriptor)->instances_size() << std::endl;
-            ss << indent << "Connections: " << (*graph_descriptor)->connections_size() << std::endl;
-            if ((*graph_descriptor)->has_graph_topology()) {
-                ss << indent << "Has Graph Topology: Yes" << std::endl;
-            }
+        ss << indent << "ID: " << gv.local_id << std::endl;
+        ss << indent << "Descriptor Name: " << gv.name << std::endl;
+        ss << indent << "Type: " << gv.type << std::endl;
+        ss << indent << "Number of Sub-instances: " << gv.sub_instances.size() << std::endl;
+        const auto* graph_desc = gv.desc;
+        ss << indent << "Total Instances in Descriptor: " << graph_desc->instances_size() << std::endl;
+        ss << indent << "Connections: " << graph_desc->connections_size() << std::endl;
+        if (graph_desc->has_graph_topology()) {
+            ss << indent << "Has Graph Topology: Yes" << std::endl;
         }
-        
-        // Recursively print sub-instances
-        if (!graph_instance->sub_instances.empty()) {
+        if (!gv.sub_instances.empty()) {
             ss << indent << "Sub-instances:" << std::endl;
-            for (const auto& sub_instance : graph_instance->sub_instances) {
-                print_node_instance(get_instance_by_global_id(sub_instance), indent_level + 1);
+            for (const auto& [id, child] : gv.sub_instances) {
+                ss << indent << "ID: " << id << std::endl;
+                print_node(child, indent_level + 1);
             }
         }
     } else {
         // Fallback for unknown node types
         ss << indent << "=== UNKNOWN NODE TYPE ===" << std::endl;
-        ss << indent << "ID: " << node_instance->id << std::endl;
-        ss << indent << "Descriptor Name: " << node_instance->descriptor_name << std::endl;
+        ss << indent << "Global ID: " << id << std::endl;
     }
     
     ss << indent << "---" << std::endl;
@@ -752,24 +680,23 @@ void MeshGraphDescriptor::print_node_instance(const NodeInstance* node_instance,
 void MeshGraphDescriptor::print_all_nodes() {
     std::stringstream ss;
     ss << "\n=== PRINTING ALL NODE INSTANCES ===" << std::endl;
-    ss << "Total instances: " << all_instances_.size() << std::endl;
+    ss << "Total instances: " << nodes_.size() << std::endl;
     ss << "=====================================" << std::endl;
     log_debug(tt::LogFabric, "{}", ss.str());
     
     ss.str(std::string());
     ss << "\n=== TOP LEVEL INSTANCE ===" << std::endl;
-    if (top_level_instance_) {
-        print_node_instance(top_level_instance_, 0);
+    if (top_level_id_ != static_cast<NodeId>(-1)) {
+        print_node(top_level_id_, 0);
     } else {
         ss << "No top level instance found." << std::endl;
         log_debug(tt::LogFabric, "{}", ss.str());
     }
 }
 
-// Dynamic checks to implement
-// Check that all instances have been defined somewhere
-// Check that all instances are of the same type
-// Validate that connection nodes reference valid instances in this graph
+
+// Connnection phase checks
+// Check that all instances have been defined somewhere 
 
 }  // namespace tt::tt_fabric
 
