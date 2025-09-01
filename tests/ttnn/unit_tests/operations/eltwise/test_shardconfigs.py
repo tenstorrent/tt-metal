@@ -20,6 +20,7 @@ import pytest
     [
         (ttnn.neg, 1e-10),
         (ttnn.identity, 1e-10),
+        (ttnn.abs, 1e-10),
     ],
 )
 def test_ops_sharded1(device, input_shapes, ttnn_fn, atol):
@@ -30,12 +31,18 @@ def test_ops_sharded1(device, input_shapes, ttnn_fn, atol):
 
     shard_grid = ttnn.CoreRangeSet(
         {
-            ttnn.CoreRange((0, 0), (7, 7)),
+            ttnn.CoreRange((0, 0), (6, 6)),
         }
     )
-    shard_shape = [32, 64]  # N*C*H // 7 and W // 7
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardMode.PHYSICAL)
-    shard_config = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec)
+
+    shard_config = ttnn.create_sharded_memory_config(
+        (224, 448),
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.COL_MAJOR,  # passes for both ROW and COL MAJOR orientation
+        use_height_and_width_as_shard_shape=True,
+        # when False RuntimeError: height and width must be shard shape with CoreRangeSet
+    )
 
     input_tensor1 = ttnn.from_torch(
         in_data1,
@@ -74,6 +81,7 @@ def test_ops_sharded1(device, input_shapes, ttnn_fn, atol):
     [
         (ttnn.neg, 1e-10),
         (ttnn.identity, 1e-10),
+        (ttnn.abs, 1e-10),
     ],
 )
 def test_ops_sharded2(device, input_shapes, ttnn_fn, atol):
@@ -84,13 +92,26 @@ def test_ops_sharded2(device, input_shapes, ttnn_fn, atol):
 
     shard_grid = ttnn.CoreRangeSet(
         {
-            ttnn.CoreRange((0, 0), (7, 7)),
+            ttnn.CoreRange((0, 0), (1, 5)),
         }
     )
-    shard_shape = [32, 512]  # N*C*H // 6 and W // 2
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardMode.PHYSICAL)
-    shard_config = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec)
 
+    shard_config = ttnn.create_sharded_memory_config(
+        (192, 1024),
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.COL_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+        # when False: RuntimeError: height and width must be shard shape with CoreRangeSet
+    )
+
+    # core_grid=ttnn.CoreGrid(y=2, x=6),
+    # num_shards_along_width <= shard_grid.y
+
+    #  (0, 0), (5, 1) => ( y, x) ?
+    # E       RuntimeError: TT_FATAL @ /home/ubuntu/Repo/tt-metal/ttnn/core/tensor/tensor_spec.cpp:86: num_shards_along_width <= shard_grid.y
+    # E       info:
+    # E       Number of shards along width 6 must not exceed number of rows 2 for column major orientation!
     input_tensor1 = ttnn.from_torch(
         in_data1,
         dtype=ttnn.bfloat16,
@@ -127,6 +148,7 @@ def test_ops_sharded2(device, input_shapes, ttnn_fn, atol):
     [
         (ttnn.neg, 1e-10),
         (ttnn.identity, 1e-10),
+        (ttnn.abs, 1e-10),
     ],
 )
 def test_ops_sharded3(device, input_shapes, ttnn_fn, atol):
@@ -137,12 +159,21 @@ def test_ops_sharded3(device, input_shapes, ttnn_fn, atol):
 
     shard_grid = ttnn.CoreRangeSet(
         {
-            ttnn.CoreRange((0, 0), (7, 7)),
+            ttnn.CoreRange((0, 0), (2, 2)),
         }
     )
-    shard_shape = [104, 32]  # what is the correct shard shape here ?
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardMode.LOGICAL)
-    shard_config = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec)
+
+    shard_config = ttnn.create_sharded_memory_config(
+        (416, 32),
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,  # only COL MAJOR orientation fails
+        use_height_and_width_as_shard_shape=True,
+    )
+    # Error:  num_shards_along_height <= shard_grid.x with col_major
+    # E       RuntimeError: TT_FATAL @ /home/ubuntu/Repo/tt-metal/ttnn/core/tensor/tensor_spec.cpp:81: num_shards_along_height <= shard_grid.x
+    # E       info:
+    # E       Number of shards along height 13 must not exceed number of columns 3 for column major orientation!
 
     input_tensor1 = ttnn.from_torch(
         in_data1,
