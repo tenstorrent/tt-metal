@@ -46,7 +46,6 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
         (1, 512, 256, 256, 32, 4, 8, 8),
         # SDXL Refiner
         (1, 1152, 128, 128, 32, 2, 8, 4),
-        (1, 768, 128, 128, 32, 2, 8, 8),
         (1, 512, 64, 64, 32, 1, 8, 8),  # SD 1.4 VAE
         (1, 512, 128, 128, 32, 1, 8, 8),  # SD 1.4 VAE
         (1, 512, 256, 256, 32, 4, 8, 8),  # SD 1.4 VAE

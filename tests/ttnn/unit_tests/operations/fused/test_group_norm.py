@@ -512,6 +512,7 @@ def generate_sdxl_test_inputs_neg_mask():
     inputs = []
     inputs.append((1, 640, 128, 128))
     inputs.append((1, 960, 128, 128))
+    inputs.append((1, 768, 128, 128))
     return inputs
 
 
