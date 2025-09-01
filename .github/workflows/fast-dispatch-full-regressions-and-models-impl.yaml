@@ -120,11 +120,13 @@ jobs:
           STABLE_CIv2_COUNT="$(jq 'length' <<< "${STABLE_CIv2_OUT}")"
           UNSTABLE_COUNT="$(jq 'length' <<< "${UNSTABLE_OUT}")"
 
-          echo "stable_matrix=${STABLE_OUT}"     >> "$GITHUB_OUTPUT"
-          echo "unstable_matrix=${UNSTABLE_OUT}" >> "$GITHUB_OUTPUT"
+
+          echo "stable_matrix=$(echo $STABLE_OUT | tr -d '\n')" >> "$GITHUB_OUTPUT"
+          echo "unstable_matrix=$(echo $UNSTABLE_OUT | tr -d '\n')" >> "$GITHUB_OUTPUT"
+          echo "stable_ci_v2_matrix=$(echo $STABLE_CIv2_OUT | tr -d '\n')" >> "$GITHUB_OUTPUT"
+
           echo "stable_count=${STABLE_COUNT}"     >> "$GITHUB_OUTPUT"
           echo "unstable_count=${UNSTABLE_COUNT}" >> "$GITHUB_OUTPUT"
-          echo "stable_ci_v2_matrix=${STABLE_CIv2_OUT}" >> "$GITHUB_OUTPUT"
           echo "stable_ci_v2_count=${STABLE_CIv2_COUNT}" >> "$GITHUB_OUTPUT"
 
   nightly-wh-models:
