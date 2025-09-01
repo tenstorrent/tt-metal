@@ -95,7 +95,7 @@ class Attention(LightweightModule):
 
         self.transformation_mats = transformation_mats
         self.is_sliding = (
-            configuration.layer_types[layer_num] == "sliding_window" if configuration.layer_types else False
+            configuration.layer_types[layer_num] == "sliding_attention" if configuration.layer_types else False
         )
 
         self.model_config = configuration.get_model_config()
