@@ -2,6 +2,15 @@ name: "(Single-card) Frequent model and ttnn tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      stable-models-to-run:
+        description: "List of requested models as JSON array, for example: [\"common_models\", \"functional_unet\"]. Default is 'all'"
+        default: "all"
+        type: string
+      unstable-models-to-run:
+        description: "List of requested models as JSON array, for example: [\"stable_diffusion\", \"mamba 5\"]. Default is 'stable_diffusion,mamba 5'"
+        default: "stable_diffusion,mamba 5" # Skipping due to issue #15932 (mamba 1, mamba 2, mamba 3, mamba 4, mamba 6)
+        type: string
   workflow_call:
   schedule:
     - cron: "0 */2 * * *"
@@ -23,3 +32,5 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      stable-models-to-run: ${{ inputs.stable-models-to-run }}
+      unstable-models-to-run: ${{ inputs.unstable-models-to-run }}
