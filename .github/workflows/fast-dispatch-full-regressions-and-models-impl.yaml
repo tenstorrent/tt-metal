@@ -67,7 +67,7 @@ jobs:
             {"model":"yolov12x"},
             {"model":"gemma-3-4b-it"},
             {"model":"ttt-mistral-7B-v0.3"},
-            {"model":"stable_diffusion_xl_base","timeout":45}
+            {"model":"stable_diffusion_xl_base","timeout":45} # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
           ]'
 
           # Stable set (CIv2)
@@ -139,14 +139,6 @@ jobs:
       matrix:
         card: [N150, N300]
         test-config: ${{ fromJSON(needs.plan.outputs.stable_matrix) }}
-        # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
-        include:
-          - model: stable_diffusion_xl_base
-            card: N150
-            timeout: 45
-          - model: stable_diffusion_xl_base
-            card: N300
-            timeout: 45
     name: Nightly ${{ matrix.card }} ${{ matrix.test-config.model }}
     defaults:
       run:
@@ -171,7 +163,7 @@ jobs:
           name: ${{ inputs.wheel-artifact-name }}
       - uses: ./.github/actions/ensure-active-weka-mount
       - name: Run frequent reg tests scripts
-        timeout-minutes: ${{ matrix.timeout || 30 }}
+        timeout-minutes: ${{ matrix.test-config.timeout || 30 }}
         uses: ./.github/actions/docker-run
         with:
           docker_image: ${{ inputs.docker-image }}
