@@ -126,7 +126,7 @@ struct __attribute__((packed)) compressed_route_2d_t {
 static_assert(sizeof(compressed_route_1d_t) == 1, "1D route must be 1 byte");
 static_assert(sizeof(compressed_route_2d_t) == 2, "2D route must be 2 bytes");
 
-template <uint8_t dim>
+template <uint8_t dim, bool compressed>
 struct __attribute__((packed)) compressed_routing_path_t {
     static_assert(dim == 1 || dim == 2, "dim must be 1 or 2");
 
@@ -152,24 +152,24 @@ struct __attribute__((packed)) compressed_routing_path_t {
     static const uint16_t SINGLE_ROUTE_SIZE_2D = 32;
 
     // Compressed routing uses much smaller encoding
-    // 1D: 1 byte (direction:1bit, hops:7bits)
+    // 1D: 1 byte (num_hops:8bits)
     static const uint16_t COMPRESSED_ROUTE_SIZE_1D = sizeof(compressed_route_1d_t);
     // 2D: 2 bytes (ns_hops:5bits, ew_hops:5bits, ns_dir:1bit, ew_dir:1bit, turn_point:4bits)
     static const uint16_t COMPRESSED_ROUTE_SIZE_2D = sizeof(compressed_route_2d_t);
 
     static constexpr uint16_t MAX_CHIPS_LOWLAT = (dim == 1) ? MAX_CHIPS_LOWLAT_1D : MAX_CHIPS_LOWLAT_2D;
-    static constexpr uint16_t SINGLE_ROUTE_SIZE = (dim == 1) ? SINGLE_ROUTE_SIZE_1D : SINGLE_ROUTE_SIZE_2D;
     static constexpr uint16_t COMPRESSED_ROUTE_SIZE = (dim == 1) ? COMPRESSED_ROUTE_SIZE_1D : COMPRESSED_ROUTE_SIZE_2D;
-
-    std::uint8_t packed_paths[MAX_CHIPS_LOWLAT * SINGLE_ROUTE_SIZE] = {};  // 64 or 32768
+    static constexpr uint16_t SINGLE_ROUTE_SIZE =
+        compressed ? ((dim == 1) ? COMPRESSED_ROUTE_SIZE_1D : COMPRESSED_ROUTE_SIZE_2D)
+                   : ((dim == 1) ? SINGLE_ROUTE_SIZE_1D : SINGLE_ROUTE_SIZE_2D);
 
     // Compressed paths using bitfield structures
     union {
         // 16 bytes for 1D or 2048 bytes for 2D
-        std::uint8_t raw[MAX_CHIPS_LOWLAT * COMPRESSED_ROUTE_SIZE];
-        compressed_route_1d_t one[MAX_CHIPS_LOWLAT];  // Only valid when dim == 1
-        compressed_route_2d_t two[MAX_CHIPS_LOWLAT];  // Only valid when dim == 2
-    } compressed_paths = {};
+        std::uint8_t raw[MAX_CHIPS_LOWLAT * SINGLE_ROUTE_SIZE];  // 64 or 34768 bytes
+        compressed_route_1d_t one[MAX_CHIPS_LOWLAT];             // 16 bytes Only valid when dim == 1
+        compressed_route_2d_t two[MAX_CHIPS_LOWLAT];             // 2048 bytes Only valid when dim == 2
+    } paths = {};
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
     // Routing calculation methods

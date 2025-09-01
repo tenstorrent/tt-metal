@@ -2258,7 +2258,7 @@ void ControlPlane::populate_fabric_connection_info(
 }
 
 void ControlPlane::write_all_to_all_routing_fields_1D(uint8_t num_chips) const {
-    compressed_routing_path_t<1> routing_path;
+    compressed_routing_path_t<1, false> routing_path;
     for (uint8_t src_chip_id = 0; src_chip_id < num_chips; ++src_chip_id) {
         routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips);
         // TODO copy
@@ -2266,7 +2266,7 @@ void ControlPlane::write_all_to_all_routing_fields_1D(uint8_t num_chips) const {
 }
 
 void ControlPlane::write_all_to_all_routing_fields_2D(uint16_t num_chips, uint16_t ew_dim) const {
-    compressed_routing_path_t<2> routing_path;
+    compressed_routing_path_t<2, false> routing_path;
     for (uint16_t src_chip_id = 0; src_chip_id < num_chips; ++src_chip_id) {
         routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips, ew_dim);
         // TODO copy

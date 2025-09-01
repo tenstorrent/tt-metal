@@ -9,7 +9,7 @@ namespace tt::tt_fabric {
 
 // 1D routing specialization
 template <>
-void compressed_routing_path_t<1>::calculate_chip_to_all_routing_fields(
+void compressed_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
     uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) {
     for (uint8_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
         uint32_t routing_field_value = 0;
@@ -34,14 +34,14 @@ void compressed_routing_path_t<1>::calculate_chip_to_all_routing_fields(
 
         // Store the 4-byte routing field value directly as uint32_t
         uint32_t field_offset = dst_chip_id * SINGLE_ROUTE_SIZE;
-        uint32_t* route_ptr = reinterpret_cast<uint32_t*>(&packed_paths[field_offset]);
+        uint32_t* route_ptr = reinterpret_cast<uint32_t*>(&paths.raw[field_offset]);
         *route_ptr = routing_field_value;
     }
 }
 
 // 2D routing specialization
 template <>
-void compressed_routing_path_t<2>::calculate_chip_to_all_routing_fields(
+void compressed_routing_path_t<2, false>::calculate_chip_to_all_routing_fields(
     uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) {
     for (uint16_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
         if (src_chip_id == dst_chip_id) {
@@ -55,7 +55,7 @@ void compressed_routing_path_t<2>::calculate_chip_to_all_routing_fields(
         uint16_t dst_col = dst_chip_id / ew_dim;
         uint16_t dst_row = dst_chip_id % ew_dim;
 
-        uint8_t* route_buffer = &packed_paths[dst_chip_id * SINGLE_ROUTE_SIZE];
+        uint8_t* route_buffer = &paths.raw[dst_chip_id * SINGLE_ROUTE_SIZE];
         uint16_t hop_index = 0;
         uint16_t byte_index = 0;
         uint8_t current_packed_byte = 0;
@@ -121,28 +121,28 @@ void compressed_routing_path_t<2>::calculate_chip_to_all_routing_fields(
 
 // 1D compressed routing specialization
 template <>
-void compressed_routing_path_t<1>::calculate_chip_to_all_routing_fields_compressed(
+void compressed_routing_path_t<1, true>::calculate_chip_to_all_routing_fields_compressed(
     uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) {
     for (uint16_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
         if (src_chip_id == dst_chip_id) {
             // Noop to self
-            compressed_paths.one[dst_chip_id].set(0);
+            paths.one[dst_chip_id].set(0);
             continue;
         }
 
         uint8_t hops = (dst_chip_id > src_chip_id) ? (dst_chip_id - src_chip_id) : (src_chip_id - dst_chip_id);
-        compressed_paths.one[dst_chip_id].set(hops);
+        paths.one[dst_chip_id].set(hops);
     }
 }
 
 // 2D compressed routing specialization
 template <>
-void compressed_routing_path_t<2>::calculate_chip_to_all_routing_fields_compressed(
+void compressed_routing_path_t<2, true>::calculate_chip_to_all_routing_fields_compressed(
     uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) {
     for (uint16_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
         if (src_chip_id == dst_chip_id) {
             // Self route - no movement needed
-            compressed_paths.two[dst_chip_id].set(0, 0, 0, 0, 0);
+            paths.two[dst_chip_id].set(0, 0, 0, 0, 0);
             continue;
         }
 
@@ -163,7 +163,7 @@ void compressed_routing_path_t<2>::calculate_chip_to_all_routing_fields_compress
         uint8_t ew_direction = (dst_row > src_row) ? 1 : 0;
         uint8_t turn_after_ns = ns_hops;  // XY routing: complete NS first, then EW
 
-        compressed_paths.two[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, turn_after_ns);
+        paths.two[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, turn_after_ns);
     }
 }
 

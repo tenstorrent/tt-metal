@@ -25,7 +25,7 @@ inline void pack_command_into_buffer(
 // Common helper function for both 1D and 2D routing
 template <uint8_t dim>
 inline void decode_route_to_buffer_common(
-    const compressed_routing_path_t<dim>& routing_path,
+    const compressed_routing_path_t<dim, false>& routing_path,
     uint16_t dst_chip_id,
     uint8_t* out_route_buffer,
     uint16_t max_chips,
@@ -38,7 +38,7 @@ inline void decode_route_to_buffer_common(
         return;
     }
 
-    const uint8_t* packed_route = &routing_path.packed_paths[dst_chip_id * route_size];
+    const uint8_t* packed_route = &routing_path.paths.raw[dst_chip_id * route_size];
     // Copy packed data directly to output buffer
     for (uint16_t i = 0; i < route_size; ++i) {
         out_route_buffer[i] = packed_route[i];
@@ -47,21 +47,21 @@ inline void decode_route_to_buffer_common(
 
 // Device-side decoder function for 2D routing (packed paths)
 template <>
-inline void compressed_routing_path_t<2>::decode_route_to_buffer(
+inline void compressed_routing_path_t<2, false>::decode_route_to_buffer(
     uint16_t dst_chip_id, uint8_t* out_route_buffer) const {
     decode_route_to_buffer_common(*this, dst_chip_id, out_route_buffer, MAX_CHIPS_LOWLAT, SINGLE_ROUTE_SIZE);
 }
 
 // Device-side decoder function for 1D routing (packed paths)
 template <>
-inline void compressed_routing_path_t<1>::decode_route_to_buffer(
+inline void compressed_routing_path_t<1, false>::decode_route_to_buffer(
     uint16_t dst_chip_id, uint8_t* out_route_buffer) const {
     decode_route_to_buffer_common(*this, dst_chip_id, out_route_buffer, MAX_CHIPS_LOWLAT, SINGLE_ROUTE_SIZE);
 }
 
 // Device-side compressed decoder function for 2D routing
 template <>
-inline bool compressed_routing_path_t<2>::decode_compressed_route_to_buffer(
+inline bool compressed_routing_path_t<2, true>::decode_compressed_route_to_buffer(
     uint16_t dst_chip_id, uint8_t* out_route_buffer) const {
     uint32_t* route_ptr = reinterpret_cast<uint32_t*>(out_route_buffer);
 
@@ -72,7 +72,7 @@ inline bool compressed_routing_path_t<2>::decode_compressed_route_to_buffer(
     }
 
     // Get compressed route data
-    const auto& compressed_route = compressed_paths.two[dst_chip_id];
+    const auto& compressed_route = paths.two[dst_chip_id];
     uint8_t ns_hops = compressed_route.get_ns_hops();
     uint8_t ew_hops = compressed_route.get_ew_hops();
     uint8_t ns_direction = compressed_route.get_ns_direction();
@@ -135,7 +135,7 @@ inline bool compressed_routing_path_t<2>::decode_compressed_route_to_buffer(
 
 // Device-side compressed decoder function for 1D routing
 template <>
-inline bool compressed_routing_path_t<1>::decode_compressed_route_to_buffer(
+inline bool compressed_routing_path_t<1, true>::decode_compressed_route_to_buffer(
     uint16_t dst_chip_id, uint8_t* out_route_buffer) const {
     uint32_t* route_ptr = reinterpret_cast<uint32_t*>(out_route_buffer);
 
@@ -145,7 +145,7 @@ inline bool compressed_routing_path_t<1>::decode_compressed_route_to_buffer(
         return false;
     }
 
-    const auto& compressed_route = compressed_paths.one[dst_chip_id];
+    const auto& compressed_route = paths.one[dst_chip_id];
     uint8_t hops = compressed_route.get_hops();
     if (hops == 0) {
         // Noop to self

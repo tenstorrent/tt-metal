@@ -9,7 +9,9 @@
 namespace tt::tt_fabric {
 
 // Template specializations are defined in compressed_routing_path.cpp
-template class compressed_routing_path_t<1>;
-template class compressed_routing_path_t<2>;
+template class compressed_routing_path_t<1, false>;
+template class compressed_routing_path_t<2, false>;
+template class compressed_routing_path_t<1, true>;
+template class compressed_routing_path_t<2, true>;
 
 }  // namespace tt::tt_fabric
