@@ -14,6 +14,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
 )
 import os
 from models.utility_functions import profiler
+from conftest import is_galaxy
 
 from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
 
@@ -64,6 +65,7 @@ def run_demo_inference(
             encoders_on_device=encoders_on_device,
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
+            is_galaxy=is_galaxy(),
         ),
     )
 
