@@ -31,6 +31,14 @@ done
 [ -n "$good_commit" ] || die "Please specify -g GOOD_SHA."
 [ -n "$bad_commit" ] || die "Please specify -b BAD_SHA."
 
+echo "TT_METAL_HOME: $TT_METAL_HOME"
+echo "PYTHONPATH: $PYTHONPATH"
+echo "ARCH_NAME: ${ARCH_NAME:-}"
+echo "pwd: $(pwd)"
+
+echo "Creating virtual environment:"
+./create_venv.sh
+
 git cat-file -e "$good_commit^{commit}" 2>/dev/null || die "Invalid good commit: $good_commit"
 git cat-file -e "$bad_commit^{commit}" 2>/dev/null  || die "Invalid bad commit: $bad_commit"
 
