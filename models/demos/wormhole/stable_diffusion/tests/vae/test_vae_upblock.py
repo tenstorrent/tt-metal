@@ -7,6 +7,7 @@ import torch
 from diffusers import AutoencoderKL
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
     UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
     UPBLOCK_RESNET_NORM_NUM_BLOCKS,
@@ -18,7 +19,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_blackhole("Blackhole PCC bad until GN issues fixed (#20760)")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "input_channels, input_height, input_width, out_channels, output_height, output_width, resnet_norm_blocks, resnet_conv_in_channel_split_factors, upsample_conv_channel_split_factors, block_id",
     [
