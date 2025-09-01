@@ -14,6 +14,7 @@ void bind_moreh_softmax_backward_operation(py::module& module) {
     export_enum<MorehSoftmaxBackwardOp>(module, "MorehSoftmaxBackwardOp");
     export_enum<MorehSoftmaxBackwardOpParallelizationStrategy>(module, "MorehSoftmaxBackwardOpParallelizationStrategy");
 
+// NOLINTBEGIN(bugprone-macro-parentheses)
 #define BIND_MOREH_SOFT_BACKWARD_OP(op_name, op_enum, op_desc)                         \
     bind_registered_operation(                                                         \
         module,                                                                        \
@@ -29,6 +30,7 @@ void bind_moreh_softmax_backward_operation(py::module& module) {
             py::arg("strategy") = MorehSoftmaxBackwardOpParallelizationStrategy::NONE, \
             py::arg("memory_config") = std::nullopt,                                   \
             py::arg("compute_kernel_config") = std::nullopt});
+    // NOLINTEND(bugprone-macro-parentheses)
 
     BIND_MOREH_SOFT_BACKWARD_OP(
         moreh_softmax_backward, MorehSoftmaxBackwardOp::SOFTMAX, "Moreh Softmax Backward Operation")
