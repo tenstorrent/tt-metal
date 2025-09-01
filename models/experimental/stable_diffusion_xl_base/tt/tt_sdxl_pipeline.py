@@ -33,7 +33,7 @@ class TtSDXLPipelineConfig:
     capture_trace: bool = True
     vae_on_device: bool = True
     encoders_on_device: bool = True
-    is_galaxy: bool = False
+    is_galaxy: bool
 
 
 class TtSDXLPipeline(LightweightModule):
