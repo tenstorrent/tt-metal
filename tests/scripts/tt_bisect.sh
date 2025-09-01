@@ -117,6 +117,9 @@ while [[ "$found" == "false" ]]; do
     echo "Run: $test"
     if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" >"$output_file" 2>&1; then
       timeout_rc=0
+      echo "--- Logs (attempt $attempt) ---"
+      sed -n '1,200p' "$output_file" || true
+      echo "------------------------------"
       break
     else
       timeout_rc=$?
