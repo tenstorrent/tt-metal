@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -18,10 +18,9 @@ from loguru import logger
 
 
 class TtDecoder(LightweightModule):
-    def __init__(self, device, state_dict, model_config, use_tp):
+    def __init__(self, device, state_dict, model_config):
         super().__init__()
 
-        self.use_tp = use_tp
         self.device = device
 
         self.norm_groups = 32

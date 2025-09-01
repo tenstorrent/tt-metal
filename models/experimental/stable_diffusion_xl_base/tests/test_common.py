@@ -391,15 +391,13 @@ def batch_encode_prompt_on_device(
             bs_embed * num_images_per_prompt, -1
         )
 
-    if not use_tp:
-        return prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds
-    else:
-        return (
-            prompt_embeds[:num_promts],
-            negative_prompt_embeds[:num_promts],
-            pooled_prompt_embeds[:num_promts],
-            negative_pooled_prompt_embeds[:num_promts],
-        )
+    slice_to = num_promts if use_tp else None
+    return (
+        prompt_embeds[:slice_to],
+        negative_prompt_embeds[:slice_to],
+        pooled_prompt_embeds[:slice_to],
+        negative_pooled_prompt_embeds[:slice_to],
+    )
 
 
 # Copied from sdxl pipeline
@@ -524,7 +522,7 @@ def run_tt_image_gen(
         unet_outputs = []
         if tid is None or capture_trace:
             tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
-            for unet_slice in range(1 if use_tp else 2):
+            for unet_slice in range(tt_prompt_embeds.shape[0]):
                 latent_model_input = tt_latents
                 noise_pred, _ = run_tt_iteration(
                     tt_unet,
