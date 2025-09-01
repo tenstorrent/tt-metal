@@ -13,6 +13,7 @@ from models.experimental.uniad.tt.model_preprocessing_encoder import (
 from models.experimental.uniad.reference.pan_segformer_head import PansegformerHead
 from models.experimental.uniad.tt.ttnn_pan_segformer_head import TtPansegformerHead
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.experimental.uniad.common import load_torch_model
 
 
 class DotDict(dict):
@@ -21,8 +22,8 @@ class DotDict(dict):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_uniad_TtPansegformerhead(device, reset_seeds):
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
+def test_uniad_TtPansegformerhead(device, reset_seeds, model_location_generator):
+    # weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
     kwargs = {
         "num_query": 300,
         "num_classes": 4,
@@ -36,8 +37,6 @@ def test_uniad_TtPansegformerhead(device, reset_seeds):
         "loss_iou": {"type": "GIoULoss", "loss_weight": 2.0},
     }
 
-    torch_dict = torch.load(weights_path, map_location=torch.device("cpu"))["state_dict"]
-
     torch_model = PansegformerHead(
         bev_h=50,
         bev_w=50,
@@ -47,19 +46,9 @@ def test_uniad_TtPansegformerhead(device, reset_seeds):
         as_two_stage=False,
         **kwargs,
     )
-
-    new_bev_h, new_bev_w = 50, 50
-    new_bev_size = new_bev_h * new_bev_w
-
-    state_dict = {k: v for k, v in torch_dict.items() if k.startswith("seg_head")}
-    for key in ["pts_bbox_head.bev_embedding.weight", "seg_head.bev_embedding.weight"]:
-        if key in state_dict:
-            print(f"Slicing {key} from {state_dict[key].shape} to {(new_bev_size, state_dict[key].shape[1])}")
-            state_dict[key] = state_dict[key][:new_bev_size, :]
-
-    new_state_dict = dict(zip(torch_model.state_dict().keys(), state_dict.values()))
-    torch_model.load_state_dict(new_state_dict)
-    torch_model.eval()
+    torch_model = load_torch_model(
+        torch_model=torch_model, layer="seg_head", model_location_generator=model_location_generator
+    )
 
     pts_feats = torch.randn(2500, 1, 256)
     gt_lane_labels = [torch.randint(0, 2, (1, 4))]

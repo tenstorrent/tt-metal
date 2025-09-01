@@ -13,25 +13,16 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.uniad.tt.model_preprocessing_encoder import (
     create_uniad_model_parameters_encoder,
 )
+from models.experimental.uniad.common import load_torch_model
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_uniad_query_interaction(
-    device,
-    reset_seeds,
-):
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
-
+def test_uniad_query_interaction(device, reset_seeds, model_location_generator):
     torch_model = QueryInteractionModule()
 
-    torch_dict = torch.load(weights_path, map_location=torch.device("cpu"))
-    torch_dict = torch_dict["state_dict"]
-
-    state_dict = {k: v for k, v in torch_dict.items() if (k.startswith("query_interact"))}
-
-    new_state_dict = dict(zip(torch_model.state_dict().keys(), state_dict.values()))
-    torch_model.load_state_dict(new_state_dict)
-    torch_model.eval()
+    torch_model = load_torch_model(
+        torch_model=torch_model, layer="query_interact", model_location_generator=model_location_generator
+    )
 
     num_instances = 901
 

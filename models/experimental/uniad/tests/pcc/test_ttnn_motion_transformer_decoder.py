@@ -4,7 +4,6 @@
 
 import pytest
 import torch
-from collections import OrderedDict
 import sys
 from models.experimental.uniad.reference import utils
 from models.experimental.uniad.tt import ttnn_utils
@@ -39,6 +38,7 @@ import ttnn
 
 sys.modules["mmdet3d"] = sys.modules["models"]
 sys.modules["mmdet3d.core.bbox.structures.lidar_box3d"] = utils
+from models.experimental.uniad.common import load_torch_model
 
 
 def custom_preprocessor(model, name):
@@ -300,7 +300,7 @@ def custom_preprocessor_embeddding_layer(model, dtype=ttnn.bfloat16, device=None
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_uniad_MotionDeformableAttention(device, reset_seeds):
+def test_uniad_MotionDeformableAttention(device, reset_seeds, model_location_generator):
     weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
     reference_model = MotionHead(
         args=(),
@@ -353,19 +353,11 @@ def test_uniad_MotionDeformableAttention(device, reset_seeds):
         **{"num_query": 300, "predict_modes": 6},
     )
     reference_model = reference_model.motionformer.bev_interaction_layers[0].attentions[0]
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
-
-    prefix = "motion_head.motionformer.bev_interaction_layers.0.attentions.0"
-    filtered = OrderedDict(
-        (
-            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-            for k, v in weights["state_dict"].items()
-            if k.startswith(prefix)
-        )
+    reference_model = load_torch_model(
+        torch_model=reference_model,
+        layer="motion_head.motionformer.bev_interaction_layers.0.attentions.0",
+        model_location_generator=model_location_generator,
     )
-
-    reference_model.load_state_dict(filtered)
-    reference_model.eval()
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: reference_model,
@@ -468,7 +460,7 @@ def test_uniad_MotionDeformableAttention(device, reset_seeds):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_uniad_MotionTransformerAttentionLayer(device, reset_seeds):
+def test_uniad_MotionTransformerAttentionLayer(device, reset_seeds, model_location_generator):
     weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
     reference_model = MotionHead(
         args=(),
@@ -521,19 +513,12 @@ def test_uniad_MotionTransformerAttentionLayer(device, reset_seeds):
         **{"num_query": 300, "predict_modes": 6},
     )
     reference_model = reference_model.motionformer.bev_interaction_layers[0]
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
 
-    prefix = "motion_head.motionformer.bev_interaction_layers.0"
-    filtered = OrderedDict(
-        (
-            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-            for k, v in weights["state_dict"].items()
-            if k.startswith(prefix)
-        )
+    reference_model = load_torch_model(
+        torch_model=reference_model,
+        layer="motion_head.motionformer.bev_interaction_layers.0",
+        model_location_generator=model_location_generator,
     )
-
-    reference_model.load_state_dict(filtered)
-    reference_model.eval()
 
     ###-----------------Inputs creation---------------------
     query = torch.randn(1, 1, 6, 256)
@@ -656,7 +641,7 @@ def test_uniad_MotionTransformerAttentionLayer(device, reset_seeds):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_uniad_MotionTransformerDecoder(device, reset_seeds):
+def test_uniad_MotionTransformerDecoder(device, reset_seeds, model_location_generator):
     weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
     reference_model = MotionHead(
         args=(),
@@ -709,19 +694,9 @@ def test_uniad_MotionTransformerDecoder(device, reset_seeds):
         **{"num_query": 300, "predict_modes": 6},
     )
     reference_model = reference_model.motionformer
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
-
-    prefix = "motion_head.motionformer"
-    filtered = OrderedDict(
-        (
-            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-            for k, v in weights["state_dict"].items()
-            if k.startswith(prefix)
-        )
+    reference_model = load_torch_model(
+        torch_model=reference_model, layer="motion_head.motionformer", model_location_generator=model_location_generator
     )
-
-    reference_model.load_state_dict(filtered)
-    reference_model.eval()
 
     # Preparing inputs
     track_query = torch.randn(1, 1, 256)
