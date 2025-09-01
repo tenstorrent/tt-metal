@@ -5,6 +5,14 @@
 import ttnn
 from models.demos.yolov6l.tt.ttnn_bottlerep import TtBottleRep
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtRepBlock:
     def __init__(
@@ -35,8 +43,12 @@ class TtRepBlock:
             )
 
     def __call__(self, inpur_tensor):
+        if use_signpost:
+            signpost(header="TtRepBlock Start")
         output, out_h, out_w = self.conv1(inpur_tensor)
         for i in range(self.n_blocks):
             block = getattr(self, f"bottle_rep{i}")
             output, out_h, out_w = block(output)
+        if use_signpost:
+            signpost(header="TtRepBlock End")
         return output, out_h, out_w

@@ -5,6 +5,14 @@
 import ttnn
 from models.demos.yolov6l.tt.common import Yolov6l_Conv2D
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtSppf:
     def __init__(self, device, parameters, model_params):
@@ -28,6 +36,8 @@ class TtSppf:
         )
 
     def __call__(self, x):
+        if use_signpost:
+            signpost(header="TtSppf Start")
         conv1 = self.cv1(x)
         y = [conv1]
         for i in range(3):
@@ -55,4 +65,6 @@ class TtSppf:
             ttnn.deallocate(y[i])
 
         conv2 = self.cv2(concat_output)
+        if use_signpost:
+            signpost(header="TtSppf End")
         return conv2
