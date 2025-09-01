@@ -45,18 +45,25 @@ on:
 
 run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      version: ${{ inputs.version || '22.04' }}
+      skip-tt-train: false
   test-dispatch:
     timeout-minutes: 1440
-    env:
-      ARCH_NAME: ${{ inputs.arch }}
     runs-on: >-
       ${{
         fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     container:
-      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:1dec18cfd17d73a2130c1a2eb676bbbaa412fd47
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
-
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: DEBUG
         PYTHONPATH: /work
@@ -79,6 +86,7 @@ jobs:
         - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
         - /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
       options: >
+        --device /dev/tenstorrent
         --group-add 1457
         --tmpfs /tmp
     defaults:
