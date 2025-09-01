@@ -130,6 +130,7 @@ public:
 private:
     void run_local_discovery();
     void run_global_discovery();
+    void clear();
     void merge(PhysicalSystemDescriptor&& other);
     void exchange_metadata(bool issue_gather);
     void generate_cross_host_connections();
