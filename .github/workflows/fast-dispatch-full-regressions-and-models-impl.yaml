@@ -28,6 +28,8 @@ jobs:
       unstable_matrix: ${{ steps.ctm.outputs.unstable_matrix }}
       stable_count:    ${{ steps.ctm.outputs.stable_count }}
       unstable_count:  ${{ steps.ctm.outputs.unstable_count }}
+      stable_ci_v2_matrix: ${{ steps.ctm.outputs.stable_ci_v2_matrix }}
+      stable_ci_v2_matrix_count: ${{ steps.ctm.outputs.stable_ci_v2_matrix_count }}
     steps:
       - id: ctm
         shell: bash
