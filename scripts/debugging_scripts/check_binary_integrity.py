@@ -15,6 +15,7 @@ from collections import namedtuple
 from io import BytesIO
 from check_per_device import run as get_check_per_device
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
+from block_locations_to_check import run as get_block_locations_to_check
 from elftools.elf.elffile import ELFFile
 from elftools.elf.relocation import RelocationSection
 from elftools.elf.sections import Section as ELFSection
@@ -22,13 +23,13 @@ from elftools.elf.segments import Segment as ELFSegment
 from elftools.elf.relocation import Relocation as ELFRelocation
 import os
 from ttexalens.context import Context
-from ttexalens.device import Device
+from ttexalens.device import Device, OnChipCoordinate
 from ttexalens.tt_exalens_lib import read_from_device
 from triage import ScriptConfig, log_check, run_script
 from sortedcontainers import SortedDict
 
 script_config = ScriptConfig(
-    depends=["check_per_device", "dispatcher_data"],
+    depends=["check_per_device", "dispatcher_data", "block_locations_to_check"],
 )
 
 
@@ -247,7 +248,9 @@ def apply_kernel_relocations(section: ELFSection) -> bytes:
     return section_stream.getvalue()
 
 
-def check_binary_integrity(device: Device, dispatcher_data: DispatcherData):
+def check_binary_integrity(
+    device: Device, dispatcher_data: DispatcherData, block_locations: dict[str, list[OnChipCoordinate]]
+):
     elf_cache: dict[str, ELFFile] = {}
 
     def load_elf_file(path: str) -> ELFFile:
@@ -255,14 +258,10 @@ def check_binary_integrity(device: Device, dispatcher_data: DispatcherData):
             elf_cache[path] = ELFFile.load_from_path(path)
         return elf_cache[path]
 
-    block_types = ["functional_workers", "eth"]
+    block_types = ["tensix", "idle_eth"]
     for block_type in block_types:
-        for location in device.get_block_locations(block_type):
+        for location in block_locations[block_type]:
             noc_block = device.get_block(location)
-
-            # We support only idle eth blocks for now
-            if noc_block.block_type == "eth" and noc_block not in device.idle_eth_blocks:
-                continue
 
             for risc_name in noc_block.risc_names:
                 dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
@@ -326,7 +325,10 @@ def check_binary_integrity(device: Device, dispatcher_data: DispatcherData):
 def run(args, context: Context):
     check_per_device = get_check_per_device(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
-    check_per_device.run_check(lambda device: check_binary_integrity(device, dispatcher_data))
+    block_locations_to_check = get_block_locations_to_check(args, context)
+    check_per_device.run_check(
+        lambda device: check_binary_integrity(device, dispatcher_data, block_locations_to_check[device])
+    )
 
 
 if __name__ == "__main__":

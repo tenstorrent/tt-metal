@@ -21,6 +21,7 @@ Description:
 from triage import ScriptConfig, TTTriageError, recurse_field, triage_field, hex_serializer, run_script
 from check_per_device import dataclass, run as get_check_per_device
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
+from block_locations_to_check import run as get_block_locations_to_check
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.device import Device
@@ -33,7 +34,7 @@ import re
 import subprocess
 
 script_config = ScriptConfig(
-    depends=["check_per_device", "dispatcher_data"],
+    depends=["check_per_device", "dispatcher_data", "block_locations_to_check"],
 )
 
 
@@ -232,8 +233,9 @@ def dump_callstacks(
     gdb_callstack: bool,
     active_cores: bool,
     port: int | None,
+    block_locations: list[OnChipCoordinate],
 ) -> list[DumpCallstacksData]:
-    blocks_to_test = ["functional_workers", "eth"]
+    blocks_to_test = ["tensix", "idle_eth"]
     elfs_cache: dict[str, ParsedElfFile] = {}
     result: list[DumpCallstacksData] = []
     gdb_server: GdbServer | None = None
@@ -253,12 +255,8 @@ def dump_callstacks(
 
     try:
         for block_to_test in blocks_to_test:
-            for location in device.get_block_locations(block_to_test):
+            for location in block_locations[block_to_test]:
                 noc_block = device.get_block(location)
-
-                # We support only idle eth blocks for now
-                if noc_block.block_type == "eth" and noc_block not in device.idle_eth_blocks:
-                    continue
 
                 for risc_name in noc_block.risc_names:
                     dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
@@ -303,10 +301,18 @@ def run(args, context: Context):
     active_cores = args["--active_cores"]
     port = int(args["--port"]) if gdb_callstack else None
     check_per_device = get_check_per_device(args, context)
+    block_locations_to_check = get_block_locations_to_check(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     return check_per_device.run_check(
         lambda device: dump_callstacks(
-            device, dispatcher_data, context, full_callstack, gdb_callstack, active_cores, port
+            device,
+            dispatcher_data,
+            context,
+            full_callstack,
+            gdb_callstack,
+            active_cores,
+            port,
+            block_locations_to_check[device],
         )
     )
 
