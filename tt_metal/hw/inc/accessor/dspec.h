@@ -8,6 +8,7 @@
 #include <variant>
 #include "helpers.h"
 #include "array_wrapper.h"
+#include "compile_time_args.h"
 #include <cstring>
 
 // Forward declared from dataflow_api.h
@@ -165,16 +166,24 @@ struct DistributionSpec {
         tensor_shape_rt(init_tensor_shape(tensor_shape_ptr, rank_rt_param)),
         shard_shape_rt(init_shard_shape(shard_shape_ptr, rank_rt_param)),
         bank_coords_rt(init_bank_coords(bank_coords_ptr, num_banks_rt_param)) {
-        // Initialize runtime values after const arrays
-        if constexpr (!has_static_rank) {
-            rank_rt = rank_rt_param;
+        uint32_t rank = has_static_rank ? RankCT : rank_rt_param;
+
+        if constexpr (!tensor_shape_static) {
+            ASSERT(rank == 0 || tensor_shape_ptr != nullptr);
         }
-        if constexpr (!has_static_num_banks) {
-            num_banks_rt = num_banks_rt_param;
+        if constexpr (!shard_shape_static) {
+            ASSERT(rank == 0 || shard_shape_ptr != nullptr);
+        }
+
+        if constexpr (!bank_coords_static) {
+            if constexpr (has_static_num_banks) {
+                ASSERT(NumBanksCT == 0 || bank_coords_ptr != nullptr);
+            } else {
+                ASSERT(num_banks_rt == 0 || bank_coords_ptr != nullptr);
+            }
         }
 
         // Verify that shapes are non-zero
-        uint32_t rank = has_static_rank ? RankCT : rank_rt_param;
         for (size_t i = 0; i < rank; ++i) {
             if constexpr (!tensor_shape_static) {
                 ASSERT(tensor_shape_rt[i] > 0);
@@ -456,5 +465,22 @@ private:
     static constexpr size_t tensor_volume_ct = precompute_volume_ct(TensorShapeWrapper::elements);
     static constexpr size_t shard_volume_ct = precompute_volume_ct(ShardShapeWrapper::elements);
 };
+
+template <bool IsDram>
+auto make_interleaved_dspec() {
+    return DistributionSpec<
+        /*RankCT=*/0,
+        /*NumBanksCT=*/0,
+        /*TensorShapeWrapper=*/ArrayStaticWrapper<uint32_t>,
+        /*ShardShapeWrapper=*/ArrayStaticWrapper<uint32_t>,
+        /*BankCoordsWrapper=*/ArrayStaticWrapper<uint16_t>,
+        /*IsInterleaved=*/true,
+        IsDram>(
+        /* rank_rt */ 0,
+        /* num_banks_rt */ 0,
+        /* tensor_shape_ptr */ nullptr,
+        /* shard_shape_ptr */ nullptr,
+        /* bank_coords_ptr */ nullptr);
+}
 
 }  // namespace tensor_accessor
