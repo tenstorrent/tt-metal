@@ -254,7 +254,7 @@ def rotary_embedding_factory(
     base: float,
     rope_scaling: Optional[RopeScaling] = None,
     device: Optional[Any] = None,
-) -> Union[RotaryEmbedding, YarnRotaryEmbedding, LlamaRotaryEmbedding, LinearScaledRotaryEmbedding]:
+) -> Union[RotaryEmbedding, ScaledRotaryEmbedding]:
     if rope_scaling is None:
         return RotaryEmbedding(dim, max_position_embeddings, base, device)
     else:
