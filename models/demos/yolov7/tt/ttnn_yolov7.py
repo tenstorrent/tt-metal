@@ -21,13 +21,11 @@ class ttnn_SPPCSPC:
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["cv1"],
             height_sharding=False,
-            height_sharding=False,
         )
         self.cv2 = Conv(
             [1, 20, 20, 1024],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["cv2"],
-            height_sharding=False,
             height_sharding=False,
         )
         self.cv3 = Conv(
@@ -40,7 +38,6 @@ class ttnn_SPPCSPC:
             [1, 20, 20, 512],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["cv4"],
-            height_sharding=False,
             height_sharding=False,
         )
         self.cv5 = Conv(
@@ -59,7 +56,6 @@ class ttnn_SPPCSPC:
             [1, 20, 20, 1024],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["cv7"],
-            height_sharding=False,
             height_sharding=False,
         )
 
@@ -148,13 +144,11 @@ class ttnn_repconv:
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["0"],
             height_sharding=height_sharding,
-            height_sharding=height_sharding,
         )
         self.rbr_1x1 = Conv(
             input_shape,
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["1"],
-            height_sharding=height_sharding,
             height_sharding=height_sharding,
         )
 
@@ -206,23 +200,9 @@ class ttnn_detect:
             activation="",
             height_sharding=False,
         )
-        self.convm_2 = Conv(
-            [1, 40, 40, 512],
-            (1, 1, 1, 1, 0, 0, 1, 1),
-            parameters["1"],
-            is_reshape=True,
-            activation="",
-            height_sharding=False,
-        )
         self.m.append(self.convm_2)
 
         self.convm_2 = Conv(
-            [1, 20, 20, 1024],
-            (1, 1, 1, 1, 0, 0, 1, 1),
-            parameters["2"],
-            is_reshape=True,
-            activation="",
-            height_sharding=False,
             [1, 20, 20, 1024],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["2"],
@@ -304,22 +284,6 @@ class ttnn_yolov7:
             deallocate_activation=True,
             enable_split_reader=True,
             use_1d_systolic_array=False,
-            [1, 640, 640, 3],
-            (3, 3, 1, 1, 1, 1, 1, 1),
-            parameters["0"],
-            act_block_h=32 * 50,
-            deallocate_activation=True,
-            enable_split_reader=True,
-            use_1d_systolic_array=False,
-        )
-        self.conv2 = Conv(
-            [1, 640, 640, 32],
-            (3, 3, 2, 2, 1, 1, 1, 1),
-            parameters["1"],
-            act_block_h=32 * 50,
-            deallocate_activation=True,
-            enable_split_reader=True,
-            use_1d_systolic_array=False,
         )
         self.conv2 = Conv(
             [1, 640, 640, 32],
@@ -331,13 +295,6 @@ class ttnn_yolov7:
             use_1d_systolic_array=False,
         )
         self.conv3 = Conv(
-            [1, 320, 320, 64],
-            (3, 3, 1, 1, 1, 1, 1, 1),
-            parameters["2"],
-            act_block_h=32 * 15,
-            deallocate_activation=True,
-            enable_split_reader=True,
-            use_1d_systolic_array=False,
             [1, 320, 320, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["2"],
@@ -550,13 +507,11 @@ class ttnn_yolov7:
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["32"],
             height_sharding=False,
-            height_sharding=False,
         )
         self.conv28 = Conv(
             [1, 40, 40, 256],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["33"],
-            height_sharding=False,
             height_sharding=False,
         )
         self.conv29 = Conv(
@@ -564,13 +519,11 @@ class ttnn_yolov7:
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["34"],
             height_sharding=False,
-            height_sharding=False,
         )
         self.conv30 = Conv(
             [1, 40, 40, 256],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["35"],
-            height_sharding=False,
             height_sharding=False,
         )
 
@@ -615,8 +568,6 @@ class ttnn_yolov7:
             enable_act_double_buffer=True,
             num_cores_nhw=64,
             enable_split_reader=True,
-            num_cores_nhw=64,
-            enable_split_reader=True,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
@@ -626,13 +577,11 @@ class ttnn_yolov7:
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["43"],
             height_sharding=False,
-            height_sharding=False,
         )
         self.conv36 = Conv(
             [1, 20, 20, 1024],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["44"],
-            height_sharding=False,
             height_sharding=False,
         )
         self.conv37 = Conv(
@@ -640,13 +589,11 @@ class ttnn_yolov7:
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["45"],
             height_sharding=False,
-            height_sharding=False,
         )
         self.conv38 = Conv(
             [1, 20, 20, 256],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["46"],
-            height_sharding=False,
             height_sharding=False,
         )
         self.conv39 = Conv(
@@ -654,13 +601,11 @@ class ttnn_yolov7:
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["47"],
             height_sharding=False,
-            height_sharding=False,
         )
         self.conv40 = Conv(
             [1, 20, 20, 256],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["48"],
-            height_sharding=False,
             height_sharding=False,
         )
 
@@ -699,25 +644,21 @@ class ttnn_yolov7:
             [1, 40, 40, 256],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["58"],
-            height_sharding=False,
         )
         self.conv47 = Conv(
             [1, 40, 40, 128],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["59"],
-            height_sharding=False,
         )
         self.conv48 = Conv(
             [1, 40, 40, 128],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["60"],
-            height_sharding=False,
         )
         self.conv49 = Conv(
             [1, 40, 40, 128],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["61"],
-            height_sharding=False,
         )
 
         self.conv50 = Conv(
@@ -840,7 +781,6 @@ class ttnn_yolov7:
             (3, 3, 2, 2, 1, 1, 1, 1),
             parameters["92"],
             height_sharding=False,
-            height_sharding=False,
         )
 
         self.conv73 = Conv(
@@ -860,13 +800,11 @@ class ttnn_yolov7:
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["96"],
             height_sharding=False,
-            height_sharding=False,
         )
         self.conv76 = Conv(
             [1, 20, 20, 256],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["97"],
-            height_sharding=False,
             height_sharding=False,
         )
         self.conv77 = Conv(
@@ -874,13 +812,11 @@ class ttnn_yolov7:
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["98"],
             height_sharding=False,
-            height_sharding=False,
         )
         self.conv78 = Conv(
             [1, 20, 20, 256],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["99"],
-            height_sharding=False,
             height_sharding=False,
         )
 
@@ -890,7 +826,6 @@ class ttnn_yolov7:
             parameters["101"],
             height_sharding=False,
         )
-        self.repconv1 = ttnn_repconv(device, parameters["102"], [1, 80, 80, 128], height_sharding=True)
         self.repconv1 = ttnn_repconv(device, parameters["102"], [1, 80, 80, 128], height_sharding=True)
         self.repconv2 = ttnn_repconv(device, parameters["103"], [1, 40, 40, 256])
         self.repconv3 = ttnn_repconv(device, parameters["104"], [1, 20, 20, 512])
@@ -946,8 +881,6 @@ class ttnn_yolov7:
 
         conv10 = sharded_concat([conv10, conv8, conv6, conv5])
 
-        conv10 = sharded_concat([conv10, conv8, conv6, conv5])
-
         ttnn.deallocate(conv5)
         ttnn.deallocate(conv6)
         ttnn.deallocate(conv8)
@@ -980,7 +913,6 @@ class ttnn_yolov7:
         conv12 = ttnn.to_layout(conv12, ttnn.ROW_MAJOR_LAYOUT)
 
         conv14 = sharded_concat([conv14, conv12])
-        conv14 = sharded_concat([conv14, conv12])
         ttnn.deallocate(mp1)
 
         conv15 = self.conv15(self.device, conv14)
@@ -999,7 +931,6 @@ class ttnn_yolov7:
         conv20 = self.conv20(self.device, conv19)
         ttnn.deallocate(conv19)
 
-        conv20 = sharded_concat([conv20, conv18, conv16, conv15])
         conv20 = sharded_concat([conv20, conv18, conv16, conv15])
 
         conv21 = self.conv21(self.device, conv20)
@@ -1029,7 +960,6 @@ class ttnn_yolov7:
         ttnn.deallocate(conv23)
 
         conv24 = sharded_concat([conv24, conv22])
-        conv24 = sharded_concat([conv24, conv22])
         ttnn.deallocate(mp2)
 
         conv25 = self.conv25(self.device, conv24)
@@ -1049,16 +979,12 @@ class ttnn_yolov7:
         ttnn.deallocate(conv29)
 
         conv30 = sharded_concat([conv30, conv28, conv26, conv25])
-        conv30 = sharded_concat([conv30, conv28, conv26, conv25])
 
         conv31 = self.conv31(self.device, conv30)
         ttnn.deallocate(conv25)
         ttnn.deallocate(conv26)
         ttnn.deallocate(conv28)
 
-        print("conv31 shape: ", conv31.shape, " layout: ", conv31.layout)
-        # conv31 = ttnn.sharded_to_interleaved(conv31, ttnn.L1_MEMORY_CONFIG)
-        # conv31 = ttnn.to_layout(conv31, ttnn.ROW_MAJOR_LAYOUT)
         print("conv31 shape: ", conv31.shape, " layout: ", conv31.layout)
         # conv31 = ttnn.sharded_to_interleaved(conv31, ttnn.L1_MEMORY_CONFIG)
         # conv31 = ttnn.to_layout(conv31, ttnn.ROW_MAJOR_LAYOUT)
@@ -1079,20 +1005,15 @@ class ttnn_yolov7:
         # mp3 = ttnn.sharded_to_interleaved(mp3, ttnn.L1_MEMORY_CONFIG)
         # mp3 = ttnn.to_layout(mp3, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
         # conv31 = ttnn.to_memory_config(conv31, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # mp3 = ttnn.sharded_to_interleaved(mp3, ttnn.L1_MEMORY_CONFIG)
-        # mp3 = ttnn.to_layout(mp3, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-        # conv31 = ttnn.to_memory_config(conv31, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         conv32 = self.conv32(self.device, mp3)
 
         conv33 = self.conv33(self.device, conv31)
-        # conv31 = ttnn.to_memory_config(conv31, memory_config=ttnn.L1_MEMORY_CONFIG)
         # conv31 = ttnn.to_memory_config(conv31, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         conv34 = self.conv34(self.device, conv33)
         ttnn.deallocate(conv33)
 
         conv34 = concat(3, False, conv34, conv32)
-        # conv34 = sharded_concat([conv34, conv32])
         # conv34 = sharded_concat([conv34, conv32])
         ttnn.deallocate(mp3)
 
@@ -1112,7 +1033,6 @@ class ttnn_yolov7:
         conv40 = self.conv40(self.device, conv39)
         ttnn.deallocate(conv39)
 
-        conv40 = sharded_concat([conv40, conv38, conv36, conv35])
         conv40 = sharded_concat([conv40, conv38, conv36, conv35])
 
         conv41 = self.conv41(self.device, conv40)
@@ -1153,7 +1073,6 @@ class ttnn_yolov7:
         conv43 = ttnn.to_layout(conv43, ttnn.ROW_MAJOR_LAYOUT)
 
         conv43 = sharded_concat([conv43, conv42])
-        conv43 = sharded_concat([conv43, conv42])
 
         conv44 = self.conv44(self.device, conv43)
         ttnn.deallocate(conv42)
@@ -1169,7 +1088,6 @@ class ttnn_yolov7:
 
         conv49 = self.conv49(self.device, conv48)
 
-        conv49 = sharded_concat([conv49, conv48, conv47, conv46, conv45, conv44])
         conv49 = sharded_concat([conv49, conv48, conv47, conv46, conv45, conv44])
 
         conv50 = self.conv50(self.device, conv49)
@@ -1227,7 +1145,6 @@ class ttnn_yolov7:
         conv58 = self.conv58(self.device, conv57)
 
         conv58 = sharded_concat([conv58, conv57, conv56, conv55, conv54, conv53])
-        conv58 = sharded_concat([conv58, conv57, conv56, conv55, conv54, conv53])
 
         conv59 = self.conv59(self.device, conv58)
         ttnn.deallocate(conv53)
@@ -1248,7 +1165,6 @@ class ttnn_yolov7:
             padding=[0, 0],
             dilation=[1, 1],
             # memory_config=ttnn.L1_MEMORY_CONFIG,
-            # memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         conv60 = self.conv60(self.device, mp4)
@@ -1259,7 +1175,6 @@ class ttnn_yolov7:
         ttnn.deallocate(conv61)
         ttnn.deallocate(mp4)
 
-        conv62 = sharded_concat([conv62, conv60, conv50])
         conv62 = sharded_concat([conv62, conv60, conv50])
 
         ttnn.deallocate(conv50)
@@ -1278,7 +1193,6 @@ class ttnn_yolov7:
 
         conv68 = self.conv68(self.device, conv67)
 
-        conv68 = sharded_concat([conv68, conv67, conv66, conv65, conv64, conv63])
         conv68 = sharded_concat([conv68, conv67, conv66, conv65, conv64, conv63])
 
         conv69 = self.conv69(self.device, conv68)
@@ -1311,7 +1225,6 @@ class ttnn_yolov7:
         ttnn.deallocate(mp5)
 
         conv72 = sharded_concat([conv72, conv70, SPPCSPC])
-        conv72 = sharded_concat([conv72, conv70, SPPCSPC])
 
         ttnn.deallocate(conv71)
 
@@ -1330,7 +1243,6 @@ class ttnn_yolov7:
 
         conv78 = self.conv78(self.device, conv77)
 
-        conv78 = sharded_concat([conv78, conv77, conv76, conv75, conv74, conv73])
         conv78 = sharded_concat([conv78, conv77, conv76, conv75, conv74, conv73])
 
         conv79 = self.conv79(self.device, conv78)

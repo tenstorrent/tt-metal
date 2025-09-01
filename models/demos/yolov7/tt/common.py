@@ -66,8 +66,6 @@ class TtYOLOv7Conv2D:
             enable_split_reader=self.enable_split_reader,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
-            enable_act_double_buffer=True,
-            enable_weights_double_buffer=True,
             deallocate_activation=self.deallocate_activation,
         )
         compute_config = ttnn.init_device_compute_kernel_config(
