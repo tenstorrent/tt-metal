@@ -7,22 +7,10 @@
 
 namespace tt::tt_fabric {
 
-// template <uint8_t dim>
-// void compressed_routing_path_t<dim>::calculate_chip_to_all_routing_fields(
-//     uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) {
-//     // Default implementation - should be specialized
-//     std::memset(packed_paths, 0, sizeof(packed_paths));
-// }
-
 // 1D routing specialization
 template <>
 void compressed_routing_path_t<1>::calculate_chip_to_all_routing_fields(
     uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) {
-    const uint32_t FIELD_WIDTH = 2;
-    const uint32_t WRITE_ONLY = 0b01;
-    const uint32_t FORWARD_ONLY = 0b10;
-    const uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;
-
     for (uint8_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
         uint32_t routing_field_value = 0;
 
@@ -55,16 +43,6 @@ void compressed_routing_path_t<1>::calculate_chip_to_all_routing_fields(
 template <>
 void compressed_routing_path_t<2>::calculate_chip_to_all_routing_fields(
     uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) {
-    const uint8_t NOOP = 0b0000;
-    const uint8_t FORWARD_EAST = 0b0001;
-    const uint8_t FORWARD_WEST = 0b0010;
-    const uint8_t FORWARD_NORTH = 0b0100;
-    const uint8_t FORWARD_SOUTH = 0b1000;
-    const uint8_t WRITE_AND_FORWARD_EAST = 0b0001;
-    const uint8_t WRITE_AND_FORWARD_WEST = 0b0010;
-    const uint8_t WRITE_AND_FORWARD_NORTH = 0b0100;
-    const uint8_t WRITE_AND_FORWARD_SOUTH = 0b1000;
-
     for (uint16_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
         if (src_chip_id == dst_chip_id) {
             // Noop to self
@@ -138,6 +116,54 @@ void compressed_routing_path_t<2>::calculate_chip_to_all_routing_fields(
         }
 
         // Remaining bytes are already NOOP (0) from memset
+    }
+}
+
+// 1D compressed routing specialization
+template <>
+void compressed_routing_path_t<1>::calculate_chip_to_all_routing_fields_compressed(
+    uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) {
+    for (uint16_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
+        if (src_chip_id == dst_chip_id) {
+            // Noop to self
+            compressed_paths.one[dst_chip_id].set(0);
+            continue;
+        }
+
+        uint8_t hops = (dst_chip_id > src_chip_id) ? (dst_chip_id - src_chip_id) : (src_chip_id - dst_chip_id);
+        compressed_paths.one[dst_chip_id].set(hops);
+    }
+}
+
+// 2D compressed routing specialization
+template <>
+void compressed_routing_path_t<2>::calculate_chip_to_all_routing_fields_compressed(
+    uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) {
+    for (uint16_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
+        if (src_chip_id == dst_chip_id) {
+            // Self route - no movement needed
+            compressed_paths.two[dst_chip_id].set(0, 0, 0, 0, 0);
+            continue;
+        }
+
+        // Calculate 2D coordinates
+        uint16_t src_col = src_chip_id / ew_dim;
+        uint16_t src_row = src_chip_id % ew_dim;
+        uint16_t dst_col = dst_chip_id / ew_dim;
+        uint16_t dst_row = dst_chip_id % ew_dim;
+
+        // Calculate hops needed in each dimension
+        uint8_t ns_hops = (dst_col != src_col) ? ((dst_col > src_col) ? (dst_col - src_col) : (src_col - dst_col)) : 0;
+        uint8_t ew_hops = (dst_row != src_row) ? ((dst_row > src_row) ? (dst_row - src_row) : (src_row - dst_row)) : 0;
+
+        // Encode directions
+        // ns_direction: 0=north, 1=south
+        // ew_direction: 0=west, 1=east
+        uint8_t ns_direction = (dst_col > src_col) ? 1 : 0;
+        uint8_t ew_direction = (dst_row > src_row) ? 1 : 0;
+        uint8_t turn_after_ns = ns_hops;  // XY routing: complete NS first, then EW
+
+        compressed_paths.two[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, turn_after_ns);
     }
 }
 
