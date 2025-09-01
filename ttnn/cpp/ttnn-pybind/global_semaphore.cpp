@@ -16,7 +16,7 @@
 namespace ttnn::global_semaphore {
 
 void py_module_types(py::module& module) {
-    py::class_<GlobalSemaphore, std::shared_ptr<GlobalSemaphore>>(module, "global_sempahore");
+    py::class_<GlobalSemaphore, std::shared_ptr<GlobalSemaphore>>(module, "global_semaphore");
 }
 
 void py_module(py::module& module) {

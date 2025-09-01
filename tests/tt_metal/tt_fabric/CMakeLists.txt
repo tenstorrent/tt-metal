@@ -2,6 +2,7 @@ set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/common/utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_routing_tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_control_plane_logical_to_physical.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_custom_routing_tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_intermesh_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_multi_host.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_apis.cpp
@@ -30,6 +31,36 @@ target_include_directories(
 
 set_target_properties(
     fabric_unit_tests
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
+
+set(UNIT_TESTS_PHYSICAL_DISCOVERY_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/physical_discovery/test_physical_system_descriptor.cpp
+)
+
+add_executable(test_physical_discovery ${UNIT_TESTS_PHYSICAL_DISCOVERY_SRC})
+
+target_link_libraries(
+    test_physical_discovery
+    PRIVATE
+        tt_metal
+        fabric
+        test_common_libs
+)
+
+target_include_directories(
+    test_physical_discovery
+    PRIVATE
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+)
+
+set_target_properties(
+    test_physical_discovery
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
