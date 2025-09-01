@@ -34,7 +34,7 @@ class TtSDXLPipelineConfig:
     capture_trace: bool = True
     vae_on_device: bool = True
     encoders_on_device: bool = True
-    use_tp: bool = False
+    use_cfg_parallel: bool = False
 
 
 class TtSDXLPipeline(LightweightModule):
@@ -57,7 +57,9 @@ class TtSDXLPipeline(LightweightModule):
 
         self.ttnn_device = ttnn_device
         self.cpu_device = "cpu"
-        self.batch_size = list(self.ttnn_device.shape)[1] if pipeline_config.use_tp else ttnn_device.get_num_devices()
+        self.batch_size = (
+            list(self.ttnn_device.shape)[1] if pipeline_config.use_cfg_parallel else ttnn_device.get_num_devices()
+        )
         self.torch_pipeline = torch_pipeline
         self.pipeline_config = pipeline_config
 
@@ -174,7 +176,7 @@ class TtSDXLPipeline(LightweightModule):
                 self.ag_persistent_buffer,
                 self.ag_semaphores,
                 capture_trace=False,
-                use_tp=self.pipeline_config.use_tp,
+                use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
             )
             ttnn.synchronize_device(self.ttnn_device)
             profiler.end("warmup_run")
@@ -219,7 +221,7 @@ class TtSDXLPipeline(LightweightModule):
                     negative_pooled_prompt_embeds=None,
                     lora_scale=None,
                     clip_skip=None,
-                    use_tp=self.pipeline_config.use_tp,
+                    use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
                 )
                 # batch_encode_prompt_on_device returns a single tuple of 4 tensors,
                 # but we need individual tuples for each prompt
@@ -403,7 +405,7 @@ class TtSDXLPipeline(LightweightModule):
             output_device=self.output_device if hasattr(self, "output_device") else None,
             output_shape=self.output_shape,
             tid_vae=self.tid_vae if hasattr(self, "tid_vae") else None,
-            use_tp=self.pipeline_config.use_tp,
+            use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
         )
         return imgs
 
@@ -578,7 +580,7 @@ class TtSDXLPipeline(LightweightModule):
             self.ag_persistent_buffer,
             self.ag_semaphores,
             capture_trace=True,
-            use_tp=self.pipeline_config.use_tp,
+            use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
         )
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("capture_model_trace")
