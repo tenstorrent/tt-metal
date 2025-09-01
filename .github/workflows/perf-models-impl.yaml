@@ -118,6 +118,7 @@ jobs:
         with:
           run_args: pytest -n auto models/demos/roberta/tests/test_performance.py -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other' }}
+      # issue: https://github.com/tenstorrent/tt-metal/issues/27745
       # - name: Run yolov10x model_perf test
       #   timeout-minutes: ${{ matrix.test-info.timeout }}
       #   uses: ./.github/actions/model-perf-test
