@@ -291,6 +291,8 @@ class CausalUpsampleBlock:
         out_channels: int,
         input_shape=None,
         torch_ref=None,
+        parallel_config=None,
+        ccl_manager=None,
         num_res_blocks: int = 0,
         temporal_expansion: int = 2,
         spatial_expansion: int = 2,
@@ -316,6 +318,8 @@ class CausalUpsampleBlock:
                     bias=bias,
                     input_shape=input_shape,
                     torch_ref=torch_ref.blocks[i],
+                    parallel_config=parallel_config,
+                    ccl_manager=ccl_manager,
                 )
             )
 
