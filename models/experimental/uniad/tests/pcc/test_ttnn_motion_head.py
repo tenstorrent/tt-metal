@@ -4,7 +4,6 @@
 
 import torch
 import pytest
-from collections import OrderedDict
 
 import ttnn
 
@@ -23,6 +22,7 @@ from ttnn.model_preprocessing import (
 )
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.experimental.uniad.common import load_torch_model
 
 
 def custom_preprocessor_layer(child, name):
@@ -133,8 +133,7 @@ def custom_preprocessor_motion_head(model, name):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_uniad_MotionHead(device, reset_seeds):
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
+def test_uniad_MotionHead(device, reset_seeds, model_location_generator):
     reference_model = MotionHead(
         args=(),
         predict_steps=12,
@@ -186,20 +185,9 @@ def test_uniad_MotionHead(device, reset_seeds):
         num_query=300,
         predict_modes=6,
     )
-
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
-
-    prefix = "motion_head"
-    filtered = OrderedDict(
-        (
-            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-            for k, v in weights["state_dict"].items()
-            if k.startswith(prefix)
-        )
+    reference_model = load_torch_model(
+        torch_model=reference_model, layer="motion_head", model_location_generator=model_location_generator
     )
-
-    reference_model.load_state_dict(filtered)
-    reference_model.eval()
 
     bev_embed = torch.randn(2500, 1, 256)
 

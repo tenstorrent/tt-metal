@@ -10,7 +10,6 @@ import pytest
 
 from models.experimental.uniad.reference.planning_head import PlanningHeadSingleMode
 from models.experimental.uniad.tt.ttnn_planning_head import TtPlanningHeadSingleMode
-from collections import OrderedDict
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import (
@@ -21,6 +20,7 @@ from ttnn.model_preprocessing import (
 )
 
 from loguru import logger
+from models.experimental.uniad.common import load_torch_model
 
 
 def custom_preprocessor(model, name):
@@ -60,27 +60,12 @@ def create_uniad_model_parameters(model, device=None):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_TtPlanningHeadSingleMode(device, reset_seeds):
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
-
+def test_TtPlanningHeadSingleMode(device, reset_seeds, model_location_generator):
     reference_model = PlanningHeadSingleMode(bev_h=50, bev_w=50, embed_dims=256, planning_steps=6, planning_eval=True)
-    reference_model.eval()
 
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
-
-    prefix = "planning_head"
-
-    filtered = OrderedDict(
-        (
-            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-            for k, v in weights["state_dict"].items()
-            if k.startswith(prefix)
-        )
+    reference_model = load_torch_model(
+        torch_model=reference_model, layer="planning_head", model_location_generator=model_location_generator
     )
-
-    reference_model.load_state_dict(filtered)
-    reference_model.eval()
-
     bev_embed = torch.rand(2500, 1, 256)
     occ_mask = torch.rand(1, 5, 1, 50, 50)
     bev_pos = torch.rand(1, 256, 50, 50)

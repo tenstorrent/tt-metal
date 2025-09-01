@@ -5,7 +5,6 @@
 
 import torch
 import pytest
-from collections import OrderedDict
 
 import ttnn
 from models.experimental.uniad.reference.resnet import ResNet, ModulatedDeformConv2dPack
@@ -17,6 +16,7 @@ from ttnn.model_preprocessing import (
     preprocess_model_parameters,
     fold_batch_norm2d_into_conv2d,
 )
+from models.experimental.uniad.common import load_torch_model
 
 
 def custom_preprocessor(model, name):
@@ -134,9 +134,7 @@ def create_uniad_model_resnet(model: ResNet, input_tensor, device=None):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_uniad_bottle_neck_layer_1(device, reset_seeds):
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
-
+def test_uniad_bottle_neck_layer_1(device, reset_seeds, model_location_generator):
     reference_model = ResNet(
         depth=101,
         in_channels=3,
@@ -161,19 +159,10 @@ def test_uniad_bottle_neck_layer_1(device, reset_seeds):
         pretrained=None,
         init_cfg=None,
     )
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
 
-    prefix = "img_backbone"
-    filtered = OrderedDict(
-        (
-            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-            for k, v in weights["state_dict"].items()
-            if k.startswith(prefix)
-        )
+    reference_model = load_torch_model(
+        torch_model=reference_model, layer="img_backbone", model_location_generator=model_location_generator
     )
-
-    reference_model.load_state_dict(filtered)
-    reference_model.eval()
 
     parameters = create_uniad_model_resnet(reference_model, torch.randn(6, 3, 640, 360))
 
@@ -217,9 +206,7 @@ def test_uniad_bottle_neck_layer_1(device, reset_seeds):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_uniad_bottle_neck_layer3(device, reset_seeds):
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
-
+def test_uniad_bottle_neck_layer3(device, reset_seeds, model_location_generator):
     reference_model = ResNet(
         depth=101,
         in_channels=3,
@@ -244,19 +231,9 @@ def test_uniad_bottle_neck_layer3(device, reset_seeds):
         pretrained=None,
         init_cfg=None,
     )
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
-
-    prefix = "img_backbone"
-    filtered = OrderedDict(
-        (
-            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-            for k, v in weights["state_dict"].items()
-            if k.startswith(prefix)
-        )
+    reference_model = load_torch_model(
+        torch_model=reference_model, layer="img_backbone", model_location_generator=model_location_generator
     )
-
-    reference_model.load_state_dict(filtered)
-    reference_model.eval()
 
     parameters = create_uniad_model_resnet(reference_model, torch.randn(6, 3, 640, 360))
 
@@ -301,9 +278,7 @@ def test_uniad_bottle_neck_layer3(device, reset_seeds):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_uniad_reslayer1(device, reset_seeds):
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
-
+def test_uniad_reslayer1(device, reset_seeds, model_location_generator):
     reference_model = ResNet(
         depth=101,
         in_channels=3,
@@ -328,19 +303,9 @@ def test_uniad_reslayer1(device, reset_seeds):
         pretrained=None,
         init_cfg=None,
     )
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
-
-    prefix = "img_backbone"
-    filtered = OrderedDict(
-        (
-            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-            for k, v in weights["state_dict"].items()
-            if k.startswith(prefix)
-        )
+    reference_model = load_torch_model(
+        torch_model=reference_model, layer="img_backbone", model_location_generator=model_location_generator
     )
-
-    reference_model.load_state_dict(filtered)
-    reference_model.eval()
 
     parameters = create_uniad_model_resnet(reference_model, torch.randn(6, 3, 640, 360))
 
@@ -390,9 +355,7 @@ def test_uniad_reslayer1(device, reset_seeds):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_uniad_reslayer2(device, reset_seeds):
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
-
+def test_uniad_reslayer2(device, reset_seeds, model_location_generator):
     reference_model = ResNet(
         depth=101,
         in_channels=3,
@@ -417,19 +380,9 @@ def test_uniad_reslayer2(device, reset_seeds):
         pretrained=None,
         init_cfg=None,
     )
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
-
-    prefix = "img_backbone"
-    filtered = OrderedDict(
-        (
-            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-            for k, v in weights["state_dict"].items()
-            if k.startswith(prefix)
-        )
+    reference_model = load_torch_model(
+        torch_model=reference_model, layer="img_backbone", model_location_generator=model_location_generator
     )
-
-    reference_model.load_state_dict(filtered)
-    reference_model.eval()
 
     parameters = create_uniad_model_resnet(reference_model, torch.randn(6, 3, 640, 360))
 
@@ -478,9 +431,7 @@ def test_uniad_reslayer2(device, reset_seeds):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_uniad_resnet(device, reset_seeds):
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
-
+def test_uniad_resnet(device, reset_seeds, model_location_generator):
     reference_model = ResNet(
         depth=101,
         in_channels=3,
@@ -505,19 +456,9 @@ def test_uniad_resnet(device, reset_seeds):
         pretrained=None,
         init_cfg=None,
     )
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
-
-    prefix = "img_backbone"
-    filtered = OrderedDict(
-        (
-            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-            for k, v in weights["state_dict"].items()
-            if k.startswith(prefix)
-        )
+    reference_model = load_torch_model(
+        torch_model=reference_model, layer="img_backbone", model_location_generator=model_location_generator
     )
-
-    reference_model.load_state_dict(filtered)
-    reference_model.eval()
 
     parameters = create_uniad_model_resnet(reference_model, torch.randn(6, 3, 640, 360))
 
@@ -543,7 +484,6 @@ def test_uniad_resnet(device, reset_seeds):
         conv_cfg=None,
         dcn=True,
         stage_with_dcn=(False, False, True, True),
-        # zero_init_residual=True,
         pretrained=None,
         init_cfg=None,
     )
@@ -555,7 +495,6 @@ def test_uniad_resnet(device, reset_seeds):
         (torch_input_permute.shape[0] * torch_input_permute.shape[1] * torch_input_permute.shape[2]),
         torch_input_permute.shape[3],
     )
-    # ttnn_input = ttnn.from_torch(torch_input_permute, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     ttnn_input = ttnn.from_torch(torch_input_permute, device=device, dtype=ttnn.bfloat16)
 
     ttnn_output = ttnn_model(ttnn_input)

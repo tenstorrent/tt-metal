@@ -15,11 +15,11 @@ from models.experimental.uniad.tt.ttnn_utils import TtLiDARInstance3DBoxes
 import copy
 
 from models.experimental.uniad.tt.model_preprocessing_uniad import create_uniad_model_parameters_uniad
+from models.experimental.uniad.common import load_torch_model
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_uniad(device, reset_seeds):
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
+def test_uniad(device, reset_seeds, model_location_generator):
     reference_model = UniAD(
         True,
         True,
@@ -169,36 +169,10 @@ def test_uniad(device, reset_seeds):
         },
     )
 
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
-
-    state_dict = weights.get("state_dict", weights)
-
-    # Your model's expected shape
-    new_bev_h = 50
-    new_bev_w = 50
-    new_bev_size = new_bev_h * new_bev_w
-
-    # 1. Slice row_embed and col_embed from [200, 128] → [50, 128]
-    for key in [
-        "pts_bbox_head.positional_encoding.row_embed.weight",
-        "pts_bbox_head.positional_encoding.col_embed.weight",
-    ]:
-        if key in state_dict:
-            print(f"Slicing {key} from {state_dict[key].shape} to {(new_bev_h, state_dict[key].shape[1])}")
-            state_dict[key] = state_dict[key][:new_bev_h, :]
-
-    # 2. Slice bev_embedding from [40000, 256] → [2500, 256]
-    for key in ["pts_bbox_head.bev_embedding.weight", "seg_head.bev_embedding.weight"]:
-        if key in state_dict:
-            print(f"Slicing {key} from {state_dict[key].shape} to {(new_bev_size, state_dict[key].shape[1])}")
-            state_dict[key] = state_dict[key][:new_bev_size, :]
-
-    if "criterion.code_weights" in state_dict:
-        del state_dict["criterion.code_weights"]
-
     # Load the modified checkpoint
-    reference_model.load_state_dict(state_dict)
-    reference_model.eval()
+    reference_model = load_torch_model(
+        torch_model=reference_model, layer="", model_location_generator=model_location_generator
+    )
 
     rescale = True
 

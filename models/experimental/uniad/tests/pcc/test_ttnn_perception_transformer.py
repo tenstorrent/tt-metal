@@ -5,7 +5,6 @@
 import torch
 import numpy as np
 import pytest
-from collections import OrderedDict
 from torch import nn
 
 
@@ -20,10 +19,12 @@ from models.experimental.uniad.tt.model_preprocessing_perception_transformer imp
     extract_sequential_branch,
 )
 
+from models.experimental.uniad.common import load_torch_model
+
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_perception_transformer_get_bev_features_function(device):
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
+def test_perception_transformer_get_bev_features_function(device, reset_seeds, model_location_generator):
+    # weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
 
     reference_model = PerceptionTransformer(
         num_feature_levels=4,
@@ -37,20 +38,11 @@ def test_perception_transformer_get_bev_features_function(device):
         use_cams_embeds=True,
         rotate_center=[100, 100],
     )
-
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
-
-    prefix = "pts_bbox_head.transformer"
-    filtered = OrderedDict(
-        (
-            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-            for k, v in weights["state_dict"].items()
-            if k.startswith(prefix)
-        )
+    reference_model = load_torch_model(
+        torch_model=reference_model,
+        layer="pts_bbox_head.transformer",
+        model_location_generator=model_location_generator,
     )
-
-    reference_model.load_state_dict(filtered)
-    reference_model.eval()
 
     parameters = create_uniad_model_parameters_perception_transformer(reference_model, device)
 
@@ -201,8 +193,8 @@ def test_perception_transformer_get_bev_features_function(device):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_perception_transformer_get_states_and_refs(device):
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
+def test_perception_transformer_get_states_and_refs(device, reset_seeds, model_location_generator):
+    # weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
 
     reference_model = PerceptionTransformer(
         num_feature_levels=4,
@@ -216,20 +208,11 @@ def test_perception_transformer_get_states_and_refs(device):
         use_cams_embeds=True,
         rotate_center=[100, 100],
     )
-
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
-
-    prefix = "pts_bbox_head.transformer"
-    filtered = OrderedDict(
-        (
-            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-            for k, v in weights["state_dict"].items()
-            if k.startswith(prefix)
-        )
+    reference_model = load_torch_model(
+        torch_model=reference_model,
+        layer="pts_bbox_head.transformer",
+        model_location_generator=model_location_generator,
     )
-
-    reference_model.load_state_dict(filtered)
-    reference_model.eval()
 
     parameters = create_uniad_model_parameters_perception_transformer(reference_model, device)
 

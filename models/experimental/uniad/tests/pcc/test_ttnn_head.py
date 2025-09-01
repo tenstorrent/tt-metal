@@ -16,12 +16,11 @@ from models.experimental.uniad.tt.model_preprocessing_perception_transformer imp
 )
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.experimental.uniad.common import load_torch_model
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_head_get_detections(device, reset_seeds):
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
-
+def test_head_get_detections(device, reset_seeds, model_location_generator):
     reference_model = BEVFormerTrackHead(
         args=(),
         with_box_refine=True,
@@ -51,44 +50,9 @@ def test_head_get_detections(device, reset_seeds):
         },
     )
 
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
-
-    state_dict = weights.get("state_dict", weights)
-
-    # Your model's expected shape
-    new_bev_h = 50
-    new_bev_w = 50
-    new_bev_size = new_bev_h * new_bev_w
-
-    # 1. Slice row_embed and col_embed from [200, 128] → [50, 128]
-    for key in [
-        "pts_bbox_head.positional_encoding.row_embed.weight",
-        "pts_bbox_head.positional_encoding.col_embed.weight",
-    ]:
-        if key in state_dict:
-            print(f"Slicing {key} from {state_dict[key].shape} to {(new_bev_h, state_dict[key].shape[1])}")
-            state_dict[key] = state_dict[key][:new_bev_h, :]
-
-    # 2. Slice bev_embedding from [40000, 256] → [2500, 256]
-    for key in ["pts_bbox_head.bev_embedding.weight", "seg_head.bev_embedding.weight"]:
-        if key in state_dict:
-            print(f"Slicing {key} from {state_dict[key].shape} to {(new_bev_size, state_dict[key].shape[1])}")
-            state_dict[key] = state_dict[key][:new_bev_size, :]
-
-    if "criterion.code_weights" in state_dict:
-        del state_dict["criterion.code_weights"]
-
-    # Load the modified checkpoint
-    prefix = "pts_bbox_head"
-    filtered = OrderedDict(
-        (
-            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-            for k, v in weights["state_dict"].items()
-            if k.startswith(prefix)
-        )
+    reference_model = load_torch_model(
+        torch_model=reference_model, layer="pts_bbox_head", model_location_generator=model_location_generator
     )
-    reference_model.load_state_dict(filtered)
-    reference_model.eval()
 
     parameters = create_uniad_model_parameters_perception_transformer(reference_model, device)
 
