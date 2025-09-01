@@ -174,7 +174,6 @@ jobs:
             local workflow_file="$1"
             local display_name="$2"
 
-            echo "🚀 Triggering $workflow_file..."
             gh workflow run "$workflow_file" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}"
 
             # Poll for run ID
@@ -186,6 +185,7 @@ jobs:
                 break
               fi
             done
+            echo "$run_id"
           }
 
           # Trigger enabled workflows
