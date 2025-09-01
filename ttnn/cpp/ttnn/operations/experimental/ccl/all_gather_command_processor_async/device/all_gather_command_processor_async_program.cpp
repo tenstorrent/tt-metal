@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -7,7 +7,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_command_processor_async/device/all_gather_command_processor_async_op.hpp"
 #include <tt-metalium/fabric.hpp>
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -74,67 +74,21 @@ static void print_tensor_slice(const ttnn::ccl::v2::TensorSlice& slice_v2) {
         slice_v2.worker_slice_offset.x);
 }
 
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
-    size_t num_links,
-    size_t num_workers_per_link,
-    IDevice* device,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const CoreCoord core_grid_offset) {
-    std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
-    CoreRangeSet sender_worker_core_range;
-    const size_t num_workers_preferred = num_workers_per_link * num_links;
-    const auto available_cores = device->worker_cores(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
-    if (available_cores.num_cores() < num_workers_preferred) {
-        log_warning(
-            tt::LogOp,
-            "AllGather is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
-            "cores ({} per link and {} links) are made available but only {} are available. This may lead to "
-            "performance loss.",
-            num_workers_preferred,
-            num_workers_per_link,
-            num_links,
-            available_cores.num_cores());
-    }
-    for (const auto& cr : available_cores.ranges()) {
-        auto start = cr.start_coord;
-        auto end = cr.end_coord;
-        for (size_t y = start.y; y <= end.y; y++) {
-            for (size_t x = start.x; x <= end.x; x++) {
-                sender_worker_core_range = sender_worker_core_range.merge(CoreRangeSet(CoreRange(
-                    CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y),
-                    CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y))));
-                if (sender_worker_core_range.num_cores() == num_workers_preferred) {
-                    break;
-                }
-            }
-            if (sender_worker_core_range.num_cores() == num_workers_preferred) {
-                break;
-            }
-        }
-        if (sender_worker_core_range.num_cores() == num_workers_preferred) {
-            break;
-        }
-    }
-    return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
-}
-
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_command_processor_async_multi_core_with_workers(
     const Tensor& input_tensor,
     IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
-    ccl::Topology topology,
+    const uint32_t dim,
     const GlobalSemaphore semaphore,
+    const uint32_t num_links,
+    ccl::Topology topology,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
     IDevice* mesh_device = input_tensor.device();

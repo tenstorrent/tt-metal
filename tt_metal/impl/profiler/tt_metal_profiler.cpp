@@ -306,16 +306,21 @@ void peekDeviceData(IDevice* device, std::vector<CoreCoord>& worker_cores) {
     const auto& device_profiler_it = tt_metal_device_profiler_map.find(device_id);
     if (device_profiler_it != tt_metal_device_profiler_map.end()) {
         DeviceProfiler& device_profiler = device_profiler_it->second;
-        device_profiler.device_sync_new_events.clear();
+        device_profiler.device_sync_new_markers.clear();
         device_profiler.readResults(device, worker_cores, ProfilerReadState::NORMAL, ProfilerDataBufferSource::L1);
         device_profiler.processResults(device, worker_cores, ProfilerReadState::NORMAL, ProfilerDataBufferSource::L1);
-        for (auto& event : device_profiler.device_events) {
-            const ZoneDetails zone_details = device_profiler.getZoneDetails(event.timer_id);
-            if (zone_details.zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::SYNC_ZONE)]) {
-                ZoneScopedN("Adding_device_sync_event");
-                auto ret = device_profiler.device_sync_events.insert(event);
-                if (ret.second) {
-                    device_profiler.device_sync_new_events.insert(event);
+        for (const auto& [core, risc_map] : device_profiler.device_markers_per_core_risc_map) {
+            for (const auto& [risc, device_markers] : risc_map) {
+                for (const tracy::TTDeviceMarker& marker : device_markers) {
+                    const tracy::MarkerDetails marker_details = device_profiler.getMarkerDetails(marker.marker_id);
+                    if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+                            tracy::MarkerDetails::MarkerNameKeyword::SYNC_ZONE)]) {
+                        ZoneScopedN("Adding_device_sync_marker");
+                        auto ret = device_profiler.device_sync_markers.insert(marker);
+                        if (ret.second) {
+                            device_profiler.device_sync_new_markers.insert(marker);
+                        }
+                    }
                 }
             }
         }
@@ -418,15 +423,15 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
         peekDeviceData(device_receiver, receiver_cores);
 
         TT_ASSERT(
-            tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_events.size() ==
-            tt_metal_device_profiler_map.at(device_id_receiver).device_sync_new_events.size());
+            tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_markers.size() ==
+            tt_metal_device_profiler_map.at(device_id_receiver).device_sync_new_markers.size());
 
-        auto event_receiver = tt_metal_device_profiler_map.at(device_id_receiver).device_sync_new_events.begin();
+        auto event_receiver = tt_metal_device_profiler_map.at(device_id_receiver).device_sync_new_markers.begin();
 
-        for (auto event_sender = tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_events.begin();
-             event_sender != tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_events.end();
+        for (auto event_sender = tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_markers.begin();
+             event_sender != tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_markers.end();
              event_sender++) {
-            TT_ASSERT(event_receiver != tt_metal_device_profiler_map.at(device_id_receiver).device_sync_events.end());
+            TT_ASSERT(event_receiver != tt_metal_device_profiler_map.at(device_id_receiver).device_sync_markers.end());
             deviceDeviceTimePair.at(device_id_sender)
                 .at(device_id_receiver)
                 .push_back({event_sender->timestamp, event_receiver->timestamp});
@@ -807,9 +812,11 @@ void ProcessDeviceProfilerResults(
         }
 
         if (dumpDeviceProfilerDataMidRun(state)) {
-            profiler.pushTracyDeviceResults();
+            std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
+                getSortedDeviceMarkersVector(profiler.device_markers_per_core_risc_map);
+            profiler.pushTracyDeviceResults(device_markers_vec);
             profiler.dumpDeviceResults();
-            profiler.device_data_points.clear();
+            profiler.device_markers_per_core_risc_map.clear();
         }
     }
 #endif
