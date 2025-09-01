@@ -29,6 +29,7 @@ namespace utils {
         case BinaryOpType::LOGICAL_AND:
         case BinaryOpType::LOGICAL_OR:
         case BinaryOpType::LOGICAL_XOR:
+        case BinaryOpType::SQUARED_DIFFERENCE:
             return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32)
                 || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::DIV:
@@ -36,7 +37,6 @@ namespace utils {
         case BinaryOpType::LOGADDEXP2:
         case BinaryOpType::LDEXP:
         case BinaryOpType::BIAS_GELU: return (a == DataType::FLOAT32 && b == DataType::FLOAT32);
-        case BinaryOpType::SQUARED_DIFFERENCE:
         case BinaryOpType::RSUB:
         case BinaryOpType::GT:
         case BinaryOpType::LT:

@@ -550,6 +550,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype.value() == DataType::INT32) {
                 op_init_and_name = {"mul_int32_tile_init();", fmt::format("mul_int32_tile({0}, {0}, {0});", idst)};
+            } else if (input_dtype.value() == DataType::UINT16) {
+                op_init_and_name = {"mul_int_tile_init();", fmt::format("mul_uint16_tile({0}, {0}, {0});", idst)};
             } else {
                 op_init_and_name = {"square_tile_init();", fmt::format("square_tile({});", idst)};
             }
