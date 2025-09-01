@@ -54,7 +54,9 @@ def test_all_gather_chunk_perf():
                 num_devices = 8
             else:
                 num_devices = 4
-            total_bytes_moved = total_bytes * ((num_devices - 1) / num_devices) / num_links
+            total_bytes_moved = (
+                total_bytes * ((num_devices - 1) / num_devices) / num_links / (2 if topology == "ring" else 1)
+            )
 
             data_size_bytes_gb = total_bytes / (10**9)
             data_size_bytes_mb = total_bytes / (10**6)
@@ -111,9 +113,7 @@ def test_all_gather_chunk_perf():
                     )
 
                     # Append row for CSV output
-                    current_bandwidth_gbps = (
-                        total_bytes_moved / measured_avg / 2 if topology == "ring" else total_bytes_moved / measured_avg
-                    )
+                    current_bandwidth_gbps = total_bytes_moved / measured_avg
                     rows.append(
                         {
                             "Output Shape": str(ag_output_shape),
