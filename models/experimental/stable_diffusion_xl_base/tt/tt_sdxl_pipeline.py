@@ -427,7 +427,6 @@ class TtSDXLPipeline(LightweightModule):
                     self.ttnn_device,
                     self.torch_pipeline.vae.state_dict(),
                     self.tt_model_config,
-                    self.pipeline_config.use_tp,
                 )
                 if pipeline_config.vae_on_device
                 else None
@@ -466,7 +465,6 @@ class TtSDXLPipeline(LightweightModule):
 
     def __allocate_device_tensors(self, tt_latents, tt_prompt_embeds, tt_text_embeds, tt_time_ids):
         # Allocation of device tensors for the input data.
-        is_mesh_device = isinstance(self.ttnn_device, ttnn._ttnn.multi_device.MeshDevice)
         if not self.allocated_device_tensors:
             profiler.start("allocate_input_tensors")
 
