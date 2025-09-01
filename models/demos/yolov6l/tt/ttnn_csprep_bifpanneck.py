@@ -7,6 +7,13 @@ from models.demos.yolov6l.tt.common import Yolov6l_Conv2D
 from models.demos.yolov6l.tt.ttnn_bepc3 import TtBepC3
 from models.demos.yolov6l.tt.ttnn_bifusion import TtBiFusion
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtCSPRepBiFPANNeck:
     def __init__(self, device, parameters, model_params):
@@ -49,6 +56,8 @@ class TtCSPRepBiFPANNeck:
         )
 
     def __call__(self, input_list):
+        if use_signpost:
+            signpost(header="TtCSPRepBiFPANNeck Start")
         (input_tensor_3, input_tensor_2, input_tensor_1, input_tensor_0) = input_list
 
         fpn_out0 = self.reduce_layer0(input_tensor_0)
@@ -89,5 +98,8 @@ class TtCSPRepBiFPANNeck:
         pan_out0 = self.Rep_n4(p_concat_layer2)
 
         outputs = [pan_out2, pan_out_1, pan_out0]
+
+        if use_signpost:
+            signpost(header="TtCSPRepBiFPANNeck End")
 
         return outputs

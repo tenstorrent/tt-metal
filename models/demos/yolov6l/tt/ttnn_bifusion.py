@@ -5,6 +5,14 @@
 import ttnn
 from models.demos.yolov6l.tt.common import Yolov6l_Conv2D, Yolov6x_Conv_T_2D
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtBiFusion:
     def __init__(self, device, parameters, model_params):
@@ -45,6 +53,8 @@ class TtBiFusion:
         )
 
     def __call__(self, x):
+        if use_signpost:
+            signpost(header="TtBiFusion Start")
         conv_t = self.upsample(x[0])
         conv1 = self.cv1(x[1])
         conv2 = self.cv2(x[2])
@@ -64,4 +74,6 @@ class TtBiFusion:
         )
         output = ttnn.concat([conv_t, conv1, downsample], dim=-1, memory_config=output_sharded_memory_config)
         output, out_h, out_w = self.cv3(output)
+        if use_signpost:
+            signpost(header="TtBiFusion End")
         return output, out_h, out_w
