@@ -65,7 +65,7 @@ def run_demo_inference(
             encoders_on_device=encoders_on_device,
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
-            is_galaxy=is_galaxy,
+            is_galaxy=is_galaxy(),
         ),
     )
 
