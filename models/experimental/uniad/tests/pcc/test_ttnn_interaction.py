@@ -25,9 +25,10 @@ from ttnn.model_preprocessing import (
     preprocess_linear_bias,
     preprocess_layernorm_parameter,
 )
-from collections import OrderedDict
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+from models.experimental.uniad.common import load_torch_model
 
 
 def custom_preprocessor(model, name):
@@ -132,24 +133,14 @@ def custom_preprocessor(model, name):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_MapInteraction(device, reset_seeds):
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
-
+def test_MapInteraction(device, reset_seeds, model_location_generator):
     reference_model = MapInteraction(embed_dims=256, num_heads=8, dropout=0.1, batch_first=True)
 
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
-
-    prefix = "motion_head.motionformer.map_interaction_layers.0"
-    filtered = OrderedDict(
-        (
-            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-            for k, v in weights["state_dict"].items()
-            if k.startswith(prefix)
-        )
+    reference_model = load_torch_model(
+        torch_model=reference_model,
+        layer="motion_head.motionformer.map_interaction_layers.0",
+        model_location_generator=model_location_generator,
     )
-
-    reference_model.load_state_dict(filtered)
-    reference_model.eval()
 
     query = torch.randn(1, 1, 6, 256)
     key = torch.randn(1, 300, 256)
@@ -179,24 +170,14 @@ def test_MapInteraction(device, reset_seeds):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_TrackAgentInteraction(device, reset_seeds):
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
-
+def test_TrackAgentInteraction(device, reset_seeds, model_location_generator):
     reference_model = TrackAgentInteraction(embed_dims=256, num_heads=8, dropout=0.1, batch_first=True)
 
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
-
-    prefix = "motion_head.motionformer.track_agent_interaction_layers.0"
-    filtered = OrderedDict(
-        (
-            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-            for k, v in weights["state_dict"].items()
-            if k.startswith(prefix)
-        )
+    reference_model = load_torch_model(
+        torch_model=reference_model,
+        layer="motion_head.motionformer.track_agent_interaction_layers.0",
+        model_location_generator=model_location_generator,
     )
-
-    reference_model.load_state_dict(filtered)
-    reference_model.eval()
 
     query = torch.randn(1, 1, 6, 256)
     key = torch.randn(1, 1, 256)
@@ -226,26 +207,13 @@ def test_TrackAgentInteraction(device, reset_seeds):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_IntentionInteraction(device, reset_seeds):
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
-
+def test_IntentionInteraction(device, reset_seeds, model_location_generator):
     reference_model = IntentionInteraction(embed_dims=256, num_heads=8, dropout=0.1, batch_first=True)
-
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
-
-    prefix = "motion_head.motionformer.intention_interaction_layers"
-    filtered = OrderedDict(
-        (
-            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-            for k, v in weights["state_dict"].items()
-            if k.startswith(prefix)
-        )
+    reference_model = load_torch_model(
+        torch_model=reference_model,
+        layer="motion_head.motionformer.intention_interaction_layers",
+        model_location_generator=model_location_generator,
     )
-
-    reference_model.load_state_dict(filtered)
-    reference_model.eval()
-
-    print("reference_model", reference_model)
 
     query = torch.randn(1, 1, 6, 256)
 

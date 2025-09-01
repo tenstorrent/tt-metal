@@ -7,7 +7,6 @@ import ttnn
 import pytest
 import torch
 from torch import nn
-from collections import OrderedDict
 
 from models.experimental.uniad.reference.decoder import DetectionTransformerDecoder, FFN
 
@@ -18,6 +17,8 @@ from models.experimental.uniad.tt.model_preprocessing_perception_transformer imp
 from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_linear_weight, preprocess_linear_bias
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+from models.experimental.uniad.common import load_torch_model
 
 
 class DotDict(dict):
@@ -45,23 +46,14 @@ def custom_preprocessor(model, name):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_uniad_decoder(device, reset_seeds):
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
-
+def test_uniad_decoder(device, reset_seeds, model_location_generator):
     reference_model = DetectionTransformerDecoder(num_layers=6, embed_dim=256, num_heads=8)
-    weights = torch.load(weights_path, map_location=torch.device("cpu"))
 
-    prefix = "pts_bbox_head.transformer.decoder"
-    filtered = OrderedDict(
-        (
-            (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-            for k, v in weights["state_dict"].items()
-            if k.startswith(prefix)
-        )
+    reference_model = load_torch_model(
+        torch_model=reference_model,
+        layer="pts_bbox_head.transformer.decoder",
+        model_location_generator=model_location_generator,
     )
-
-    reference_model.load_state_dict(filtered)
-    reference_model.eval()
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: reference_model,

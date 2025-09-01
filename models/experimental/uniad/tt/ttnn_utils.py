@@ -5,7 +5,6 @@
 import ttnn
 
 import torch
-import torch.nn.functional as F
 import numpy as np
 from torch import Tensor
 import math
@@ -109,11 +108,13 @@ def multi_scale_deformable_attn_pytorch(
         value_l = ttnn.reshape(value_l, (bs * num_heads, head_dim, h_l, w_l))
         grid = ttnn.permute(sampling_grids[lvl], (0, 2, 1, 3, 4))
         grid = ttnn.reshape(grid, (bs * num_heads, num_queries * num_points, 1, 2))
-        # TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/21617>
-        value_l = ttnn.to_torch(value_l).to(dtype=torch.float)
-        grid = ttnn.to_torch(grid).to(dtype=torch.float)
-        sampled = F.grid_sample(value_l, grid, mode="bilinear", padding_mode="zeros", align_corners=False)
-        sampled = ttnn.from_torch(sampled, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        value_l = ttnn.typecast(value_l, ttnn.bfloat16)
+        grid = ttnn.typecast(grid, ttnn.bfloat16)
+        value_l = ttnn.to_layout(value_l, layout=ttnn.ROW_MAJOR_LAYOUT)
+        grid = ttnn.to_layout(grid, layout=ttnn.ROW_MAJOR_LAYOUT)
+        value_l = ttnn.permute(value_l, (0, 2, 3, 1))
+        sampled = ttnn.grid_sample(value_l, grid)
+        sampled = ttnn.permute(sampled, (0, 3, 1, 2))
         sampled = ttnn.reshape(sampled, (bs, num_heads, head_dim, num_queries, num_points))
         sampled = ttnn.permute(sampled, (0, 3, 1, 4, 2))
         attn = attention_weights[:, :, :, lvl, :]
@@ -302,8 +303,10 @@ def denormalize_bbox(normalized_bboxes, pc_range, device=None):
 
     rot_sine = ttnn.typecast(rot_sine, ttnn.bfloat16)
     rot_cosine = ttnn.typecast(rot_cosine, ttnn.bfloat16)
-
-    rot = ttnn.atan2(rot_sine, rot_cosine)  # Does not support float32
+    if rot_sine.shape[0] == 0:
+        rot = rot_sine
+    else:
+        rot = ttnn.atan2(rot_sine, rot_cosine)  # Does not support float32
 
     rot = -1 * rot
     rot = rot - np.pi / 2

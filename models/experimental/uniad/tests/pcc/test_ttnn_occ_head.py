@@ -9,10 +9,11 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.uniad.reference.occ_head import OccHead
 from models.experimental.uniad.tt.ttnn_occ_head import TtOccHead
+from models.experimental.uniad.common import load_torch_model
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_occhead(reset_seeds, device):
+def test_occhead(reset_seeds, device, model_location_generator):
     occflow_grid_conf = {
         "xbound": [-50.0, 50.0, 0.5],
         "ybound": [-50.0, 50.0, 0.5],
@@ -27,18 +28,9 @@ def test_occhead(reset_seeds, device):
         attn_mask_thresh=0.3,
     )
 
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
-
-    torch_dict = torch.load(weights_path, map_location=torch.device("cpu"))
-    torch_dict = torch_dict["state_dict"]
-
-    state_dict = {k: v for k, v in torch_dict.items() if (k.startswith("occ_head"))}
-
-    new_state_dict = dict(zip(occ_head.state_dict().keys(), state_dict.values()))
-    occ_head.load_state_dict(new_state_dict)
-    occ_head.eval()
-
-    occ_head = occ_head.eval()
+    occ_head = load_torch_model(
+        torch_model=occ_head, layer="occ_head", model_location_generator=model_location_generator
+    )
 
     bev_feat = torch.randn(2500, 1, 256)
     no_query = True
