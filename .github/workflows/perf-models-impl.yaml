@@ -190,7 +190,7 @@ jobs:
         uses: ./.github/actions/model-perf-test
         with:
           run_args: pytest -n auto models/demos/yolov8s/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env2' }}
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
       - name: Run yolov6l model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/model-perf-test
