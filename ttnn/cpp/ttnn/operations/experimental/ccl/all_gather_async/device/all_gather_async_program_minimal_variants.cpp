@@ -48,6 +48,8 @@ uint32_t all_gather_async_core_count(
 uint32_t default_workers(
     const MeshDevice& mesh_device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    Topology topology,
+    uint32_t output_data_size_bytes,
     uint32_t num_links,
     uint32_t ring_size,
     uint32_t num_directions_per_link,
@@ -58,11 +60,25 @@ uint32_t default_workers(
     // Above 4 workers we start getting performance drops, so we limit to 4 workers or less, depending on the number of
     // available cores This was determined by the sweep
     // tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py
-    constexpr std::array<uint32_t, 4> candidate_worker_counts = {4, 2, 1};
+    ttnn::SmallVector<uint32_t> candidate_worker_counts;
+    // if per link data moved is greater than 0.25 MB, we search greedily for 4 workers, otherwise we search greedily
+    // for 2 workers. for ring, half the data is moved per link, so we divide by 2
+    double data_moved_per_link_bytes = double(output_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
+                                       (topology == ccl::Topology::Ring ? 2 : 1);
+    if (data_moved_per_link_bytes > double(0.25 * 1024 * 1024)) {
+        candidate_worker_counts = {4, 2, 1};
+    } else {
+        candidate_worker_counts = {2, 1};
+    }
     for (auto worker_count : candidate_worker_counts) {
         uint32_t core_count =
             all_gather_async_core_count(worker_count, num_directions_per_link, num_mux_cores_per_direction_per_link);
         if (num_cores >= core_count) {
+            log_trace(
+                tt::LogOp,
+                "data_moved_per_link_bytes: {} and worker_count: {}",
+                data_moved_per_link_bytes,
+                worker_count);
             return worker_count;
         }
     }
@@ -191,9 +207,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     uint32_t num_mux_cores_per_direction_per_link = 1;
     // Get worker cores
     // 2 senders (reader + writer) per direction (forward, backward) per link
+    uint32_t output_data_size_bytes = output_tensor.buffer()->size();
     uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(detail::default_workers(
         *mesh_device,
         sub_device_id,
+        topology,
+        output_data_size_bytes,
         num_links,
         ring_size,
         num_directions_per_link,

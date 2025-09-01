@@ -68,9 +68,9 @@ def test_all_gather_chunk_perf():
             best_num_workers_per_link = None
             for j, chunks_per_sync in enumerate(chunks_per_sync_list):
                 for k, num_workers_per_link in enumerate(num_workers_per_link_list):
-                    if chunks_per_sync == "MAX" and num_workers_per_link == None:
+                    if chunks_per_sync != None and num_workers_per_link == None:
                         continue
-                    elif chunks_per_sync == None and num_workers_per_link == 1:
+                    elif chunks_per_sync == None and num_workers_per_link != None:
                         continue
 
                     cols = ["DEVICE KERNEL"]
