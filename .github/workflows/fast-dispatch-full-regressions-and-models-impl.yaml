@@ -22,108 +22,108 @@ on:
         default: "all"
 jobs:
   plan:
-  runs-on: ubuntu-latest
-  outputs:
-    stable_matrix:   ${{ steps.mk.outputs.stable_matrix }}
-    unstable_matrix: ${{ steps.mk.outputs.unstable_matrix }}
-    stable_count:    ${{ steps.mk.outputs.stable_count }}
-    unstable_count:  ${{ steps.mk.outputs.unstable_count }}
-  steps:
-    - id: mk
-      shell: bash
-      run: |
-        set -euo pipefail
+    runs-on: ubuntu-latest
+    outputs:
+      stable_matrix:   ${{ steps.mk.outputs.stable_matrix }}
+      unstable_matrix: ${{ steps.mk.outputs.unstable_matrix }}
+      stable_count:    ${{ steps.mk.outputs.stable_count }}
+      unstable_count:  ${{ steps.mk.outputs.unstable_count }}
+    steps:
+      - id: mk
+        shell: bash
+        run: |
+          set -euo pipefail
 
-        # ----- Catalogs -----
-        # Stable set (default path; optional per-model timeout)
-        STABLE='[
-          {"model":"common_models"},
-          {"model":"functional_unet"},
-          {"model":"ttt-llama3.2-1B"},
-          {"model":"qwen25_vl-3B"},
-          {"model":"resnet50"},
-          {"model":"whisper"},
-          {"model":"openpdn_mnist"},
-          {"model":"vit"},
-          {"model":"sentence_bert"},
-          {"model":"yolov7"},
-          {"model":"swin_s"},
-          {"model":"yolov6l"},
-          {"model":"swin_v2"},
-          {"model":"mobilenetv2"},
-          {"model":"segformer"},
-          {"model":"vgg_unet"},
-          {"model":"yolov10x"},
-          {"model":"yolov11"},
-          {"model":"yolov8s"},
-          {"model":"yolov8s_world"},
-          {"model":"yolov8x"},
-          {"model":"yolov9c"},
-          {"model":"vanilla_unet"},
-          {"model":"yolov5x"},
-          {"model":"efficientnetb0"},
-          {"model":"vovnet"},
-          {"model":"ufld_v2"},
-          {"model":"yolov12x"},
-          {"model":"gemma-3-4b-it"},
-          {"model":"ttt-mistral-7B-v0.3"},
-          {"model":"stable_diffusion_xl_base","timeout":45}
-        ]'
+          # ----- Catalogs -----
+          # Stable set (default path; optional per-model timeout)
+          STABLE='[
+            {"model":"common_models"},
+            {"model":"functional_unet"},
+            {"model":"ttt-llama3.2-1B"},
+            {"model":"qwen25_vl-3B"},
+            {"model":"resnet50"},
+            {"model":"whisper"},
+            {"model":"openpdn_mnist"},
+            {"model":"vit"},
+            {"model":"sentence_bert"},
+            {"model":"yolov7"},
+            {"model":"swin_s"},
+            {"model":"yolov6l"},
+            {"model":"swin_v2"},
+            {"model":"mobilenetv2"},
+            {"model":"segformer"},
+            {"model":"vgg_unet"},
+            {"model":"yolov10x"},
+            {"model":"yolov11"},
+            {"model":"yolov8s"},
+            {"model":"yolov8s_world"},
+            {"model":"yolov8x"},
+            {"model":"yolov9c"},
+            {"model":"vanilla_unet"},
+            {"model":"yolov5x"},
+            {"model":"efficientnetb0"},
+            {"model":"vovnet"},
+            {"model":"ufld_v2"},
+            {"model":"yolov12x"},
+            {"model":"gemma-3-4b-it"},
+            {"model":"ttt-mistral-7B-v0.3"},
+            {"model":"stable_diffusion_xl_base","timeout":45}
+          ]'
 
-        # Stable set (CIv2)
-        STABLE_CIv2='[
-          {"model":"yolov8s"},
-          {"model":"vadv2"}
-        ]'
+          # Stable set (CIv2)
+          STABLE_CIv2='[
+            {"model":"yolov8s"},
+            {"model":"vadv2"}
+          ]'
 
-        # Unstable set (explicit commands)
-        UNSTABLE='[
-          {"model":"stable_diffusion","cmd":"TT_MM_THROTTLE_PERF=5 pytest --timeout 1000 -n auto tests/nightly/single_card/stable_diffusion"},
-          {"model":"mamba 1","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 1"},
-          {"model":"mamba 2","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 2"},
-          {"model":"mamba 3","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 3"},
-          {"model":"mamba 4","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 4"},
-          {"model":"mamba 5","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 5"},
-          {"model":"mamba 6","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 6"}
-        ]'
+          # Unstable set (explicit commands)
+          UNSTABLE='[
+            {"model":"stable_diffusion","cmd":"TT_MM_THROTTLE_PERF=5 pytest --timeout 1000 -n auto tests/nightly/single_card/stable_diffusion"},
+            {"model":"mamba 1","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 1"},
+            {"model":"mamba 2","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 2"},
+            {"model":"mamba 3","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 3"},
+            {"model":"mamba 4","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 4"},
+            {"model":"mamba 5","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 5"},
+            {"model":"mamba 6","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 6"}
+          ]'
 
-        SEL='${{ inputs.models-to-run }}'
+          SEL='${{ inputs.models-to-run }}'
 
-        # ---- Normalize selection to a JSON array (SEL_ARR) ----
-        if [ -z "${SEL}" ] || [ "${SEL}" = "all" ]; then
-          # Keep all (we'll branch later by leaving SEL_ARR empty)
-          SEL_ARR=''
-        else
-          if echo "${SEL}" | jq -e type >/dev/null 2>&1; then
-            # already JSON; expect an array of strings
-            SEL_ARR="$(echo "${SEL}" | jq -c '.')"
+          # ---- Normalize selection to a JSON array (SEL_ARR) ----
+          if [ -z "${SEL}" ] || [ "${SEL}" = "all" ]; then
+            # Keep all (we'll branch later by leaving SEL_ARR empty)
+            SEL_ARR=''
           else
-            # CSV -> JSON array (trim whitespace around items)
-            SEL_ARR="$(echo "${SEL}" | tr ',' '\n' | sed -E 's/^ *| *$//g' | awk 'NF' | jq -R . | jq -s -c '.')"
+            if echo "${SEL}" | jq -e type >/dev/null 2>&1; then
+              # already JSON; expect an array of strings
+              SEL_ARR="$(echo "${SEL}" | jq -c '.')"
+            else
+              # CSV -> JSON array (trim whitespace around items)
+              SEL_ARR="$(echo "${SEL}" | tr ',' '\n' | sed -E 's/^ *| *$//g' | awk 'NF' | jq -R . | jq -s -c '.')"
+            fi
           fi
-        fi
 
-        # ---- Filter catalogs by selection (or keep all if SEL_ARR empty) ----
-        if [ -z "${SEL_ARR}" ]; then
-          STABLE_OUT="${STABLE}"
-          STABLE_CIv2_OUT="${STABLE_CIv2}"
-          UNSTABLE_OUT="${UNSTABLE}"
-        else
-          STABLE_OUT="$(jq --argjson sel "${SEL_ARR}" '[.[] | select($sel | index(.model))]' <<< "${STABLE}")"
-          STABLE_CIv2_OUT="$(jq --argjson sel "${SEL_ARR}" '[.[] | select($sel | index(.model))]' <<< "${STABLE_CIv2}")"
-          UNSTABLE_OUT="$(jq --argjson sel "${SEL_ARR}" '[.[] | select($sel | index(.model))]' <<< "${UNSTABLE}")"
-        fi
+          # ---- Filter catalogs by selection (or keep all if SEL_ARR empty) ----
+          if [ -z "${SEL_ARR}" ]; then
+            STABLE_OUT="${STABLE}"
+            STABLE_CIv2_OUT="${STABLE_CIv2}"
+            UNSTABLE_OUT="${UNSTABLE}"
+          else
+            STABLE_OUT="$(jq --argjson sel "${SEL_ARR}" '[.[] | select($sel | index(.model))]' <<< "${STABLE}")"
+            STABLE_CIv2_OUT="$(jq --argjson sel "${SEL_ARR}" '[.[] | select($sel | index(.model))]' <<< "${STABLE_CIv2}")"
+            UNSTABLE_OUT="$(jq --argjson sel "${SEL_ARR}" '[.[] | select($sel | index(.model))]' <<< "${UNSTABLE}")"
+          fi
 
-        STABLE_COUNT="$(jq 'length' <<< "${STABLE_OUT}")"
-        STABLE_CIv2_COUNT="$(jq 'length' <<< "${STABLE_CIv2_OUT}")"
-        UNSTABLE_COUNT="$(jq 'length' <<< "${UNSTABLE_OUT}")"
+          STABLE_COUNT="$(jq 'length' <<< "${STABLE_OUT}")"
+          STABLE_CIv2_COUNT="$(jq 'length' <<< "${STABLE_CIv2_OUT}")"
+          UNSTABLE_COUNT="$(jq 'length' <<< "${UNSTABLE_OUT}")"
 
-        echo "stable_matrix=${STABLE_OUT}"     >> "$GITHUB_OUTPUT"
-        echo "unstable_matrix=${UNSTABLE_OUT}" >> "$GITHUB_OUTPUT"
-        echo "stable_count=${STABLE_COUNT}"     >> "$GITHUB_OUTPUT"
-        echo "unstable_count=${UNSTABLE_COUNT}" >> "$GITHUB_OUTPUT"
-        echo "stable_ci_v2_matrix=${STABLE_CIv2_OUT}" >> "$GITHUB_OUTPUT"
-        echo "stable_ci_v2_count=${STABLE_CIv2_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "stable_matrix=${STABLE_OUT}"     >> "$GITHUB_OUTPUT"
+          echo "unstable_matrix=${UNSTABLE_OUT}" >> "$GITHUB_OUTPUT"
+          echo "stable_count=${STABLE_COUNT}"     >> "$GITHUB_OUTPUT"
+          echo "unstable_count=${UNSTABLE_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "stable_ci_v2_matrix=${STABLE_CIv2_OUT}" >> "$GITHUB_OUTPUT"
+          echo "stable_ci_v2_count=${STABLE_CIv2_COUNT}" >> "$GITHUB_OUTPUT"
 
   nightly-wh-models:
     needs: plan
