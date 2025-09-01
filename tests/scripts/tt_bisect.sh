@@ -36,7 +36,7 @@ echo "PYTHONPATH: $PYTHONPATH"
 echo "ARCH_NAME: ${ARCH_NAME:-}"
 echo "pwd: $(pwd)"
 
-echo "Creating virtual environment:"
+# Creating virtual environment where we can install ttnn
 ./create_venv.sh
 
 git cat-file -e "$good_commit^{commit}" 2>/dev/null || die "Invalid good commit: $good_commit"
