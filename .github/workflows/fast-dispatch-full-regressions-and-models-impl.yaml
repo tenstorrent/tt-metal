@@ -21,15 +21,15 @@ on:
         type: string
         default: "all"
 jobs:
-  plan:
+  create-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      stable_matrix:   ${{ steps.mk.outputs.stable_matrix }}
-      unstable_matrix: ${{ steps.mk.outputs.unstable_matrix }}
-      stable_count:    ${{ steps.mk.outputs.stable_count }}
-      unstable_count:  ${{ steps.mk.outputs.unstable_count }}
+      stable_matrix:   ${{ steps.ctm.outputs.stable_matrix }}
+      unstable_matrix: ${{ steps.ctm.outputs.unstable_matrix }}
+      stable_count:    ${{ steps.ctm.outputs.stable_count }}
+      unstable_count:  ${{ steps.ctm.outputs.unstable_count }}
     steps:
-      - id: mk
+      - id: ctm
         shell: bash
         run: |
           set -euo pipefail
@@ -130,15 +130,15 @@ jobs:
           echo "stable_ci_v2_count=${STABLE_CIv2_COUNT}" >> "$GITHUB_OUTPUT"
 
   nightly-wh-models:
-    needs: plan
-    if: ${{ needs.plan.outputs.stable_count != '0' }}
+    needs: create-test-matrix
+    if: ${{ needs.create-test-matrix.outputs.stable_count != '0' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
         card: [N150, N300]
-        test-config: ${{ fromJSON(needs.plan.outputs.stable_matrix) }}
+        test-config: ${{ fromJSON(needs.create-test-matrix.outputs.stable_matrix) }}
     name: Nightly ${{ matrix.card }} ${{ matrix.test-config.model }}
     defaults:
       run:
@@ -195,14 +195,14 @@ jobs:
           path: generated/test_reports/
           prefix: "test_reports_"
   nightly-wh-unstable-models:
-    needs: plan
-    if: ${{ needs.plan.outputs.unstable_count != '0' }}
+    needs: create-test-matrix
+    if: ${{ needs.create-test-matrix.outputs.unstable_count != '0' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-config: ${{ fromJSON(needs.plan.outputs.unstable_matrix) }}
+        test-config: ${{ fromJSON(needs.create-test-matrix.outputs.unstable_matrix) }}
         card: [N150, N300]
     name: "[Unstable] Nightly ${{ matrix.card }} ${{ matrix.test-config.model }}"
     defaults:
@@ -248,15 +248,15 @@ jobs:
           path: generated/test_reports/
           prefix: "test_reports_"
   nightly-wh-models-civ2:
-    needs: plan
-    if: ${{ needs.plan.outputs.stable_ci_v2_count != '0' }}
+    needs: create-test-matrix
+    if: ${{ needs.create-test-matrix.outputs.stable_ci_v2_count != '0' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
         card: [N150, N300]
-        test-config: ${{ fromJSON(needs.plan.outputs.stable_ci_v2_matrix) }}
+        test-config: ${{ fromJSON(needs.create-test-matrix.outputs.stable_ci_v2_matrix) }}
         model: [yolov8s, vadv2]
     name: Nightly CIv2-compatible ${{ matrix.card }} ${{ matrix.test-config.model }}
     runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', matrix.card) }}
