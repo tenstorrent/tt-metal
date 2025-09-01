@@ -174,6 +174,9 @@ class TtSDXLPipeline(LightweightModule):
             all_embeds = []
             for i in range(0, len(prompts), self.batch_size):
                 batch_prompts = prompts[i : i + self.batch_size]
+                current_negative_prompts = (
+                    negative_prompt[i : i + self.batch_size] if isinstance(negative_prompt, list) else negative_prompt
+                )
                 batch_embeds = batch_encode_prompt_on_device(
                     self.torch_pipeline,
                     self.tt_text_encoder,
@@ -184,7 +187,7 @@ class TtSDXLPipeline(LightweightModule):
                     device=self.cpu_device,
                     num_images_per_prompt=1,
                     do_classifier_free_guidance=True,
-                    negative_prompt=negative_prompt,
+                    negative_prompt=current_negative_prompts,
                     negative_prompt_2=None,
                     prompt_embeds=None,
                     negative_prompt_embeds=None,

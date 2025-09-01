@@ -40,9 +40,12 @@ def run_demo_inference(
         prompts = [prompts]
 
     needed_padding = (batch_size - len(prompts) % batch_size) % batch_size
-    prompts = prompts + [""] * needed_padding
+    if isinstance(negative_prompt, list):
+        assert len(negative_prompt) == len(prompts), "prompts and negative_prompt lists must be the same length"
 
-    assert isinstance(negative_prompt, str), "negative_prompt must be a string"
+    prompts = prompts + [""] * needed_padding
+    if isinstance(negative_prompt, list):
+        negative_prompt = negative_prompt + [""] * needed_padding
 
     # 1. Load components
     profiler.start("diffusion_pipeline_from_pretrained")
@@ -159,7 +162,7 @@ def run_demo_inference(
 )
 @pytest.mark.parametrize(
     "negative_prompt",
-    ((""),),
+    ((None),),
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
