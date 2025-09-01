@@ -15,6 +15,7 @@
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/eltwise_unary/where.h"
 #include "compute_kernel_api.h"
+#include "compute_kernel_api/copy_dest_values.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -24,11 +25,11 @@ void MAIN {
     constexpr auto cb_input = tt::CBIndex::c_0;   // input
     constexpr auto cb_output = tt::CBIndex::c_2;  // output
 
-    constexpr auto cb_tanh_lut = tt::CBIndex::c_1;   // lut tanh(x)
-    constexpr auto cb_exp_2x = tt::CBIndex::c_3;     // exp(2x)
-    constexpr auto cb_sub = tt::CBIndex::c_4;        // exp(2x) - 1
-    constexpr auto cb_add = tt::CBIndex::c_5;        // recip ( exp(2x) + 1 )
-    constexpr auto cb_tanh_exp = tt::CBIndex::c_6;   // tanh[x] = (exp[2x] - 1) / (exp[2x] + 1)
+    constexpr auto cb_tanh_lut = tt::CBIndex::c_1;  // lut tanh(x)
+    constexpr auto cb_exp_2x = tt::CBIndex::c_3;    // exp(2x)
+    constexpr auto cb_sub = tt::CBIndex::c_4;       // exp(2x) - 1
+    constexpr auto cb_add = tt::CBIndex::c_5;       // recip ( exp(2x) + 1 )
+    constexpr auto cb_tanh_exp = tt::CBIndex::c_6;  // tanh[x] = (exp[2x] - 1) / (exp[2x] + 1)
 
     constexpr uint32_t one = 0x3f800000u;    //  1.0f
     constexpr uint32_t two = 0x40000000u;    //  2.0f
@@ -141,7 +142,8 @@ void MAIN {
             cb_pop_front(cb_sub, 1);
             cb_pop_front(cb_add, 1);
 
-            // output = cb_tanh_lut if abs(x) > 3.5, otherwise cb_tanh_exp
+            // tanh(x) = cb_tanh_lut if abs(x) > 3.5, otherwise cb_tanh_exp
+            // output = cb_input - tanh(x)
             cb_wait_front(cb_tanh_lut, 1);
             cb_wait_front(cb_tanh_exp, 1);
             cb_wait_front(cb_input, 1);
@@ -160,9 +162,17 @@ void MAIN {
             where_tile_init();
 #ifdef TANH_FP32
             where_fp32_tile(0, 1, 2, 0);
+            copy_dest_values(1, 0);
+            copy_tile_init(cb_input);
+            copy_tile(cb_input, 0, 0);
+            sub_binary_tile_init();
+            sub_binary_tile(0, 1, 0);
 #endif
 #ifdef TANH_BF16
             where_tile(0, 1, 2, 0);
+            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWSUB, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_input);
+            binary_dest_reuse_tiles<EltwiseBinaryType::ELWSUB, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                cb_input, 0, 0);
 #endif
             tile_regs_commit();
             tile_regs_wait();
