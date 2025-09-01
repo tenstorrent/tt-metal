@@ -851,7 +851,10 @@ int main(int argc, char **argv) {
     adamw_params.lr = config.learning_rate;
     adamw_params.weight_decay = config.weight_decay;
     adamw_params.use_kahan_summation = config.use_kahan_summation;
-    if (!config.enable_mpi) {
+
+    if (config.use_no_op) {
+        fmt::print("WARNING: Using NoOp optimizer - parameters will NOT be updated.\n");
+    } else if (!config.enable_mpi) {
         fmt::print("AdamW configuration:\n");
         fmt::print("    Learning rate: {}\n", adamw_params.lr);
         fmt::print("    Weight decay: {}\n", adamw_params.weight_decay);
@@ -866,10 +869,10 @@ int main(int argc, char **argv) {
         if (config.enable_mpi) {
             return std::make_unique<RemoteOptimizer>(
                 get_model_parameters(model), config.num_mh_workers, config.socket_type);
-        } else if (config.use_moreh_adamw) {
-            return std::make_unique<ttml::optimizers::MorehAdamW>(get_model_parameters(model), adamw_params);
         } else if (config.use_no_op) {
             return std::make_unique<ttml::optimizers::NoOp>(get_model_parameters(model));
+        } else if (config.use_moreh_adamw) {
+            return std::make_unique<ttml::optimizers::MorehAdamW>(get_model_parameters(model), adamw_params);
         } else {
             return std::make_unique<ttml::optimizers::AdamW>(get_model_parameters(model), adamw_params);
         }
@@ -886,6 +889,8 @@ int main(int argc, char **argv) {
         fmt::println("[worker] Remote optimizer receiving weights from rank {}", config.num_mh_workers);
         optimizer_ptr->receive_weights();
         fmt::println("[worker] Remote optimizer received weights from rank {}", config.num_mh_workers);
+    } else if (config.use_no_op) {
+        fmt::print("Skipping training state load (NoOp optimizer)\n");
     } else {
         // otherwise proceed with normal loading training state if necessary
         if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {
