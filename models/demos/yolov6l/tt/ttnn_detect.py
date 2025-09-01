@@ -5,6 +5,13 @@
 import ttnn
 from models.demos.yolov6l.tt.common import Yolov6l_Conv2D
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtDetect:
     def __init__(self, device, parameters, model_params):
@@ -124,6 +131,8 @@ class TtDetect:
         self.ones_tensor = parameters.ones_tensor
 
     def __call__(self, input_list):
+        if use_signpost:
+            signpost(header="TtDetect Start")
         stems_0 = self.stem_0(input_list[0])
         stems_1 = self.stem_1(input_list[1])
         stems_2 = self.stem_2(input_list[2])
@@ -215,5 +224,8 @@ class TtDetect:
 
         bbox = ttnn.multiply(bbox, self.strides)
         output = ttnn.concat([bbox, self.ones_tensor, cls_score_list], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        if use_signpost:
+            signpost(header="TtDetect End")
 
         return output

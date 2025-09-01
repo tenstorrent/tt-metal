@@ -7,6 +7,14 @@ from models.demos.yolov6l.tt.common import Yolov6l_Conv2D
 from models.demos.yolov6l.tt.ttnn_bepc3 import TtBepC3
 from models.demos.yolov6l.tt.ttnn_sppf import TtSppf
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtCSPBepBackbone:
     def __init__(self, device, parameters, model_params):
@@ -68,6 +76,8 @@ class TtCSPBepBackbone:
         self.erblock5_2 = TtSppf(device, parameters.ERBlock_5[2].sppf, model_params.ERBlock_5[2].sppf)
 
     def __call__(self, x):
+        if use_signpost:
+            signpost(header="TtCSPBepBackbone Start")
         outputs = []
         stem = self.stem(x)
         erblock2_0 = self.erblock2_0(stem)
@@ -87,4 +97,6 @@ class TtCSPBepBackbone:
         erblock5_1 = self.erblock5_1(erblock5_0)
         erblock5_2 = self.erblock5_2(erblock5_1)
         outputs.append(erblock5_2)
+        if use_signpost:
+            signpost(header="TtCSPBepBackbone End")
         return tuple(outputs)
