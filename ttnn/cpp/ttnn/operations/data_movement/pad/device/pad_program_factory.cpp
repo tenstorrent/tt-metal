@@ -418,7 +418,7 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
     switch (ntiles_w) {
         case 2: ncores_w = 2; break;
         case 4: ncores_w = 4; break;
-        case 8: ncores_w = 8; break;
+        case 8:
         case 64: ncores_w = 8; break;
     }
     ncores = ncores_h * ncores_w;

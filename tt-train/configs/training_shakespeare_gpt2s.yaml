@@ -22,6 +22,7 @@ training_config:
     dropout_prob: 0.2
     num_blocks: 12
     vocab_size: 96
+    weight_tying: "enabled"
     max_sequence_length: 1024
     experimental:
       use_composite_layernorm: false
@@ -29,3 +30,14 @@ training_config:
 device_config:
     enable_ddp: false
     mesh_shape: [1,1]
+
+
+# if you want to run as eval with weighgts from  hugging face:
+# 1. Run tools/download_weights.py
+# 2. nano_gpt --safetensors ~/.cache/huggingface/hub/models--gpt2/snapshots/607a30d783dfa663caf39e06633721c8d4cfcd7e/  -c configs/training_shakespeare_gpt2s.yaml --eval 1
+
+eval_config:
+  repetition_penalty: 1.0
+  temperature: 0.7
+  top_k: 50
+  top_p: 1.0

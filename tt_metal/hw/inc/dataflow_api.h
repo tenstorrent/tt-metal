@@ -890,17 +890,17 @@ inline void noc_async_write_multicast(
  * | size                           | Size of data transfer in bytes                         | uint32_t  | 0..1MB                           | True     |
  * | noc                            | Which NOC to use for the transaction                   | uint8_t   | 0 or 1                           | False    |
  * | vc                             | Which VC to use for the transaction                    | uint8_t   | 0-3                              | False    |
- * | non_posted (template argument) | Whether the write is nonposted (i.e. ack required)     | bool      | true or false                    | False    |
+ * | posted (template argument)     | Whether the write is posted (i.e. no ack required)     | bool      | true or false                    | False    |
  */
 // clang-format on
-template <bool non_posted = true>
+template <bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_set_state(
     uint64_t dst_noc_addr, uint32_t size, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_SET_STATE, dst_noc_addr, size, vc);
 
     WAYPOINT("NWPW");
-    ncrisc_noc_write_set_state<non_posted, true /* one_packet */>(noc, write_cmd_buf, dst_noc_addr, size, vc);
+    ncrisc_noc_write_set_state<posted, true /* one_packet */>(noc, write_cmd_buf, dst_noc_addr, size, vc);
     WAYPOINT("NWPD");
 }
 
@@ -920,10 +920,10 @@ FORCE_INLINE void noc_async_write_one_packet_set_state(
  * | src_local_l1_addr              | Address in local L1 memory on source core          | uint32_t  | 0..1MB        | True     |
  * | dst_local_l1_addr              | Address in local L1 memory on destination core     | uint32_t  | 0..1MB        | True     |
  * | noc                            | Which NOC to use for the transaction               | uint8_t   | 0 or 1        | False    |
- * | non_posted (template argument) | Whether the write is nonposted (i.e. ack required) | bool      | true or false | False    |
+ * | posted (template argument)     | Whether the write is posted (i.e. no ack required) | bool      | true or false | False    |
  */
 // clang-format on
-template <bool non_posted = true>
+template <bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_state(
     uint32_t src_local_l1_addr, uint32_t dst_local_l1_addr, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, 0ull, 0, -1);
@@ -932,7 +932,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, dst_local_l1_addr, src_local_l1_addr);
 
     WAYPOINT("NWPW");
-    ncrisc_noc_write_with_state<noc_mode, non_posted, true /* update_counter */, true /* one_packet */>(
+    ncrisc_noc_write_with_state<noc_mode, posted, true /* update_counter */, true /* one_packet */>(
         noc, write_cmd_buf, src_local_l1_addr, dst_local_l1_addr);
     WAYPOINT("NWPD");
 }
@@ -2160,7 +2160,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, dst_noc_addr, 0, vc);
 
-    ncrisc_noc_write_set_state<!posted, false /* one_packet */>(noc, cmd_buf, dst_noc_addr, 0 /* len_bytes */, vc);
+    ncrisc_noc_write_set_state<posted, false /* one_packet */>(noc, cmd_buf, dst_noc_addr, 0 /* len_bytes */, vc);
     WAYPOINT("NAWD");
 }
 
@@ -2202,7 +2202,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
 
     WAYPOINT("NWPW");
     ncrisc_noc_set_transaction_id(noc, cmd_buf, trid);
-    ncrisc_noc_write_with_state<noc_mode, !posted, update_counter>(
+    ncrisc_noc_write_with_state<noc_mode, posted, update_counter>(
         noc, cmd_buf, src_local_l1_addr, dst_local_l1_addr, size);
     WAYPOINT("NWPD");
 }

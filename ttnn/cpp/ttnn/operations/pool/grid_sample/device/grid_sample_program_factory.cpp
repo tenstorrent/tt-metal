@@ -215,8 +215,17 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/writer_grid_sample_interleaved.cpp";
 
+    // Create reader defines for precomputed grid
+    std::map<std::string, std::string> reader_defines;
+    if (use_precomputed_grid) {
+        reader_defines["USE_PRECOMPUTED_GRID"] = "1";
+    }
+
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
-        program, reader_kernel_path, all_cores, tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        program,
+        reader_kernel_path,
+        all_cores,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program, writer_kernel_path, all_cores, tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));

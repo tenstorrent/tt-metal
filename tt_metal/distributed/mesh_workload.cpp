@@ -364,7 +364,7 @@ uint32_t MeshWorkloadImpl::get_sem_base_addr(
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
     return base_addr + get_program_config(
                            MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type),
-                           mesh_device->using_fast_dispatch())
+                           tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch())
                            .sem_offset;
 }
 
@@ -392,7 +392,7 @@ uint32_t MeshWorkloadImpl::get_cb_base_addr(
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
     return base_addr + get_program_config(
                            MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type),
-                           mesh_device->using_fast_dispatch())
+                           tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch())
                            .cb_offset;
 }
 

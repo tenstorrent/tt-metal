@@ -615,3 +615,52 @@ def test_binary_logical_uint16_edge_cases(ttnn_op, use_legacy, device):
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 
     assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    [
+        (torch.Size([1, 2, 32]), torch.Size([1, 2, 32])),
+        (torch.Size([1]), torch.Size([1, 5, 12])),
+        (torch.Size([1, 2, 32, 64, 125]), torch.Size([1, 2, 32, 1, 1])),
+        (torch.Size([]), torch.Size([])),
+        (torch.Size([5]), torch.Size([1])),
+    ],
+)
+@pytest.mark.parametrize(
+    "low_a, high_a, low_b, high_b",
+    [
+        (10, 100, 0, 9),
+        (305, 400, 150, 300),
+    ],
+)
+def test_binary_squared_difference_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, device):
+    num_elements_a = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
+    torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements_a, dtype=torch.int32)
+    num_elements_b = max(int(torch.prod(torch.tensor(b_shape)).item()), 1)
+    torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements_b, dtype=torch.int32)
+    torch_input_tensor_a = torch_input_tensor_a[:num_elements_a].reshape(a_shape).nan_to_num(0.0)
+    torch_input_tensor_b = torch_input_tensor_b[:num_elements_b].reshape(b_shape).nan_to_num(0.0)
+
+    golden_function = ttnn.get_golden_function(ttnn.squared_difference)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.squared_difference(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+    assert torch.equal(output_tensor, torch_output_tensor)

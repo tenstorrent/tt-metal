@@ -267,14 +267,6 @@ struct Mish {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
-struct Tanhshrink {
-    static Tensor invoke(
-        QueueId queue_id,
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-};
-
 struct Hardshrink {
     static Tensor invoke(
         QueueId queue_id,
@@ -325,12 +317,32 @@ struct Tanh {
         const Tensor& input,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        bool accuracy = false);
+        bool approx = false);
+};
+
+struct Tanhshrink {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        bool approx = false);
+};
+
+struct Clamp {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        float min_val,
+        float max_val,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 }  // namespace unary
 }  // namespace operations
 
+// NOLINTBEGIN(bugprone-macro-parentheses)
 #define REGISTER_UNARY_OPERATION(operation_name, operation_type) \
     constexpr auto operation_name = ttnn::register_operation<    \
         "ttnn::" #operation_name,                                \
@@ -378,6 +390,7 @@ struct Tanh {
         ttnn::operations::unary::ExecuteUnaryWithOptionalIntegerParameter<                                  \
             ttnn::operations::unary::UnaryOpType::operation_type,                                           \
             data_type>>();
+// NOLINTEND(bugprone-macro-parentheses)
 
 REGISTER_UNARY_OPERATION(acos, ACOS);
 REGISTER_UNARY_OPERATION(asin, ASIN);
@@ -470,14 +483,15 @@ constexpr auto identity = ttnn::register_operation<"ttnn::identity", ttnn::opera
 constexpr auto abs = ttnn::register_operation<"ttnn::abs", ttnn::operations::unary::Abs>();
 constexpr auto eqz = ttnn::register_operation<"ttnn::eqz", ttnn::operations::unary::Eqz>();
 constexpr auto mish = ttnn::register_operation<"ttnn::mish", ttnn::operations::unary::Mish>();
-constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::operations::unary::Tanhshrink>();
 constexpr auto hardshrink = ttnn::register_operation<"ttnn::hardshrink", ttnn::operations::unary::Hardshrink>();
 constexpr auto hardtanh = ttnn::register_operation<"ttnn::hardtanh", ttnn::operations::unary::Hardtanh>();
 constexpr auto softshrink = ttnn::register_operation<"ttnn::softshrink", ttnn::operations::unary::Softshrink>();
 constexpr auto deg2rad = ttnn::register_operation<"ttnn::deg2rad", ttnn::operations::unary::Deg2Rad>();
 constexpr auto rad2deg = ttnn::register_operation<"ttnn::rad2deg", ttnn::operations::unary::Rad2Deg>();
+constexpr auto clamp_tss = ttnn::register_operation<"ttnn::clamp_tss", ttnn::operations::unary::Clamp>();
 constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::operations::unary::Softplus>();
 constexpr auto tanh = ttnn::register_operation<"ttnn::tanh", ttnn::operations::unary::Tanh>();
+constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::operations::unary::Tanhshrink>();
 constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
 
 constexpr auto sigmoid_accurate =

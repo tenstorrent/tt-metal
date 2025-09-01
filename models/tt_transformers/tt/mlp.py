@@ -81,7 +81,9 @@ class MLP(LightweightModule):
         self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
 
         # Default activation is SILU
-        self.activation_type = self.args.mlp_activation_type
+        self.activation_type = (
+            args.mlp_activation_type if hasattr(args, "mlp_activation_type") else ttnn.UnaryOpType.SILU
+        )
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """

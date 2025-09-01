@@ -490,6 +490,19 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         pred_is_bcast = (pred_w == 1 && (true_w > 1 || false_w > 1));
         true_is_bcast = (true_w == 1 && (pred_w > 1 || false_w > 1));
         false_is_bcast = (false_w == 1 && (pred_w > 1 || true_w > 1));
+    } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
+        // Row broadcast detection based on height dimension (second-to-last)
+        auto pred_shape = predicate_tensor.logical_shape();
+        auto true_shape = value_true_tensor.value().logical_shape();
+        auto false_shape = value_false_tensor.value().logical_shape();
+
+        auto pred_h = pred_shape[pred_shape.rank() - 2];  // height dim
+        auto true_h = true_shape[true_shape.rank() - 2];
+        auto false_h = false_shape[false_shape.rank() - 2];
+
+        pred_is_bcast = (pred_h == 1 && (true_h > 1 || false_h > 1));
+        true_is_bcast = (true_h == 1 && (pred_h > 1 || false_h > 1));
+        false_is_bcast = (false_h == 1 && (pred_h > 1 || true_h > 1));
     }
 
     // READER KERNEL - Use kernel path from utils
@@ -516,6 +529,27 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         reader_defines["SRC_BCAST_FALSE"] = false_is_bcast ? "1" : "0";
 
         // Add BCAST_LLK define (set to 0 for now, can be optimized later)
+        reader_defines["BCAST_LLK"] = "0";
+    } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
+        // ROW_BCAST: need dataflow defines for FILL_TILE_WITH_FIRST_ROW_B etc.
+        reader_defines = make_dataflow_defines(
+            predicate_tensor.dtype(),
+            value_true_tensor.value().dtype(),
+            value_false_tensor.value().dtype());  // For predicate (a) and value_true (b)
+
+        bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
+        bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
+        bool value_false_sharded = value_false_tensor.value().memory_config().is_sharded();
+        reader_defines["SRC_SHARDED_A"] = predicate_sharded ? "1" : "0";    // CB0 sharding
+        reader_defines["SRC_SHARDED_B"] = value_true_sharded ? "1" : "0";   // CB1 sharding
+        reader_defines["SRC_SHARDED_C"] = value_false_sharded ? "1" : "0";  // CB2 sharding
+
+        // Set broadcast defines to match ternary reader kernel expectations
+        // CB0 = predicate, CB1 = true tensor, CB2 = false tensor
+        reader_defines["SRC_BCAST_A"] = pred_is_bcast ? "1" : "0";   // First tensor (CB0)
+        reader_defines["SRC_BCAST_B"] = true_is_bcast ? "1" : "0";   // Second tensor (CB1)
+        reader_defines["SRC_BCAST_C"] = false_is_bcast ? "1" : "0";  // Third tensor (CB2)
+
         reader_defines["BCAST_LLK"] = "0";
     }
     if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::OUTER_BCAST) {

@@ -31,7 +31,7 @@
 #define NOC_CMD_BUF_OFFSET_BIT 10
 #define NOC_INSTANCE_OFFSET 0x00010000
 #define NOC_INSTANCE_OFFSET_BIT 16
-#define NOC_CMD_BUF_INSTANCE_OFFSET(noc, buf) ((buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT))
+#define NOC_CMD_BUF_INSTANCE_OFFSET(noc, buf) (((buf) << NOC_CMD_BUF_OFFSET_BIT) + ((noc) << NOC_INSTANCE_OFFSET_BIT))
 
 ////
 // NIU master IF control registers:
@@ -268,19 +268,19 @@
 #define NOC_COORD_REG_OFFSET 4  // offset (from LSB) in register holding x-y coordinate
 
 // Address formats
-#define NOC_XY_ENCODING(x, y)                                                   \
-    (((uint32_t)(y)) << ((NOC_ADDR_LOCAL_BITS % 32) + NOC_ADDR_NODE_ID_BITS)) | \
-        (((uint32_t)(x)) << (NOC_ADDR_LOCAL_BITS % 32))
+#define NOC_XY_ENCODING(x, y)                                                    \
+    ((((uint32_t)(y)) << ((NOC_ADDR_LOCAL_BITS % 32) + NOC_ADDR_NODE_ID_BITS)) | \
+     (((uint32_t)(x)) << (NOC_ADDR_LOCAL_BITS % 32)))
 
 // Address formats
 #define NOC_XY_PCIE_ENCODING(x, y) \
     ((uint64_t(NOC_XY_ENCODING(x, y)) << (NOC_ADDR_LOCAL_BITS - NOC_COORD_REG_OFFSET)) | 0x800000000)
 
-#define NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end)                                \
-    (((uint32_t)(x_start)) << ((NOC_ADDR_LOCAL_BITS % 32) + 2 * NOC_ADDR_NODE_ID_BITS)) |     \
-        (((uint32_t)(y_start)) << ((NOC_ADDR_LOCAL_BITS % 32) + 3 * NOC_ADDR_NODE_ID_BITS)) | \
-        (((uint32_t)(x_end)) << (NOC_ADDR_LOCAL_BITS % 32)) |                                 \
-        (((uint32_t)(y_end)) << ((NOC_ADDR_LOCAL_BITS % 32) + NOC_ADDR_NODE_ID_BITS))
+#define NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end)                             \
+    ((((uint32_t)(x_start)) << ((NOC_ADDR_LOCAL_BITS % 32) + 2 * NOC_ADDR_NODE_ID_BITS)) | \
+     (((uint32_t)(y_start)) << ((NOC_ADDR_LOCAL_BITS % 32) + 3 * NOC_ADDR_NODE_ID_BITS)) | \
+     (((uint32_t)(x_end)) << (NOC_ADDR_LOCAL_BITS % 32)) |                                 \
+     (((uint32_t)(y_end)) << ((NOC_ADDR_LOCAL_BITS % 32) + NOC_ADDR_NODE_ID_BITS)))
 
 #define NOC_XY_ADDR2(xy, addr) ((((uint64_t)(xy)) << NOC_ADDR_LOCAL_BITS) | ((uint64_t)(addr)))
 

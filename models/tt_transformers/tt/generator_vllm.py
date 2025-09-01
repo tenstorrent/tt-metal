@@ -13,7 +13,7 @@ from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs,
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 
 import ttnn
-from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
+from models.demos.gemma3.demo.vision_demo import create_multimodal_model
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
@@ -189,6 +189,33 @@ def input_processor_for_llama_text(ctx: InputContext, inputs: Union[DecoderOnlyI
                 f"TT-LLama8B and TT-Llama11B do not support prompts longer than {MAX_PROMPT_LEN} tokens on N150 (received prompt with {prompt_len} tokens)"
             )
     return inputs
+
+
+def input_processor_for_multimodal(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
+    input_processor = ctx.get_hf_processor()
+    if "prompt" in inputs:
+        prompt_text = inputs["prompt"]
+    else:
+        # [INFO] with current version of vLLM, in server mode, inputs["prompt"] gives KeyError; only inputs['prompt_token_ids'] is available
+        assert "prompt_token_ids" in inputs, "prompt_token_ids must be available in server mode"
+        prompt_text = input_processor.decode(inputs["prompt_token_ids"], skip_special_tokens=False)
+
+    multi_modal_data = inputs.get("multi_modal_data", None)
+
+    processed_inputs = input_processor(
+        text=prompt_text,  # [INFO] Qwen2VLProcessor handles the case where text is a string or a list of strings
+        images=multi_modal_data["image"] if multi_modal_data is not None else None,
+        videos=None,  # [INFO] videos are not supported yet
+        return_tensors="pt",
+    )
+
+    assert processed_inputs.input_ids.shape[0] == 1, "Only one image is processed at a time by vLLM"
+    return {
+        "type": inputs["type"],
+        "prompt_token_ids": processed_inputs.input_ids[0].tolist(),
+        "prompt": prompt_text,
+        "multi_modal_data": {"image": processed_inputs},  # [INFO] add processed_inputs
+    }
 
 
 # @MULTIMODAL_REGISTRY.register_image_input_mapper()  # TODO: Add once model can accept inputs from multi_modal_input_mapper (raw pixel values)
@@ -373,3 +400,51 @@ class MistralForCausalLM(Generator):
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
+@INPUT_REGISTRY.register_input_processor(input_processor_for_multimodal)
+class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def initialize_vllm_model(
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, n_layers=None, tt_data_parallel=1
+    ):
+        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+
+        model_args = []
+        model = []
+        state_dict = None
+
+        for submesh in submesh_devices:
+            model_args_i, model_i, state_dict = create_multimodal_model(
+                mesh_device=submesh,
+                max_batch_size=max_batch_size // tt_data_parallel,
+                max_seq_len=max_seq_len,
+                use_paged_kv_cache=True,
+                checkpoint=state_dict,
+            )
+            model_args.append(model_args_i)
+            model.append(model_i)
+
+        return cls(model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    def prefill_forward(self, *args, **kwargs):
+        data = kwargs.get("images", None)
+        pixel_values = [im.pixel_values if hasattr(im, "pixel_values") else None for im in data] if data else None
+
+        return super().prefill_forward_text(
+            pixel_values=pixel_values,
+            **kwargs,
+        )
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward_text(*args, **kwargs)

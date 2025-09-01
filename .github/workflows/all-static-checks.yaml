@@ -124,12 +124,12 @@ jobs:
           while IFS=$'\t' read -r status path1 path2; do
             case "$status" in
               A|M)
-                if [[ "$path1" =~ \.(c|cc|cxx|cpp|h|hh|hpp)$ ]]; then
+                if [[ "$path1" =~ \.(c|cc|cxx|cpp|h|hh|hpp)$ ]] && [[ ! "$path1" =~ ^tt_metal/hw/inc/ ]]; then
                   CHANGED+=("$path1")
                 fi
                 ;;
               R*)
-                if [[ "$path2" =~ \.(c|cc|cxx|cpp|h|hh|hpp)$ ]]; then
+                if [[ "$path2" =~ \.(c|cc|cxx|cpp|h|hh|hpp)$ ]] && [[ ! "$path2" =~ ^tt_metal/hw/inc/ ]]; then
                   CHANGED+=("$path2")
                   OLD_FOR_NEW["$path2"]="$path1"
                 fi

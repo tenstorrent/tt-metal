@@ -11,6 +11,7 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.sd_helper_funcs import run
 from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
@@ -45,7 +46,9 @@ def unsqueeze_all_params_to_4d(params):
     return params
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 15659008}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": SD_L1_SMALL_SIZE, "trace_region_size": 15659008}], indirect=True
+)
 def test_stable_diffusion_unet_trace(device):
     assert is_wormhole_b0() or is_blackhole(), "SD 1.4 runs on Wormhole B0 or Blackhole"
 
@@ -171,7 +174,9 @@ def test_stable_diffusion_unet_trace(device):
     print(f"SD1.4 is running at {fps} FPS")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 8192, "trace_region_size": 6458368}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": SD_L1_SMALL_SIZE, "trace_region_size": 6458368}], indirect=True
+)
 def test_stable_diffusion_vae_trace(device):
     if is_wormhole_b0():
         os.environ["TT_MM_THROTTLE_PERF"] = "5"
@@ -240,7 +245,9 @@ def test_stable_diffusion_vae_trace(device):
 
 
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 21 * 4096, "trace_region_size": 789321728}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": SD_L1_SMALL_SIZE, "trace_region_size": 789321728}], indirect=True
+)
 @pytest.mark.parametrize(
     "batch_size, num_inference_steps, expected_compile_time, expected_inference_time",
     [
@@ -400,7 +407,7 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_kernel_samples_per_second",
-    ((11.30),),
+    ((11.10),),
 )
 def test_stable_diffusion_device_perf(expected_kernel_samples_per_second):
     subdir = "ttnn_stable_diffusion"

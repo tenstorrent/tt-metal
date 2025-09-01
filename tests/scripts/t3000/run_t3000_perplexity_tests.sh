@@ -208,6 +208,22 @@ run_t3000_qwen3_perplexity_tests() {
   fi
 }
 
+run_t3000_gemma3_accuracy_tests() {
+  # Record the start time
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_gemma3_accuracy_tests"
+  gemma3_27b=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it
+
+  HF_MODEL=$gemma3_27b pytest models/demos/gemma3/demo/text_demo.py -k "ci-token-matching"
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_gemma3_accuracy_tests $duration seconds to complete"
+}
+
+
 run_t3000_tests() {
   # Run Qwen2.5 perplexity tests
   run_t3000_qwen25_perplexity_tests
@@ -233,6 +249,9 @@ run_t3000_tests() {
   # Run llama3 perplexity tests
   run_t3000_llama3_perplexity_tests_single_card
   run_t3000_llama3_perplexity_tests_t3000
+
+  # Run gemma3 accuracy tests
+  run_t3000_gemma3_accuracy_tests
 }
 
 fail=0

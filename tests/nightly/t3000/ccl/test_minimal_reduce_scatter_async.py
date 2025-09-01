@@ -246,6 +246,7 @@ def run_reduce_scatter_impl(
         (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
         # Composite-RS tests
         (8, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        (8, [1, 1, 256, 128], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
         (8, [1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, True),
         (8, [1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True),
     ],
@@ -261,6 +262,7 @@ def run_reduce_scatter_impl(
         "composite_rs_test_one",
         "composite_rs_test_two",
         "composite_rs_test_three",
+        "composite_rs_test_four",
     ],
 )
 @pytest.mark.parametrize(

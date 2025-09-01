@@ -5,9 +5,11 @@
 import math
 import re
 from enum import Enum
+from types import SimpleNamespace
 from typing import Optional
 
 import torch
+from llama_models.llama3.api.datatypes import ImageMedia
 from loguru import logger
 from pydantic import AliasChoices, BaseModel, Field
 
@@ -42,8 +44,8 @@ class PagedAttentionConfig:
 class RopeScalingType(str, Enum):
     """Types of RoPE scaling."""
 
-    LINEAR = "linear"
     # DYNAMIC = "dynamic"
+    LINEAR = "linear"
     YARN = "yarn"
     LLAMA3 = "llama3"
     DEFAULT = "default"
@@ -236,6 +238,71 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
         return tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
 
 
+def compute_llama3_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Llama-3.x specific scaling for rotary embeddings."""
+    low_freq_factor = 1
+    high_freq_factor = 4
+
+    low_freq_wavelen = orig_context_len / low_freq_factor
+    high_freq_wavelen = orig_context_len / high_freq_factor
+    new_freqs = []
+    for freq in freqs:
+        wavelen = 2 * math.pi / freq
+        if wavelen < high_freq_wavelen:
+            new_freqs.append(freq)
+        elif wavelen > low_freq_wavelen:
+            new_freqs.append(freq / scale_factor)
+        else:
+            assert low_freq_wavelen != high_freq_wavelen
+            smooth = (orig_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
+            new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
+    return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
+
+
+def compute_linear_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Linear scaling for rotary embeddings."""
+    freqs /= scale_factor
+    return freqs
+
+
+def compute_default_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Default scaling for rotary embeddings."""
+    return freqs
+
+
+def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int, rope_type="llama3"):
+    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
+
+    if rope_type == "default":
+        freqs = compute_default_parameters(freqs, scale_factor, orig_context_len)
+    elif rope_type == "linear":
+        freqs = compute_linear_parameters(freqs, scale_factor, orig_context_len)
+    elif rope_type == "llama3":
+        freqs = compute_llama3_parameters(freqs, scale_factor, orig_context_len)
+
+    return freqs
+
+
+def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len, rope_type="llama3"):
+    """
+    Precompute the frequency tensor for sine and cosine values with given dimensions.
+
+    Args:
+        dim (int): Dimension of the frequency tensor.
+        end (int): End index for precomputing frequencies.
+        theta (float, optional): Scaling factor for frequency computation. Defaults to 500000.0.
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: Tensors containing cosine and sine values.
+    """
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    t = torch.arange(end)
+    if scale_factor is not None:
+        freqs = apply_scaling(freqs, scale_factor, orig_context_len, rope_type=rope_type)
+    freqs = torch.outer(t, freqs).float()
+    return torch.cos(freqs), torch.sin(freqs)
+
+
 def freqs_to_rotation_matrix(cos_freqs, sin_freqs):
     """
     Transform cos/sin frequencies to a rotation matrix.
@@ -261,46 +328,31 @@ def gather_cos_sin(position_ids, cos, sin):
     return cos, sin
 
 
-def apply_llama3_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
-    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
-    # Values obtained from grid search
-    low_freq_factor = 1
-    high_freq_factor = 4
+def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, orig_context_len, start_pos=0):
+    cos, sin = precompute_freqs(
+        head_dim, seq_len * 2, theta=theta, scale_factor=scale_factor, orig_context_len=orig_context_len
+    )
+    cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
+    assert cos_gathered.size() == (1, 1, seq_len, head_dim)
+    assert sin_gathered.size() == (1, 1, seq_len, head_dim)
 
-    low_freq_wavelen = orig_context_len / low_freq_factor
-    high_freq_wavelen = orig_context_len / high_freq_factor
-    new_freqs = []
-    for freq in freqs:
-        wavelen = 2 * math.pi / freq
-        if wavelen < high_freq_wavelen:
-            new_freqs.append(freq)
-        elif wavelen > low_freq_wavelen:
-            new_freqs.append(freq / scale_factor)
-        else:
-            assert low_freq_wavelen != high_freq_wavelen
-            smooth = (orig_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
-            new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
-    return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
+    cos_gathereds = ttnn.from_torch(
+        cos_gathered,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    sin_gathereds = ttnn.from_torch(
+        sin_gathered,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
 
-
-def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
-    """
-    Precompute the frequency tensor for sine and cosine values with given dimensions.
-
-    Args:
-        dim (int): Dimension of the frequency tensor.
-        end (int): End index for precomputing frequencies.
-        theta (float, optional): Scaling factor for frequency computation. Defaults to 500000.0.
-
-    Returns:
-        Tuple[torch.Tensor, torch.Tensor]: Tensors containing cosine and sine values.
-    """
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
-    t = torch.arange(end)
-    if scale_factor is not None:
-        freqs = apply_llama3_scaling(freqs, scale_factor, orig_context_len)
-    freqs = torch.outer(t, freqs).float()
-    return torch.cos(freqs), torch.sin(freqs)
+    rot_mats = [cos_gathereds, sin_gathereds]
+    return rot_mats
 
 
 #  Add-Multiply method of rotary embeddings for prefill
@@ -615,3 +667,46 @@ def create_tt_model(
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
 
     return tt_model_args, model, tt_kv_cache, state_dict
+
+
+def hf_multimodal_encode(messages, processor):
+    hf_messages = []
+
+    for msg in messages:
+        hf_content = []
+
+        for item in msg.content:
+            if isinstance(item, ImageMedia):
+                hf_content.append(
+                    {
+                        "type": "image",
+                        "image": item.image,
+                    }
+                )
+            elif isinstance(item, str):
+                hf_content.append(
+                    {
+                        "type": "text",
+                        "text": item,
+                    }
+                )
+
+        hf_messages.append(
+            {
+                "role": msg.role,
+                "content": hf_content,
+            }
+        )
+
+    encoded = processor.apply_chat_template(
+        hf_messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt"
+    ).to("cpu", dtype=torch.bfloat16)
+
+    return SimpleNamespace(
+        **encoded,
+        tokens=encoded["input_ids"].squeeze(0),
+        vision=SimpleNamespace(
+            images=encoded.get("pixel_values", None),
+            mask=None,
+        ),
+    )

@@ -54,8 +54,8 @@ inline std::string get_command_option(
     const std::optional<std::string>& default_value = std::nullopt) {
     std::vector<std::string>::const_iterator option_pointer =
         std::find(std::begin(test_args), std::end(test_args), option);
-    if (option_pointer != std::end(test_args) and option_pointer++ != std::end(test_args)) {
-        return *option_pointer;
+    if (option_pointer != std::end(test_args) && std::next(option_pointer) != std::end(test_args)) {
+        return *std::next(option_pointer);
     }
     if (not default_value.has_value()) {
         throw std::runtime_error("Option not found!");

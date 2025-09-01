@@ -73,14 +73,11 @@ class basic_transformer_block:
             end_grid = ttnn.CoreCoord(7, 3)
 
         sharded_mem_cfg = ttnn.get_memory_config(hidden_states)
-        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            subblock_w=1,
-            block_h=sharded_mem_cfg.shard_spec.shape[0] // 32,
-            block_w=sharded_mem_cfg.shard_spec.shape[1] // 32,
-            inplace=False,
-        )
+        program_config = ttnn.LayerNormDefaultProgramConfig()
 
+        old_hidden_states = hidden_states
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_hidden_states)
         norm_hidden_states = ttnn.layer_norm(
             hidden_states,
             epsilon=1e-05,
@@ -90,7 +87,7 @@ class basic_transformer_block:
             program_config=program_config,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
-
+        hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_cfg)
         # 1. Self-Attention
         cross_attention_kwargs = cross_attention_kwargs if cross_attention_kwargs is not None else {}
         cross_attention_dim = config.cross_attention_dim if cross_attention_dim is None else cross_attention_dim
@@ -121,6 +118,9 @@ class basic_transformer_block:
         else:
             hidden_states = sum
         if cross_attention_dim is not None:
+            old_hidden_states = hidden_states
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(old_hidden_states)
             norm_hidden_states = ttnn.layer_norm(
                 hidden_states,
                 epsilon=1e-05,
@@ -130,7 +130,7 @@ class basic_transformer_block:
                 program_config=program_config,
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
             )
-
+            hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_cfg)
             # 2. Cross-Attention
             attn_output = self.cross_attention_2(
                 hidden_states=norm_hidden_states,
@@ -155,6 +155,9 @@ class basic_transformer_block:
                 hidden_states = sum
 
         # 3. Feed-forward
+        old_hidden_states = hidden_states
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(old_hidden_states)
         norm_hidden_states = ttnn.layer_norm(
             hidden_states,
             epsilon=1e-05,
@@ -164,6 +167,7 @@ class basic_transformer_block:
             program_config=program_config,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
+        hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_cfg)
         if use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 

@@ -8,7 +8,6 @@ from dataclasses import dataclass
 
 from diffusers import StableDiffusionXLPipeline
 from loguru import logger
-from conftest import is_galaxy
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
@@ -35,6 +34,7 @@ class TtSDXLPipelineConfig:
     vae_on_device: bool = True
     encoders_on_device: bool = True
     use_cfg_parallel: bool = False
+    is_galaxy: bool
 
 
 class TtSDXLPipeline(LightweightModule):
@@ -68,7 +68,7 @@ class TtSDXLPipeline(LightweightModule):
         self.allocated_device_tensors = False
         self.generated_input_tensors = False
 
-        if is_galaxy():
+        if pipeline_config.is_galaxy:
             logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
             os.environ["TT_MM_THROTTLE_PERF"] = "5"
 

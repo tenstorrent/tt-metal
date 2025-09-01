@@ -282,7 +282,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
 
     @classmethod
     @abstractmethod
-    def forward_mlp_decode(cls, x: ttnn.Tensor, row_idx: int, cfg: RunPrefillConfig) -> ttnn.Tensor:
+    def forward_mlp_decode(cls, x: ttnn.Tensor, row_idx: int, cfg: RunDecodeConfig) -> ttnn.Tensor:
         """
         Forward pass for the MLP component during prefill.
         This method should be implemented by subclasses to handle specific MLP configurations.

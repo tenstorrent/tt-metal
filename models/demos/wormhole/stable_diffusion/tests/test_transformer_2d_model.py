@@ -8,6 +8,7 @@ from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d_new_conv import transformer_2d_model
@@ -25,7 +26,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     TRANSFORMER_PARAMETERIZATIONS,
 )
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 def test_transformer_2d_model_512x512(
     device,
     model_name,

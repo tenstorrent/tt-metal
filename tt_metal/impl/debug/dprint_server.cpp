@@ -57,7 +57,7 @@ using std::uint32_t;
 
 using namespace tt;
 
-#define CAST_U8P(p) reinterpret_cast<uint8_t*>(p)
+#define CAST_U8P(p) (reinterpret_cast<uint8_t*>(p))
 
 namespace {
 
@@ -375,9 +375,8 @@ void WriteInitMagic(chip_id_t device_id, const CoreCoord& virtual_core, int risc
     while (num_tries-- > 0) {
         auto result =
             tt::tt_metal::MetalContext::instance().get_cluster().read_core(device_id, virtual_core, base_addr, 4);
-        if (result[0] == DEBUG_PRINT_SERVER_STARTING_MAGIC && enabled) {
-            return;
-        } else if (result[0] == DEBUG_PRINT_SERVER_DISABLED_MAGIC && !enabled) {
+        if ((result[0] == DEBUG_PRINT_SERVER_STARTING_MAGIC && enabled) ||
+            (result[0] == DEBUG_PRINT_SERVER_DISABLED_MAGIC && !enabled)) {
             return;
         }
     }

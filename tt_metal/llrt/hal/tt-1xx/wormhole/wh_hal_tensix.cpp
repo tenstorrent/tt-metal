@@ -23,7 +23,7 @@ namespace tt::tt_metal::wormhole {
 #include "core_config.h"
 
 HalCoreInfoType create_tensix_mem_map() {
-    std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
+    constexpr std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
     std::vector<DeviceAddr> mem_map_bases;
     const uint32_t default_l1_kernel_config_size = 69 * 1024;

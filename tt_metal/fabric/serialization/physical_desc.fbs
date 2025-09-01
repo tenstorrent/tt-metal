@@ -47,7 +47,7 @@ table PhysicalConnectivityGraph {
 
 table AsicDescriptor {
     tray_id: uint32;
-    n_id: uint32;
+    asic_location: uint32;
     board_type: uint32;
     unique_id: uint64;
     host_name: string;

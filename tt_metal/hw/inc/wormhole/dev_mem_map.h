@@ -76,10 +76,10 @@
 #define MEM_L1_BARRIER 12
 #define MEM_MAILBOX_BASE 16
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12656
+#define MEM_MAILBOX_SIZE 12704
 // These are used in ncrisc-halt.S, asserted in ncrisc.cc to be valid
-#define MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS MEM_MAILBOX_BASE + 4
-#define MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS MEM_MAILBOX_BASE + 8
+#define MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS (MEM_MAILBOX_BASE + 4)
+#define MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS (MEM_MAILBOX_BASE + 8)
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
@@ -95,7 +95,7 @@
 #define MEM_NCRISC_KERNEL_BASE MEM_NCRISC_IRAM_BASE
 
 #define MEM_NOC_COUNTER_SIZE 4
-#define MEM_NOC_COUNTER_L1_SIZE 5 * 2 * 2 * MEM_NOC_COUNTER_SIZE
+#define MEM_NOC_COUNTER_L1_SIZE (5 * 2 * 2 * MEM_NOC_COUNTER_SIZE)
 #define MEM_NOC_COUNTER_BASE (MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE)
 
 // Tensix routing table for fabric networking

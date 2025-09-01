@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "compile_time_args.h"
+
 namespace tensor_accessor {
 namespace detail {
 template <template <uint32_t...> class Wrapper, size_t BASE_IDX, size_t... Is>

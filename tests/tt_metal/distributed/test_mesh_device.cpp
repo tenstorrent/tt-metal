@@ -147,5 +147,6 @@ TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
             fabric_node_id);
     }
 }
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed
