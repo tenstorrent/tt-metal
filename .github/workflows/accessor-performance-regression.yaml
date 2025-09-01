@@ -86,18 +86,17 @@ jobs:
         timeout-minutes: 45
         run: |
           echo "🚀 Starting accessor performance regression tests..."
-          cd tests/ttnn/benchmark/python/perf_regression
-          python -m pytest test_accessor_perf_regression.py -v --tb=short | tee perf_regression_results.log
+          python -m tests/ttnn/benchmark/python/perf_regression/pytest test_accessor_perf_regression.py -v --tb=short
 
       - name: 📊 Generate Performance Report
         if: always()
         run: |
           echo "## Accessor Performance Regression Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          if [ -f "tests/ttnn/benchmark/python/perf_regression/perf_regression_results.log" ]; then
+          if [ -f "perf_regression_results.log" ]; then
             echo "### Test Results Summary" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-            cat tests/ttnn/benchmark/python/perf_regression/perf_regression_results.log >> $GITHUB_STEP_SUMMARY
+            cat perf_regression_results.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           else
             echo "No performance regression results file found." >> $GITHUB_STEP_SUMMARY
