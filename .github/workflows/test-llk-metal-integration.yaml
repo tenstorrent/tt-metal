@@ -183,7 +183,6 @@ jobs:
               sleep 5
               run_id=$(gh run list --workflow "$workflow_file" --branch "$PARENT_BRANCH_NAME" --limit 1 --json databaseId --jq '.[0].databaseId' --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "")
               if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
-                echo "✅ $display_name run ID: $run_id"
                 break
               fi
             done
@@ -194,12 +193,15 @@ jobs:
           # Trigger enabled workflows
           for workflow in "${!workflows[@]}"; do
             if [ "${workflows[$workflow]}" = "true" ]; then
+              echo "🚀 Triggering $workflow..."
               case "$workflow" in
                 "all-post-commit-workflows.yaml")
                   run_ids["all-post-commit"]=$(trigger_and_get_id "$workflow" "All post-commit")
+                  echo "✅ All post-commit run ID: ${run_ids[all-post-commit]}"
                   ;;
                 "blackhole-post-commit.yaml")
                   run_ids["blackhole"]=$(trigger_and_get_id "$workflow" "Blackhole")
+                  echo "✅ Blackhole run ID: ${run_ids[blackhole]}"
                   ;;
               esac
             fi
