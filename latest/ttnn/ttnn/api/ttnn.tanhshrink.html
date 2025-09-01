@@ -328,7 +328,7 @@
 <dd>
 <p>Applies tanhshrink to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p>
 <div class="math notranslate nohighlight">
-\[\mathrm{{output\_tensor}}_i = \verb|tanhshrink|(\mathrm{{input\_tensor}}_i)\]</div>
+\[\mathrm{output\_tensor}_i = tanhshrink(\mathrm{input\_tensor}_i)\]</div>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -339,8 +339,9 @@
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>fast_and_approximate_mode</strong> (<em>Boolean</em><em>, </em><em>optional</em>) – Enables a performance-optimized approximation method. When True, the operation runs faster but may produce results with minor precision differences. Defaults to <cite>False</cite>.</p></li>
 <li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – command queue id. Defaults to <cite>0</cite>.</p></li>
 </ul>
 </dd>
@@ -363,18 +364,19 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, BFLOAT8_B</p></td>
+<td><p>BFLOAT16, BFLOAT8_B, FLOAT32</p></td>
 <td><p>TILE</p></td>
 <td><p>2, 3, 4</p></td>
 </tr>
 </tbody>
 </table>
+<p>BFLOAT8_B/BFLOAT4_B is supported only for approx=True mode.</p>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">tanhshrink</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">tanhshrink</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">fast_and_approximate_mode</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>

@@ -341,7 +341,7 @@
 <ul class="simple">
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>accuracy</strong> (<em>Boolean</em><em>, </em><em>optional</em>) – provides better accuracy for input range -3 to 3, for dtype BFLOAT16. Defaults to <cite>False</cite>.</p></li>
+<li><p><strong>fast_and_approximate_mode</strong> (<em>Boolean</em><em>, </em><em>optional</em>) – Enables a performance-optimized approximation method. When True, the operation runs faster but may produce results with minor precision differences. Defaults to <cite>False</cite>.</p></li>
 <li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – command queue id. Defaults to <cite>0</cite>.</p></li>
 </ul>
 </dd>
@@ -370,12 +370,13 @@
 </tr>
 </tbody>
 </table>
+<p>BFLOAT8_B/BFLOAT4_B is supported only for approx=True mode.</p>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="doctest highlight-default notranslate">
 <div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">tanh</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">accuracy</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">tanh</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">fast_and_approximate_mode</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
