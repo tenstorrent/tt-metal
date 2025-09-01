@@ -433,7 +433,7 @@ bool is_split_reader_viable(
     if (fully_buffered) {
         comparison_factor = 2;
     }
-    log_info(
+    log_debug(
         tt::LogOp,
         "is_split_reader_viable: act_cost={}, weights_cost={}, comparison_factor={}, act_cost > comparison_factor * "
         "weights_cost={}",
