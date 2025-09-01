@@ -59,7 +59,6 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
-        TT_METAL_SLOW_DISPATCH_MODE: 1
         TT_METAL_HOME: /work
         PYTHONFAULTHANDLER: 1       # prints Python stack trace on segfault
         PYTHONMALLOC: debug         # adds checks, helps catch memory issues
