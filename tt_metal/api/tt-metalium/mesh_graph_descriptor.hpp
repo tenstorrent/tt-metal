@@ -41,6 +41,7 @@ struct NodeInstance {
 
     const uint32_t global_id = generate_next_global_id();
 
+    //virtual ~NodeInstance() = default;   // adds vptr → polymorphic
 private:
     inline static uint32_t generate_next_global_id() {
         static std::atomic_uint32_t next_global_id_ = 0;
@@ -55,7 +56,7 @@ struct MeshInstance : public NodeInstance {
 
 struct GraphInstance : public NodeInstance {
     std::string type;
-    std::vector<std::shared_ptr<NodeInstance>> sub_instances = {};
+    std::vector<uint32_t> sub_instances = {};
 };
 
 
@@ -82,12 +83,11 @@ private:
     std::unordered_map<std::string, const proto::GraphDescriptor*> graph_descriptors_by_name_;
     std::unordered_map<std::string, std::unordered_set<const proto::GraphDescriptor*>> graph_descriptors_by_type_;
 
-    // TODO: Change this to a unique pointer
     // Single source of truth - all instances by global ID
-    std::unordered_map<uint32_t, std::shared_ptr<NodeInstance>> all_instances_;
+    std::unordered_map<uint32_t, std::unique_ptr<NodeInstance>> all_instances_;
     
     // Secondary indices - store only global IDs for memory efficiency
-    std::shared_ptr<NodeInstance> top_level_instance_;
+    NodeInstance* top_level_instance_;
     std::unordered_map<std::string, std::vector<uint32_t>> instances_by_type_;
     std::unordered_map<std::string, std::vector<uint32_t>> instances_by_name_;
     
@@ -113,11 +113,11 @@ private:
     // helper to populate descriptors
     void populate_descriptors();
 
-    std::shared_ptr<NodeInstance> populate_instances(const proto::NodeRef& node_ref);
-    std::shared_ptr<NodeInstance> construct_node_instance(const proto::NodeRef& node_ref);
+    uint32_t populate_instances(const proto::NodeRef& node_ref);
+    std::unique_ptr<NodeInstance> construct_node_instance(const proto::NodeRef& node_ref);
     
     // Helper function to get instance type
-    std::string get_instance_type(const std::shared_ptr<NodeInstance>& node_instance);
+    std::string get_instance_type(const std::unique_ptr<NodeInstance>& node_instance);
     
 
 };

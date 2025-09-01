@@ -168,9 +168,10 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshG
 void MeshGraphDescriptor::populate() {
 
     populate_descriptors();
-    top_level_instance_ = populate_instances(proto_->top_level_instance());
-
-    // Set the top level instance
+    uint32_t top_level_global_id = populate_instances(proto_->top_level_instance());
+    
+    // Get the top level instance from the map
+    top_level_instance_ = all_instances_[top_level_global_id].get();
 }
 
 
@@ -532,33 +533,36 @@ void MeshGraphDescriptor::populate_descriptors() {
     }
 }
 
-std::shared_ptr<MeshGraphDescriptor::NodeInstance> MeshGraphDescriptor::populate_instances(const proto::NodeRef& node_ref) {
+uint32_t MeshGraphDescriptor::populate_instances(const proto::NodeRef& node_ref) {
     auto node_instance = construct_node_instance(node_ref);
     
     // Store in the single map by global ID
-    all_instances_[node_instance->global_id] = node_instance;
+    uint32_t global_id = node_instance->global_id;
+    std::string descriptor_name = node_instance->descriptor_name;
     
     // Build secondary indices
     std::string instance_type = get_instance_type(node_instance);
-    instances_by_type_[instance_type].push_back(node_instance->global_id);
-    instances_by_name_[node_instance->descriptor_name].push_back(node_instance->global_id);
+    instances_by_type_[instance_type].push_back(global_id);
+    instances_by_name_[descriptor_name].push_back(global_id);
 
     if (auto graph_descriptor = std::get_if<const proto::GraphDescriptor*>(&node_instance->descriptor)) {
         for (const auto& instance : (*graph_descriptor)->instances()) {
-            auto sub_instance = populate_instances(instance);
-            static_pointer_cast<GraphInstance>(node_instance)->sub_instances.push_back(sub_instance);
+            uint32_t sub_global_id = populate_instances(instance);
+            static_cast<GraphInstance*>(node_instance.get())->sub_instances.push_back(sub_global_id);
         }
     }
 
-    return node_instance;
+    // Store in the map after processing sub-instances
+    all_instances_[global_id] = std::move(node_instance);
+    return global_id;
 }
 
 
-std::shared_ptr<MeshGraphDescriptor::NodeInstance> MeshGraphDescriptor::construct_node_instance(const proto::NodeRef& node_ref) {
+std::unique_ptr<MeshGraphDescriptor::NodeInstance> MeshGraphDescriptor::construct_node_instance(const proto::NodeRef& node_ref) {
     std::string descriptor_name;
     uint32_t instance_id;
 
-    std::shared_ptr<NodeInstance> node_instance;
+    std::unique_ptr<NodeInstance> node_instance;
 
     if (node_ref.has_mesh()) {
         descriptor_name = node_ref.mesh().mesh_descriptor();
@@ -580,7 +584,7 @@ std::shared_ptr<MeshGraphDescriptor::NodeInstance> MeshGraphDescriptor::construc
         }
 
         // Check that it doesn't have a sub_ref
-        MeshInstance mesh_instance{
+        node_instance = std::make_unique<MeshInstance>(MeshInstance{
             {instance_id, 
              descriptor_name, 
              mesh_descriptor, 
@@ -588,9 +592,7 @@ std::shared_ptr<MeshGraphDescriptor::NodeInstance> MeshGraphDescriptor::construc
             },
             mesh_descriptor->arch(),
             device_ids,
-        };
-
-        node_instance = std::make_shared<MeshInstance>(mesh_instance);
+        });
 
     } else if (node_ref.has_graph()) {
         descriptor_name = node_ref.graph().graph_descriptor();
@@ -603,7 +605,7 @@ std::shared_ptr<MeshGraphDescriptor::NodeInstance> MeshGraphDescriptor::construc
         auto graph_descriptor = it->second;
 
         // Check that it doesn't have a sub_ref
-        GraphInstance graph_instance{
+        node_instance = std::make_unique<GraphInstance>(GraphInstance{
             {
                 instance_id, 
                 descriptor_name, 
@@ -611,22 +613,18 @@ std::shared_ptr<MeshGraphDescriptor::NodeInstance> MeshGraphDescriptor::construc
                 &node_ref.graph(),
             },
             graph_descriptor->type(),
-        };
-
-        // TODO: Add all other fields for easy access
-
-        node_instance = std::make_shared<GraphInstance>(graph_instance);
+        });
     }
 
     return node_instance;
 }
 
 // Helper function to get the type of a node instance
-std::string MeshGraphDescriptor::get_instance_type(const std::shared_ptr<NodeInstance>& node_instance) {
+std::string MeshGraphDescriptor::get_instance_type(const std::unique_ptr<NodeInstance>& node_instance) {
     if (std::holds_alternative<const proto::MeshDescriptor*>(node_instance->descriptor)) {
         return "mesh";
     } else if (std::holds_alternative<const proto::GraphDescriptor*>(node_instance->descriptor)) {
-        auto graph_instance = std::static_pointer_cast<GraphInstance>(node_instance);
+        auto graph_instance = static_cast<GraphInstance*>(node_instance.get());
         return graph_instance->type;
     }
     return "unknown";
@@ -737,7 +735,7 @@ void MeshGraphDescriptor::print_node_instance(const NodeInstance* node_instance,
         if (!graph_instance->sub_instances.empty()) {
             ss << indent << "Sub-instances:" << std::endl;
             for (const auto& sub_instance : graph_instance->sub_instances) {
-                print_node_instance(sub_instance.get(), indent_level + 1);
+                print_node_instance(get_instance_by_global_id(sub_instance), indent_level + 1);
             }
         }
     } else {
@@ -761,7 +759,7 @@ void MeshGraphDescriptor::print_all_nodes() {
     ss.str(std::string());
     ss << "\n=== TOP LEVEL INSTANCE ===" << std::endl;
     if (top_level_instance_) {
-        print_node_instance(top_level_instance_.get(), 0);
+        print_node_instance(top_level_instance_, 0);
     } else {
         ss << "No top level instance found." << std::endl;
         log_debug(tt::LogFabric, "{}", ss.str());
