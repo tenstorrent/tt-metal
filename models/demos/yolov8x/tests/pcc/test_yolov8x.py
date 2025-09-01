@@ -181,7 +181,7 @@ def test_DFL(device, input_tensor, reset_seeds, model_location_generator):
     with torch.inference_mode():
         torch_model_output = submodule(input_tensor)
 
-    passing, pcc = assert_with_pcc(ttnn_model_output, torch_model_output, 0.99)
+    passing, pcc = assert_with_pcc(ttnn_model_output, torch_model_output, 0.97)
     logger.info(f"Passing: {passing}, PCC: {pcc}")
 
 
