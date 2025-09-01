@@ -1619,3 +1619,29 @@ def test_unary_tanh_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
 
     assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=0.15)
     assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([32, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+def test_unary_square_uint16_ttnn(input_shapes, device):
+    in_data = torch.randint(
+        0, 255, input_shapes, dtype=torch.int32
+    )  # Beyond 255 leads to overflow of uint16 range, since it a square op.
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    cq_id = 0
+    output_tensor = ttnn.square(input_tensor, queue_id=cq_id)
+    golden_function = ttnn.get_golden_function(ttnn.square)
+    golden_tensor = golden_function(in_data)
+    output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+
+    assert torch.equal(golden_tensor, output_tensor)
