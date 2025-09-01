@@ -9,7 +9,7 @@ on:
         type: string
       unstable-models-to-run:
         description: "List of requested models as JSON array, for example: [\"stable_diffusion\", \"mamba 5\"]. Default is 'stable_diffusion,mamba 5'"
-        default: "stable_diffusion,mamba 5" # Skipping due to issue #15932 (mamba 1, mamba 2, mamba 3, mamba 4, mamba 6)
+        default: "[\"stable_diffusion\", \"mamba 5\"]" # Skipping due to issue #15932 (mamba 1, mamba 2, mamba 3, mamba 4, mamba 6)
         type: string
   workflow_call:
   schedule:
