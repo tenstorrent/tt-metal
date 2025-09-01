@@ -473,9 +473,8 @@ class TtDFL:
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.softmax(x, dim=-1)
         x, h, w = self.conv(x)
-        x = ttnn.permute(x, (0, 3, 1, 2))
-        x = ttnn.reshape(x, (x.shape[0], 1, 4, int(x.shape[3] / 4)))
-        x = ttnn.reshape(x, (x.shape[0], x.shape[1] * x.shape[2], x.shape[3]))
+        x = ttnn.permute(x, (0, 1, 3, 2))  # To increase the performance of below reshape operation
+        x = ttnn.reshape(x, (x.shape[0], 4, -1))
         return x
 
 
