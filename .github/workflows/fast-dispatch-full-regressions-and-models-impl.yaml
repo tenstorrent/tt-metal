@@ -111,9 +111,9 @@ jobs:
             STABLE_CIv2_OUT="${STABLE_CIv2}"
             UNSTABLE_OUT="${UNSTABLE}"
           else
-            STABLE_OUT="$(jq --argjson sel "${SEL_ARR}" '[.[] | select($sel | index(.model))]' <<< "${STABLE}")"
-            STABLE_CIv2_OUT="$(jq --argjson sel "${SEL_ARR}" '[.[] | select($sel | index(.model))]' <<< "${STABLE_CIv2}")"
-            UNSTABLE_OUT="$(jq --argjson sel "${SEL_ARR}" '[.[] | select($sel | index(.model))]' <<< "${UNSTABLE}")"
+            STABLE_OUT=$(jq --argjson sel "$SEL_ARR" '[.[] | select(.model | IN($sel[]))]' <<< "$STABLE")
+            UNSTABLE_OUT=$(jq --argjson sel "$SEL_ARR" '[.[] | select(.model | IN($sel[]))]' <<< "$UNSTABLE")
+            STABLE_CIv2_OUT="$(jq --argjson sel "${SEL_ARR}" '[.[] | select(.model | IN($sel[]))]' <<< "${STABLE_CIv2}")"
           fi
 
           STABLE_COUNT="$(jq 'length' <<< "${STABLE_OUT}")"
