@@ -265,18 +265,18 @@ upsample_base_args = {
 
 # Test case configurations from decoder
 upsample_test_configs = [
-    # # First upsample block (768->512)
-    # {
-    #     "name": "block1_768-512",
-    #     "in_channels": 768,
-    #     "out_channels": 512,
-    #     "num_res_blocks": 6,
-    #     "temporal_expansion": 3,
-    #     "spatial_expansion": 2,
-    #     "input_shape": (1, 768, 32, 60, 106),
-    #     # "expected_output_shape": (1, 512, 82, 120, 212),
-    # },
-    # Second upsample block (512->256)
+    # # First upsample block (768->512), T padded from 28->32
+    {
+        "name": "block1_768-512",
+        "in_channels": 768,
+        "out_channels": 512,
+        "num_res_blocks": 6,
+        "temporal_expansion": 3,
+        "spatial_expansion": 2,
+        "input_shape": (1, 768, 32, 60, 106),
+        # "expected_output_shape": (1, 512, 82, 120, 212),
+    },
+    # Second upsample block (512->256), T padded from 82->88
     {
         "name": "block2_512-256",
         "in_channels": 512,
@@ -284,20 +284,20 @@ upsample_test_configs = [
         "num_res_blocks": 4,
         "temporal_expansion": 2,
         "spatial_expansion": 2,
-        "input_shape": (1, 512, 82, 120, 212),
+        "input_shape": (1, 512, 88, 120, 212),
         # "expected_output_shape": (1, 256, 163, 240, 424),
     },
-    # # Third upsample block (256->128)
-    # {
-    #     "name": "block3_256-128",
-    #     "in_channels": 256,
-    #     "out_channels": 128,
-    #     "num_res_blocks": 3,
-    #     "temporal_expansion": 1,
-    #     "spatial_expansion": 2,
-    #     "input_shape": (1, 256, 163, 240, 424),
-    #     # "expected_output_shape": (1, 128, 163, 480, 848),
-    # },
+    # Third upsample block (256->128), T padded from 163->168
+    {
+        "name": "block3_256-128",
+        "in_channels": 256,
+        "out_channels": 128,
+        "num_res_blocks": 3,
+        "temporal_expansion": 1,
+        "spatial_expansion": 2,
+        "input_shape": (1, 256, 168, 240, 424),
+        # "expected_output_shape": (1, 128, 163, 480, 848),
+    },
 ]
 
 
@@ -442,9 +442,11 @@ def test_tt_upsample_forward(mesh_device, config, divide_T, reset_seeds, use_rea
         tt_output_torch = tt_output_torch[:, :, temporal_expansion - 1 : tt_output_torch.shape[2], :, :]
 
     # Get reference output
+    logger.info("Run RefResBlock forward")
     with torch.no_grad():
         ref_output = reference_model(torch_input)
 
+    logger.info("assert quality")
     assert_quality(ref_output, tt_output_torch, pcc=0.989)
 
 
