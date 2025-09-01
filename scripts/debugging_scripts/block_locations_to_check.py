@@ -5,10 +5,10 @@
 
 """
 Usage:
-    block_to_check
+    block_locations_to_check
 
 Description:
-    Provides list of block locations of given type that should be checked for other scripts.
+    Provides list of block locations of supported types that should be checked for other scripts.
 """
 
 from ttexalens.hw.tensix.wormhole.wormhole import WormholeDevice
@@ -22,12 +22,13 @@ script_config = ScriptConfig(
     depends=["devices_to_check"],
 )
 
-VALID_BLOCK_TYPES = {
+# List of block types that script returns, can be extended if other block types are needed
+BLOCK_TYPES = [
     "idle_eth",
     "active_eth",
     "tensix",
     "eth",
-}
+]
 
 
 def is_galaxy(device: Device) -> str:
@@ -50,10 +51,6 @@ def get_idle_eth_block_locations(device: Device) -> list[OnChipCoordinate]:
 
 
 def get_block_locations_to_check(block_type: str, device: Device) -> list[OnChipCoordinate]:
-    if block_type not in VALID_BLOCK_TYPES:
-        raise TTTriageError(f"Invalid block type {block_type}")
-
-    block_locations: dict[Device, list[OnChipCoordinate]] = {}
     match block_type:
         case "idle_eth":
             return get_idle_eth_block_locations(device)
@@ -69,7 +66,7 @@ def get_block_locations_to_check(block_type: str, device: Device) -> list[OnChip
 def run(args, context: Context):
     devices = get_devices_to_check(args, context)
     return {
-        device: {block_type: get_block_locations_to_check(block_type, device) for block_type in VALID_BLOCK_TYPES}
+        device: {block_type: get_block_locations_to_check(block_type, device) for block_type in BLOCK_TYPES}
         for device in devices
     }
 

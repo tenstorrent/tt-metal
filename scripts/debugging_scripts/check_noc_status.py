@@ -24,7 +24,7 @@ from block_locations_to_check import run as get_block_locations_to_check
 from triage import ScriptConfig, log_check, run_script
 
 script_config = ScriptConfig(
-    depends=["block_locations_to_check", "check_per_device", "dispatcher_data"],
+    depends=["check_per_device", "dispatcher_data", "block_locations_to_check"],
 )
 
 
