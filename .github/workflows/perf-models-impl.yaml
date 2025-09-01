@@ -93,6 +93,7 @@ jobs:
           docker_opts: ${{ env.DOCKER_OPTS }}
           install_wheel: true
           run_args: pytest -n auto models/demos/wormhole/stable_diffusion/tests -m models_performance_bare_metal --timeout=480
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' }}
       - name: Run covnet_mnist model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/model-perf-test
