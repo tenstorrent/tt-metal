@@ -85,23 +85,23 @@ def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape, use_prec
 
 @pytest.mark.parametrize("use_precomputed_grid", [True, False])
 @pytest.mark.parametrize(
-    "input_shape, grid_shape, channel_extent_factor",
+    "input_shape, grid_shape, grid_batching_factor",
     [
         ((1, 256, 48, 160), (1, 25281, 7, 2), 7),
         ((1, 128, 32, 32), (1, 16, 16, 2), 4),
     ],
 )
-def test_grid_sample_channel_extending(device, input_shape, grid_shape, channel_extent_factor, use_precomputed_grid):
+def test_grid_sample_channel_extending(device, input_shape, grid_shape, grid_batching_factor, use_precomputed_grid):
     """Test grid sample with channel extending functionality (multiple coordinate sets)"""
     torch.manual_seed(523)
 
     batch_size, channels, height, width = input_shape
     grid_n, grid_h, grid_w, grid_coords = grid_shape
 
-    # Validate that channel_extent_factor is a divisor of width
+    # Validate that grid_batching_factor is a divisor of width
     assert (
-        grid_w % channel_extent_factor == 0
-    ), f"channel_extent_factor {channel_extent_factor} must divide grid width {grid_w}"
+        grid_w % grid_batching_factor == 0
+    ), f"grid_batching_factor {grid_batching_factor} must divide grid width {grid_w}"
 
     # Create input tensor (NCHW -> NHWC)
     torch_input_nchw = torch.randn(input_shape, dtype=torch.float32)
@@ -118,13 +118,13 @@ def test_grid_sample_channel_extending(device, input_shape, grid_shape, channel_
         ttnn_grid_precomputed = ttnn.prepare_grid_sample_grid(
             ttnn_grid_host, input_shape_nhwc, padding_mode="zeros", output_dtype=ttnn.bfloat16
         )
-        new_grid_w = grid_w // channel_extent_factor
-        final_last_dim = 6 * channel_extent_factor
+        new_grid_w = grid_w // grid_batching_factor
+        final_last_dim = 6 * grid_batching_factor
         ttnn_grid_reshaped = ttnn.reshape(ttnn_grid_precomputed, (batch_size, grid_h, new_grid_w, final_last_dim))
         ttnn_grid_device = ttnn.to_device(ttnn_grid_reshaped, device)
     else:
-        new_grid_w = grid_w // channel_extent_factor
-        new_last_dim = 2 * channel_extent_factor
+        new_grid_w = grid_w // grid_batching_factor
+        new_last_dim = 2 * grid_batching_factor
         ttnn_grid_host = ttnn.from_torch(grid_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
         ttnn_grid_reshaped = ttnn.reshape(ttnn_grid_host, (batch_size, grid_h, new_grid_w, new_last_dim))
         ttnn_grid_device = ttnn.to_device(ttnn_grid_reshaped, device)
@@ -142,15 +142,15 @@ def test_grid_sample_channel_extending(device, input_shape, grid_shape, channel_
     torch_output_nhwc_ = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
     torch_expected_nhwc = (
-        torch_output_nhwc_.view(batch_size, grid_h, new_grid_w, channel_extent_factor, channels)
+        torch_output_nhwc_.view(batch_size, grid_h, new_grid_w, grid_batching_factor, channels)
         .contiguous()
-        .view(batch_size, grid_h, new_grid_w, channels * channel_extent_factor)
+        .view(batch_size, grid_h, new_grid_w, channels * grid_batching_factor)
     )
 
     # Check output shape
-    expected_shape = (batch_size, grid_h, new_grid_w, channels * channel_extent_factor)
+    expected_shape = (batch_size, grid_h, new_grid_w, channels * grid_batching_factor)
     assert ttnn_output_torch.shape == expected_shape, f"Expected {expected_shape}, got {ttnn_output_torch.shape}"
     pcc_passed, pcc_message = assert_with_pcc(torch_expected_nhwc, ttnn_output_torch, pcc=0.99)
     logger.info(
-        f"Channel extending test (extent_factor={channel_extent_factor}, precomputed={use_precomputed_grid}): {pcc_message}"
+        f"Channel extending test (extent_factor={grid_batching_factor}, precomputed={use_precomputed_grid}): {pcc_message}"
     )

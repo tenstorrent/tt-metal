@@ -20,6 +20,9 @@
 
 namespace ttnn::operations::grid_sample {
 
+constexpr uint32_t PRECOMPUTED_GRID_ELEMENTS_PER_POINT = 6;
+constexpr uint32_t STANDARD_GRID_ELEMENTS_PER_POINT = 2;
+
 tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const Tensor& input_tensor,
     const Tensor& grid_tensor,
@@ -109,7 +112,8 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const uint32_t output_cb_num_pages = out_ntiles_c * buffering_factor;
     // Calculate the number of data points batched into a single grid row
     uint32_t grid_last_dim = grid_tensor.logical_shape()[-1];
-    const uint32_t num_of_elements_per_grid_point = use_precomputed_grid ? 6 : 2;
+    const uint32_t num_of_elements_per_grid_point =
+        use_precomputed_grid ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT : STANDARD_GRID_ELEMENTS_PER_POINT;
     const uint32_t grid_batching_factor = grid_last_dim / num_of_elements_per_grid_point;
 
     const auto [output_cb_index, output_cb_handle] = tt::tt_metal::create_cb(

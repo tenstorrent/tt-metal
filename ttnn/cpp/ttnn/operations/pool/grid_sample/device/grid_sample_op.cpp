@@ -11,6 +11,9 @@ namespace ttnn::operations::grid_sample {
 using namespace tt;
 using namespace tt::tt_metal;
 
+constexpr uint32_t PRECOMPUTED_GRID_ELEMENTS_PER_POINT = 6;
+constexpr uint32_t STANDARD_GRID_ELEMENTS_PER_POINT = 2;
+
 void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& grid_tensor = input_tensors.at(1);
@@ -27,12 +30,13 @@ void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
     uint32_t grid_last_dim = grid_tensor.logical_shape()[-1];
     if (use_precomputed_grid_) {
         TT_FATAL(
-            grid_last_dim % 6 == 0 && grid_last_dim >= 6,
+            grid_last_dim % PRECOMPUTED_GRID_ELEMENTS_PER_POINT == 0 &&
+                grid_last_dim >= PRECOMPUTED_GRID_ELEMENTS_PER_POINT,
             "Grid tensor last dimension must be a multiple of 6 (multiple sets of h_nw, w_nw, weight_nw, weight_ne, "
             "weight_sw, weight_se)");
     } else {
         TT_FATAL(
-            grid_last_dim % 2 == 0 && grid_last_dim >= 2,
+            grid_last_dim % STANDARD_GRID_ELEMENTS_PER_POINT == 0 && grid_last_dim >= STANDARD_GRID_ELEMENTS_PER_POINT,
             "Grid tensor last dimension must be a multiple of 2 (multiple sets of x, y relative coordinates)");
     }
 
@@ -89,7 +93,8 @@ std::vector<TensorSpec> GridSample::compute_output_specs(const std::vector<Tenso
 
     // Calculate the number of batched grid points per grid row
 
-    const uint32_t num_of_elements_per_grid_point = use_precomputed_grid_ ? 6 : 2;
+    const uint32_t num_of_elements_per_grid_point =
+        use_precomputed_grid_ ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT : STANDARD_GRID_ELEMENTS_PER_POINT;
     uint32_t grid_batching_factor = grid_last_dim / num_of_elements_per_grid_point;
 
     // The channels get extended by grid_batching_factor

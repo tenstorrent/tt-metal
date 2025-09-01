@@ -10,6 +10,13 @@
 
 #define ALWI inline __attribute__((always_inline))
 
+constexpr uint32_t PRECOMPUTED_GRID_ELEMENTS_PER_POINT = 6;
+constexpr uint32_t STANDARD_GRID_ELEMENTS_PER_POINT = 2;
+
+ALWI bool is_coordinate_valid(int32_t coord, uint32_t max_size) {
+    return (coord >= 0) && (coord < static_cast<int32_t>(max_size));
+}
+
 ALWI void fill_four_val(uint32_t begin_addr, uint16_t val, uint16_t val1, uint16_t val2, uint16_t val3) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
 
@@ -97,9 +104,9 @@ void kernel_main() {
 
 #ifdef USE_PRECOMPUTED_GRID
             // Each precomputed grid entry has 6 values: h0, w0, weight_nw, weight_ne, weight_sw, weight_se
-            uint32_t grid_offset = grid_idx * 6;
-            int16_t h0_raw = *reinterpret_cast<volatile int16_t*>(&grid_ptr[grid_offset + 0]);
-            int16_t w0_raw = *reinterpret_cast<volatile int16_t*>(&grid_ptr[grid_offset + 1]);
+            uint32_t precomputed_data_offset = grid_idx * PRECOMPUTED_GRID_ELEMENTS_PER_POINT;
+            int16_t h0_raw = *reinterpret_cast<volatile int16_t*>(&grid_ptr[precomputed_data_offset + 0]);
+            int16_t w0_raw = *reinterpret_cast<volatile int16_t*>(&grid_ptr[precomputed_data_offset + 1]);
 
             h0 = static_cast<int32_t>(h0_raw);
             w0 = static_cast<int32_t>(w0_raw);
@@ -107,15 +114,15 @@ void kernel_main() {
             w1 = w0 + 1;
 
             // Read precomputed weights
-            weight_nw_bf = grid_ptr[grid_offset + 2];
-            weight_ne_bf = grid_ptr[grid_offset + 3];
-            weight_sw_bf = grid_ptr[grid_offset + 4];
-            weight_se_bf = grid_ptr[grid_offset + 5];
+            weight_nw_bf = grid_ptr[precomputed_data_offset + 2];
+            weight_ne_bf = grid_ptr[precomputed_data_offset + 3];
+            weight_sw_bf = grid_ptr[precomputed_data_offset + 4];
+            weight_se_bf = grid_ptr[precomputed_data_offset + 5];
 #else
             // Each regular grid entry has 2 values: x, y coordinates
-            uint32_t grid_offset = grid_idx * 2;
-            uint16_t h_coord_raw = grid_ptr[grid_offset + 1];  // y coordinate
-            uint16_t w_coord_raw = grid_ptr[grid_offset + 0];  // x coordinate
+            uint32_t coordinate_pair_offset = grid_idx * STANDARD_GRID_ELEMENTS_PER_POINT;
+            uint16_t h_coord_raw = grid_ptr[coordinate_pair_offset + 1];  // y coordinate
+            uint16_t w_coord_raw = grid_ptr[coordinate_pair_offset + 0];  // x coordinate
 
             float h_coord_rel = bfloat16_to_float(h_coord_raw);
             float w_coord_rel = bfloat16_to_float(w_coord_raw);
@@ -138,10 +145,10 @@ void kernel_main() {
             float w_frac_inv = 1.0f - w_frac;
 
             // Need to declare boundary checks before using them
-            bool h0_valid = (h0 >= 0) && (h0 < static_cast<int32_t>(input_height));
-            bool h1_valid = (h1 >= 0) && (h1 < static_cast<int32_t>(input_height));
-            bool w0_valid = (w0 >= 0) && (w0 < static_cast<int32_t>(input_width));
-            bool w1_valid = (w1 >= 0) && (w1 < static_cast<int32_t>(input_width));
+            bool h0_valid = is_coordinate_valid(h0, input_height);
+            bool h1_valid = is_coordinate_valid(h1, input_height);
+            bool w0_valid = is_coordinate_valid(w0, input_width);
+            bool w1_valid = is_coordinate_valid(w1, input_width);
 
             float weight_nw = (h0_valid && w0_valid) ? (h_frac_inv * w_frac_inv) : 0.0f;  // North-West
             float weight_ne = (h0_valid && w1_valid) ? (h_frac_inv * w_frac) : 0.0f;      // North-East
@@ -157,10 +164,10 @@ void kernel_main() {
             // For precomputed grid, we need to compute boundary checks here
             // since they weren't computed in the #ifdef section above
 #ifdef USE_PRECOMPUTED_GRID
-            bool h0_valid = (h0 >= 0) && (h0 < static_cast<int32_t>(input_height));
-            bool h1_valid = (h1 >= 0) && (h1 < static_cast<int32_t>(input_height));
-            bool w0_valid = (w0 >= 0) && (w0 < static_cast<int32_t>(input_width));
-            bool w1_valid = (w1 >= 0) && (w1 < static_cast<int32_t>(input_width));
+            bool h0_valid = is_coordinate_valid(h0, input_height);
+            bool h1_valid = is_coordinate_valid(h1, input_height);
+            bool w0_valid = is_coordinate_valid(w0, input_width);
+            bool w1_valid = is_coordinate_valid(w1, input_width);
 #endif
 
             // Reserve CB space for 4 corner input sticks for this grid
