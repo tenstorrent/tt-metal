@@ -273,43 +273,6 @@ upsample_base_args = {
     "has_attention": False,
 }
 
-# Test case configurations from decoder
-upsample_test_configs = [
-    # # First upsample block (768->512), T padded from 28->32
-    {
-        "name": "block1_768-512",
-        "in_channels": 768,
-        "out_channels": 512,
-        "num_res_blocks": 6,
-        "temporal_expansion": 3,
-        "spatial_expansion": 2,
-        "input_shape": (1, 768, 32, 60, 106),
-        # "expected_output_shape": (1, 512, 82, 120, 212),
-    },
-    # Second upsample block (512->256), T padded from 82->88
-    {
-        "name": "block2_512-256",
-        "in_channels": 512,
-        "out_channels": 256,
-        "num_res_blocks": 4,
-        "temporal_expansion": 2,
-        "spatial_expansion": 2,
-        "input_shape": (1, 512, 88, 120, 212),
-        # "expected_output_shape": (1, 256, 163, 240, 424),
-    },
-    # Third upsample block (256->128), T padded from 163->168
-    {
-        "name": "block3_256-128",
-        "in_channels": 256,
-        "out_channels": 128,
-        "num_res_blocks": 3,
-        "temporal_expansion": 1,
-        "spatial_expansion": 2,
-        "input_shape": (1, 256, 168, 240, 424),
-        # "expected_output_shape": (1, 128, 163, 480, 848),
-    },
-]
-
 
 def create_random_causalupsampleblock_models(
     mesh_device, in_channels, out_channels, use_real_weights, input_shape, parallel_config, ccl_manager, **model_args
@@ -358,6 +321,7 @@ def create_random_causalupsampleblock_models(
                 logger.warning(f"No matching upsample block for {in_channels}->{out_channels}")
 
     # Create TT model with same weights
+    input_shape[2] = div_up(input_shape[2], mesh_device.get_num_devices())
     tt_model = TtCausalUpsampleBlock(
         mesh_device=mesh_device,
         in_channels=in_channels,
@@ -374,8 +338,42 @@ def create_random_causalupsampleblock_models(
 
 @pytest.mark.parametrize(
     "config",
-    upsample_test_configs,
-    ids=[cfg["name"] for cfg in upsample_test_configs],
+    [
+        # First upsample block (768->512), T padded from 28->32
+        {
+            "name": "block1_768-512",
+            "in_channels": 768,
+            "out_channels": 512,
+            "num_res_blocks": 6,
+            "temporal_expansion": 3,
+            "spatial_expansion": 2,
+            "input_shape": [1, 768, 28, 60, 106],
+            # "expected_output_shape": (1, 512, 82, 120, 212),
+        },
+        # Second upsample block (512->256), T padded from 82->88
+        {
+            "name": "block2_512-256",
+            "in_channels": 512,
+            "out_channels": 256,
+            "num_res_blocks": 4,
+            "temporal_expansion": 2,
+            "spatial_expansion": 2,
+            "input_shape": [1, 512, 82, 120, 212],
+            # "expected_output_shape": (1, 256, 163, 240, 424),
+        },
+        # Third upsample block (256->128), T padded from 163->168
+        {
+            "name": "block3_256-128",
+            "in_channels": 256,
+            "out_channels": 128,
+            "num_res_blocks": 3,
+            "temporal_expansion": 1,
+            "spatial_expansion": 2,
+            "input_shape": [1, 256, 163, 240, 424],
+            # "expected_output_shape": (1, 128, 163, 480, 848),
+        },
+    ],
+    ids=["768", "512", "256"],
 )
 @pytest.mark.parametrize("divide_T", [8, 1], ids=["T8", "T1"])  # Emulate T fracturing
 @pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
@@ -390,7 +388,6 @@ def test_tt_upsample_forward(mesh_device, config, divide_T, reset_seeds, use_rea
     input_shape = config["input_shape"]
     N, C, T, H, W = input_shape
     T = T // divide_T
-    input_shape = (N, C, T, H, W)
     # expected_output_shape = config["expected_output_shape"]
 
     # Prepare model args
@@ -426,9 +423,11 @@ def test_tt_upsample_forward(mesh_device, config, divide_T, reset_seeds, use_rea
     )
 
     # Create input tensor with correct shape from the decoder
-    N, C, T, H, W = input_shape
     torch_input = torch.randn(N, C, T, H, W)
     tt_input = torch_input.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
+    tt_input = torch.nn.functional.pad(
+        tt_input, pad=(0, 0, 0, 0, 0, 0, 0, div_up(T, mesh_device.get_num_devices()) - T)
+    )
     tt_input = ttnn.from_torch(
         tt_input,
         device=mesh_device,
@@ -447,9 +446,10 @@ def test_tt_upsample_forward(mesh_device, config, divide_T, reset_seeds, use_rea
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[0, 1]),
     )
+    breakpoint()
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
     if mesh_device.get_num_devices() > 1:
-        tt_output_torch = tt_output_torch[:, :, temporal_expansion - 1 : tt_output_torch.shape[2], :, :]
+        tt_output_torch = tt_output_torch[:, :, temporal_expansion - 1 : T * temporal_expansion, :, :]
 
     # Get reference output
     logger.info("Run RefResBlock forward")
@@ -494,16 +494,16 @@ decoder_test_configs = [
         "input_shape": (1, 12, 28, 30, 53),
         # Expected output will be approximately: (1, 3, 163, 240, 424)
     },
-    # {
-    #     "name": "medium_latent",
-    #     "input_shape": (1, 12, 28, 40, 76),
-    #     # Expected output will be approximately: (1, 3, 163, 480, 848)
-    # },
-    # {
-    #     "name": "large_latent",
-    #     "input_shape": (1, 12, 28, 60, 106),
-    #     # Expected output will be approximately: (1, 3, 163, 480, 848)
-    # },
+    {
+        "name": "medium_latent",
+        "input_shape": (1, 12, 28, 40, 76),
+        # Expected output will be approximately: (1, 3, 163, 480, 848)
+    },
+    {
+        "name": "large_latent",
+        "input_shape": (1, 12, 28, 60, 106),
+        # Expected output will be approximately: (1, 3, 163, 480, 848)
+    },
 ]
 
 
