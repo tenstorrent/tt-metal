@@ -29,11 +29,6 @@ on:
           - config-t3000
           - config-tg
         description: "Runner Type Label"
-      extra-label:
-        required: true
-        type: string
-        default: "in-service"
-        description: "Secondary tag to filter runners"
       good-commit:
         required: true
         type: string
@@ -54,9 +49,10 @@ jobs:
     timeout-minutes: 1440
     env:
       ARCH_NAME: ${{ inputs.arch }}
-    runs-on:
-      - ${{ inputs.runner-label }}
-      - ${{ inputs.extra-label }}
+    runs-on: >-
+      ${{
+        fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+      }}
     container:
       image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:1dec18cfd17d73a2130c1a2eb676bbbaa412fd47
       env:
