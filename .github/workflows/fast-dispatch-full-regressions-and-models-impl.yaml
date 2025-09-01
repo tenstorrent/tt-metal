@@ -36,6 +36,7 @@ jobs:
 
           # ----- Catalogs -----
           # Stable set (default path; optional per-model timeout)
+          # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
           STABLE='[
             {"model":"common_models"},
             {"model":"functional_unet"},
@@ -67,7 +68,7 @@ jobs:
             {"model":"yolov12x"},
             {"model":"gemma-3-4b-it"},
             {"model":"ttt-mistral-7B-v0.3"},
-            {"model":"stable_diffusion_xl_base","timeout":45} # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
+            {"model":"stable_diffusion_xl_base","timeout":45}
           ]'
 
           # Stable set (CIv2)
@@ -109,23 +110,22 @@ jobs:
           if [ -z "${SEL_ARR}" ]; then
 
             STABLE_OUT="${STABLE}"
-            echo "Final stable matrix: ${STABLE_OUT}"
+
             STABLE_CIv2_OUT="${STABLE_CIv2}"
-            echo "Final stable CIv2 matrix: ${STABLE_CIv2_OUT}"
+
             # Skipping due to issue 15932 (mamba 1, mamba 2, mamba 3, mamba 4, mamba 6)
             UNSTABLE_OUT='[
               {"model":"stable_diffusion","cmd":"TT_MM_THROTTLE_PERF=5 pytest --timeout 1000 -n auto tests/nightly/single_card/stable_diffusion"},
               {"model":"mamba 5","cmd":"pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 5"}
             ]'
-            echo "Final unstable matrix: ${UNSTABLE_OUT}"
 
           else
             STABLE_OUT=$(jq --argjson sel "$SEL_ARR" '[.[] | select(.model | IN($sel[]))]' <<< "$STABLE")
-            echo "Final stable matrix: ${STABLE_OUT}"
+
             UNSTABLE_OUT=$(jq --argjson sel "$SEL_ARR" '[.[] | select(.model | IN($sel[]))]' <<< "$UNSTABLE")
-            echo "Final unstable matrix: ${UNSTABLE_OUT}"
+
             STABLE_CIv2_OUT="$(jq --argjson sel "${SEL_ARR}" '[.[] | select(.model | IN($sel[]))]' <<< "${STABLE_CIv2}")"
-            echo "Final stable CIv2 matrix: ${STABLE_CIv2_OUT}"
+
           fi
 
           STABLE_COUNT="$(jq 'length' <<< "${STABLE_OUT}")"
