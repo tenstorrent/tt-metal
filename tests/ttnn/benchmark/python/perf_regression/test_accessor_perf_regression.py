@@ -84,69 +84,89 @@ def run_current_benchmark(benchmark_name: str) -> PerformanceData:
     return PerformanceData.from_dict(results)
 
 
-def run_benchmark_regression_test(benchmark_name: str):
-    """Generic function to run regression test for any benchmark."""
-    logger.info(f"Running performance regression test for {benchmark_name}")
+def run_benchmark_regression_test(benchmark_name: str, log_file: str = None):
+    """Generic function to run regression test for any benchmark.
 
-    # Load baseline data
+    Args:
+        benchmark_name: Name of the benchmark to run
+        log_file: Optional path to log file where all logger.info messages will be stored
+    """
+    # Configure logger to write to file if log_file is provided
+    log_handler_id = None
+    if log_file:
+        # Inherit the existing logger format instead of defining a custom one
+        log_handler_id = logger.add(log_file, level="INFO")
+
     try:
-        baseline = load_baseline(benchmark_name)
-    except Exception as e:
-        pytest.skip(f"Could not load baseline for {benchmark_name}: {e}")
+        logger.info(f"Running performance regression test for {benchmark_name}")
 
-    # Run current benchmark
-    try:
-        current = run_current_benchmark(benchmark_name)
-    except Exception as e:
-        pytest.skip(f"Could not run benchmark {benchmark_name}: {e}")
+        # Load baseline data
+        try:
+            baseline = load_baseline(benchmark_name)
+        except Exception as e:
+            pytest.skip(f"Could not load baseline for {benchmark_name}: {e}")
 
-    # Run regression check
-    try:
-        results = check_regression(baseline, current)
-    except Exception as e:
-        pytest.skip(f"Could not compare results for {benchmark_name}: {e}")
+        # Run current benchmark
+        try:
+            current = run_current_benchmark(benchmark_name)
+        except Exception as e:
+            pytest.skip(f"Could not run benchmark {benchmark_name}: {e}")
 
-    # Summarize results
-    summary = summarize_regression_results(results)
+        # Run regression check
+        try:
+            results = check_regression(baseline, current)
+        except Exception as e:
+            pytest.skip(f"Could not compare results for {benchmark_name}: {e}")
 
-    # Log summary
-    logger.info(f"Regression test summary for {benchmark_name}:")
-    logger.info(f"  Total tests: {summary['total_tests']}")
-    logger.info(f"  Regressions: {summary['regressions']}")
-    logger.info(f"  Improvements: {summary['improvements']}")
-    logger.info(f"  No change: {summary['no_change']}")
+        # Summarize results
+        summary = summarize_regression_results(results)
 
-    # Log detailed results
-    for section, subsections in results.items():
-        for subsection, result in subsections.items():
-            logger.info(f"  {section}.{subsection}: {result['message']}")
+        # Log summary
+        logger.info(f"Regression test summary for {benchmark_name}:")
+        logger.info(f"  Total tests: {summary['total_tests']}")
+        logger.info(f"  Regressions: {summary['regressions']}")
+        logger.info(f"  Improvements: {summary['improvements']}")
+        logger.info(f"  No change: {summary['no_change']}")
 
-    # Fail if any regressions detected
-    if summary["regressions"] > 0:
-        regression_summary = "\\n".join(summary["regression_messages"])
-        assert False, f"Performance regressions detected in {benchmark_name}:\\n{regression_summary}"
+        # Log detailed results
+        for section, subsections in results.items():
+            for subsection, result in subsections.items():
+                logger.info(f"  {section}.{subsection}: {result['message']}")
+
+        # Fail if any regressions detected
+        if summary["regressions"] > 0:
+            regression_summary = "\\n".join(summary["regression_messages"])
+            assert False, f"Performance regressions detected in {benchmark_name}:\\n{regression_summary}"
+
+    finally:
+        # Remove the file handler if it was added
+        if log_handler_id is not None:
+            logger.remove(log_handler_id)
+
+
+DEFAULT_LOG_FILE = "perf_regression_results.log"
 
 
 def test_constructor():
     """Test for performance regressions in constructor benchmark."""
-    run_benchmark_regression_test("constructor")
+    run_benchmark_regression_test("constructor", DEFAULT_LOG_FILE)
 
 
 def test_get_noc_addr_page_id():
     """Test for performance regressions in get_noc_addr_page_id benchmark."""
-    run_benchmark_regression_test("get_noc_addr_page_id")
+    run_benchmark_regression_test("get_noc_addr_page_id", DEFAULT_LOG_FILE)
 
 
 def test_get_noc_addr_page_coord():
     """Test for performance regressions in get_noc_addr_page_coord benchmark."""
-    run_benchmark_regression_test("get_noc_addr_page_coord")
+    run_benchmark_regression_test("get_noc_addr_page_coord", DEFAULT_LOG_FILE)
 
 
 def test_manual_pages_iteration():
     """Test for performance regressions in manual_pages_iteration benchmark."""
-    run_benchmark_regression_test("manual_pages_iteration")
+    run_benchmark_regression_test("manual_pages_iteration", DEFAULT_LOG_FILE)
 
 
 def test_pages_iterator():
     """Test for performance regressions in pages_iterator benchmark."""
-    run_benchmark_regression_test("pages_iterator")
+    run_benchmark_regression_test("pages_iterator", DEFAULT_LOG_FILE)

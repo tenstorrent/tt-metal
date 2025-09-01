@@ -2,6 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+Accessor benchmarks.
+
+To run benchmark and save results to json file (to generate ground truth data):
+python accessor_benchmarks.py --export-results-to ./results
+
+More details: python3 accessor_benchmarks.py --help
+"""
+
 
 import argparse
 import json
