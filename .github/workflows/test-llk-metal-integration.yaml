@@ -186,8 +186,6 @@ jobs:
                 break
               fi
             done
-
-            echo "$run_id"
           }
 
           # Trigger enabled workflows
@@ -197,11 +195,11 @@ jobs:
               case "$workflow" in
                 "all-post-commit-workflows.yaml")
                   run_ids["all-post-commit"]=$(trigger_and_get_id "$workflow" "All post-commit")
-                  echo "✅ All post-commit run ID: ${run_ids[all-post-commit]}"
+                  [ -n "${run_ids[all-post-commit]}" ] && echo "✅ All post-commit run ID: ${run_ids[all-post-commit]}"
                   ;;
                 "blackhole-post-commit.yaml")
                   run_ids["blackhole"]=$(trigger_and_get_id "$workflow" "Blackhole")
-                  echo "✅ Blackhole run ID: ${run_ids[blackhole]}"
+                  [ -n "${run_ids[blackhole]}" ] && echo "✅ Blackhole run ID: ${run_ids[blackhole]}"
                   ;;
               esac
             fi
