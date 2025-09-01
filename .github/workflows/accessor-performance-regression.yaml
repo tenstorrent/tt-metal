@@ -86,7 +86,7 @@ jobs:
         timeout-minutes: 45
         run: |
           echo "🚀 Starting accessor performance regression tests..."
-          python -m tests/ttnn/benchmark/python/perf_regression/pytest test_accessor_perf_regression.py -v --tb=short
+          python -m pytest tests/ttnn/benchmark/python/perf_regression/test_accessor_perf_regression.py -v --tb=short
 
       - name: 📊 Generate Performance Report
         if: always()
