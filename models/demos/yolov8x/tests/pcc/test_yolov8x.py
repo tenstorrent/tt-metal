@@ -42,53 +42,6 @@ def make_anchors(feats, strides, grid_cell_offset=0.5):
     return torch.cat(anchor_points), torch.cat(stride_tensor)
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE}], indirect=True, ids=["0"])
-@pytest.mark.parametrize(
-    "input_tensor",
-    [torch.rand((1, 3, 640, 640))],
-    ids=["input_tensor1"],
-)
-@pytest.mark.parametrize(
-    "use_pretrained_weights",
-    [True],
-)
-def test_yolov8x_640(device, input_tensor, use_pretrained_weights, model_location_generator):
-    disable_persistent_kernel_cache()
-
-    inp_h, inp_w = input_tensor.shape[2], input_tensor.shape[3]
-    if use_pretrained_weights:
-        torch_model = load_torch_model(model_location_generator)
-        state_dict = torch_model.state_dict()
-    else:
-        torch_model = yolov8x.DetectionModel()
-        torch_model.eval()
-        state_dict = torch_model.state_dict()
-    parameters = custom_preprocessor(device, state_dict, inp_h, inp_w)
-    ttnn_model = TtYolov8xModel(device=device, parameters=parameters)
-
-    n, c, h, w = input_tensor.shape
-    if c == 3:
-        c = 16
-    input_mem_config = ttnn.create_sharded_memory_config(
-        [n, c, h, w],
-        ttnn.CoreGrid(x=8, y=8),
-        ttnn.ShardStrategy.HEIGHT,
-    )
-
-    ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-    ttnn_input = ttnn_input.to(device, input_mem_config)
-
-    with torch.inference_mode():
-        ttnn_model_output = ttnn_model(ttnn_input)[0]
-        ttnn_model_output = ttnn.to_torch(ttnn_model_output)
-
-    with torch.inference_mode():
-        torch_model_output = torch_model(input_tensor)[0]
-
-    passing, pcc = assert_with_pcc(ttnn_model_output, torch_model_output, 0.99)
-    logger.info(f"Passing: {passing}, PCC: {pcc}")
-
-
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [(torch.rand((1, 3, 640, 640)))], ids=["input_tensor1"])
 def test_Conv(device, input_tensor, model_location_generator):
@@ -144,7 +97,7 @@ def test_C2f(device, input_tensor, reset_seeds, model_location_generator):
     parameters = custom_preprocessor(device, state_dict)
 
     c2f_configs = {
-        "model.2": {"input_params": ((1, 1, 0, 160, 160), (1, 1, 0, 160, 400), (3, 1, 1, 80, 80))},
+        "model.2": {"input_params": ((1, 1, 0, 80, 160), (1, 1, 0, 160, 400), (3, 1, 1, 80, 80))},
     }
 
     with torch.inference_mode():
@@ -246,6 +199,53 @@ def test_dist2bbox(device, distance, anchors):
     ttnn_model_output = ttnn.to_torch(ttnn_model_output)
 
     torch_model_output = decode_bboxes(distance, anchors)
+
+    passing, pcc = assert_with_pcc(ttnn_model_output, torch_model_output, 0.99)
+    logger.info(f"Passing: {passing}, PCC: {pcc}")
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE}], indirect=True, ids=["0"])
+@pytest.mark.parametrize(
+    "input_tensor",
+    [torch.rand((1, 3, 640, 640))],
+    ids=["input_tensor1"],
+)
+@pytest.mark.parametrize(
+    "use_pretrained_weights",
+    [True],
+)
+def test_yolov8x_640(device, input_tensor, use_pretrained_weights, model_location_generator):
+    disable_persistent_kernel_cache()
+
+    inp_h, inp_w = input_tensor.shape[2], input_tensor.shape[3]
+    if use_pretrained_weights:
+        torch_model = load_torch_model(model_location_generator)
+        state_dict = torch_model.state_dict()
+    else:
+        torch_model = yolov8x.DetectionModel()
+        torch_model.eval()
+        state_dict = torch_model.state_dict()
+    parameters = custom_preprocessor(device, state_dict, inp_h, inp_w)
+    ttnn_model = TtYolov8xModel(device=device, parameters=parameters)
+
+    n, c, h, w = input_tensor.shape
+    if c == 3:
+        c = 16
+    input_mem_config = ttnn.create_sharded_memory_config(
+        [n, c, h, w],
+        ttnn.CoreGrid(x=8, y=8),
+        ttnn.ShardStrategy.HEIGHT,
+    )
+
+    ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_input = ttnn_input.to(device, input_mem_config)
+
+    with torch.inference_mode():
+        ttnn_model_output = ttnn_model(ttnn_input)[0]
+        ttnn_model_output = ttnn.to_torch(ttnn_model_output)
+
+    with torch.inference_mode():
+        torch_model_output = torch_model(input_tensor)[0]
 
     passing, pcc = assert_with_pcc(ttnn_model_output, torch_model_output, 0.99)
     logger.info(f"Passing: {passing}, PCC: {pcc}")
