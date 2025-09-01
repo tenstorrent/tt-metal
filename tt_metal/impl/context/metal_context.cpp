@@ -225,6 +225,9 @@ void MetalContext::teardown() {
     dispatch_query_manager_.reset();
     dispatch_core_manager_.reset();
     tt::tt_metal::reset_topology_state();
+
+    // Deinitialize inspector
+    inspector_data_.reset();
 }
 
 MetalContext& MetalContext::instance() {
