@@ -1619,3 +1619,42 @@ def test_unary_tanh_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
 
     assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=0.15)
     assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([64, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "min_val, max_val",
+    [
+        (None, None),
+        (-29, None),
+        (None, 18),
+        (-10, 34),
+        (12, 82),
+        (1, -1),
+        (0, 0),
+        (0, 1),
+    ],
+)
+def test_unary_clamp_tss_int32_ttnn(input_shapes, min_val, max_val, device):
+    torch.manual_seed(0)
+    in_data1 = torch.randint(-100, 100, input_shapes, dtype=torch.int32)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    min = min_val
+    max = max_val
+    if min is None and max is None:
+        with pytest.raises(RuntimeError, match="Only one of 'min' or 'max' can be None. Please provide one value"):
+            ttnn.clamp(input_tensor1, min, max)
+    else:
+        output_tensor = ttnn.clamp(input_tensor1, min, max)
+        golden_function = ttnn.get_golden_function(ttnn.clamp)
+        golden_tensor = golden_function(in_data1, min, max)
+        assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))

@@ -446,6 +446,18 @@ Tensor Clamp::invoke(
         queue_id, input_tensor, {UnaryWithParam{op_type, {min_val, max_val}}}, memory_config, optional_output_tensor);
 }
 
+Tensor Clamp::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const int32_t min_val,
+    const int32_t max_val,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::CLAMP_TSS;
+    return detail::unary_impl(
+        queue_id, input_tensor, {UnaryWithParam{op_type, {min_val, max_val}}}, memory_config, optional_output_tensor);
+}
+
 Tensor Softshrink::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,

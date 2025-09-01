@@ -22,4 +22,15 @@ inline void calculate_clamp(uint param0, uint param1) {
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_clamp_int32(uint param0, uint param1) {
+    for (int d = 0; d < ITERATIONS; d++) {
+        load_value_param_int(param0);
+        calculate_unary_max_min_int32_body(true);
+        load_value_param_int(param1);
+        calculate_unary_max_min_int32_body(false);
+        sfpi::dst_reg++;
+    }
+}
+
 }  // namespace ckernel::sfpu

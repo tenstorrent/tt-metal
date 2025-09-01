@@ -24,4 +24,10 @@ inline void llk_math_eltwise_unary_sfpu_clamp(
         ckernel::sfpu::calculate_clamp<APPROXIMATE, ITERATIONS>, dst_index, vector_mode, param0, param1);
 }
 
+template <bool APPROXIMATE, int ITERATIONS = 8>
+inline void llk_math_eltwise_unary_sfpu_clamp_int32(
+    uint dst_index, uint param0, uint param1, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_clamp_int32<APPROXIMATE, ITERATIONS>, dst_index, vector_mode, param0, param1);
+}
 }  // namespace ckernel

@@ -308,7 +308,8 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     const Tensor& input_a,
     std::optional<float> min,
     std::optional<float> max,
-    const std::optional<MemoryConfig>& output_mem_config) {
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor) {
     TT_FATAL(
         (max.has_value() || min.has_value()),
         "Either 'min' value or 'max' value can be None. Please provide at least one value");
@@ -321,34 +322,54 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     float min_val = min.has_value() ? min.value() : std::numeric_limits<float>::lowest();
     float max_val = max.has_value() ? max.value() : std::numeric_limits<float>::max();
 
-    return ttnn::clamp_tss(a, min_val, max_val, output_mem_config);
+    return ttnn::clamp_tss(ttnn::DefaultQueueId, a, min_val, max_val, output_mem_config, output_tensor);
+}
+
+Tensor ExecuteUnaryCompositeClamp::invoke(
+    const Tensor& a,
+    std::optional<int32_t> min,
+    std::optional<int32_t> max,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor) {
+    TT_FATAL(
+        (max.has_value() || min.has_value()),
+        "Either 'min' value or 'max' value can be None. Please provide at least one value");
+    int32_t min_val = min.has_value() ? min.value() : -16777216;  // -2^24 (since int is converted to float32)
+    int32_t max_val = max.has_value() ? max.value() : 16777216;   // 2^24 (since int is converted to float32)
+
+    return ttnn::clamp_tss(ttnn::DefaultQueueId, a, min_val, max_val, output_mem_config, output_tensor);
 }
 
 Tensor ExecuteUnaryCompositeClamp::invoke(
     const Tensor& a,
     std::optional<Tensor> min,
     std::optional<Tensor> max,
-    const std::optional<MemoryConfig>& output_mem_config) {
-    auto output_memory_config = output_mem_config.value_or(a.memory_config());
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor) {
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {
         return ttnn::where(
-            ttnn::ge(a, min.value(), std::nullopt, output_memory_config), a, min.value(), output_memory_config);
+            ttnn::ge(a, min.value(), std::nullopt, output_mem_config),
+            a,
+            min.value(),
+            output_mem_config,
+            output_tensor);
     } else if (!min.has_value()) {
         return ttnn::where(
-            ttnn::le(a, max.value(), std::nullopt, output_memory_config), a, max.value(), output_memory_config);
+            ttnn::le(a, max.value(), std::nullopt, output_mem_config),
+            a,
+            max.value(),
+            output_mem_config,
+            output_tensor);
     }
-    Tensor a_max = ttnn::minimum(ttnn::DefaultQueueId, a, max.value(), std::nullopt, output_memory_config);
+    Tensor a_max = ttnn::minimum(ttnn::DefaultQueueId, a, max.value(), std::nullopt, output_mem_config);
     Tensor temp = ttnn::where(
-        ttnn::eq(min.value(), 0.0f, std::nullopt, output_memory_config),
-        ttnn::relu(a_max, output_memory_config),
-        ttnn::maximum(ttnn::DefaultQueueId, a_max, min.value(), std::nullopt, output_memory_config),
-        output_memory_config);
+        ttnn::eq(min.value(), 0.0f, std::nullopt, output_mem_config),
+        ttnn::relu(a_max, output_mem_config),
+        ttnn::maximum(ttnn::DefaultQueueId, a_max, min.value(), std::nullopt, output_mem_config),
+        output_mem_config);
     return ttnn::where(
-        ttnn::gt(min.value(), max.value(), std::nullopt, output_memory_config),
-        max.value(),
-        temp,
-        output_memory_config);
+        ttnn::gt(min.value(), max.value(), std::nullopt, output_mem_config), max.value(), temp, output_mem_config);
 }
 
 // Theano defines this differently...

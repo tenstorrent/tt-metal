@@ -431,10 +431,19 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         }
         case UnaryOpType::CLAMP_TSS: {
             float param1 = params[1];
-            op_init_and_name = {
-                "clamp_tile_init();",
-                fmt::format(
-                    "clamp_tile({}, {}, {});", idst, std::bit_cast<uint32_t>(param0), std::bit_cast<uint32_t>(param1))};
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {
+                    "clamp_tile_init();",
+                    fmt::format("clamp_tile_int32({}, {}, {});", idst, (uint)param0, (uint)param1)};
+            } else {
+                op_init_and_name = {
+                    "clamp_tile_init();",
+                    fmt::format(
+                        "clamp_tile({}, {}, {});",
+                        idst,
+                        std::bit_cast<uint32_t>(param0),
+                        std::bit_cast<uint32_t>(param1))};
+            }
             break;
         }
         case UnaryOpType::HARDTANH: {
