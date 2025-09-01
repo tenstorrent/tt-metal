@@ -13,8 +13,10 @@ else
   echo "Not running inside Docker"
 fi
 
-
-
+echo "Running tt-smi -r to reset devices..."
+tt-smi -r
+echo "Running tt-smi --list to show devices..."
+tt-smi --list
 
 # Make in-tree modules win and avoid user site interference
 export PYTHONNOUSERSITE=1
