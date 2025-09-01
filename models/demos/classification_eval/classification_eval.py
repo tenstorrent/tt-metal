@@ -51,27 +51,25 @@ def evaluation(
             inputs, labels = get_batch(data_loader, res)
 
         # preprocess
-        if model_name == "mobilenetv2":
+        if model_name in ["mobilenetv2", "resnet50"]:
             torch_input_tensor = inputs
             if model_type == "tt_model":
-                ttnn_input = torch.permute(inputs, (0, 2, 3, 1))
-                ttnn_input = torch.nn.functional.pad(ttnn_input, (0, 16 - ttnn_input.shape[-1]), value=0)
-                ttnn_input = ttnn.from_torch(
-                    ttnn_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=inputs_mesh_mapper
-                )
-                ttnn_input = ttnn.reshape(
-                    ttnn_input,
-                    (1, 1, ttnn_input.shape[0] * ttnn_input.shape[1] * ttnn_input.shape[2], ttnn_input.shape[3]),
-                )
-                input_tensors_all.append(ttnn_input)
+                if model_name == "mobilenetv2":
+                    ttnn_input = torch.permute(inputs, (0, 2, 3, 1))
+                    ttnn_input = torch.nn.functional.pad(ttnn_input, (0, 16 - ttnn_input.shape[-1]), value=0)
+                    ttnn_input = ttnn.from_torch(
+                        ttnn_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=inputs_mesh_mapper
+                    )
+                    ttnn_input = ttnn.reshape(
+                        ttnn_input,
+                        (1, 1, ttnn_input.shape[0] * ttnn_input.shape[1] * ttnn_input.shape[2], ttnn_input.shape[3]),
+                    )
+                    input_tensors_all.append(ttnn_input)
+                if model_name == "resnet50":
+                    input_tensors_all.append(inputs)
                 input_labels_all.append(labels)
         elif model_name in ["swin_s", "vovnet", "efficientnet_b0", "swin_v2"]:
             torch_input_tensor = inputs
-        elif model_name == "resnet50":
-            torch_input_tensor = inputs
-            if model_type == "tt_model":
-                input_tensors_all.append(inputs)
-                input_labels_all.append(labels)
         else:
             torch_input_tensor = inputs
             if model_type == "tt_model":
@@ -97,8 +95,7 @@ def evaluation(
         elif model_type == "torch_model":
             output = model(torch_input_tensor)
 
-        # post_process
-        if model_name == "mobilenetv2":
+        if model_name in ["mobilenetv2", "resnet50"]:
             if model_type == "torch_model":
                 final_output = output
                 prediction = final_output.argmax(dim=-1)
@@ -137,14 +134,6 @@ def evaluation(
                 final_output = output.logits
                 predicted_id = final_output.argmax(dim=-1)
 
-        elif model_name == "resnet50":
-            if model_type == "torch_model":
-                final_output = output
-                predicted_id = final_output.argmax(dim=-1)
-                for i in range(batch_size):
-                    pred_id.append(predicted_id[i].item())
-                    gt_id.append(labels[i])
-
         elif model_name == "efficientnet_b0":
             if model_type == "tt_model":
                 output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
@@ -162,13 +151,27 @@ def evaluation(
                 gt_id.append(labels[i])
 
     if model_type == "tt_model":
-        if model_name == "mobilenetv2":
-            outputs = model.enqueue(input_tensors_all).pop_all()
+        if model_name in ["mobilenetv2", "resnet50"]:
+            if model_name == "resnet50":
+                for inputs in input_tensors_all:
+                    tt_inputs_host = ttnn.from_torch(
+                        inputs,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=inputs_mesh_mapper,
+                    )
+                    tt_inputs_host_all.append(tt_inputs_host)
+
+                outputs = model.enqueue(tt_inputs_host_all).pop_all()
+            else:
+                outputs = model.enqueue(input_tensors_all).pop_all()
             for iter in range(iterations // batch_size):
                 predictions = []
                 output = outputs[iter]
                 labels = input_labels_all[iter]
                 output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+                if model_name == "resnet50":
+                    output = torch.reshape(output, (output.shape[0], 1000))
                 prediction = output.argmax(dim=-1)
                 for i in range(batch_size):
                     pred_id.append(prediction[i].item())
@@ -176,37 +179,10 @@ def evaluation(
                 del output, prediction
 
     if model_type == "tt_model":
-        if model_name == "resnet50":
-            for inputs in input_tensors_all:
-                tt_inputs_host = ttnn.from_torch(
-                    inputs,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    mesh_mapper=inputs_mesh_mapper,
-                )
-                tt_inputs_host_all.append(tt_inputs_host)
-
-            outputs = model.enqueue(tt_inputs_host_all).pop_all()
-
-            predictions = []
-            for output in outputs:
-                output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
-                output = torch.reshape(output, (output.shape[0], 1000))
-                predictions.append(output.argmax(dim=-1))
-            for iter in range(iterations // batch_size):
-                labels = input_labels_all[iter]
-                prediction = predictions[iter]
-                for i in range(batch_size):
-                    pred_id.append(prediction[i].item())
-                    gt_id.append(labels[i])
-
-    if model_type == "tt_model":
-        if model_name == "mobilenetv2":
+        if model_name in ["mobilenetv2", "resnet50"]:
             model.cleanup()
         elif model_name in ["vovnet", "swin_v2", "efficientnet_b0", "swin_s"]:
             model.release()
-        elif model_name == "resnet50":
-            model.cleanup()
         elif model_name == "vit":
             model.release_vit_trace_2cqs_inference()
 
