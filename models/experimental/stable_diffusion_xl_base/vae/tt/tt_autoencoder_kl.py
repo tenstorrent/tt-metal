@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,13 +14,11 @@ class TtAutoencoderKL(LightweightModule):
         device,
         state_dict,
         model_config,
-        use_tp,
     ):
         super().__init__()
 
         self.device = device
         self.model_config = model_config
-        self.use_tp = use_tp
 
         self.stride = (1, 1)
         self.padding = (0, 0)
@@ -31,7 +29,6 @@ class TtAutoencoderKL(LightweightModule):
             device,
             state_dict,
             model_config,
-            use_tp,
         )
 
         post_quant_conv_weights = state_dict[f"post_quant_conv.weight"].squeeze()

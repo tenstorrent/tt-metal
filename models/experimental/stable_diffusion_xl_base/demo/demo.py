@@ -164,7 +164,7 @@ def prepare_device(mesh_device, use_tp):
 )
 @pytest.mark.parametrize(
     "prompt",
-    (["An astronaut riding a green horse"],),
+    (("An astronaut riding a green horse"),),
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
