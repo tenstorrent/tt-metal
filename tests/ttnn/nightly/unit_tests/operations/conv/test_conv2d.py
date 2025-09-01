@@ -4431,12 +4431,12 @@ def test_conv_dram_panoptic(
 
 
 @pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader, split_input_channels_factor, split_output_channels_factor, act_db, w_db, frequency_in_model",
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, split_input_channels_factor, split_output_channels_factor, act_db, w_db, frequency_in_model",
     # fmt: off
     (
-        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (12, 12), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 2, 1, False, True, 2),  # Panoptic
-        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (18, 18), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 2, 1, False, True, 2),  # Panoptic
-        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1),  (6, 6),  (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 2, 1, False, True, 2),  # Panoptic
+        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (12, 12), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 2, 1, False, True, 2),  # Panoptic
+        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (18, 18), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 2, 1, False, True, 2),  # Panoptic
+        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1),  (6, 6),  (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 2, 1, False, True, 2),  # Panoptic
     ),
     # fmt: on
 )
@@ -4464,7 +4464,6 @@ def test_conv2d_ch_split_dram_panoptic(
     math_fidelity,
     fp32_accum,
     packer_l1_acc,
-    enable_split_reader,
     split_input_channels_factor,
     split_output_channels_factor,
     act_db,
