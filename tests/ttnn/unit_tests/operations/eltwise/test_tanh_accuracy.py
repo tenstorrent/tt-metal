@@ -61,15 +61,16 @@ def test_tanh_range(device, torch_dtype, ttnn_dtype):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = ttnn.tanh(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG, accuracy=True)
+    output_tensor = ttnn.tanh(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_allclose(output_tensor, torch_output_tensor, rtol=1e-05, atol=0.012)
     pcc, pcc_msg = assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
-    # pcc_msg 0.9999663646890817, accuracy=False pcc 0.9978378297942829
+    # pcc_msg 0.9999663646890817, fast_and_approximate_mode=True pcc 0.9978378297942829
     # pcc_msg 0.9999583453515977 - fpu arithmetic, pcc_msg 0.9999669593009368 sfpu arithmetic
-    # fp32 pcc_msg 0.9999829606828651 (accuracy=True) , 0.9977552960423647 (accuracy=False)
+    # fp32 pcc_msg 0.9999829606828651 (fast_and_approximate_mode=False) , 0.9977552960423647 (fast_and_approximate_mode=True)
+    # Single-tile tanh: accurate = 5325ns, approx = 1789ns (~66% faster)
     assert pcc
 
 
@@ -94,7 +95,7 @@ def test_tanh_inplace(device, high, low, torch_dtype, ttnn_dtype):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    ttnn.tanh(input_tensor_a, accuracy=True, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_tensor=input_tensor_a)
+    ttnn.tanh(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_tensor=input_tensor_a)
     output_tensor = ttnn.to_torch(input_tensor_a)
 
     assert_allclose(output_tensor, torch_output_tensor, rtol=1e-05, atol=0.016)
@@ -129,7 +130,7 @@ def test_tanh_accuracy(device, input_shapes, high, low, torch_dtype, ttnn_dtype)
     torch_output_tensor = golden_function(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    output = ttnn.tanh(input_tensor, accuracy=True)
+    output = ttnn.tanh(input_tensor)
     output_tensor = ttnn.to_torch(output)
 
     assert_allclose(output_tensor, torch_output_tensor, rtol=1e-05, atol=0.016)
@@ -177,7 +178,7 @@ def test_tanh_height_sharded(device, input_shapes, high, low, torch_dtype, ttnn_
         device=device,
         memory_config=input_mem_config,
     )
-    output_tensor = ttnn.tanh(input_tensor1, accuracy=True)
+    output_tensor = ttnn.tanh(input_tensor1)
     output_tensor = ttnn.to_torch(output_tensor)
     golden_function = ttnn.get_golden_function(ttnn.tanh)
     golden_tensor = golden_function(in_data)
@@ -273,7 +274,7 @@ def test_tanh_sharded(device, high, low, input_mem_config, torch_dtype, ttnn_dty
         device=device,
         memory_config=return_mem_config(input_mem_config),
     )
-    output_tensor = ttnn.tanh(input_tensor1, accuracy=True)
+    output_tensor = ttnn.tanh(input_tensor1)
     output_tensor = ttnn.to_torch(output_tensor)
     golden_function = ttnn.get_golden_function(ttnn.tanh)
     golden_tensor = golden_function(in_data)
