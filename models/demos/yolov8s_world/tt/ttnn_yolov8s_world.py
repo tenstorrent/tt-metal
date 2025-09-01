@@ -331,7 +331,11 @@ class TtSPPF:
         y = [cv1]
         for i in range(3):
             output = ttnn.max_pool2d(
-                input_tensor=y[-1],
+                input_tensor=(
+                    ttnn.to_layout(ttnn.sharded_to_interleaved(y[-1]), layout=ttnn.ROW_MAJOR_LAYOUT)
+                    if y[-1].is_sharded()
+                    else y[-1]
+                ),
                 batch_size=self.batch_size,
                 input_h=out_h,
                 input_w=out_w,
@@ -340,6 +344,8 @@ class TtSPPF:
                 stride=[1, 1],
                 padding=[p, p],
                 dilation=[1, 1],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                applied_shard_scheme=None if y[-1].is_sharded() else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             )
             y.append(output)
 
@@ -591,24 +597,22 @@ class TtImagePoolingAttn:
 
         x = [proj(x)[0] for (x, proj) in zip(x, self.projections)]
         x = [
-            ttnn.to_layout(
-                ttnn.reshape(
-                    ttnn.adaptive_max_pool2d(
-                        input_tensor=ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT),
-                        batch_size=1,
-                        input_h=int(math.sqrt(x.shape[2])),
-                        input_w=int(math.sqrt(x.shape[2])),
-                        channels=x.shape[-1],
-                        output_size=(3, 3),
-                        memory_config=ttnn.L1_MEMORY_CONFIG,
-                    ),
-                    (bs, num_patches, -1),
+            ttnn.reshape(
+                ttnn.adaptive_max_pool2d(
+                    input_tensor=x,
+                    batch_size=1,
+                    input_h=int(math.sqrt(x.shape[2])),
+                    input_w=int(math.sqrt(x.shape[2])),
+                    channels=x.shape[-1],
+                    output_size=(3, 3),
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
                 ),
-                layout=ttnn.TILE_LAYOUT,
+                (bs, num_patches, -1),
             )
             for x in x
         ]
         x = concat(x, dim=1, use_sharded_concat=False)
+        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         q = ttnn.clone(text)
         for index, module in enumerate(self.query):
             if module == ttnn.linear:
@@ -617,6 +621,7 @@ class TtImagePoolingAttn:
                     self.parameters["query"][index]["weight"],
                     bias=self.parameters["query"][index]["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    core_grid=ttnn.CoreGrid(y=8, x=8),
                 )
             else:
                 q = module(
@@ -624,6 +629,7 @@ class TtImagePoolingAttn:
                     weight=self.parameters["query"][index]["weight"],
                     bias=self.parameters["query"][index]["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
                 )
 
         k = ttnn.clone(x)
@@ -634,6 +640,7 @@ class TtImagePoolingAttn:
                     self.parameters["key"][index]["weight"],
                     bias=self.parameters["key"][index]["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    core_grid=ttnn.CoreGrid(y=8, x=8),
                 )
             else:
                 k = module(
@@ -641,6 +648,7 @@ class TtImagePoolingAttn:
                     weight=self.parameters["key"][index]["weight"],
                     bias=self.parameters["key"][index]["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
                 )
 
         v = ttnn.clone(x)
@@ -651,6 +659,7 @@ class TtImagePoolingAttn:
                     self.parameters["value"][index]["weight"],
                     bias=self.parameters["value"][index]["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    core_grid=ttnn.CoreGrid(y=8, x=8),
                 )
             else:
                 v = module(
@@ -658,6 +667,7 @@ class TtImagePoolingAttn:
                     weight=self.parameters["value"][index]["weight"],
                     bias=self.parameters["value"][index]["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
                 )
 
         q = q.reshape(bs, -1, self.nh, self.hc)
