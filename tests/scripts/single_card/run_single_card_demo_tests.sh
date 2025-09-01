@@ -210,7 +210,7 @@ run_roberta_func() {
 
 run_stable_diffusion_func() {
 
-  pytest -n auto --disable-warnings --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo --timeout 900
+  TT_MM_THROTTLE_PERF=5 pytest --disable-warnings --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/tests/test_demo.py
 
 }
 
