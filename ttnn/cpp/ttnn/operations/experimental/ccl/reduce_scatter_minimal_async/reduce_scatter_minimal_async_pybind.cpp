@@ -58,7 +58,7 @@ void bind_reduce_scatter_minimal_async(pybind11::module& module, const ccl_opera
                     num_buffers_per_channel);
             },
             py::arg("input_tensor"),
-            py::arg("persistent_output_buffers"),
+            py::arg("persistent_output_buffers") = std::nullopt,
             py::arg("dim"),
             py::arg("multi_device_global_semaphore"),
             py::kw_only(),
