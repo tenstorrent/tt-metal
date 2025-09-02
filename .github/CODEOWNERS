@@ -267,7 +267,7 @@ models/experimental/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT
 models/demos/wormhole/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat
 models/demos/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat
 models/experimental/*yolo*/ @tenstorrent/cse-developer-ttnn @uaydonat
-models/experimental/yolo_eval @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-developers-convolutions
+models/demos/yolo_eval @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-developers-convolutions
 models/demos/segformer @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/metalium-developers-convolutions
 models/perf/ @yieldthought @uaydonat
 models/perf/benchmarking_utils.py @skhorasganiTT @williamlyTT @uaydonat
@@ -283,9 +283,9 @@ models/experimental/stable_diffusion_35_large/ @jonathansuTT @cglagovichTT @tens
 models/experimental/tt_dit/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn
 models/experimental/swin_s @arginugaTT @tenstorrent/cse-developer-ttnn
 models/demos/yolov7 @ssinghalTT @tenstorrent/cse-developer-ttnn
-models/experimental/classification_eval @tenstorrent/cse-developer-ttnn
+models/demos/classification_eval @tenstorrent/cse-developer-ttnn
 models/demos/yolov11 @ssinghalTT @tenstorrent/cse-developer-ttnn
-models/experimental/segmentation_evaluation @tenstorrent/cse-developer-ttnn
+models/demos/segmentation_evaluation @tenstorrent/cse-developer-ttnn
 models/demos/yolov6l @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/demos/yolov12x @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn
