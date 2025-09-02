@@ -22,7 +22,7 @@ jobs:
   # regression-testing:
   #   uses: ./.github/workflows/regression-testing.yaml
   create-tag:
-    needs: regression-testing
+    # needs: regression-testing
     uses: ./.github/workflows/release-verify-or-create-tag.yaml
     with:
       fetch_depth: 0
