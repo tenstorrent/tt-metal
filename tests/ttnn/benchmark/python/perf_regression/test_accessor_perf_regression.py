@@ -32,7 +32,7 @@ from accessor_benchmarks import (
 from perf_regression import PerformanceData, check_regression, summarize_regression_results
 
 
-def load_baseline(benchmark_name: str) -> PerformanceData:
+def load_baseline(benchmark_name: str, perf_baseline_dir: Path = None) -> PerformanceData:
     gt_file_map = {
         "get_noc_addr_page_id": "get_noc_addr.json",
         "get_noc_addr_page_coord": "get_noc_addr_page_coord.json",
@@ -44,22 +44,9 @@ def load_baseline(benchmark_name: str) -> PerformanceData:
     if benchmark_name not in gt_file_map:
         raise ValueError(f"Unknown benchmark: {benchmark_name}")
 
-    tt_metal_home = os.environ.get("TT_METAL_HOME")
-    if not tt_metal_home:
-        raise RuntimeError("TT_METAL_HOME environment variable not set")
+    assert perf_baseline_dir is not None, "perf_baseline_dir is required"
 
-    gt_path = (
-        Path(tt_metal_home)
-        / "tests"
-        / "ttnn"
-        / "benchmark"
-        / "python"
-        / "perf_regression"
-        / "gt"
-        / "accessor_benchmarks"
-        / ttnn.get_arch_name()
-        / gt_file_map[benchmark_name]
-    )
+    gt_path = perf_baseline_dir / gt_file_map[benchmark_name]
 
     if not gt_path.exists():
         raise FileNotFoundError(f"Ground truth file not found: {gt_path}")
@@ -86,11 +73,12 @@ def run_current_benchmark(benchmark_name: str) -> PerformanceData:
     return PerformanceData.from_dict(results)
 
 
-def run_benchmark_regression_test(benchmark_name: str, log_file: str = None):
+def run_benchmark_regression_test(benchmark_name: str, perf_baseline_dir: Path = None, log_file: str = None):
     """Generic function to run regression test for any benchmark.
 
     Args:
         benchmark_name: Name of the benchmark to run
+        perf_baseline_dir: Path to baseline directory (if None, uses default)
         log_file: Optional path to log file where all logger.info messages will be stored
     """
     # Configure logger to write to file if log_file is provided
@@ -104,7 +92,7 @@ def run_benchmark_regression_test(benchmark_name: str, log_file: str = None):
 
         # Load baseline data
         try:
-            baseline = load_baseline(benchmark_name)
+            baseline = load_baseline(benchmark_name, perf_baseline_dir)
         except Exception as e:
             pytest.skip(f"Could not load baseline for {benchmark_name}: {e}")
 
@@ -149,26 +137,26 @@ def run_benchmark_regression_test(benchmark_name: str, log_file: str = None):
 DEFAULT_LOG_FILE = "perf_regression_results.log"
 
 
-def test_constructor():
+def test_constructor(perf_baseline_path):
     """Test for performance regressions in constructor benchmark."""
-    run_benchmark_regression_test("constructor", DEFAULT_LOG_FILE)
+    run_benchmark_regression_test("constructor", perf_baseline_path, DEFAULT_LOG_FILE)
 
 
-def test_get_noc_addr_page_id():
+def test_get_noc_addr_page_id(perf_baseline_path):
     """Test for performance regressions in get_noc_addr_page_id benchmark."""
-    run_benchmark_regression_test("get_noc_addr_page_id", DEFAULT_LOG_FILE)
+    run_benchmark_regression_test("get_noc_addr_page_id", perf_baseline_path, DEFAULT_LOG_FILE)
 
 
-def test_get_noc_addr_page_coord():
+def test_get_noc_addr_page_coord(perf_baseline_path):
     """Test for performance regressions in get_noc_addr_page_coord benchmark."""
-    run_benchmark_regression_test("get_noc_addr_page_coord", DEFAULT_LOG_FILE)
+    run_benchmark_regression_test("get_noc_addr_page_coord", perf_baseline_path, DEFAULT_LOG_FILE)
 
 
-def test_manual_pages_iteration():
+def test_manual_pages_iteration(perf_baseline_path):
     """Test for performance regressions in manual_pages_iteration benchmark."""
-    run_benchmark_regression_test("manual_pages_iteration", DEFAULT_LOG_FILE)
+    run_benchmark_regression_test("manual_pages_iteration", perf_baseline_path, DEFAULT_LOG_FILE)
 
 
-def test_pages_iterator():
+def test_pages_iterator(perf_baseline_path):
     """Test for performance regressions in pages_iterator benchmark."""
-    run_benchmark_regression_test("pages_iterator", DEFAULT_LOG_FILE)
+    run_benchmark_regression_test("pages_iterator", perf_baseline_path, DEFAULT_LOG_FILE)
