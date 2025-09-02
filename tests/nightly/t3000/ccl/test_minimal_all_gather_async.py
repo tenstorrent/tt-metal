@@ -12,6 +12,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_
 from models.utility_functions import skip_for_blackhole
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
+from tracy import signpost
 
 
 def create_global_semaphores(t3k_mesh_device, num_devices, cores, initial_value):
@@ -40,6 +41,7 @@ def run_all_gather_impl(
     num_workers_per_link=None,
     num_buffers_per_channel=None,
     allowed_pcc=1,
+    skip_check=False,
 ):
     torch.manual_seed(0)
 
@@ -156,11 +158,13 @@ def run_all_gather_impl(
         logger.info(f"Done capturing trace")
 
         # Execute trace
+        signpost("start")
         for i in range(num_iters):
             ttnn.execute_trace(t3k_mesh_device, trace_id, cq_id=0, blocking=False)
             ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
             tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
         logger.info(f"Done executing trace")
+        signpost("stop")
     else:
         for i in range(num_iters):
             tt_all_gather_out_tensor = run_op(i)
@@ -172,16 +176,17 @@ def run_all_gather_impl(
 
             logger.info(f"Done iteration {i}")
 
-    for i in range(num_iters):
-        tt_ag_out_tensor = tt_all_gather_out_tensor_list[i]
-        torch_ag_out_tensor = ag_output_tensor_goldens_list[i if not enable_trace else 0]
+    if not skip_check:
+        for i in range(num_iters):
+            tt_ag_out_tensor = tt_all_gather_out_tensor_list[i]
+            torch_ag_out_tensor = ag_output_tensor_goldens_list[i if not enable_trace else 0]
 
-        tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
-        tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
-        tt_ag_out = tt_ag_out[:, :, :, 0 : torch_ag_out_tensor.shape[3]]
-        eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensor, allowed_pcc)
-        logger.info(f"{output}, iteration {i}")
-        assert eq, f"{i} FAILED ag: {output}"
+            tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
+            tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
+            tt_ag_out = tt_ag_out[:, :, :, 0 : torch_ag_out_tensor.shape[3]]
+            eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensor, allowed_pcc)
+            logger.info(f"{output}, iteration {i}")
+            assert eq, f"{i} FAILED ag: {output}"
 
     t3k_mesh_device.reset_sub_device_stall_group()
     t3k_mesh_device.clear_loaded_sub_device_manager()
@@ -192,6 +197,7 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype, is_training_shape",
     [
+        (8, [1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
         (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
         (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
         (8, [8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
@@ -206,6 +212,7 @@ def run_all_gather_impl(
         (8, [1, 16, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
     ],
     ids=[
+        "dit_shape",  # this one triggers the default chunks_per_sync
         "sd35_spatial",
         "sd35_prompt",
         "gather_dim_0",
