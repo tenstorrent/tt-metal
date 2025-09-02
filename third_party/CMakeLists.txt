@@ -338,6 +338,6 @@ if(BUILD_TTNN_OP_RUNTIME_PREDICTOR)
     CPMAddPackage(
         NAME ttnn-op-runtime-predictor
         GIT_REPOSITORY git@github.com:tenstorrent/ttnn-op-runtime-predictor.git
-        GIT_TAG 4714e00d996da2965626e1f66da65cb04357d841
+        GIT_TAG c46c4fb7de34c46fb565e032a75c5bee591f2b33
     )
 endif()
