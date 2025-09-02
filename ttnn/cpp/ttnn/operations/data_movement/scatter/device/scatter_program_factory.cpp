@@ -161,8 +161,8 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
             input_and_output_chunk_size,
             index_chunk_size,
             source_chunk_size};
-        std::copy(input_shape.cbegin(), input_shape.cend(), reader_runtime_args.end());
-        std::copy(index_shape.cbegin(), index_shape.cend(), reader_runtime_args.end());
+        std::copy(input_shape.cbegin(), input_shape.cend() - 1, std::back_inserter(reader_runtime_args));
+        std::copy(index_shape.cbegin(), index_shape.cend() - 1, std::back_inserter(reader_runtime_args));
 
         SetRuntimeArgs(program, reader_kernel, core, reader_runtime_args);
 
@@ -172,8 +172,8 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
             sticks_per_core,
             input_and_output_chunk_size,
         };
-        std::copy(input_shape.cbegin(), input_shape.cend(), writer_runtime_args.end());
-        std::copy(index_shape.cbegin(), index_shape.cend(), writer_runtime_args.end());
+        // std::copy(input_shape.cbegin(), input_shape.cend() - 1, std::back_inserter(writer_runtime_args));
+        // std::copy(index_shape.cbegin(), index_shape.cend() - 1, std::back_inserter(writer_runtime_args));
 
         SetRuntimeArgs(program, writer_kernel, core, writer_runtime_args);
 

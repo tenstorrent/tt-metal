@@ -4,9 +4,10 @@
 
 #pragma once
 
-#include <cstdint>
-
 #include <tt-metalium/constants.hpp>
+
+#include <array>
+#include <cstdint>
 
 constexpr uint32_t ONE_PAGE = 1;
 
@@ -108,13 +109,12 @@ FORCE_INLINE constexpr auto get_ctas() {
     };
 }
 
-// Helper to fill array at compile time
-template <uint32_t... I>
-constexpr auto make_array_from_function(int C, std::index_sequence<I...>) {
-    return std::array<uint32_t, sizeof...(I)>{get_arg_val<uint32_t>(C + I)...};
-}
-
 template <uint32_t N>
-constexpr auto make_array(uint32_t C) {
-    return make_array_from_function(C, std::make_index_sequence<N>());
+std::array<uint32_t, N> make_shape_array_from_runtime_args(const uint32_t& C) {
+    std::array<uint32_t, N> ret{};
+    for (uint32_t i = C; i < C + N; ++i) {
+        ret[i - C] = get_arg_val<uint32_t>(i);
+    }
+
+    return ret;
 }
