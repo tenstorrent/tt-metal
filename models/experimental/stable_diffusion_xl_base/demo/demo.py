@@ -4,6 +4,7 @@
 
 
 import pytest
+import ttnn
 import torch
 from diffusers import DiffusionPipeline
 from loguru import logger
@@ -11,6 +12,7 @@ from transformers import CLIPTextModelWithProjection, CLIPTextModel
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
+    SDXL_FABRIC_CONFIG,
 )
 import os
 from models.utility_functions import profiler
@@ -30,8 +32,9 @@ def run_demo_inference(
     evaluation_range,
     capture_trace,
     guidance_scale,
+    use_cfg_parallel,
 ):
-    batch_size = ttnn_device.get_num_devices()
+    batch_size = list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
 
     start_from, _ = evaluation_range
     torch.manual_seed(0)
@@ -65,6 +68,7 @@ def run_demo_inference(
             encoders_on_device=encoders_on_device,
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
+            use_cfg_parallel=use_cfg_parallel,
             is_galaxy=is_galaxy(),
         ),
     )
@@ -72,25 +76,20 @@ def run_demo_inference(
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
     (
-        prompt_embeds_torch,
-        negative_prompt_embeds_torch,
-        pooled_prompt_embeds_torch,
-        negative_pooled_prompt_embeds_torch,
+        all_prompt_embeds_torch,
+        torch_add_text_embeds,
     ) = tt_sdxl.encode_prompts(prompts)
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
-        prompt_embeds_torch,
-        negative_prompt_embeds_torch,
-        pooled_prompt_embeds_torch,
-        negative_pooled_prompt_embeds_torch,
+        all_prompt_embeds_torch,
+        torch_add_text_embeds,
     )
 
     tt_sdxl.prepare_input_tensors(
         [
             tt_latents,
-            *tt_prompt_embeds[0],
-            tt_add_text_embeds[0][0],
-            tt_add_text_embeds[0][1],
+            tt_prompt_embeds[0],
+            tt_add_text_embeds[0],
         ]
     )
     tt_sdxl.compile_image_processing()
@@ -115,9 +114,8 @@ def run_demo_inference(
         tt_sdxl.prepare_input_tensors(
             [
                 tt_latents,
-                *tt_prompt_embeds[iter],
-                tt_add_text_embeds[iter][0],
-                tt_add_text_embeds[iter][1],
+                tt_prompt_embeds[iter],
+                tt_add_text_embeds[iter],
             ]
         )
         imgs = tt_sdxl.generate_images()
@@ -149,8 +147,22 @@ def run_demo_inference(
     return images
 
 
+def prepare_device(mesh_device, use_cfg_parallel):
+    if use_cfg_parallel:
+        assert mesh_device.get_num_devices() % 2 == 0, "Mesh device must have even number of devices"
+        mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
+
+
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE, "trace_region_size": SDXL_TRACE_REGION_SIZE}], indirect=True
+    "device_params",
+    [
+        {
+            "l1_small_size": SDXL_L1_SMALL_SIZE,
+            "trace_region_size": SDXL_TRACE_REGION_SIZE,
+            "fabric_config": SDXL_FABRIC_CONFIG,
+        }
+    ],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "prompt",
@@ -188,6 +200,14 @@ def run_demo_inference(
     ],
     ids=("with_trace", "no_trace"),
 )
+@pytest.mark.parametrize(
+    "use_cfg_parallel",
+    [
+        (True),
+        (False),
+    ],
+    ids=("use_cfg_parallel", "no_cfg_parallel"),
+)
 def test_demo(
     mesh_device,
     is_ci_env,
@@ -198,7 +218,9 @@ def test_demo(
     capture_trace,
     evaluation_range,
     guidance_scale,
+    use_cfg_parallel,
 ):
+    prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
         mesh_device,
         is_ci_env,
@@ -209,4 +231,5 @@ def test_demo(
         evaluation_range,
         capture_trace,
         guidance_scale,
+        use_cfg_parallel,
     )
