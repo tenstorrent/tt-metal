@@ -36,8 +36,8 @@ public:
         payload_chunk_size(payload_chunk_size),
         l1_alignment_(l1_alignment),
         payload_region_(payload_region),
-        atomic_region_(atomic_region) {
-        this->next_atomic_addr_ = this->atomic_region_.start;
+        atomic_region_(atomic_region),
+        next_atomic_addr_(this->atomic_region_.start) {
         init_payload_buffer_allocator();
     }
 

@@ -77,10 +77,11 @@ public:
         uint32_t dst_page_index,
         uint32_t total_pages_to_write,
         uint32_t cq_id,
-        tt::stl::Span<const uint32_t> expected_num_workers_completed) {
+        tt::stl::Span<const uint32_t> expected_num_workers_completed) :
+        dst_page_index(dst_page_index) {
         this->num_banks = buffer.device()->allocator()->get_num_banks(buffer.buffer_type());
         this->address = buffer.address();
-        this->dst_page_index = dst_page_index;
+
         this->page_size_to_write = buffer.aligned_page_size();
         this->data_size_to_copy = buffer.page_size();
         this->total_pages_to_write = total_pages_to_write;
@@ -138,13 +139,14 @@ public:
         tt::stl::Span<const uint32_t> expected_num_workers_completed) :
         InterleavedBufferWriteDispatchParams(
             buffer, dst_page_index, total_pages_to_write, cq_id, expected_num_workers_completed),
-        buffer(buffer) {
-        this->size_of_partial_page = partial_page_spec.partial_page_size;
+        buffer(buffer),
+        size_of_partial_page(partial_page_spec.partial_page_size),
+        full_pages_to_write(num_full_pages),
+        num_partial_pages_in_single_full_page(partial_page_spec.num_partial_pages_per_full_page),
+        curr_full_pages_start_address(buffer.address()) {
         this->page_size_to_write = partial_page_spec.partial_page_size;
         this->data_size_to_copy = partial_page_spec.partial_page_size;
-        this->full_pages_to_write = num_full_pages;
-        this->num_partial_pages_in_single_full_page = partial_page_spec.num_partial_pages_per_full_page;
-        this->curr_full_pages_start_address = buffer.address();
+
         this->end_bank_indices.push(this->num_banks);
         for (uint32_t i = 0; i < this->num_banks; i++) {
             this->curr_full_pages_curr_addresses.push_back(this->curr_full_pages_start_address);
@@ -260,13 +262,14 @@ public:
         uint32_t total_pages_to_write,
         uint32_t cq_id,
         tt::stl::Span<const uint32_t> expected_num_workers_completed) :
-        buffer(buffer) {
+        buffer_page_mapping(buffer->get_buffer_page_mapping()),
+        buffer(buffer),
+        are_pages_large(are_pages_larger_than_max_prefetch_cmd_size(*buffer)) {
         this->cq_id = cq_id;
         this->device = buffer->device();
         this->expected_num_workers_completed = expected_num_workers_completed;
-        this->buffer_page_mapping = buffer->get_buffer_page_mapping();
+
         this->total_pages_written = 0;
-        this->are_pages_large = are_pages_larger_than_max_prefetch_cmd_size(*buffer);
 
         if (this->are_pages_large) {
             const PartialPageSpec partial_page_spec = calculate_partial_page_spec(*buffer);

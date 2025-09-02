@@ -169,8 +169,7 @@ FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
         this->is_receiver_channel_serviced_);
 }
 
-FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
-    this->topology = topology;
+FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topology(topology) {
     const bool is_2D_routing = FabricContext::is_2D_topology(topology);
     uint32_t num_sender_channels = get_sender_channel_count(is_2D_routing);
     uint32_t num_downstream_edms = get_downstream_edm_count(is_2D_routing);

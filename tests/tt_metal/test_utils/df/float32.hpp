@@ -23,14 +23,13 @@ public:
     static constexpr size_t SIZEOF = 4;
 
     // create from float: no rounding, just truncate
-    float32(float float_num) {
+    float32(float float_num) : uint32_data(*reinterpret_cast<uint32_t*>(&float_num)) {
         static_assert(sizeof float_num == sizeof uint32_data, "Can only support 32bit fp");
         // just move upper 16 to lower 16 (truncate)
-        uint32_data = (*reinterpret_cast<uint32_t*>(&float_num));
     }
 
     // store lower 16 as 16-bit uint
-    float32(uint32_t new_uint32_data) { uint32_data = new_uint32_data; }
+    float32(uint32_t new_uint32_data) : uint32_data(new_uint32_data) {}
 
     float to_float() const {
         float v;

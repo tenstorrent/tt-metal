@@ -96,20 +96,19 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     SubDeviceId sub_device_id,
     program_dispatch::ProgramDispatchMetadata& dispatch_md) :
     command_queue_id(command_queue_id),
+    device(device),
     noc_index(noc_index),
     manager(manager),
     config_buffer_mgr(config_buffer_mgr),
+    dispatch_core_type(MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type()),
     expected_num_workers_completed(expected_num_workers_completed),
     program(program),
     dispatch_core(dispatch_core),
+    packed_write_max_unicast_sub_cmds(get_packed_write_max_unicast_sub_cmds(this->device)),
     multicast_cores_launch_message_wptr(multicast_cores_launch_message_wptr),
     unicast_cores_launch_message_wptr(unicast_cores_launch_message_wptr),
     sub_device_id(sub_device_id),
-    dispatch_metadata(dispatch_md) {
-    this->device = device;
-    this->dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    this->packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(this->device);
-}
+    dispatch_metadata(dispatch_md) {}
 
 void EnqueueProgramCommand::process() {
     // Compute the total number of workers this program uses
