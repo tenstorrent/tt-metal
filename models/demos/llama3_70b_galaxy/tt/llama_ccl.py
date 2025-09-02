@@ -1218,6 +1218,7 @@ def tt_distributed_rmsnorm(
     )
     padded_shape = (1, 1, inp.shape[-2], 32)
 
+    tt_stats = ttnn.to_memory_config(tt_stats, memory_config=tt_stats.memory_config(), dtype=ttnn.bfloat16)
     tt_stats_gathered = tt_ccl.line_all_gather(
         tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="LAYERNORM"
     )

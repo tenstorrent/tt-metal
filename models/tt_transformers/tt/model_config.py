@@ -2770,8 +2770,12 @@ class HfModelWrapper:
         self.model.eval()
 
     @property
-    def cache_k(self):
-        [(k, v)] = self.past_key_values.to_legacy_cache()
+    def kv_cache(self):
+        return self.past_key_values
+
+    # @property
+    def cache_k(self, index=0):
+        k, v = self.past_key_values.to_legacy_cache()[index]
         hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
         batch_size, seq_len, n_heads, head_dim = hf_k.shape
 
@@ -2787,9 +2791,10 @@ class HfModelWrapper:
 
         return meta_k
 
-    @property
-    def cache_v(self):
-        [(k, v)] = self.past_key_values.to_legacy_cache()
+    # @property
+    def cache_v(self, index=0):
+        k, v = self.past_key_values.to_legacy_cache()[index]
+        # [(k, v)] = self.past_key_values.to_legacy_cache()
         return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
 

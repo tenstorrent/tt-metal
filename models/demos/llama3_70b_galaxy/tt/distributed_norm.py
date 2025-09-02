@@ -81,7 +81,6 @@ class DistributedNorm(LightweightModule):
                     output_mem_config=self.norm.output_mem_config,
                     ccl_topology=self.ccl_topology,
                 )
-
             else:
                 return tt_distributed_rmsnorm(
                     x,

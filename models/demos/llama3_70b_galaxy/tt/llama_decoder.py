@@ -25,8 +25,6 @@ class TtTransformerBlock(LightweightModule):
         use_paged_kv_cache=False,
         prefetcher_setup=None,
         tt_ccl=None,
-        scaling_tensor_q=None,
-        scaling_tensor_k=None,
     ):
         super().__init__()
 
@@ -63,8 +61,6 @@ class TtTransformerBlock(LightweightModule):
             use_paged_kv_cache=use_paged_kv_cache,
             prefetcher_setup=prefetcher_setup,
             tt_ccl=tt_ccl,
-            scaling_tensor_q=scaling_tensor_q,
-            scaling_tensor_k=scaling_tensor_k,
         )
         self.feed_forward = TtLlamaMLP(
             mesh_device=mesh_device,
@@ -115,6 +111,9 @@ class TtTransformerBlock(LightweightModule):
             tt_ccl=tt_ccl,
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
         )
+        state_dict_prefix = args.get_state_dict_prefix("", layer_num)
+        self.ff_norm_weight = state_dict[f"{state_dict_prefix}ffn_norm.weight"]
+        self.attn_norm_weight = state_dict[f"{state_dict_prefix}attention_norm.weight"]
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
@@ -150,12 +149,52 @@ class TtTransformerBlock(LightweightModule):
             # In the first layer we "make" the h tensor from the original x keeping it alive
             # Note this works because layer 0 has a bfloat16 input while other layers use bfloat8
             # since we want residual to be bfloat16
-            attn_in_sharded, _ = self.attention_norm(x, None, mode)
+            # attn_in_sharded, _ = self.attention_norm(x, None, mode)
+            inp_torch = ttnn.to_torch(
+                x, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4))
+            )[:, :1, :, :]
+            attn_in_torch = inp_torch * torch.rsqrt(
+                inp_torch.pow(2).mean(-1, keepdim=True) + self.attention_norm.norm.eps
+            )
+            attn_in_torch = attn_in_torch * self.attn_norm_weight
+            attn_in_sharded = ttnn.from_torch(
+                attn_in_torch,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=(None, 3),
+                    mesh_shape=(8, 4),
+                ),
+                memory_config=self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"],
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+            )
             h = x
 
         else:
             # In subsequent Layers we take the h tensor from before and modify it in place
-            attn_in_sharded, _ = self.attention_norm(x, h, mode)
+            # attn_in_sharded, _ = self.attention_norm(x, h, mode)
+            h = ttnn.add(x, h, memory_config=skip_mem_cfg)
+            inp_torch = ttnn.to_torch(
+                h, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4))
+            )[:, :1, :, :]
+            attn_in_torch = inp_torch * torch.rsqrt(
+                inp_torch.pow(2).mean(-1, keepdim=True) + self.attention_norm.norm.eps
+            )
+            attn_in_torch = attn_in_torch * self.attn_norm_weight
+            attn_in_sharded = ttnn.from_torch(
+                attn_in_torch,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=(None, 3),
+                    mesh_shape=(8, 4),
+                ),
+                memory_config=self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"],
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+            )
+
         attn_out = self.attention.forward(
             attn_in_sharded,
             current_pos,
@@ -173,21 +212,30 @@ class TtTransformerBlock(LightweightModule):
             ff_in_sharded, _ = self.ff_norm(h, None, mode)
 
         if mode == "decode":
-            attn_torch = ttnn.to_torch(
-                attn_out,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4)),
+            h = ttnn.add(attn_out, h, memory_config=skip_mem_cfg)
+            inp_torch = ttnn.to_torch(
+                h, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4))
             )[:, :1, :, :]
-            torch.save(attn_torch, "attn_out.pt")
-            h_torch = ttnn.to_torch(
-                h,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4)),
-            )[:, :1, :, :]
-            torch.save(h_torch, "h.pt")
+            ff_in_torch = inp_torch * torch.rsqrt(inp_torch.pow(2).mean(-1, keepdim=True) + self.ff_norm.norm.eps)
+            ff_in_torch = ff_in_torch * self.ff_norm_weight
+            ff_in_sharded = ttnn.from_torch(
+                ff_in_torch,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=(None, 3),
+                    mesh_shape=(8, 4),
+                ),
+                memory_config=self.model_config["SHARDED_FF12_RING_MEMCFG"],
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+            )
 
-            ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
-            # temp = ttnn.add(attn_out, h, memory_config=skip_mem_cfg)
+            # ff_in_sharded, _ = self.ff_norm(inp, h, mode, ff=True)
+            # ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
             # ff_in_sharded, _ = self.ff_norm(temp, None, mode)
-            attn_out.deallocate(True)
+
+            # attn_out.deallocate(True)
 
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in_sharded, mode)
@@ -199,6 +247,6 @@ class TtTransformerBlock(LightweightModule):
             #     ff_out.deallocate(True)
             if mode == "prefill":
                 h.deallocate(True)
-            return out, ff_in_sharded
+            return out, h
         else:
             return ff_out, h

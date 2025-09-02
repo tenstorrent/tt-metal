@@ -72,52 +72,6 @@ class TtTransformer(LightweightModule):
         self.mesh_sub_device_manager_id_decode = None
         self.mesh_sub_device_manager_id_prefill = None
 
-        # Create shared QK norm scaling tensors if qk_norm is enabled
-        self.scaling_tensor_q = None
-        self.scaling_tensor_k = None
-        if args.qk_norm:
-            import math
-
-            scaling_factor = 1.0 / math.sqrt(args.head_dim)
-
-            # Create memory configs for scaling tensors (same as used in attention layer)
-            reshape_output_q_mem_cfg = ttnn.create_sharded_memory_config(
-                shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
-                core_grid=ttnn.CoreRangeSet(
-                    [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1))]
-                ),  # resharding tensor to cores
-                strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-
-            reshape_output_k_mem_cfg = ttnn.create_sharded_memory_config(
-                shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
-                core_grid=ttnn.CoreRangeSet(
-                    [ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 3))]
-                ),  # resharding tensor to cores
-                strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-
-            # Create scaling tensors with same shape as q and k tensors
-            self.scaling_tensor_q = ttnn.from_torch(
-                torch.full([1, 1, 64, 128], scaling_factor),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
-                memory_config=reshape_output_q_mem_cfg,
-            )
-
-            self.scaling_tensor_k = ttnn.from_torch(
-                torch.full([1, 1, 64, 128], scaling_factor),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
-                memory_config=reshape_output_k_mem_cfg,
-            )
-
         if mode == "decode":
             self.setup_decode()
             self.is_decode_setup = True
@@ -139,8 +93,6 @@ class TtTransformer(LightweightModule):
                 use_paged_kv_cache=use_paged_kv_cache,
                 prefetcher_setup=self.prefetcher_setup,
                 tt_ccl=self.tt_ccl,
-                scaling_tensor_q=self.scaling_tensor_q,
-                scaling_tensor_k=self.scaling_tensor_k,
             )
             for i in tqdm(range(self.n_layers))
         ]
@@ -164,6 +116,9 @@ class TtTransformer(LightweightModule):
             tt_ccl=self.tt_ccl,
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
         )
+
+        state_dict_prefix = args.get_state_dict_prefix("", None)
+        self.norm_weight = state_dict[f"{state_dict_prefix}norm.weight"]
 
         self.lm_head = LMHead(
             args=args,
@@ -662,8 +617,25 @@ class TtTransformer(LightweightModule):
         if mode == "prefill":
             return x
         # Output norm
-        x, res = self.norm(x, res=None, mode=mode)
-        x = ttnn.to_memory_config(x, self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"])
+        # x, res = self.norm(x, res=None, mode=mode)
+        inp_torch = ttnn.to_torch(
+            x, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4))
+        )[:, :1, :, :]
+        x_torch = inp_torch * torch.rsqrt(inp_torch.pow(2).mean(-1, keepdim=True) + self.norm.norm.eps)
+        x_torch = x_torch * self.norm_weight
+        x = ttnn.from_torch(
+            x_torch,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=(None, 3),
+                mesh_shape=(8, 4),
+            ),
+            memory_config=self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"],
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+        )
+        # x = ttnn.to_memory_config(x, self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"])
 
         if get_last_token != -1:
             x = x[:, :, get_last_token:, :]

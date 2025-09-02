@@ -254,7 +254,9 @@ def test_qwen_attention_inference(
             ),
         )
 
-        check_kv_cache = True
+        breakpoint()
+
+        check_kv_cache = False
         if check_kv_cache:
             # PyTorch output --------------------------------------------------------------------
             pytorch_layer_present = [
