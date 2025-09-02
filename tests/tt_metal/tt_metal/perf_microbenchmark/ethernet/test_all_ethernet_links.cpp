@@ -117,10 +117,10 @@ private:
     std::map<chip_id_t, tt_metal::IDevice*> devices_map;
 
 public:
-    ConnectedDevicesHelper(const TestParams& params) :
-        num_devices(tt::tt_metal::GetNumAvailableDevices()), device_open_(true) {
+    ConnectedDevicesHelper(const TestParams& params) : device_open_(false) {
         this->arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
+        this->num_devices = tt::tt_metal::GetNumAvailableDevices();
         std::vector<chip_id_t> ids(this->num_devices, 0);
         std::iota(ids.begin(), ids.end(), 0);
 
@@ -130,6 +130,7 @@ public:
         this->devices = tt::DevicePool::instance().get_all_active_devices();
 
         this->initialize_sender_receiver_pairs(params);
+        device_open_ = true;
     }
 
     ~ConnectedDevicesHelper() {
