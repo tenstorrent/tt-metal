@@ -109,7 +109,9 @@ void benchmark_args_combinations_single_core(
         // Set up sharded accessor compile-time args for reader kernel
         const auto sharded_accessor_args = TensorAccessorArgs(*input_shard_view, arg_config);
 
-        std::map<std::string, std::string> defines{{"ACCESSOR_CONFIG_NAME", crta_config_str}};
+        constexpr size_t n_repeat = 100;
+        std::map<std::string, std::string> defines{
+            {"ACCESSOR_CONFIG_NAME", crta_config_str}, {"N_REPEAT", std::to_string(n_repeat)}};
         // Create reader kernel
         KernelHandle reader_kernel_id = CreateKernel(
             program,

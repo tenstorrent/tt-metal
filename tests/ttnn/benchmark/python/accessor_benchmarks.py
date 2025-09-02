@@ -120,7 +120,7 @@ def get_individual_test_names(gtest_filter):
     return test_names
 
 
-def benchmark_impl(gtest_filter, res_dir, export_results_to=None, args_configs=None):
+def benchmark_impl(gtest_filter, res_dir, export_results_to=None, args_configs=None, n_repeat=1):
     if args_configs is None:
         args_configs = ARGS_CONFIGS
 
@@ -179,10 +179,10 @@ def benchmark_impl(gtest_filter, res_dir, export_results_to=None, args_configs=N
         for zone_name in zone_names:
             core = [key for key in stats["devices"][0]["cores"].keys() if key != "DEVICE"][0]
             st = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"][zone_name]["stats"]
-            logger.info(f"Zone: {zone_name}: Average: {st['Average']} (cycles)")
+            logger.info(f"Zone: {zone_name}: Average: {st['Average'] / n_repeat:.2f} (cycles)")
 
             # Store results for JSON export
-            benchmark_results[rank_key][zone_name] = st["Samples"]
+            benchmark_results[rank_key][zone_name] = list(np.array(st["Samples"]) / n_repeat)
 
     # Export results if requested
     if export_results_to is not None:
@@ -193,8 +193,10 @@ def benchmark_impl(gtest_filter, res_dir, export_results_to=None, args_configs=N
     return benchmark_results
 
 
-def benchmark_impl_static_only(gtest_filter, res_dir, export_results_to=None):
-    return benchmark_impl(gtest_filter, res_dir, export_results_to, args_configs=STATIC_ONLY_ARGS_CONFIGS)
+def benchmark_impl_static_only(gtest_filter, res_dir, export_results_to=None, n_repeat=1):
+    return benchmark_impl(
+        gtest_filter, res_dir, export_results_to, args_configs=STATIC_ONLY_ARGS_CONFIGS, n_repeat=n_repeat
+    )
 
 
 def export_benchmark_results(benchmark_results, export_dir, benchmark_name):
@@ -215,43 +217,53 @@ def export_benchmark_results(benchmark_results, export_dir, benchmark_name):
     logger.info(f"Results exported to: {output_file}")
 
 
+# Benchmark tensor_accessor.get_noc_addr(page_id)
 def benchmark_get_noc_addr_page_id(export_results_to=None):
     return benchmark_impl(
         "AccessorTests/AccessorBenchmarks.GetNocAddr/*",
         res_dir="accessor_get_noc_addr_benchmarks",
         export_results_to=export_results_to,
+        n_repeat=100,
     )
 
 
+# Benchmark tensor_accessor.get_noc_addr(page_coord)
 def benchmark_get_noc_addr_page_coord(export_results_to=None):
     return benchmark_impl(
         "AccessorTests/AccessorBenchmarks.GetNocAddrPageCoord/*",
         res_dir="accessor_get_noc_addr_page_coord_benchmarks",
         export_results_to=export_results_to,
+        n_repeat=100,
     )
 
 
+# Benchmark tensor_accessor constructor
 def benchmark_constructor(export_results_to=None):
     return benchmark_impl(
         "AccessorTests/AccessorBenchmarks.Constructor/*",
         res_dir="accessor_constructor_benchmarks",
         export_results_to=export_results_to,
+        n_repeat=100,
     )
 
 
+# Benchmark how many cycles it takes to iterate over all pages using tensor_accessor.get_noc_addr(page_id)
 def benchmark_manual_pages_iteration(export_results_to=None):
     return benchmark_impl_static_only(
         "AccessorTests/AccessorBenchmarks.ManualPagesIteration/*",
         res_dir="accessor_manual_pages_iteration_benchmarks",
         export_results_to=export_results_to,
+        n_repeat=1,
     )
 
 
+# Benchmark how many cycles it takes to iterate over all pages using tensor_accessor.pages()
 def benchmark_pages_iterator(export_results_to=None):
     return benchmark_impl_static_only(
         "AccessorTests/AccessorBenchmarks.PagesIterator/*",
         res_dir="accessor_pages_iterator_benchmarks",
         export_results_to=export_results_to,
+        n_repeat=1,
     )
 
 
