@@ -75,8 +75,6 @@ jobs:
               });
               console.log("Tag already exists");
             } catch (e) {
-              console.log("Logging github API error");
-              console.log(e);
               const { response: { status, data: { message } } } = e;
 
               const isMissingTag = status === 404 && message == "Not Found";
@@ -94,12 +92,14 @@ jobs:
                     email: "info@tenstorrent.com",
                   }
                 });
-                github.rest.git.createRef({
+                console.log("Created tag:", tag);
+                const ref = await github.rest.git.createRef({
                   owner: owner,
                   repo: repo,
                   ref: `refs/tags/${version}`,
                   sha: tag.data.sha,
                 });
+                console.log("Created ref:", ref);
               } else {
                 console.error(e);
                 console.error("Received an error that's not 404 Not Found for a tag");
