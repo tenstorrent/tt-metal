@@ -1,19 +1,54 @@
-"""
-This is the FeedForward submodule for vision block in Gemma-3-4b-it
-We have reused the TtLlamaImageFeedForward with few changes in CoreGrid and program_config configurations
-"""
-
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+from pydantic import BaseModel, Field
 
 import ttnn
-from models.common.lightweightmodule import LightweightModule
+from models.tt_transformers.tt.multimodal.llama_image_mlp import TtLlamaImageFeedForward
 
 
-class TtGemmaImageFeedForward(LightweightModule):
+class GemmaMLPConfig(BaseModel):
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
+    num_devices: int
+    vision_dim: int
+    vision_mlp_ratio: float = 4.0
+    compute_kernel_config_hifi2: ttnn.WormholeComputeKernelConfig = Field(
+        default_factory=lambda: ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+    )
+    compute_kernel_config_hifi4: ttnn.WormholeComputeKernelConfig = Field(
+        default_factory=lambda: ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+    )
+    dummy_weights: bool = False
+    # Gemma uses dynamic MAX_MM_SEQ_LEN - this will be overridden at runtime
+    VISION_MAX_MM_SEQ: int = 32
+
+    @property
+    def vision_mlp_dim(self):
+        return int(self.vision_dim * self.vision_mlp_ratio)
+
+    def get_model_config(self):
+        # Gemma-specific: Return None for program configs to disable optimizations
+        # This makes llama_image_mlp use core_grid=ttnn.CoreGrid(y=8, x=8) and program_config=None
+        return {
+            "IMAGE_MLP_FC_PROGCFG": lambda seq_len, max_seq: None,
+            "IMAGE_MLP_PROJ_PROGCFG": lambda seq_len, max_seq: None,
+        }
+
+
+class TtGemmaImageFeedForward:
     def __init__(
         self,
         mesh_device,
@@ -24,111 +59,41 @@ class TtGemmaImageFeedForward(LightweightModule):
         weight_cache_path,
         dtype,
     ):
-        super().__init__()
-
-        self.state_dict = state_dict
-        self.mesh_device = mesh_device
-        self.tt_ccl = tt_ccl
-        self.args = args
-        self.model_config = args.get_model_config()
-        torch_weight = lambda name, suffix: torch.transpose(
-            self.state_dict[f"{state_dict_prefix}{name}.{suffix}"], -2, -1
-        )
-        torch_bias = lambda name, suffix: self.state_dict[f"{state_dict_prefix}{name}.{suffix}"]
-
-        if args.dummy_weights:
-            cache_name = lambda *_: None
+        # For backward compatibility: if args is not a GemmaMLPConfig, create one
+        if not isinstance(args, GemmaMLPConfig):
+            # Extract necessary parameters from the args object
+            self.mlp_config = GemmaMLPConfig(
+                num_devices=mesh_device.get_num_devices() if mesh_device else 0,
+                vision_dim=getattr(args, "vision_dim", 1152),  # Default vision dim
+                vision_mlp_ratio=getattr(args, "vision_mlp_ratio", 4.0),  # Default ratio
+                dummy_weights=(weight_cache_path is None),
+            )
         else:
-            cache_name = lambda name, suffix: weight_cache_path / (state_dict_prefix + f"{name}.{suffix}")
+            self.mlp_config = args
 
-        as_interleaved_tensor = lambda name, suffix, type, dim: ttnn.as_tensor(
-            (
-                torch_weight(name, suffix) if suffix == "weight" else torch_bias(name, suffix)
-            ),  # Grab only the wX part of the name
-            dtype=type,
-            device=self.mesh_device,
-            mesh_mapper=(
-                ttnn.ShardTensorToMesh(self.mesh_device, dim=dim)
-                if dim is not None
-                else ttnn.ReplicateTensorToMesh(self.mesh_device)
-            ),
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name(name, suffix),
+        # Create the underlying llama MLP - just like siglip does
+        self.llama_mlp = TtLlamaImageFeedForward(
+            mesh_device=mesh_device,
+            tt_ccl=tt_ccl,
+            args=self.mlp_config,
+            state_dict=state_dict,
+            state_dict_prefix=state_dict_prefix,
+            weight_cache_path=weight_cache_path,
+            dtype=dtype,
         )
-
-        # Sharded weights
-        self.c_fc_weight = as_interleaved_tensor("c_fc", "weight", dtype, dim=-1)
-        self.c_fc_bias = as_interleaved_tensor("c_fc", "bias", ttnn.bfloat16, dim=-1)
-        self.c_fc_bias = ttnn.reshape(self.c_fc_bias, [1, -1])
-        self.c_proj_weight = as_interleaved_tensor("c_proj", "weight", dtype, dim=-2)
-        self.c_proj_bias = as_interleaved_tensor("c_proj", "bias", ttnn.bfloat16, dim=None)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """
-        w1 -> gate_proj
-        w2 -> down_proj
-        w3 -> up_proj
-        HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
-        """
         seq_len = x.shape[-2]
 
-        # Depends on whether we are padding or not
-        MAX_MM_SEQ_LEN = seq_len if "gemma-3" in self.args.base_model_name else self.args.VISION_MAX_MM_SEQ
+        # Gemma-3 specific: use dynamic MAX_MM_SEQ_LEN
+        # Temporarily set VISION_MAX_MM_SEQ to current sequence length
+        original_max_seq = self.llama_mlp.args.VISION_MAX_MM_SEQ
+        self.llama_mlp.args.VISION_MAX_MM_SEQ = seq_len
 
-        x_in = x
-        if seq_len >= MAX_MM_SEQ_LEN:  # Too big to compute. Set different program configs based on seqlen
-            # Reshape input to to fit on device and parallelize computation
-            x_in = ttnn.reshape(x_in, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
-        pc_1 = self.model_config["IMAGE_MLP_FC_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
-        pc_2 = self.model_config["IMAGE_MLP_PROJ_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
+        try:
+            return self.llama_mlp.forward(x)
+        finally:
+            self.llama_mlp.args.VISION_MAX_MM_SEQ = original_max_seq
 
-        # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
-        c_fc_out = ttnn.linear(
-            x_in,
-            self.c_fc_weight,
-            bias=self.c_fc_bias,
-            compute_kernel_config=self.args.compute_kernel_config_hifi4,
-            # core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
-            dtype=ttnn.bfloat16,
-            # program_config=pc_1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            activation="gelu",  # NOTE: activation must be passed to linear here, not in program config! Bad output otherwise
-        )
-
-        c_proj_out = ttnn.linear(
-            c_fc_out,
-            self.c_proj_weight,
-            compute_kernel_config=self.args.compute_kernel_config_hifi4,
-            # core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-            dtype=ttnn.bfloat16,
-            # program_config=pc_2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # NOTE: Need to reshape to 4D so that fast_reduce_nc hsa a dim1 to work on
-        c_proj_out = ttnn.reshape(c_proj_out, [1, 1, seq_len, -1])
-
-        # All reduce
-        if self.args.num_devices > 1:  # replace with reduce_scatter and all_gather
-            w2_out_gathered = ttnn.experimental.all_gather_async(
-                c_proj_out,
-                persistent_output_buffer=None,
-                dim=1,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=1,
-                topology=ttnn.Topology.Linear,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
-            )
-
-            pre_bias_output = ttnn.experimental.fast_reduce_nc(
-                w2_out_gathered, dims=[1], output=None, compute_kernel_config=None
-            )
-        else:
-            pre_bias_output = c_proj_out
-
-        output = ttnn.add(pre_bias_output, self.c_proj_bias)
-        return output
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        return self.forward(x)
