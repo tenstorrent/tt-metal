@@ -1671,11 +1671,7 @@ class ModelArgs:
 
     def _set_hf_params(self, checkpoint_dir):
         if self.from_hf_url:
-            # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-            if "Qwen/Qwen2.5-VL" in self.model_name:
-                from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
-            else:
-                from transformers import AutoConfig
+            from transformers import AutoConfig
 
             if self.dummy_weights:
                 logger.info(
@@ -1770,7 +1766,7 @@ class ModelArgs:
                     config.num_layers = self.n_layers
                     config.num_hidden_layers = self.n_layers
 
-                model_cls = AutoModelForVision2Seq if self.is_vision() else AutoModelForCausalLM
+                model_cls = AutoModelForVision2Seq if self.is_multimodal else AutoModelForCausalLM
                 model = model_cls.from_config(config)
                 state_dict = model.state_dict()
             else:
@@ -1785,7 +1781,7 @@ class ModelArgs:
             if self.from_hf_url:
                 from transformers import AutoModelForCausalLM, AutoModelForVision2Seq
 
-                model_cls = AutoModelForVision2Seq if self.is_vision() else AutoModelForCausalLM
+                model_cls = AutoModelForVision2Seq if self.is_multimodal else AutoModelForCausalLM
                 model = model_cls.from_pretrained(
                     self.CKPT_DIR,
                     torch_dtype="auto",
