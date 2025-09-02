@@ -209,16 +209,26 @@ def test_wan_transformer_block(
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links",
     [
-        [(2, 2), 0, 1, 1],
-        [(2, 2), 1, 0, 1],
-        [(2, 4), 0, 1, 1],
-        [(2, 4), 1, 0, 1],
-        [(4, 8), 0, 1, 4],
-        [(4, 8), 1, 0, 4],
+        [(1, 1), (1, 1), 0, 1, 1],
+        [(1, 2), (1, 2), 0, 1, 1],
+        [(1, 2), (1, 2), 1, 0, 1],
+        [(2, 1), (2, 1), 0, 1, 1],
+        [(2, 1), (2, 1), 1, 0, 1],
+        [(2, 2), (2, 2), 0, 1, 1],
+        [(2, 2), (2, 2), 1, 0, 1],
+        [(2, 4), (2, 4), 0, 1, 1],
+        [(2, 4), (2, 4), 1, 0, 1],
+        [(4, 8), (4, 8), 0, 1, 4],
+        [(4, 8), (4, 8), 1, 0, 4],
     ],
     ids=[
+        "1x1sp0tp1",
+        "1x2sp0tp1",
+        "1x2sp1tp0",
+        "2x1sp0tp1",
+        "2x1sp1tp0",
         "2x2sp0tp1",
         "2x2sp1tp0",
         "2x4sp0tp1",
@@ -229,18 +239,20 @@ def test_wan_transformer_block(
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    ("B, T, H, W, prompt_seq"),
+    ("B, T, H, W, prompt_seq_len"),
     [
-        (1, 21, 40, 80, 118),  # small input
-        (1, 31, 60, 104, 118),  # medium input
-        (1, 41, 90, 160, 118),  # large input
+        (1, 8, 40, 50, 118),  # small input
+        (1, 31, 40, 80, 118),  # 5B-720p
+        (1, 21, 60, 104, 118),  # 14B-480p
+        (1, 21, 90, 160, 118),  # 14B-720p
     ],
-    ids=["small_seq", "medium_seq", "large_seq"],
+    ids=["short_seq", "5b-720p", "14b-480p", "14b-720p"],
 )
 @pytest.mark.parametrize("load_cache", [True, False], ids=["yes_load_cache", "no_load_cache"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_wan_transformer_model(
     mesh_device: ttnn.MeshDevice,
+    mesh_shape: tuple[int, int],
     sp_axis: int,
     tp_axis: int,
     num_links: int,
@@ -248,7 +260,7 @@ def test_wan_transformer_model(
     T: int,
     H: int,
     W: int,
-    prompt_seq: int,
+    prompt_seq_len: int,
     load_cache: bool,
 ) -> None:
     torch_dtype = torch.float32
@@ -259,18 +271,20 @@ def test_wan_transformer_model(
     # Wan2.2 Model configuration
     patch_size = (1, 2, 2)
     num_attention_heads = 40
-    attention_head_dim = 128
-    num_layers = 32
-    pooled_projection_dim = 1536
+    dim = 5120
     in_channels = 16
-    text_embed_dim = 4096
-    time_embed_dim = 256
-    activation_fn = "swiglu"
-    max_sequence_length = 1024
+    out_channels = 16
+    text_dim = 4096
+    freq_dim = 256
+    ffn_dim = 13824
+    num_layers = 40
+    cross_attn_norm = True
+    eps = 1e-6
+    rope_max_seq_len = 1024
 
     # Tight error bounds based on test config
     MIN_PCC = 0.992_000
-    MIN_RMSE = 0.15
+    MAX_RMSE = 0.15
 
     torch_model = TorchWanTransformer3DModel.from_pretrained(
         "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer", torch_dtype=torch_dtype, trust_remote_code=True
@@ -293,22 +307,22 @@ def test_wan_transformer_model(
     torch.manual_seed(0)
     # Create input tensors
     spatial_input = torch.randn((B, in_channels, T, H, W), dtype=torch_dtype)
-    prompt_input = torch.randn((B, prompt_seq, text_embed_dim), dtype=torch_dtype)
+    prompt_input = torch.randn((B, prompt_seq_len, text_dim), dtype=torch_dtype)
     timestep_input = torch.randint(0, 1000, (B,), dtype=torch_dtype)
-    attention_mask = torch.ones((B, prompt_seq), dtype=torch_dtype)
 
     # Create TT model
     tt_model = WanTransformer3DModel(
         patch_size=patch_size,
-        num_attention_heads=num_attention_heads,
-        attention_head_dim=attention_head_dim,
-        num_layers=num_layers,
-        pooled_projection_dim=pooled_projection_dim,
+        num_heads=num_attention_heads,
+        dim=dim,
         in_channels=in_channels,
-        text_embed_dim=text_embed_dim,
-        time_embed_dim=time_embed_dim,
-        activation_fn=activation_fn,
-        max_sequence_length=max_sequence_length,
+        out_channels=out_channels,
+        text_dim=text_dim,
+        freq_dim=freq_dim,
+        ffn_dim=ffn_dim,
+        cross_attn_norm=cross_attn_norm,
+        eps=eps,
+        rope_max_seq_len=rope_max_seq_len,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
@@ -343,8 +357,7 @@ def test_wan_transformer_model(
     tt_spatial_out = tt_model(
         spatial=spatial_input,
         prompt=prompt_input,
-        temb_1BTD=timestep_input,
-        prompt_attention_mask=attention_mask,
+        timestep=timestep_input,
     )
 
     # Run torch model
@@ -353,33 +366,27 @@ def test_wan_transformer_model(
         hidden_states=spatial_input,
         encoder_hidden_states=prompt_input,
         timestep=timestep_input,
-        encoder_attention_mask=attention_mask,
         return_dict=False,
     )
     torch_spatial_out = torch_spatial_out[0]
 
     logger.info(f"Checking spatial outputs")
-    assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MIN_RMSE)
+    assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, num_links",
     [
+        [(2, 4), 0, 1, 1],
         [(2, 4), 1, 0, 1],
         [(4, 8), 1, 0, 4],
     ],
     ids=[
+        "2x4sp0tp1",
         "2x4sp1tp0",
         "4x8sp1tp0",
     ],
     indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    ("B, T, H, W, prompt_seq"),
-    [
-        (1, 21, 40, 80, 118),
-    ],
-    ids=["small_seq"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_wan_transformer_model_caching(
@@ -387,11 +394,6 @@ def test_wan_transformer_model_caching(
     sp_axis: int,
     tp_axis: int,
     num_links: int,
-    B: int,
-    T: int,
-    H: int,
-    W: int,
-    prompt_seq: int,
 ) -> None:
     torch_dtype = torch.float32
 
@@ -401,14 +403,16 @@ def test_wan_transformer_model_caching(
     # Wan2.2 Model configuration
     patch_size = (1, 2, 2)
     num_attention_heads = 40
-    attention_head_dim = 128
-    num_layers = 32
-    pooled_projection_dim = 1536
+    dim = 5120
     in_channels = 16
-    text_embed_dim = 4096
-    time_embed_dim = 256
-    activation_fn = "swiglu"
-    max_sequence_length = 1024
+    out_channels = 16
+    text_dim = 4096
+    freq_dim = 256
+    ffn_dim = 13824
+    num_layers = 40
+    cross_attn_norm = True
+    eps = 1e-6
+    rope_max_seq_len = 1024
 
     # Tight error bounds based on test config
     MIN_PCC = 0.992_500
@@ -442,15 +446,16 @@ def test_wan_transformer_model_caching(
     # Create TT model
     tt_model = WanTransformer3DModel(
         patch_size=patch_size,
-        num_attention_heads=num_attention_heads,
-        attention_head_dim=attention_head_dim,
-        num_layers=num_layers,
-        pooled_projection_dim=pooled_projection_dim,
+        num_heads=num_attention_heads,
+        dim=dim,
         in_channels=in_channels,
-        text_embed_dim=text_embed_dim,
-        time_embed_dim=time_embed_dim,
-        activation_fn=activation_fn,
-        max_sequence_length=max_sequence_length,
+        out_channels=out_channels,
+        text_dim=text_dim,
+        freq_dim=freq_dim,
+        ffn_dim=ffn_dim,
+        cross_attn_norm=cross_attn_norm,
+        eps=eps,
+        rope_max_seq_len=rope_max_seq_len,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
@@ -472,15 +477,16 @@ def test_wan_transformer_model_caching(
 
     cache_model = WanTransformer3DModel(
         patch_size=patch_size,
-        num_attention_heads=num_attention_heads,
-        attention_head_dim=attention_head_dim,
-        num_layers=num_layers,
-        pooled_projection_dim=pooled_projection_dim,
+        num_heads=num_attention_heads,
+        dim=dim,
         in_channels=in_channels,
-        text_embed_dim=text_embed_dim,
-        time_embed_dim=time_embed_dim,
-        activation_fn=activation_fn,
-        max_sequence_length=max_sequence_length,
+        out_channels=out_channels,
+        text_dim=text_dim,
+        freq_dim=freq_dim,
+        ffn_dim=ffn_dim,
+        cross_attn_norm=cross_attn_norm,
+        eps=eps,
+        rope_max_seq_len=rope_max_seq_len,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
