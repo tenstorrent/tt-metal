@@ -94,7 +94,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t per_core_out_matrix_height_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
     const bool block_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     const bool height_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
-
     const bool slice_inner_dim = height_sharded || !full_inner_dim;
 
     uint32_t conv_act_c_blocks;
@@ -385,7 +384,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
         conv_reader_indices_tensor, parallel_config, block_sharded, a.device(), config_tensors_in_dram);
 
-    log_info(tt::LogOp, "Config Tensor : {}", conv_reader_indices_tensor);
+    log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor);
     const tt::tt_metal::DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
 
     TT_FATAL(act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0, "Error");
@@ -520,6 +519,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     Conv2dConfig conv_config = Conv2dConfig{
         .weights_dtype = b.dtype(),
+        .config_tensors_in_dram = config_tensors_in_dram,
         .shard_layout = a.memory_config().memory_layout(),
         .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
         .enable_act_double_buffer = enable_act_double_buffer,
@@ -539,7 +539,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         is_conv_1d_depthwise_conv,
         skip_activation_mcast);
 
-    access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size = conv_sharded_input_top_left_indices[0].size();
+    access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size =
+        conv_reader_indices_storage.get_buffer()->page_size();
 
     // call function to allocate circular buffers
     allocate_cbs(cb_info, program, all_cores, a, output, conv_reader_indices_tensor);
@@ -881,6 +882,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                 reader_rt_args.insert(reader_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
                 reader_rt_args.push_back(core_y_i);                // act_mcast_sender_id
                 reader_rt_args.push_back(bottom_core_physical.x);  // act_mcast_sender_noc_x
+                reader_rt_args.push_back(core_x_i);                // dram config reader index
             } else {
                 CoreCoord curr_core = {core_x_i, core_y_i};
                 auto core_physical = device->worker_core_from_logical_core(curr_core);
@@ -895,6 +897,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                 reader_rt_args.insert(reader_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
                 reader_rt_args.push_back(core_x_i);         // act_mcast_sender_id
                 reader_rt_args.push_back(core_physical.y);  // act_mcast_sender_noc_x
+                reader_rt_args.push_back(core_y_i);         // dram config reader index
             }
             reader_rt_args.insert(reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());
         } else {

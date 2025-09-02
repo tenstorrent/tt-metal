@@ -113,6 +113,7 @@ struct Conv2dConfig {
         "activation",
         "deallocate_activation",
         "reallocate_halo_output",
+        "config_tensors_in_dram",
         "act_block_h_override",
         "act_block_w_div",
         "reshard_if_not_optimal",
@@ -133,6 +134,7 @@ struct Conv2dConfig {
             std::cref(this->activation),
             std::cref(this->deallocate_activation),
             std::cref(this->reallocate_halo_output),
+            std::cref(this->config_tensors_in_dram),
             std::cref(this->act_block_h_override),
             std::cref(this->act_block_w_div),
             std::cref(this->reshard_if_not_optimal),
@@ -204,7 +206,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
     bool enable_act_double_buffer,
-    bool enable_weights_double_buffer);
+    bool enable_weights_double_buffer,
+    bool config_tensors_in_dram);
 
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     tt::tt_metal::Program& program,
@@ -314,7 +317,8 @@ struct OptimizedConvNew {
         "input_tensor_shape",
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
-        "enable_split_reader");
+        "enable_split_reader",
+        "config_tensors_in_dram");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->parallelization_config),
@@ -330,7 +334,8 @@ struct OptimizedConvNew {
             std::cref(this->input_tensor_shape),
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_weights_double_buffer),
-            std::cref(this->enable_split_reader));
+            std::cref(this->enable_split_reader),
+            std::cref(this->config_tensors_in_dram));
     }
 };
 

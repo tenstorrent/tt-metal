@@ -48,6 +48,7 @@ std::vector<CBInfo> get_cb_info(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), compute_kernel_config);
 
+    log_info(tt::LogOp, "Conv Config : {}", conv_config);
     TT_FATAL(conv_config.weights_dtype.has_value(), "get_cb_info expects conv_config.weights_dtype to be already set");
     const tt::DataFormat weights_df = datatype_to_dataformat_converter(conv_config.weights_dtype.value());
     const tt::DataFormat bias_df = weights_df;
@@ -201,7 +202,7 @@ std::vector<CBInfo> get_cb_info(
         .name = Conv2dCb::READER_INDICES,
         .num_pages = 1,
         .page_size = pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT * 2,  // 2B per indexß
-        .is_globally_allocated = true,
+        .is_globally_allocated = conv_config.config_tensors_in_dram == false,
         .data_format = tt::DataFormat::UInt16});
 
     // L1 scratchpad CB
@@ -219,6 +220,7 @@ std::vector<CBInfo> get_cb_info(
         .is_globally_allocated = true,
         .data_format = conv_input_df});
 
+    log_info(tt::LogOp, "CB Info = {}", cb_info);
     TT_FATAL(cb_info.size() == num_cbs, "Expected info for {} cbs  by got {}!", num_cbs, cb_info.size());
     return cb_info;
 }
@@ -245,9 +247,7 @@ void allocate_cbs(
             } else if (cb.name == Conv2dCb::OUT || cb.name == Conv2dCb::MATMUL_PARTIALS) {
                 buffer = output_tensor.buffer();
             } else if (cb.name == Conv2dCb::READER_INDICES) {
-                if (!l1_indices_tensor.memory_config().is_dram()) {
-                    buffer = l1_indices_tensor.buffer();
-                }
+                buffer = l1_indices_tensor.buffer();
             } else {
                 TT_THROW(
                     "Unexpected circular buffer name {}. Expected one of: SHARDED_ACT_CB, OUT0_CB, READER_INDICES_CB",

@@ -1255,6 +1255,7 @@ Tensor construct_on_host_config_tensor(
     // We need the last dim of tensors to be multiple of 2, pad if needed
     uint32_t extend_with_zeroes = config[0].size() % 2;
     extend_with_zeroes = extend_with_zeroes > 0 ? 2 - extend_with_zeroes : 0;
+
     ttnn::Shape config_shape(
         {static_cast<uint32_t>(config.size()), static_cast<uint32_t>(config[0].size()) + extend_with_zeroes});
     std::vector<uint16_t> config_vector = flatten(config, extend_with_zeroes);

@@ -219,7 +219,8 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             output_tensor,
             compute_kernel_config,
             enable_act_double_buffer,
-            enable_weights_double_buffer);
+            enable_weights_double_buffer,
+            config_tensors_in_dram);
     } else {
         // Use regular sharded implementation
         tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
