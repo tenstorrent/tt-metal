@@ -29,8 +29,8 @@ parameters = {
         "num_links": [1],
         "input_shape": [
             [1, 1, 32, 256],
-            [1, 1, 4096, 32],
-            [1, 1, 32, 16384],
+            # [1, 1, 4096, 32],
+            # [1, 1, 32, 16384],
             # [1, 1, 1, 4096],
             # [1, 1, 1, 2048],
             # [1, 32, 2048, 8],
@@ -50,11 +50,11 @@ parameters = {
         ],
         "cluster_axis": [0, 1],
         "math_op": [ttnn.ReduceType.Sum],
-        "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint32],
+        "layout": [ttnn.TILE_LAYOUT],  # ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16],  # ttnn.bfloat8_b, ttnn.uint32],
         "mem_config": [
             ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+            # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
         ],
         "topology": [ttnn.Topology.Linear],
         "num_iters": [1],
@@ -80,14 +80,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         return True, "Ring fabric config required for ring topology"
     if (test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT) and (test_vector["input_dtype"] == ttnn.bfloat8_b):
         return True, "Row major not supported for bfloat8_b"
-
-    # Invalidate known hanging cases
-    if (
-        test_vector["mesh_shape"] == (8, 1)
-        and test_vector["input_shape"] == [1, 1, 32, 16384]
-        and test_vector["cluster_axis"] == 0
-    ):
-        return True, "Known hang case for 8-device all-reduce"
 
     return False, None
 

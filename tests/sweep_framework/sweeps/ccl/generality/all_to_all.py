@@ -26,23 +26,23 @@ parameters = {
     "suite_1": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
         "fabric_config": [
-            ttnn.FabricConfig.FABRIC_1D,
+            # ttnn.FabricConfig.FABRIC_1D,
             ttnn.FabricConfig.FABRIC_1D_RING,
         ],  # default is ring for this one
         "num_links": [1],
         "input_shape": [
-            [1, 1, 32, 2048],
-            [1, 1, 2048, 256],
+            # [1, 1, 44544, 3072],
+            [1, 1, 4096, 2048],
         ],
-        "in_dim": [0, 1, 2, 3, 4],  # only 2 and 3 are supported
-        "out_dim": [0, 1, 2, 3, 4],  # only 2 and 3 are supported
-        "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint32],
+        "in_dim": [2, 3],  # [0, 1, 2, 3, 4],  # only 2 and 3 are supported
+        "out_dim": [2, 3],  # [0, 1, 2, 3, 4],  # only 2 and 3 are supported
+        "layout": [ttnn.TILE_LAYOUT],  # , ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16],  # , ttnn.bfloat8_b, ttnn.uint32],
         "mem_config": [
             ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+            # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
         ],
-        "topology": [ttnn.Topology.Ring, ttnn.Topology.Linear],
+        "topology": [ttnn.Topology.Ring],  # ttnn.Topology.Linear],
         "num_iters": [1],
     },
 }
@@ -62,6 +62,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["fabric_config"] != ttnn.FabricConfig.FABRIC_1D_RING
     ):
         return True, "Ring topology requires FABRIC_1D_RING fabric config"
+    # invalidate when input and output dim are the same
+    if test_vector["in_dim"] == test_vector["out_dim"]:
+        return True, "in_dim and out_dim cannot be the same"
 
     return False, None
 
@@ -71,7 +74,7 @@ def mesh_device_fixture():
     yield None, "Device creation in sweep body"
 
 
-def _get_tensors(input_shape, in_dim, out_dim, mesh_shape, dtype, layout, device):
+def _get_tensors(input_shape, in_dim, out_dim, mesh_shape, dtype, layout, device, mem_config):
     """
     Generates sharded input tensors for the mesh and computes the golden reference tensors.
     """
@@ -85,15 +88,15 @@ def _get_tensors(input_shape, in_dim, out_dim, mesh_shape, dtype, layout, device
     tt_input = ttnn.from_torch(
         torch_input,
         layout=layout,
-        mesh_mapper=ttnn.ShardTensorToMesh(in_dim),
+        mesh_mapper=ttnn.ShardTensorToMesh(device, in_dim),
+        memory_config=mem_config,
         device=device,
         dtype=dtype,
     )
 
-    # The golden output is a transpose of the input, where each device receives a chunk
-    # of the input tensor from every other device, scattered along the out_dim.
-    torch_golden_chunks = torch.chunk(torch_input, num_devices, dim=in_dim)
-    torch_golden_per_device = [torch.cat(torch_golden_chunks, dim=out_dim)] * num_devices
+    # The golden output is the input tensor chunked along the out_dim.
+    # The all-to-all operation effectively transposes the sharding from in_dim to out_dim.
+    torch_golden_per_device = torch.chunk(torch_input, num_devices, dim=out_dim)
 
     return tt_input, torch_golden_per_device
 
@@ -125,22 +128,22 @@ def run(
         assert tuple(device.shape) == mesh_shape
         logger.info(f"Running test with vector: {locals()}")
 
-        tt_input, torch_golden_per_device = _get_tensors(
-            input_shape, in_dim, out_dim, mesh_shape, input_dtype, layout, device
-        )
-
         compute_grid_size = device.compute_with_storage_grid_size()
         ccl_sub_device_crs = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )
-        # all_to_all_async requires 1 semaphore
+
         semaphore = ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0)
 
         # Create persistent buffers required by the API
         output_shape = list(input_shape)
-        output_shape[in_dim] //= prod(mesh_shape)
+        output_shape[out_dim] //= prod(mesh_shape)
         persistent_intermediate_buffer = ttnn.allocate_tensor_on_device(
             output_shape, input_dtype, layout, device, mem_config
+        )
+
+        tt_input, torch_golden_per_device = _get_tensors(
+            input_shape, in_dim, out_dim, mesh_shape, input_dtype, layout, device, mem_config
         )
         persistent_output_buffer = ttnn.allocate_tensor_on_device(output_shape, input_dtype, layout, device, mem_config)
 

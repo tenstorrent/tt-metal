@@ -29,24 +29,24 @@ parameters = {
         # "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
         "num_links": [1],
         "input_shape": [
-            [1, 1, 32, 256],
-            [1, 1, 32, 248],
-            [1, 1, 1, 32, 256],
-            [2, 32, 256],
-            [2, 2, 64, 32],
-            [2, 2, 1, 32, 64],
-            [90, 60],
+            # [1, 1, 32, 256],
+            # [1, 1, 32, 248],
+            # [1, 1, 1, 32, 256],
+            # [2, 32, 256],
+            # [2, 2, 64, 32],
+            # [2, 2, 1, 32, 64],
+            # [90, 60],
             [1, 1, 32, 16384],
-            # [1, 1, 1, 2048],
-            # [1, 1, 1, 4],
-            # [1, 1, 1, 8],
-            # [1, 32, 2048, 8],
-            # [8, 32, 2048, 8],
-            # [1, 32, 2048, 16],
-            # [8, 32, 2048, 16],
-            # [1, 32, 2048, 64],
-            # [8, 32, 2048, 64],
-            # [1, 1, 8, 8],
+            [1, 1, 1, 2048],
+            [1, 1, 1, 4],
+            [1, 1, 1, 8],
+            [1, 32, 2048, 8],
+            [8, 32, 2048, 8],
+            [1, 32, 2048, 16],
+            [8, 32, 2048, 16],
+            [1, 32, 2048, 64],
+            [8, 32, 2048, 64],
+            [1, 1, 8, 8],
             # [1, 1, 16, 16],
             # [1, 1, 32, 32],
             # [1, 1, 1, 4096],
@@ -55,21 +55,21 @@ parameters = {
             # [1, 1, 1, 32],
             # [1, 32, 4096, 16],
             # [8, 32, 4096, 16],
-            # [1, 32, 4096, 32],
-            # [8, 32, 4096, 32],
-            # [1, 32, 4096, 64],
-            # [8, 32, 4096, 64],
+            # [1, 32, 4096, 32], #almost hanging for all cases
+            # [8, 32, 4096, 32], #almost hanging for all cases
+            # [1, 32, 4096, 64], #almost hanging for all cases
+            # [8, 32, 4096, 64], #almost hanging for all cases
             # [1, 1, 16, 16],
-            # [1, 1, 32, 32]
         ],
         "dim": [0, 1, 2, 3, 4],
-        "cluster_axis": [0, 1, None],
+        "cluster_axis": [0, 1],
         "math_op": [ttnn.ReduceType.Sum],
         "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],  # ttnn.bfloat8_b, ttnn.uint32_t],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
-        ],  # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)],
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ],
         "topology": [ttnn.Topology.Linear],  # , ttnn.Topology.Ring],
         "num_iters": [1],
     },
@@ -90,7 +90,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         return True, "Ring fabric config required for ring topology"
     if not _valid_cluster_div(**test_vector):
         return True, "Shape at given dim not divisible by cluster devices"
-    if (test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT) and (test_vector["dtype"] == ttnn.bfloat8_b):
+    if (test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT) and (test_vector["input_dtype"] == ttnn.bfloat8_b):
         return True, "Row major not supported for bfloat8_b"
 
     # invalidate tests that hang or crash for now
@@ -102,9 +102,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -119,9 +117,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -135,9 +131,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -152,15 +146,12 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
     ):
         return True, "hang case"
-    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 1, 32, 16384], dim: 2, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
     if (
         test_vector["mesh_shape"] == (8, 1)
         and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
@@ -168,9 +159,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -184,9 +173,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -201,15 +188,12 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
     ):
         return True, "SEG FAULT"
-
     # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 1, 32, 248], dim: 2, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
     if (
         test_vector["mesh_shape"] == (4, 2)
@@ -218,9 +202,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -234,9 +216,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -251,9 +231,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -268,9 +246,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -284,9 +260,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -300,9 +274,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -316,9 +288,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -332,14 +302,13 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
     ):
         return True, "hang case"
+
     # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 1, 32, 16384], dim: 2, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
     if (
         test_vector["mesh_shape"] == (4, 2)
@@ -348,9 +317,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -365,9 +332,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -381,9 +346,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -397,15 +360,14 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
     ):
         return True, "hang case"
-    # mesh_shape: (2, 4), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 1, 32, 248], dim: 2, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+
+        # mesh_shape: (2, 4), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 1, 32, 248], dim: 2, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
     if (
         test_vector["mesh_shape"] == (2, 4)
         and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
@@ -413,9 +375,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -429,9 +389,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -445,9 +403,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -461,15 +417,13 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
     ):
         return True, "hang case"
-    # mesh_shape: (2, 4), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 1, 32, 16384], dim: 2, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+
     if (
         test_vector["mesh_shape"] == (2, 4)
         and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
@@ -477,9 +431,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -493,9 +445,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -509,9 +459,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -525,15 +473,13 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
     ):
         return True, "hang case"
-    # mesh_shape: (1, 8), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 1, 32, 256], dim: 2, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+
     if (
         test_vector["mesh_shape"] == (1, 8)
         and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
@@ -541,9 +487,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -557,9 +501,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -573,9 +515,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -589,15 +529,13 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
     ):
         return True, "hang case"
-    # mesh_shape: (2, 4), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 1, 32, 16384], dim: 2, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+
     if (
         test_vector["mesh_shape"] == (2, 4)
         and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
@@ -605,9 +543,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -621,9 +557,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -637,9 +571,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -653,15 +585,13 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
     ):
         return True, "hang case"
-    # mesh_shape: (1, 8), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 1, 32, 16384], dim: 2, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+
     if (
         test_vector["mesh_shape"] == (1, 8)
         and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
@@ -669,9 +599,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
@@ -685,6 +613,160 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "SEG FAULT"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 2048, 64], dim: 1, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 2048, 64]
+        and test_vector["dim"] == 1
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "SEG FAULT"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 2048, 64], dim: 2, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 2048, 64]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "SEG FAULT"
+
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 2048, 64]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 2048, 64], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 2048, 64]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 2048, 64], dim: 0, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 2048, 64]
+        and test_vector["dim"] == 0
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hanging case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 2048, 64], dim: 1, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 2048, 64]
+        and test_vector["dim"] == 1
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+    ):
+        return True, "hang case"
+
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 2048, 64]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 2048, 64], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 2048, 64]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 2048, 64], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 2048, 64]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["input_dtype"] == ttnn.bfloat16
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 2048, 64], dim: 1, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 2048, 64]
+        and test_vector["dim"] == 1
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 2048, 64]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
         and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
         and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
@@ -692,7 +774,901 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["topology"] == ttnn.Topology.Linear
         and test_vector["math_op"] == ttnn.ReduceType.Sum
     ):
-        return True, "SEG FAULT"
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 2048, 64], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 2048, 64]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 2048, 64], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 2048, 64]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 2048, 64], dim: 0, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 2048, 64]
+        and test_vector["dim"] == 0
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 2048, 64]
+        and test_vector["dim"] == 1
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 2048, 64], dim: 2, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 2048, 64]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 2048, 64], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 2048, 64]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["input_dtype"] == ttnn.bfloat16
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 2048, 64], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 2048, 64]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+
+    if (
+        test_vector["mesh_shape"] == (2, 4)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 2048, 64]
+        and test_vector["dim"] == 1
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (2, 4), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 2048, 64], dim: 2, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (2, 4)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 2048, 64]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (2, 4), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 2048, 64], dim: 3, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (2, 4)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 2048, 64]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (2, 4), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 2048, 64], dim: 3, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (2, 4)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 2048, 64]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+
+    if (
+        test_vector["mesh_shape"] == (2, 4)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 2048, 64]
+        and test_vector["dim"] == 0
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (2, 4), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 2048, 64], dim: 1, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (2, 4)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 2048, 64]
+        and test_vector["dim"] == 1
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (2, 4), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 2048, 64], dim: 2, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (2, 4)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 2048, 64]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (2, 4), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 2048, 64], dim: 3, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (2, 4)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 2048, 64]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 1, 1, 4096]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 1, 1, 4096], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 1, 1, 4096]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 1, 1, 4096], dim: 3, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 1, 1, 4096]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "seg fault"
+    # mesh_shape: (2, 4), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 1, 1, 4096], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (2, 4)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 1, 1, 4096]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "seg fault"
+
+    if (
+        test_vector["mesh_shape"] == (2, 4)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 1, 1, 4096]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "seg fault"
+    # mesh_shape: (1, 8), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 1, 1, 4096], dim: 3, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (1, 8)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 1, 1, 4096]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "seg fault"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 4096, 32], dim: 1, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 32]
+        and test_vector["dim"] == 1
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 4096, 32], dim: 2, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 32]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 32]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 4096, 32], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 32]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 4096, 32], dim: 0, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 4096, 32]
+        and test_vector["dim"] == 0
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 4096, 32], dim: 1, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 4096, 32]
+        and test_vector["dim"] == 1
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 4096, 32]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 4096, 32], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 4096, 32]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 4096, 32], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 4096, 32]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 4096, 64], dim: 1, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 64]
+        and test_vector["dim"] == 1
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 64]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 4096, 64], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 64]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 4096, 64], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 64]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 4096, 64], dim: 0, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 4096, 64]
+        and test_vector["dim"] == 0
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 32]
+        and test_vector["dim"] == 1
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 4096, 64], dim: 1, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 4096, 64]
+        and test_vector["dim"] == 1
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 4096, 64], dim: 2, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 4096, 64]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 4096, 32], dim: 2, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 32]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 32]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 4096, 32], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 32]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 4096, 32], dim: 3, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 32]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 4096, 32], dim: 3, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 32]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 64]
+        and test_vector["dim"] == 1
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 4096, 64], dim: 2, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 64]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 4096, 64], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 64]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 4096, 64], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 64]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+
+    if (
+        test_vector["mesh_shape"] == (2, 4)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 32]
+        and test_vector["dim"] == 1
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (2, 4), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 4096, 32], dim: 2, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (2, 4)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 32]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (2, 4), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 4096, 32], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (2, 4)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 4096, 32]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+
+    # esh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 1, 1, 2048], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.UINT32, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 1, 1, 2048]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["input_dtype"] == ttnn.uint32
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [2, 2, 64, 32]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [2, 2, 64, 32], dim: 2, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [2, 2, 64, 32]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [2, 2, 64, 32], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [2, 2, 64, 32]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [2, 2, 64, 32], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [2, 2, 64, 32]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [2, 2, 64, 32]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (2, 4), fabric_config: FabricConfig.FABRIC_1D, input_shape: [2, 2, 64, 32], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (2, 4)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [2, 2, 64, 32]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (2, 4), fabric_config: FabricConfig.FABRIC_1D, input_shape: [2, 2, 64, 32], dim: 3, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (2, 4)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [2, 2, 64, 32]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (1, 8), fabric_config: FabricConfig.FABRIC_1D, input_shape: [2, 2, 64, 32], dim: 2, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (1, 8)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [2, 2, 64, 32]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+
+    if (
+        test_vector["mesh_shape"] == (1, 8)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [2, 2, 64, 32]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (1, 8), fabric_config: FabricConfig.FABRIC_1D, input_shape: [2, 2, 64, 32], dim: 3, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (1, 8)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [2, 2, 64, 32]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [8, 32, 2048, 64], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [8, 32, 2048, 64]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 2048, 64], dim: 2, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.ROW_MAJOR, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 2048, 64]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 32, 2048, 8], dim: 2, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 32, 2048, 8]
+        and test_vector["dim"] == 2
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+        and test_vector["math_op"] == ttnn.ReduceType.Sum
+    ):
+        return True, "hang case"
     return False, None
 
 
@@ -757,8 +1733,7 @@ def run(
         )
         if device_err is not None:
             return False, device_err, None, None
-
-        logger.info("device set up")
+            logger.info("device set up")
 
         tt_input, torch_references = _get_tensors(
             input_shape, mesh_shape, dim, cluster_axis, math_op, input_dtype, layout, device

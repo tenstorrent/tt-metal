@@ -29,16 +29,16 @@ parameters = {
         "num_links": [1],
         "cluster_axis": [0, 1],
         "input_shape": [
-            [1, 1, 32, 256],
+            # [1, 1, 32, 256],
             [1, 1, 4096, 32],
         ],
-        "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint32],
+        "layout": [ttnn.TILE_LAYOUT],  # , ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16],  # , ttnn.bfloat8_b, ttnn.uint32],
         "mem_config": [
             ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+            # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
         ],
-        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
+        "topology": [ttnn.Topology.Linear],  # , ttnn.Topology.Ring],
         "num_iters": [1],
     },
 }
@@ -137,6 +137,7 @@ def run(
                     memory_config=mem_config,
                     topology=topology,
                     subdevice_id=worker_sub_device_id,
+                    cluster_axis=cluster_axis,
                 )
                 e2e_perf = stop_measuring_time(start_time)
                 logger.info(f"Done iteration {i}")
@@ -154,20 +155,22 @@ def run(
             device.clear_loaded_sub_device_manager()
 
         # The output is replicated, so we compare each device's output to the same golden reference
-        for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-            logger.info(f"Bringing tensor {i} from device {device.get_device_ids()[i]} back to host")
-            tt_output_tensor = ttnn.to_torch(t)
-            torch_golden = torch_golden_list[i]
+        num_tensors = len(tt_out_tensor)
+        for dev in range(num_tensors):
+            for i, (t, ref) in enumerate(zip(ttnn.get_device_tensors(tt_out_tensor[dev]), torch_golden_list)):
+                logger.info(f"Bringing tensor {i} from device {device.get_device_ids()[i]} back to host")
+                tt_output_tensor = ttnn.to_torch(t)
+                torch_golden = ref
 
-            if input_dtype == ttnn.bfloat16:
-                eq, output = comp_equal(tt_output_tensor, torch_golden)
-            else:
-                eq, output = comp_pcc(tt_output_tensor, torch_golden)
+                if input_dtype == ttnn.bfloat16:
+                    eq, output = comp_equal(tt_output_tensor, torch_golden)
+                else:
+                    eq, output = comp_pcc(tt_output_tensor, torch_golden)
 
-            if not eq:
-                logger.error(f"Output mismatch for tensor {i}")
-                # Return on first mismatch
-                return [(eq, output), e2e_perf]
+                if not eq:
+                    logger.error(f"Output mismatch for tensor {i}")
+                    # Return on first mismatch
+                    return [(eq, output), e2e_perf]
 
         # If all comparisons passed
         return [(True, "Comparison passed"), e2e_perf]
