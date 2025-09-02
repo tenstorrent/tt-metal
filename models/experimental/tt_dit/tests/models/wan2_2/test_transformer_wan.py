@@ -96,8 +96,8 @@ def test_wan_transformer_block(
     layer_id = 0
 
     # Tight error bounds based on test config
-    MIN_PCC = 0.995_000
-    MIN_RMSE = 0.050
+    MIN_PCC = 0.999_500
+    MAX_RMSE = 0.032
 
     # Load Wan2.2-T2V-14B model from HuggingFace
     parent_torch_model = TorchWanTransformer3DModel.from_pretrained(
@@ -205,7 +205,7 @@ def test_wan_transformer_block(
 
     logger.info(f"Checking spatial outputs")
     for i in range(tt_spatial_out.shape[0]):
-        assert_quality(torch_spatial_out, tt_spatial_out[i], pcc=MIN_PCC, relative_rmse=MIN_RMSE)
+        assert_quality(torch_spatial_out, tt_spatial_out[i], pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
 @pytest.mark.parametrize(
