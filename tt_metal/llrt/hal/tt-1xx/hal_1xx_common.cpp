@@ -11,6 +11,10 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
     std::vector<std::string> defines;
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     uint32_t l1_cache_disable_mask = rtoptions.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
+    defines.push_back(fmt::format(
+        "PROCESSOR_INDEX={}",
+        MetalContext::instance().hal().get_processor_index(
+            params.core_type, params.processor_class, params.processor_id)));
     switch (params.core_type) {
         case HalProgrammableCoreType::TENSIX:
             switch (params.processor_class) {
