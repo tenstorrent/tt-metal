@@ -92,14 +92,14 @@ jobs:
                     email: "info@tenstorrent.com",
                   }
                 });
-                console.log("Created tag:", tag);
+                console.log("Created tag:", tag.data);
                 const ref = await github.rest.git.createRef({
                   owner: owner,
                   repo: repo,
                   ref: `refs/tags/${version}`,
                   sha: tag.data.sha,
                 });
-                console.log("Created ref:", ref);
+                console.log("Created ref:", ref.data);
               } else {
                 console.error(e);
                 console.error("Received an error that's not 404 Not Found for a tag");
