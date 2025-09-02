@@ -302,8 +302,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             tt::tt_metal::hal::get_arch(),
             a.dtype(),
             p_config.per_core_out_matrix_width_ntile * block_config.act_block_w_ntiles,
-            tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(b.dtype())));
-    log_info(tt::LogOp, "enable_split_reader: {}", enable_split_reader);
+            tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(b.dtype())),
+            dilation_w);
+    log_debug(tt::LogOp, "enable_split_reader: {}", enable_split_reader);
 
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
     // check is for 16-byte alignment
@@ -533,7 +534,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
         conv_reader_indices_tensor, input_parallel_config, block_sharded, a.device(), config_tensors_in_dram);
 
-
     log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor);
     const tt::tt_metal::DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
 
@@ -635,6 +635,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         b.padded_shape(),
         {filter_h, filter_w},
         {sliding_window_config.input_hw.first, sliding_window_config.input_hw.second},
+        {dilation_h, dilation_w},
         conv_config,
         a.dtype(),
         output.dtype(),

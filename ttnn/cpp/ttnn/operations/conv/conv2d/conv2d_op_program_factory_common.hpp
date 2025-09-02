@@ -67,6 +67,7 @@ std::vector<CBInfo> get_cb_info(
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> input_shape,
+    std::array<uint32_t, 2> dilation,
     const Conv2dConfig& conv_config,
     DataType input_datatype,
     DataType output_datatype,
@@ -101,6 +102,7 @@ bool is_split_reader_viable(
     tt::ARCH arch,
     DataType input_datatype,
     uint32_t weights_block_ntiles,
-    uint32_t weights_tile_size);
+    uint32_t weights_tile_size,
+    uint32_t dilation_w);
 }  // namespace conv2d
 }  // namespace ttnn::operations::conv

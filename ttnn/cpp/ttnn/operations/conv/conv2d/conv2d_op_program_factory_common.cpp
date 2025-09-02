@@ -50,6 +50,7 @@ std::vector<CBInfo> get_cb_info(
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> input_shape,
+    std::array<uint32_t, 2> dilation,
     const Conv2dConfig& conv_config,
     DataType input_datatype,
     DataType output_datatype,
@@ -203,7 +204,8 @@ std::vector<CBInfo> get_cb_info(
                 tt::tt_metal::hal::get_arch(),
                 input_datatype,
                 per_core_out_matrix_width_ntiles * block_config.act_block_w_ntiles,
-                weights_tile_size)) {
+                weights_tile_size,
+                dilation[1])) {
             uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles;
             uint32_t act_block_h_nsubblocks_split_last = act_block_h_nsubblocks / 2;
             uint32_t act_block_h_nsubblocks_split = act_block_h_nsubblocks - act_block_h_nsubblocks_split_last;
@@ -380,9 +382,9 @@ CBInfo& access_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_n
  * - Linear growth until reaching peak performance
  * - Constant peak rate for larger transfers
  */
-float get_noc_transfer_rate(uint32_t transfer_size_bytes, tt::ARCH arch) {
+static float get_noc_transfer_rate(uint32_t transfer_size_bytes, tt::ARCH arch) {
     // Minimum NOC transfer size that was benchmarked
-    constexpr uint32_t min_transfer_size_bytes = 16;
+    const uint32_t min_transfer_size_bytes = tt::tt_metal::hal::get_l1_alignment();
 
     // Architecture-specific performance characteristics
     struct NocPerformanceParams {
@@ -391,8 +393,12 @@ float get_noc_transfer_rate(uint32_t transfer_size_bytes, tt::ARCH arch) {
         float peak_rate_gbps;  // Maximum achievable transfer rate
     };
 
-    const NocPerformanceParams params = (arch == tt::ARCH::BLACKHOLE) ? NocPerformanceParams{2048, 0.671f, 48.5f}
-                                                                      : NocPerformanceParams{1024, 0.868f, 27.7f};
+    NocPerformanceParams params = {0, 0.0f, 0.0f};
+    switch (arch) {
+        case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{2048, 0.671f, 48.5f}; break;
+        case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{1024, 0.868f, 27.7f}; break;
+        default: TT_THROW("Unsupported architecture when calculating NOC transfer rate");
+    }
 
     // Clamp transfer size to the linear growth region
     const uint32_t effective_transfer_size =
@@ -430,6 +436,10 @@ bool is_split_reader_supported(
     it takes to transfer the weights from DRAM to L1.
     Weight cost is calculated by dividing the weight block size by the NOC link bandwidth.
     Weights are in TILE_LAYOUT so tile size is used to calculate the total weight block size.
+    - Currently only Height sharded activations are supported for split reader in which only one core reads weights from
+   DRAM, and that same core does the multicasting, so the time for reading and multicasting is approximately the same
+   and weight_mcast_factor = 2. This also affects the noc_link_bw for the weights, because only one core reads weights
+   from DRAM.
     - A threshold factor of 2.0 is used to compare the
     activation and weight costs because activating split reader will delay weights reading and multicasting.
 
@@ -441,21 +451,26 @@ bool is_split_reader_viable(
     tt::ARCH arch,
     DataType input_datatype,
     uint32_t weights_block_ntiles,
-    uint32_t weights_tile_size) {
-    TT_ASSERT(
-        arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::WORMHOLE_B0,
-        "Invalid architecture for split reader heuristic");
-
+    uint32_t weights_tile_size,
+    uint32_t dilation_w) {
     // Calculate activation transfer cost
     const uint32_t input_bytes_per_element = (input_datatype == DataType::FLOAT32) ? 4 : 2;
-    const uint32_t noc_transfer_unit_bytes = input_bytes_per_element * input_channels_padded * kernel_width;
+    // For dilated convs the kernel_width number of channels isn't sequential in the L1, so we transfer 1 channel at a
+    // time
+    const uint32_t noc_transfer_unit_bytes =
+        input_bytes_per_element * input_channels_padded * (dilation_w == 1 ? kernel_width : 1);
     const float noc_transfer_rate_gbps = get_noc_transfer_rate(noc_transfer_unit_bytes, arch);
     const float activation_cost =
         static_cast<float>(act_block_h_ntiles * tt::constants::TILE_HEIGHT * noc_transfer_unit_bytes) /
         noc_transfer_rate_gbps;
 
     // NOC link bandwidth per architecture (GB/s)
-    const uint32_t noc_link_bw = (arch == tt::ARCH::BLACKHOLE) ? 64 : 32;
+    uint32_t noc_link_bw;
+    switch (tt::tt_metal::hal::get_arch()) {
+        case tt::ARCH::BLACKHOLE: noc_link_bw = 64; break;
+        case tt::ARCH::WORMHOLE_B0: noc_link_bw = 32; break;
+        default: TT_THROW("Unsupported architecture when calculating NOC link bandwidth");
+    }
     // Weights need to be downloaded and then mcasted, the time for downloading and mcasting is approximately the same,
     // so we divide the link bandwidth by 2 to get the effective bandwidth for weights
     constexpr float weight_mcast_factor = 2.0f;
