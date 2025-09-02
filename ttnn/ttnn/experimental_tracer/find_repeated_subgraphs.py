@@ -589,6 +589,13 @@ def find_repeated_subgraphs(
     new_operation_graph = OperationGraph.from_operation_graph(operation_graph)
     if custom_patterns is not None:
         combine_custom_patterns(new_operation_graph, custom_patterns)
+        json_structure = create_graph_json_structure(new_operation_graph)
+        # Write the JSON structure to the specified output file
+        with open("intermediate_combined_operation_graph_viz.json", "w") as f:
+            json.dump(json_structure, f, indent=2)
+            print(
+                f"Dumped visualization to intermediate_combined_operation_graph_viz.json. Load it into netron.app to visualize the model."
+            )
     dump_graph_patterns(new_operation_graph, "graph_patterns.py")
     combine_conv_bn_relu(new_operation_graph)
     combine_tuple_get_item_scaled_attention_tuple_get_item(new_operation_graph)
