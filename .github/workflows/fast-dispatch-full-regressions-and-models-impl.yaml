@@ -297,7 +297,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run frequent reg tests scripts
-        timeout-minutes: ${{ matrix.timeout || 30 }}
+        timeout-minutes: ${{ matrix.test-config.timeout || 30 }}
         run: |
           pytest tests/nightly/single_card/${{ matrix.test-config.model }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
