@@ -1,7 +1,7 @@
 # Yolov7
 
 ## Platforms:
-    Wormhole (n150, n300)
+Wormhole (n150, n300)
 
 ## Introduction
 YOLOv7 is a state-of-the-art real-time object detector that surpasses all known object detectors in both speed and accuracy. It builds on the YOLO family of detectors and introduces significant architectural improvements for enhanced speed and accuracy. YOLOv7 supports advanced features such as model reparameterization, extended model scaling, and multi-task capabilities including object detection, instance segmentation, and pose estimation.
@@ -32,7 +32,6 @@ pytest --disable-warnings models/demos/yolov7/tests/pcc/test_ttnn_yolov7.py
   ```
 
 ### Demo
-Note: Output images will be saved in the `models/demos/yolov7/demo/runs` folder.
 
 ### Single Device (BS=1)
 #### Custom Images:
@@ -63,12 +62,15 @@ Note: Output images will be saved in the `models/demos/yolov7/demo/runs` folder.
   pytest --disable-warnings models/demos/yolov7/demo/demo.py::test_demo_dataset_dp
   ```
 
+Note: Output images will be saved in the `models/demos/yolov7/demo/runs` folder.
+
 ## Testing
+
 ### Performant evaluation with Trace+2CQ
 Use the following command to run the performant evaluation with Trace+2CQs:
 
 ```
-pytest models/experimental/yolo_eval/evaluate.py::test_yolov7[res0-device_params0-tt_model]
+pytest models/demos/yolo_eval/evaluate.py::test_yolov7[res0-device_params0-tt_model]
 ```
 Note: The model is evaluated with 500 samples.
 

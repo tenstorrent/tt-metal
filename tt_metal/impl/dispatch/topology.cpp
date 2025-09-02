@@ -1257,7 +1257,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto kernel = tt::tt_metal::CreateKernel(
                 *fabric_program_ptr,
-                "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
+                "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
                 eth_logical_core,
                 tt::tt_metal::EthernetConfig{
                     .noc = edm_builder.config.risc_configs[risc_id].get_configured_noc(),
@@ -1278,7 +1278,8 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
             num_local_fabric_routers);
     }
 
-    detail::CompileProgram(device, *fabric_program_ptr, /*force_slow_dispatch=*/device->using_fast_dispatch());
+    detail::CompileProgram(
+        device, *fabric_program_ptr, tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
     return fabric_program_ptr;
 }
 

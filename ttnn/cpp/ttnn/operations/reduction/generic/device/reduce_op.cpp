@@ -30,7 +30,7 @@ std::map<std::string, std::string> get_defines(
     defines["REDUCE_OP"] = (do_max ? "PoolType::MAX" : "PoolType::SUM");
     defines["REDUCE_DIM"] = reduce_dim_str;
     if (reduce_dim == tt::tt_metal::ReduceOpDim::W && reduce_op == tt::tt_metal::ReduceOpMath::SUM) {
-        defines["REDUCE_ROW_SUM_VIA_MM"] = 1;
+        defines["REDUCE_ROW_SUM_VIA_MM"] = "1";
     }
     return defines;
 }
