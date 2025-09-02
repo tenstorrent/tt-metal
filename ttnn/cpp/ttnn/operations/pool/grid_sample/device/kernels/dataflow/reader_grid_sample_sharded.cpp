@@ -1,0 +1,176 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cmath>
+#include <stdint.h>
+#include "dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/height_sharded_reader_common.hpp"
+#include "debug/dprint.h"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "../grid_sample_reader_common.hpp"
+
+void kernel_main() {
+    // Runtime arguments
+    const uint32_t input_addr = get_arg_val<uint32_t>(0);
+    const uint32_t global_grid_stick_start = get_arg_val<uint32_t>(1);
+
+    // Compile time arguments
+    constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
+    constexpr uint32_t grid_cb_index = get_compile_time_arg_val(1);
+    constexpr uint32_t scalar_cb_index = get_compile_time_arg_val(2);
+    constexpr uint32_t input_stick_nbytes = get_compile_time_arg_val(3);
+    constexpr uint32_t grid_stick_nbytes = get_compile_time_arg_val(4);
+    constexpr uint32_t input_height = get_compile_time_arg_val(5);
+    constexpr uint32_t input_width = get_compile_time_arg_val(6);
+    constexpr uint32_t grid_batching_factor = get_compile_time_arg_val(7);
+    constexpr uint32_t grid_dtype = get_compile_time_arg_val(8);
+    constexpr uint32_t grid_hw = get_compile_time_arg_val(9);
+    constexpr uint32_t use_precomputed_grid = get_compile_time_arg_val(10);
+    constexpr uint32_t split_reader = get_compile_time_arg_val(11);
+    constexpr uint32_t reader_id = get_compile_time_arg_val(12);
+    constexpr uint32_t grid_nsticks_per_core = get_compile_time_arg_val(13);
+
+    // Input tensor accessor for remote NOC reads (updated for new arg count)
+    constexpr auto input_tensor_args = TensorAccessorArgs<14>();
+    const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr, input_stick_nbytes);
+
+    // Calculate starting batch from global grid stick position
+    // All grid points in one grid stick are in the same batch
+    const uint32_t starting_batch = global_grid_stick_start / grid_hw;
+
+    // Grid coordinates scaling factors (for standard grid mode)
+    constexpr float input_height_f = float(input_height);
+    constexpr float input_width_f = float(input_width);
+    constexpr float height_scale = input_height_f * 0.5f;
+    constexpr float height_offset = height_scale - 0.5f;
+    constexpr float width_scale = input_width_f * 0.5f;
+    constexpr float width_offset = width_scale - 0.5f;
+
+    // Zero out input CB to handle invalid coordinates properly
+    zero_out_tiles<input_cb_index>();
+
+    // Get local grid data base address (already in L1)
+    const uint32_t l1_grid_base_addr = get_read_ptr(grid_cb_index);
+
+    // Process each grid stick assigned to this core
+    uint32_t grid_stick_idx = 0;
+    uint32_t l1_grid_addr = l1_grid_base_addr;
+
+    // For split reader: track grid point index starting from reader_id
+    uint32_t in_grid_row_idx = split_reader ? reader_id : 0;
+
+    // Track current batch and grid position for batch increment logic
+    uint32_t curr_batch = starting_batch;
+    uint32_t grid_points_processed = global_grid_stick_start % grid_hw;
+
+    if (in_grid_row_idx == grid_batching_factor) {
+        in_grid_row_idx = 0;
+        ++grid_stick_idx;
+        l1_grid_addr += grid_stick_nbytes;
+        ++grid_points_processed;
+        if (grid_points_processed == grid_hw) {
+            grid_points_processed = 0;
+            ++curr_batch;
+        }
+    }
+
+    while (grid_stick_idx < grid_nsticks_per_core) {
+        volatile tt_l1_ptr uint16_t* const grid_stick_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_grid_addr);
+
+        uint32_t batch_offset = curr_batch * input_height * input_width;
+
+        // Template dispatch based on grid data type and precomputed grid mode
+        if constexpr (grid_dtype == DTYPE_FLOAT32) {
+            if constexpr (use_precomputed_grid) {
+                process_grid_point<DTYPE_FLOAT32, true>(
+                    grid_stick_ptr,
+                    in_grid_row_idx,
+                    input_tensor_accessor,
+                    batch_offset,
+                    input_height,
+                    input_width,
+                    input_stick_nbytes,
+                    height_scale,
+                    height_offset,
+                    width_scale,
+                    width_offset,
+                    input_cb_index,
+                    scalar_cb_index);
+            } else {
+                process_grid_point<DTYPE_FLOAT32, false>(
+                    grid_stick_ptr,
+                    in_grid_row_idx,
+                    input_tensor_accessor,
+                    batch_offset,
+                    input_height,
+                    input_width,
+                    input_stick_nbytes,
+                    height_scale,
+                    height_offset,
+                    width_scale,
+                    width_offset,
+                    input_cb_index,
+                    scalar_cb_index);
+            }
+        } else {  // DTYPE_BFLOAT16
+            if constexpr (use_precomputed_grid) {
+                process_grid_point<DTYPE_BFLOAT16, true>(
+                    grid_stick_ptr,
+                    in_grid_row_idx,
+                    input_tensor_accessor,
+                    batch_offset,
+                    input_height,
+                    input_width,
+                    input_stick_nbytes,
+                    height_scale,
+                    height_offset,
+                    width_scale,
+                    width_offset,
+                    input_cb_index,
+                    scalar_cb_index);
+            } else {
+                process_grid_point<DTYPE_BFLOAT16, false>(
+                    grid_stick_ptr,
+                    in_grid_row_idx,
+                    input_tensor_accessor,
+                    batch_offset,
+                    input_height,
+                    input_width,
+                    input_stick_nbytes,
+                    height_scale,
+                    height_offset,
+                    width_scale,
+                    width_offset,
+                    input_cb_index,
+                    scalar_cb_index);
+            }
+        }
+
+        ++in_grid_row_idx;
+        if (in_grid_row_idx == grid_batching_factor) {
+            in_grid_row_idx = 0;
+            ++grid_stick_idx;
+            l1_grid_addr += grid_stick_nbytes;
+            ++grid_points_processed;
+            if (grid_points_processed == grid_hw) {
+                grid_points_processed = 0;
+                ++curr_batch;
+            }
+        }
+        if constexpr (split_reader) {
+            ++in_grid_row_idx;
+            if (in_grid_row_idx == grid_batching_factor) {
+                in_grid_row_idx = 0;
+                ++grid_stick_idx;
+                l1_grid_addr += grid_stick_nbytes;
+                ++grid_points_processed;
+                if (grid_points_processed == grid_hw) {
+                    grid_points_processed = 0;
+                    ++curr_batch;
+                }
+            }
+        }
+    }
+}
