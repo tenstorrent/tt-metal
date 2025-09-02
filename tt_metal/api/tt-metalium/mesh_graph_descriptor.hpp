@@ -141,6 +141,10 @@ public:
     }
 
 
+    // TODO: This will disappear after we move to Physical discovery
+    proto::Architecture get_arch() const;
+    uint32_t get_num_eth_ports_per_direction() const;
+
 private:
     const bool backwards_compatible_;
 

@@ -90,6 +90,14 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::filesystem::path& text_proto
 
 MeshGraphDescriptor::~MeshGraphDescriptor() = default;
 
+proto::Architecture MeshGraphDescriptor::get_arch() const {
+    return meshes_[0].arch;
+}
+
+uint32_t MeshGraphDescriptor::get_num_eth_ports_per_direction() const {
+    return meshes_[0].desc->channels().count();
+}
+
 void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
     // Set the default for channel policy to strict if not specified
     for (auto& mesh : *proto.mutable_mesh_descriptors()) {

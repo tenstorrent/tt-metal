@@ -53,7 +53,29 @@ TEST(MeshGraphValidation, TestTGMeshGraphInit) {
     const std::filesystem::path tg_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
-    auto mesh_graph_desc = std::make_unique<MeshGraph>(tg_mesh_graph_desc_path.string());
+    auto mesh_graph_desc = std::make_unique<MeshGraph>(tg_mesh_graph_desc_path.string(), true);
+    EXPECT_EQ(
+        mesh_graph_desc->get_coord_range(MeshId{0}, MeshHostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
+    EXPECT_EQ(
+        mesh_graph_desc->get_coord_range(MeshId{1}, MeshHostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
+    EXPECT_EQ(
+        mesh_graph_desc->get_coord_range(MeshId{2}, MeshHostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
+    EXPECT_EQ(
+        mesh_graph_desc->get_coord_range(MeshId{3}, MeshHostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
+    EXPECT_EQ(
+        mesh_graph_desc->get_coord_range(MeshId{4}, MeshHostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(3, 7)));
+}
+
+TEST(MeshGraphValidation, TestTGMeshGraphInitFromMGD2) {
+    const std::filesystem::path tg_mesh_graph_desc_2_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto";
+    auto mesh_graph_desc = std::make_unique<MeshGraph>(tg_mesh_graph_desc_2_path.string(), true);
     EXPECT_EQ(
         mesh_graph_desc->get_coord_range(MeshId{0}, MeshHostRankId(0)),
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));

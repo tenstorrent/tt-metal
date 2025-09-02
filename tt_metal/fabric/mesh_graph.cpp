@@ -4,7 +4,6 @@
 
 #include "mesh_graph.hpp"
 
-#include <algorithm>
 #include <enchantum/enchantum.hpp>
 #include <yaml-cpp/yaml.h>
 #include <array>
@@ -18,6 +17,8 @@
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <tt_stl/indestructible.hpp>
 #include <tt_stl/caseless_comparison.hpp>
+#include <tt-metalium/mesh_graph_descriptor.hpp>
+#include <protobuf/mesh_graph_descriptor.pb.h>
 
 namespace tt {
 enum class ARCH;
@@ -60,8 +61,34 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
 
 bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test; }
 
-MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path) {
-    this->initialize_from_yaml(mesh_graph_desc_file_path);
+static FabricType topology_to_fabric_type(const proto::TorusTopology& topology) {
+    auto dim_types = topology.dim_types();
+
+    // Assume 2D topology
+    if (dim_types.size() == 2) {
+        if (dim_types[0] == proto::TorusTopology::RING && dim_types[1] == proto::TorusTopology::RING) {
+            return FabricType::TORUS_XY;
+        } else if (dim_types[0] == proto::TorusTopology::RING) {
+            return FabricType::TORUS_Y;
+        } else if (dim_types[1] == proto::TorusTopology::RING) {
+            return FabricType::TORUS_X;
+        } else {
+            return FabricType::MESH;
+        }
+    }
+
+    return FabricType::MESH;
+
+}
+
+MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path, const bool version_2) {
+    if (version_2) {
+        auto filepath = std::filesystem::path(mesh_graph_desc_file_path);
+        MeshGraphDescriptor mgd2(filepath);
+        this->initialize_from_mgd2(mgd2);
+    } else {
+        this->initialize_from_yaml(mesh_graph_desc_file_path);
+    }
 }
 
 void MeshGraph::add_to_connectivity(
@@ -161,6 +188,52 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
     }
 
     return valid_connections;
+}
+
+void MeshGraph::initialize_from_mgd2(const MeshGraphDescriptor& mgd2) {
+
+    static const std::unordered_map<const proto::Architecture, tt::ARCH> proto_arch_to_arch = {
+        {proto::Architecture::WORMHOLE_B0, tt::ARCH::WORMHOLE_B0},
+        {proto::Architecture::BLACKHOLE, tt::ARCH::BLACKHOLE},
+    };
+
+    // TODO: need to fix
+    this->chip_spec_ = ChipSpec{
+        .arch = proto_arch_to_arch.at(mgd2.get_arch()),
+        .num_eth_ports_per_direction = mgd2.get_num_eth_ports_per_direction(),
+        .num_z_ports = (mgd2.get_arch() == proto::Architecture::BLACKHOLE) ? mgd2.get_num_eth_ports_per_direction() : 0, // Z set to the same number as xy if in black hole
+    };
+
+    // Make intramesh connectivity
+    this->intra_mesh_connectivity_.resize(mgd2.all_meshes().size());
+    this->inter_mesh_connectivity_.resize(mgd2.all_meshes().size());
+    // TODO: Add the host ranks
+
+    for (const auto& id : mgd2.all_meshes()) {
+        auto mesh_data = mgd2.mesh(id);
+
+        // Retrieve the fabric type from the device topology
+        auto fabric_type = topology_to_fabric_type(mesh_data.desc->device_topology());
+
+        // Only for 2D meshes
+        MeshShape mesh_shape(mesh_data.desc->device_topology().dims().at(0), mesh_data.desc->device_topology().dims().at(1));
+        std::vector<chip_id_t> chip_ids(mesh_shape[0] * mesh_shape[1]);
+        std::iota(chip_ids.begin(), chip_ids.end(), 0);
+        this->mesh_to_chip_ids_.emplace(id, MeshContainer<chip_id_t>(mesh_shape, chip_ids));
+
+        // Fill in connectivity for Mesh
+        MeshCoordinateRange mesh_coord_range(mesh_shape);
+        this->intra_mesh_connectivity_[id].resize(mesh_shape[0] * mesh_shape[1]);
+        for (const auto& src_mesh_coord : mesh_coord_range) {
+            chip_id_t src_chip_id = src_mesh_coord[0] * mesh_shape[1] + src_mesh_coord[1];
+
+            this->intra_mesh_connectivity_[id][src_chip_id] =
+                this->get_valid_connections(src_mesh_coord, mesh_coord_range, fabric_type);
+        }
+    }
+
+    // Verify if intra mesh is same as yaml
+
 }
 
 void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_path) {
