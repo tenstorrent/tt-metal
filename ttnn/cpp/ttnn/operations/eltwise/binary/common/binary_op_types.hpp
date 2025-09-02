@@ -43,6 +43,7 @@ enum class BinaryOpType {
     ADDALPHA,
     SUBALPHA,
     XLOGY,
+    REMAINDER,
 };
 
 }  // namespace ttnn::operations::binary

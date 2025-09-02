@@ -72,6 +72,7 @@ struct OpConfig {
         MAXIMUM,
         MINIMUM,
         XLOGY,
+        REMAINDER,
     };
 
     template <class EnumT>
