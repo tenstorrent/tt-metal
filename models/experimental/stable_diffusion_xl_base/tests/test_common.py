@@ -242,7 +242,7 @@ def batch_encode_prompt_on_device(
             tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens, ttnn_device, with_projection=(ind > 0))
 
             tt_sequence_output_torch = ttnn.to_torch(
-                tt_sequence_output[-3],
+                tt_sequence_output[-2],
                 mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
             ).to(torch.float32)
             tt_pooled_output_torch = ttnn.to_torch(
@@ -256,7 +256,7 @@ def batch_encode_prompt_on_device(
             # I think this may be a bug in the reference implementation, but at the moment, we'll do the same (take the last hidden state of the first text encoder)
             if ind == 0:
                 tt_pooled_prompt_embeds = ttnn.to_torch(
-                    tt_sequence_output[-2],
+                    tt_sequence_output[-1],
                     mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
                 ).to(torch.float32)
                 pooled_prompt_embeds = tt_pooled_prompt_embeds.to(torch.float32)
@@ -328,7 +328,7 @@ def batch_encode_prompt_on_device(
                 tt_tokens, ttnn_device, with_projection=(ind > 0)
             )
             tt_sequence_output_neg_torch = ttnn.to_torch(
-                tt_sequence_output_neg[-3],
+                tt_sequence_output_neg[-2],
                 mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
             ).to(torch.float32)
             tt_pooled_output_neg_torch = ttnn.to_torch(
@@ -343,7 +343,7 @@ def batch_encode_prompt_on_device(
             if ind == 0:
                 tt_pooled_prompt_embeds = (
                     ttnn.to_torch(
-                        tt_sequence_output_neg[-2],
+                        tt_sequence_output_neg[-1],
                         mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
                     )
                 ).to(torch.float32)
