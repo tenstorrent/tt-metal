@@ -394,6 +394,12 @@ def run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, debu
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 # Add this to your test file and run it
 def test_ttnn_debug(device):
+    compute_grid = device.compute_with_storage_grid_size()
+
+    print(f"compute_grid: {compute_grid.x}x{compute_grid.y}")
+    if compute_grid.x != 5 or compute_grid.y != 4:
+        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+
     torch.manual_seed(0)
 
     # 1. Define Model Configuration
