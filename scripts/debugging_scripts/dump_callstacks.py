@@ -191,7 +191,7 @@ def get_callstack(
             return top_callstack(pc, elfs, offsets, context)
         else:
             device_id = location._device._id
-            return callstack(location, elfs, offsets, risc_name, device_id=device_id, context=context)
+            return callstack(location, elfs, offsets, risc_name)
     except:
         return []
 

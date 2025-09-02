@@ -284,7 +284,7 @@ def check_binary_integrity(
                         else:
                             address: int = section["sh_addr"]
                             data: bytes = section.data()
-                            read_data = read_from_device(location, address, device._id, len(data), device._context)
+                            read_data = read_from_device(location, address, num_bytes=len(data))
                             log_check(
                                 read_data == data,
                                 f"{location.to_user_str()}: Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.firmware_path}.",
@@ -315,7 +315,7 @@ def check_binary_integrity(
                             else:
                                 data = apply_kernel_relocations(section)
                                 address: int = dispatcher_core_data.kernel_offset
-                                read_data = read_from_device(location, address, device._id, len(data), device._context)
+                                read_data = read_from_device(location, address, num_bytes=len(data))
                                 log_check(
                                     read_data == data,
                                     f"{location.to_user_str()}: Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.kernel_path}.",

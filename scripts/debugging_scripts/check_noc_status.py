@@ -14,7 +14,8 @@ Description:
 
 from ttexalens.tt_exalens_lib import read_tensix_register, parse_elf
 from ttexalens.context import Context
-from ttexalens.device import Device, OnChipCoordinate
+from ttexalens.device import Device
+from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.parse_elf import mem_access
 from ttexalens.firmware import ELF
 
@@ -65,7 +66,7 @@ def check_noc_status(
             reg = VAR_TO_REG_MAP[var]
             # If reading fails, write error message and skip to next core
             try:
-                reg_val = read_tensix_register(location=loc, register=reg, noc_id=noc_id, context=context)
+                reg_val = read_tensix_register(location=loc, register=reg, noc_id=noc_id)
                 var_val = mem_access(fw_elf, var, loc_mem_reader)[0][0]
             except Exception as e:
                 message += "    " + str(e) + "\n"

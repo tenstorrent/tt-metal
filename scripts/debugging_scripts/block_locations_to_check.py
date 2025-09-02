@@ -13,9 +13,10 @@ Description:
 
 from ttexalens.hw.tensix.wormhole.wormhole import WormholeDevice
 from devices_to_check import run as get_devices_to_check
-from triage import triage_singleton, ScriptConfig, run_script, TTTriageError
+from triage import triage_singleton, ScriptConfig, run_script
 from ttexalens.context import Context
-from ttexalens.device import Device, OnChipCoordinate
+from ttexalens.device import Device
+from ttexalens.coordinate import OnChipCoordinate
 
 script_config = ScriptConfig(
     data_provider=True,
