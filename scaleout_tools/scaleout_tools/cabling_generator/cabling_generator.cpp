@@ -190,13 +190,13 @@ Pod CablingGenerator::build_pod(
 
             if (std::find(available_a.begin(), available_a.end(), port_a_id) == available_a.end()) {
                 throw std::runtime_error(
-                    "Port " + std::to_string(*port_a_id) + " not available on board " + std::to_string(*board_a_id) +
-                    " in pod " + pod_descriptor_name);
+                    port_type_str + " Port " + std::to_string(*port_a_id) + " not available on board " +
+                    std::to_string(*board_a_id) + " in pod " + pod_descriptor_name);
             }
             if (std::find(available_b.begin(), available_b.end(), port_b_id) == available_b.end()) {
                 throw std::runtime_error(
-                    "Port " + std::to_string(*port_b_id) + " not available on board " + std::to_string(*board_b_id) +
-                    " in pod " + pod_descriptor_name);
+                    port_type_str + " Port " + std::to_string(*port_b_id) + " not available on board " +
+                    std::to_string(*board_b_id) + " in pod " + pod_descriptor_name);
             }
 
             board_a.mark_port_used(*port_type, port_a_id);
@@ -299,12 +299,12 @@ std::shared_ptr<ResolvedGraphInstance> CablingGenerator::build_graph_instance(
 
                 if (std::find(available_a.begin(), available_a.end(), port_a_id) == available_a.end()) {
                     throw std::runtime_error(
-                        "Port " + std::to_string(*port_a_id) + " not available on board " +
+                        port_type_str + " Port " + std::to_string(*port_a_id) + " not available on board " +
                         std::to_string(*board_a_id) + " in pod " + path_a[0]);
                 }
                 if (std::find(available_b.begin(), available_b.end(), port_b_id) == available_b.end()) {
                     throw std::runtime_error(
-                        "Port " + std::to_string(*port_b_id) + " not available on board " +
+                        port_type_str + " Port " + std::to_string(*port_b_id) + " not available on board " +
                         std::to_string(*board_b_id) + " in pod " + path_b[0]);
                 }
 

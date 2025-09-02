@@ -1,6 +1,3 @@
-
-# 5LB configuration using V3 schema
-
 graph_templates {
   key: "5lb"
   value {
