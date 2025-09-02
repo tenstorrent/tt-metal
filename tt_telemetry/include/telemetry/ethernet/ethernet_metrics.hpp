@@ -11,7 +11,7 @@
  #include <string>
  #include <vector>
 
-#include <third_party/umd/device/api/umd/device/cluster.hpp>
+#include <third_party/umd/device/api/umd/device/cluster.h>
 
 #include <telemetry/metric.hpp>
 #include <telemetry/ethernet/ethernet_endpoint.hpp>

@@ -50,7 +50,7 @@ EthernetCRCErrorCountMetric::EthernetCRCErrorCountMetric(
             endpoint_.ethernet_core.y,
             tt::umd::CoreType::ETH,
             tt::umd::CoordSystem::LOGICAL);
-        crc_addr_ = 0x100;
+        crc_addr_ = 0x1f7c;
     }
 }
 
@@ -85,7 +85,7 @@ EthernetRetrainCountMetric::EthernetRetrainCountMetric(
     value_ = 0;
     ethernet_core_ = tt::umd::CoreCoord(
         endpoint_.ethernet_core.x, endpoint_.ethernet_core.y, tt::umd::CoreType::ETH, tt::umd::CoordSystem::LOGICAL);
-    retrain_count_addr_ = 0x100;
+    retrain_count_addr_ = 0x1edc;
 }
 
 const std::vector<std::string> EthernetRetrainCountMetric::telemetry_path() const {
@@ -120,7 +120,7 @@ EthernetCorrectedCodewordCountMetric::EthernetCorrectedCodewordCountMetric(
             endpoint_.ethernet_core.y,
             tt::umd::CoreType::ETH,
             tt::umd::CoordSystem::LOGICAL);
-        corr_addr_ = 0x100;
+        corr_addr_ = 0x1f90;
     }
 }
 
@@ -162,7 +162,7 @@ EthernetUncorrectedCodewordCountMetric::EthernetUncorrectedCodewordCountMetric(
             endpoint_.ethernet_core.y,
             tt::umd::CoreType::ETH,
             tt::umd::CoordSystem::LOGICAL);
-        uncorr_addr_ = 0x100;
+        uncorr_addr_ = 0x1f98;
     }
 }
 

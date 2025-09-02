@@ -142,23 +142,23 @@ static void test_print_link_health() {
 }
 
 int main(int argc, char* argv[]) {
-    std::cout << "crc_err_addr = " << std::hex
-              << tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-                     tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CRC_ERR)
-              << std::endl;
-    std::cout << "retrain_count_addr = "
-              << tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-                     tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT)
-              << std::endl;
-    std::cout << "corr_cw_addr = "
-              << tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-                     tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CORR_CW)
-              << std::endl;
-    std::cout << "uncorr_cw_addr = "
-              << tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-                     tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW)
-              << std::endl;
-    return 0;
+    // std::cout << "crc_err_addr = " << std::hex
+    //           << tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+    //                  tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CRC_ERR)
+    //           << std::endl;
+    // std::cout << "retrain_count_addr = "
+    //           << tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+    //                  tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT)
+    //           << std::endl;
+    // std::cout << "corr_cw_addr = "
+    //           << tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+    //                  tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CORR_CW)
+    //           << std::endl;
+    // std::cout << "uncorr_cw_addr = "
+    //           << tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+    //                  tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW)
+    //           << std::endl;
+    // return 0;
 
     // Parse command line arguments
     cxxopts::Options options("tt_telemetry_server", "TT-Metal Telemetry Server");

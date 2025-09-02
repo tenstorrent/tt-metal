@@ -11,7 +11,7 @@
 #include <string>
 #include <unordered_map>
 
-#include <third_party/umd/device/api/umd/device/cluster.hpp>
+#include <third_party/umd/device/api/umd/device/cluster.h>
 
 enum class MetricUnit : uint16_t {
     UNITLESS = 0,

@@ -13,8 +13,8 @@
 #include <map>
 
 #include <telemetry/ethernet/chip_identifier.hpp>
-#include <third_party/umd/device/api/umd/device/cluster.hpp>
-#include <third_party/umd/device/api/umd/device/types/telemetry.hpp>
+#include <third_party/umd/device/api/umd/device/cluster.h>
+#include <third_party/umd/device/api/umd/device/types/telemetry.h>
 
 class ARCTelemetryReader {
 public:
