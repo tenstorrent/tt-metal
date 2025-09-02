@@ -108,12 +108,11 @@ class Experts(AbstractModule):
             The converted TTNN tensor.
         """
         multi_dev_host_weights = ttnn.from_host_shards(
-            [
-                ttnn.from_torch(e.unsqueeze(0), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)
-                for e in wx_per_device_state_dict_group
-            ],
+            [ttnn.from_torch(e.unsqueeze(0), layout=ttnn.ROW_MAJOR_LAYOUT) for e in wx_per_device_state_dict_group],
             mesh_device.shape,
         )
+        # This is a solution to fasten the conversion to tile layout and bfloat4_b with multi-threading
+        multi_dev_host_weights = ttnn.to_dtype(multi_dev_host_weights, ttnn.bfloat4_b)
 
         multi_dev_weights = ttnn.to_device(
             multi_dev_host_weights,
