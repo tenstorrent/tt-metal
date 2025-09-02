@@ -350,7 +350,7 @@ uint64_t BankManager::allocate_buffer(
     }
     TT_ASSERT(bool(allocators_[state.value]), "Allocator not initialized!");
 
-    auto address = allocator_->allocate(size_per_bank, bottom_up, address_limit);
+    auto address = allocators_[state.value]->allocate(size_per_bank, bottom_up, address_limit);
     if (not address.has_value()) {
         TT_THROW(
             "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
@@ -360,7 +360,7 @@ uint64_t BankManager::allocate_buffer(
             num_banks,
             size_per_bank);
     }
-    allocated_buffers_.insert(address.value());
+    allocated_buffers_[state.value].insert(address.value());
 
     return address.value();
     /*
@@ -430,11 +430,6 @@ void BankManager::deallocate_buffer(DeviceAddr address, BankManager::StateDepend
     // Helper: update overlays and delegate to allocator
     auto it = allocated_buffers_[state.value].find(address);
     if (it != allocated_buffers_[state.value].end()) {
-        DeviceAddr size_per_bank = it->second;
-        for (auto dependent_state : state_dependencies_.dependents[state.value]) {
-            auto y = dependent_state.value;
-            reservations_by_source_[y][state.value].remove(address, address + size_per_bank);
-        }
         allocated_buffers_[state.value].erase(it);
     }
     allocators_[state.value]->deallocate(address);
@@ -444,8 +439,8 @@ void BankManager::deallocate_all(BankManager::StateDependencies::StateId state) 
     this->assert_valid_state(state);
     std::vector<DeviceAddr> addrs;
     addrs.reserve(allocated_buffers_[state.value].size());
-    for (const auto& kv : allocated_buffers_[state.value]) {
-        addrs.push_back(kv.first);
+    for (const auto& addr : allocated_buffers_[state.value]) {
+        addrs.push_back(addr);
     }
     for (DeviceAddr addr : addrs) {
         this->deallocate_buffer(addr, state);
@@ -464,8 +459,8 @@ BankManager::~BankManager() {
         if (!allocators_[s]) {
             continue;
         }
-        for (const auto& kv : allocated_buffers_[s]) {
-            allocators_[s]->deallocate(kv.first);
+        for (const auto& addr : allocated_buffers_[s]) {
+            allocators_[s]->deallocate(addr);
         }
     }
     allocated_buffers_.clear();

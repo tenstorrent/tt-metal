@@ -129,7 +129,7 @@ private:
     ttsl::SmallVector<std::unordered_map<uint32_t, IntervalSet>> reservations_by_source_{};
 
     // Track allocations per state
-    ttsl::SmallVector<std::unordered_map<DeviceAddr, DeviceAddr>> allocated_buffers_{};
+    ttsl::SmallVector<std::unordered_set<DeviceAddr>> allocated_buffers_{};
     ttsl::SmallVector<std::unique_ptr<allocator::Algorithm>> allocators_{};
 
     // State-independent methods
