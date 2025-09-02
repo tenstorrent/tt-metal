@@ -28,6 +28,7 @@ struct Pool2D {
         MemoryConfig memory_config_;
         bool count_include_pad_;
         std::optional<int32_t> divisor_override_;
+        bool return_indices_;
         uint32_t memory_used;
     };
 
@@ -84,6 +85,7 @@ struct Pool2D {
         MemoryConfig memory_config,
         bool count_include_pad,
         std::optional<int32_t> divisor_override,
+        bool return_indices,
         uint32_t memory_used);
 };
 

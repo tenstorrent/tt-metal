@@ -76,7 +76,6 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
         .padding = {padding_4d.at(0), padding_4d.at(1), padding_4d.at(2), padding_4d.at(3)},
         .dilation_hw = {dilation_h, dilation_w},
         .ceil_mode = ceil_mode,
-        .return_indices = return_indices,
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
     auto output_shape = sliding_window_config.get_output_shape();
@@ -114,7 +113,13 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
         } else {  // auto-sharding
             std::optional<sliding_window::ParallelConfig> sw_parallel_config =
                 pool::determine_pool_config_for_auto_shard(
-                    input_tensor, sliding_window_config, channels, pool_type, count_include_pad, divisor_override);
+                    input_tensor,
+                    sliding_window_config,
+                    channels,
+                    pool_type,
+                    count_include_pad,
+                    divisor_override,
+                    return_indices);
             TT_FATAL(
                 sw_parallel_config.has_value(),
                 "autosharding could not determine valid shard scheme, please check tensor dimensions");
@@ -199,7 +204,6 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
         .core_range_set = parallel_config.grid,
         .snap_to_tile = false,
         .ceil_mode = ceil_mode,
-        .return_indices = return_indices,
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
 
@@ -302,6 +306,7 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
         out_memory_config,
         count_include_pad,
         divisor_override,
+        return_indices,
         pre_allocate_size);
 
     // format and return the result

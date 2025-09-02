@@ -90,7 +90,8 @@ std::optional<sliding_window::ParallelConfig> determine_pool_config_for_auto_sha
     uint32_t channels,
     Pool2DType pool_type,
     bool count_include_pad,
-    std::optional<int32_t> divisor_override);
+    std::optional<int32_t> divisor_override,
+    bool return_indices);
 
 FactoryParameters get_factory_parameters(
     uint32_t num_shards_c,

@@ -278,7 +278,8 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     uint32_t channels,
     Pool2DType pool_type,
     bool count_include_pad,
-    std::optional<int32_t> divisor_override) {
+    std::optional<int32_t> divisor_override,
+    bool return_indices) {
     uint32_t batch_size = sliding_window_config.batch_size;
     auto output_shape = sliding_window_config.get_output_shape();
     auto compute_grid_size = input_tensor.device()->compute_with_storage_grid_size();
@@ -323,7 +324,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             sliding_window_config.get_ceil_pad_h(),
             sliding_window_config.get_ceil_pad_w(),
             sliding_window_config.ceil_mode,
-            sliding_window_config.return_indices,
+            return_indices,
             sliding_window_config.window_hw.first,
             sliding_window_config.window_hw.second,
             sliding_window_config.get_output_shape()[1],

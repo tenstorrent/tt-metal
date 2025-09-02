@@ -695,6 +695,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     const auto& out_mem_config = op_attr.memory_config_;
     bool count_include_pad = op_attr.count_include_pad_;
     std::optional<int32_t> divisor_override = op_attr.divisor_override_;
+    bool return_indices = op_attr.return_indices_;
 
     tt::tt_metal::Program program{};
 
@@ -724,7 +725,6 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     auto ceil_pad_h = sliding_window_config.get_ceil_pad_h();
     auto ceil_pad_w = sliding_window_config.get_ceil_pad_w();
     auto ceil_mode = sliding_window_config.ceil_mode;
-    auto return_indices = sliding_window_config.return_indices;
     auto dilation_h = sliding_window_config.dilation_hw.first;
     auto dilation_w = sliding_window_config.dilation_hw.second;
     auto num_shards_c = sliding_window_config.num_cores_c;
@@ -796,7 +796,7 @@ void Pool2D::MultiCore::override_runtime_arguments(
         UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
     }
 
-    if (operation_attributes.sliding_window_config_.return_indices) {
+    if (operation_attributes.return_indices_) {
         TT_FATAL(tensor_args.input_tensors_.size() == 2, "Index tensor is required when return_indices is true");
         auto& raw_in_idx_cb = cached_program.shared_variables.raw_in_idx_cb;
         auto& out_idx_cb = cached_program.shared_variables.out_cb;
