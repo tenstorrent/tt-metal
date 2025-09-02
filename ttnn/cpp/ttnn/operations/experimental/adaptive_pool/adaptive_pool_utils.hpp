@@ -33,7 +33,7 @@ void validate_adaptive_pool_feasibility(uint32_t input_h, uint32_t input_w, uint
 
 // Helper functions for stride validation
 std::vector<uint32_t> calculate_stride_pattern(uint32_t input_size, uint32_t output_size);
-bool are_strides_uniform(const std::vector<uint32_t>& strides);
+bool are_strides_reasonably_uniform(const std::vector<uint32_t>& strides);
 
 }  // namespace operations::experimental::adaptive_pool
 }  // namespace ttnn

@@ -161,18 +161,50 @@ std::vector<uint32_t> calculate_stride_pattern(uint32_t input_size, uint32_t out
     return strides;
 }
 
-// Check if stride pattern is uniform (can be approximated with fixed stride)
-bool are_strides_uniform(const std::vector<uint32_t>& strides) {
-    if (strides.size() <= 1) {
-        return true;
+// Calculate the actual stride pattern that the fixed pooling parameters will produce
+std::vector<uint32_t> calculate_actual_pooling_strides(
+    uint32_t input_size,
+    uint32_t output_size,
+    uint32_t kernel_size,
+    uint32_t stride,
+    uint32_t pad_before,
+    uint32_t pad_after) {
+    std::vector<uint32_t> actual_strides;
+
+    // Calculate the actual start positions in the padded input for each output
+    for (uint32_t out_idx = 1; out_idx < output_size; out_idx++) {
+        uint32_t prev_start = (out_idx - 1) * stride;
+        uint32_t curr_start = out_idx * stride;
+        actual_strides.push_back(curr_start - prev_start);
     }
 
-    uint32_t expected_stride = strides[0];
-    for (uint32_t stride : strides) {
-        if (stride != expected_stride) {
+    return actual_strides;
+}
+
+// Check if the calculated pooling parameters produce uniform behavior
+bool validate_pooling_params_uniformity(
+    const AdaptivePoolingParams& params, uint32_t input_h, uint32_t input_w, uint32_t output_h, uint32_t output_w) {
+    // Check height dimension
+    auto h_actual_strides = calculate_actual_pooling_strides(
+        input_h, output_h, params.kernel_size[0], params.stride[0], params.padding[0], params.padding[1]);
+
+    // Check width dimension
+    auto w_actual_strides = calculate_actual_pooling_strides(
+        input_w, output_w, params.kernel_size[1], params.stride[1], params.padding[2], params.padding[3]);
+
+    // All strides should be exactly the same (since we're using fixed stride)
+    for (uint32_t stride : h_actual_strides) {
+        if (stride != params.stride[0]) {
             return false;
         }
     }
+
+    for (uint32_t stride : w_actual_strides) {
+        if (stride != params.stride[1]) {
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -189,13 +221,13 @@ void validate_adaptive_pool_feasibility(uint32_t input_h, uint32_t input_w, uint
     bool w_borders_ok = are_borders_correctable_with_padding(w_kernels);
     bool w_correctable = w_uniform_middle && w_borders_ok;
 
-    // Check stride pattern uniformity
-    auto h_strides = calculate_stride_pattern(input_h, output_h);
-    auto w_strides = calculate_stride_pattern(input_w, output_w);
-    bool h_strides_uniform = are_strides_uniform(h_strides);
-    bool w_strides_uniform = are_strides_uniform(w_strides);
+    // Calculate the actual pooling parameters that would be used
+    AdaptivePoolingParams params = calculate_adaptive_pool_params(input_h, input_w, output_h, output_w);
 
-    if (!h_correctable || !w_correctable || !h_strides_uniform || !w_strides_uniform) {
+    // Check if the calculated parameters produce uniform behavior
+    bool params_uniform = validate_pooling_params_uniformity(params, input_h, input_w, output_h, output_w);
+
+    if (!h_correctable || !w_correctable || !params_uniform) {
         std::string error_msg = "Adaptive pooling configuration not supported. ";
 
         if (!h_correctable) {
@@ -232,29 +264,17 @@ void validate_adaptive_pool_feasibility(uint32_t input_h, uint32_t input_w, uint
             }
         }
 
-        if (!h_strides_uniform) {
-            error_msg += "Height stride pattern [";
-            for (size_t i = 0; i < h_strides.size(); i++) {
-                error_msg += std::to_string(h_strides[i]);
-                if (i < h_strides.size() - 1) {
-                    error_msg += ",";
-                }
-            }
-            error_msg += "] not uniform, ";
+        if (!params_uniform) {
+            error_msg += "Calculated pooling parameters (kernel=[" + std::to_string(params.kernel_size[0]) + "," +
+                         std::to_string(params.kernel_size[1]) + "], stride=[" + std::to_string(params.stride[0]) +
+                         "," + std::to_string(params.stride[1]) + "], padding=[" + std::to_string(params.padding[0]) +
+                         "," + std::to_string(params.padding[1]) + "," + std::to_string(params.padding[2]) + "," +
+                         std::to_string(params.padding[3]) + "]) do not produce uniform pooling behavior, ";
         }
 
-        if (!w_strides_uniform) {
-            error_msg += "Width stride pattern [";
-            for (size_t i = 0; i < w_strides.size(); i++) {
-                error_msg += std::to_string(w_strides[i]);
-                if (i < w_strides.size() - 1) {
-                    error_msg += ",";
-                }
-            }
-            error_msg += "] not uniform, ";
-        }
-
-        error_msg += "Correctable patterns require uniform middle kernels AND borders <= middle AND uniform strides. ";
+        error_msg +=
+            "Correctable patterns require uniform middle kernels AND borders <= middle AND calculated pooling "
+            "parameters must produce uniform behavior. ";
         error_msg += "Input shape: (" + std::to_string(input_h) + "," + std::to_string(input_w) + "), Output shape: (" +
                      std::to_string(output_h) + "," + std::to_string(output_w) + ").";
 
