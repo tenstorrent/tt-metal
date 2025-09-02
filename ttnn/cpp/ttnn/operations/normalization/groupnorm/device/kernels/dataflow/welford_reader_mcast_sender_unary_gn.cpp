@@ -367,14 +367,22 @@ void kernel_main() {
                     auto p_local_means = reinterpret_cast<volatile uint16_t*>(local_read_ptr);
                     auto p_local_vars = p_local_means + TILE_WIDTH * TILE_HEIGHT;
 
+                    // Print local means
+                    DPRINT << "local means: ";
+                    for (uint32_t j = 0; j < 32 * 2; j += 2) {
+                        DPRINT << BF16(p_local_means[j]) << " ";
+                    }
+                    DPRINT << ENDL();
+
                     // Print local vars
+                    DPRINT << "local vars: ";
                     for (uint32_t j = 0; j < 32 * 2; j += 2) {
                         DPRINT << BF16(p_local_vars[j]) << " ";
                     }
                     DPRINT << ENDL();
 
                     auto local_result = combine_welford<32, num_channels_per_group * num_rows_per_group / 32, 2>(p_local_means, p_local_vars);
-                    DPRINT << "local mean: " << BF16(local_result.mean) << " local var: " << BF16(local_result.variance) << " local count: " << local_result.count << ENDL();
+                    DPRINT << "local combined mean: " << BF16(local_result.mean) << " local combined var: " << BF16(local_result.variance) << " local count: " << local_result.count << ENDL();
 
                     // Write this to cb_ex_global
                     auto global_means_ptr = get_write_ptr(cb_ex_global);
@@ -399,9 +407,21 @@ void kernel_main() {
                         noc_async_read_barrier();
                     }
 
+                    DPRINT << "global means: ";
+                    for (uint32_t j = 0; j < 32 * 16; j+=16) {
+                        DPRINT << BF16(p_global_means[j]) << " ";
+                    }
+                    DPRINT << ENDL();
+
+                    DPRINT << "global vars: ";
+                    for (uint32_t j = 0; j < 32 * 16; j+=16) {
+                        DPRINT << BF16(p_global_vars[j]) << " ";
+                    }
+                    DPRINT << ENDL();
+
                     // Read mean and variance arrays from cb_ex_global, then combine using Welford
                     auto global_result = combine_welford<num_mcast_cores, num_channels_per_group * num_rows_per_group, 16>(p_global_means, p_global_vars);
-                    DPRINT << "global mean: " << BF16(global_result.mean) << " global var: " << BF16(global_result.variance) << ENDL();
+                    DPRINT << "global combined mean: " << BF16(global_result.mean) << " global combined var: " << BF16(global_result.variance) << ENDL();
 
                     // Write this to cb_ex_global
                     p_global_means[0] = global_result.mean;
