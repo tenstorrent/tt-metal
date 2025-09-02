@@ -140,16 +140,6 @@ private:
 
     // State-dependent methods
     void assert_valid_state(StateDependencies::StateId state) const;
-
-    // Helpers to compute union of all source reservations for a state and subtract from free ranges
-
-    static DeviceAddr align_up(DeviceAddr addr, DeviceAddr alignment) {
-        if (alignment == 0) {
-            return addr;
-        }
-        DeviceAddr factor = (addr + alignment - 1) / alignment;
-        return factor * alignment;
-    }
 };
 
 }  // namespace tt_metal

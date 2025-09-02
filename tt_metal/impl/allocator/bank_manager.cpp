@@ -360,6 +360,7 @@ uint64_t BankManager::allocate_buffer(
     BankManager::StateDependencies::StateId state) {
     this->assert_valid_state(state);
     TT_ASSERT(bool(allocators_[state.value]), "Allocator not initialized!");
+    auto* alloc = allocators_[state.value].get();
 
     uint32_t num_banks = this->num_banks();
     bool is_sharded = false;
@@ -383,7 +384,7 @@ uint64_t BankManager::allocate_buffer(
     // If there are no dependent states, fall back to allocator's native strategy
     const auto& neighbors = state_dependencies_.dependencies[state.value];
     if (neighbors.empty()) {
-        auto address = allocators_[state.value]->allocate(size_per_bank, bottom_up, address_limit);
+        auto address = alloc->allocate(size_per_bank, bottom_up, address_limit);
         if (not address.has_value()) {
             TT_THROW(
                 "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
@@ -419,11 +420,12 @@ uint64_t BankManager::allocate_buffer(
     all_free.reserve(1 + neighbors.size());
 
     // Current state ranges
-    all_free.push_back(clamp_ranges(allocators_[state.value]->available_addresses(size_per_bank)));
+    all_free.push_back(clamp_ranges(alloc->available_addresses(size_per_bank)));
 
     // Neighbor state ranges
     for (const auto dep_state : neighbors) {
-        all_free.push_back(clamp_ranges(allocators_[dep_state.value]->available_addresses(size_per_bank)));
+        auto* dep_alloc = allocators_[dep_state.value].get();
+        all_free.push_back(clamp_ranges(dep_alloc->available_addresses(size_per_bank)));
     }
 
     // Sort each free range list by start address to prepare for intersection
@@ -464,7 +466,8 @@ uint64_t BankManager::allocate_buffer(
     std::optional<DeviceAddr> chosen;
     if (bottom_up) {
         for (const auto& r : allowed) {
-            DeviceAddr s = align_up(r.first, alignment_bytes_);
+            // DeviceAddr s = alloc->align(r.first);
+            DeviceAddr s = r.first;
             if (s + size_per_bank <= r.second) {
                 chosen = s;
                 break;
@@ -474,7 +477,7 @@ uint64_t BankManager::allocate_buffer(
         for (ssize_t i = static_cast<ssize_t>(allowed.size()) - 1; i >= 0; --i) {
             const auto& r = allowed[static_cast<size_t>(i)];
             DeviceAddr s = r.second - size_per_bank;
-            s = (s / alignment_bytes_) * alignment_bytes_;  // round down to alignment
+            // s = (s / alignment_bytes_) * alignment_bytes_;  // round down to alignment
             if (s >= r.first) {
                 chosen = s;
                 break;
@@ -490,9 +493,11 @@ uint64_t BankManager::allocate_buffer(
             enchantum::to_string(buffer_type_),
             num_banks,
             size_per_bank);
+    } else if (chosen.value() % alignment_bytes_ != 0) {
+        TT_THROW("Chosen address {} is not aligned to {} B", chosen.value(), alignment_bytes_);
     }
 
-    auto address = allocators_[state.value]->allocate_at_address(chosen.value(), size_per_bank);
+    auto address = alloc->allocate_at_address(chosen.value(), size_per_bank);
     if (!address.has_value()) {
         TT_THROW("Allocator failed to place at chosen address {}", chosen.value());
     }
