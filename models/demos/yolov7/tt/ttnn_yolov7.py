@@ -189,7 +189,9 @@ class ttnn_detect:
         self.stride = [8.0, 16.0, 32.0]
 
         self.m = []
-        self.convm_1 = Conv([1, 80, 80, 256], (1, 1, 1, 1, 0, 0, 1, 1), parameters["0"], is_reshape=True, activation="")
+        self.convm_1 = Conv(
+            [1, 80, 80, 256], (1, 1, 1, 1, 0, 0, 1, 1), parameters["0"], is_reshape=True, activation="sigmoid"
+        )
         self.m.append(self.convm_1)
 
         self.convm_2 = Conv(
@@ -197,7 +199,7 @@ class ttnn_detect:
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["1"],
             is_reshape=True,
-            activation="",
+            activation="sigmoid",
             height_sharding=False,
         )
         self.m.append(self.convm_2)
@@ -207,7 +209,7 @@ class ttnn_detect:
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["2"],
             is_reshape=True,
-            activation="",
+            activation="sigmoid",
             height_sharding=False,
         )
         self.m.append(self.convm_2)
@@ -215,6 +217,9 @@ class ttnn_detect:
     def __call__(self, x):
         z = []
         self.training = False
+
+        if not self.training or not torch.onnx.is_in_onnx_export():
+            return self.detect(x)
 
         for i in range(self.nl):
             x[i] = ttnn.to_memory_config(x[i], ttnn.L1_MEMORY_CONFIG)
@@ -262,6 +267,57 @@ class ttnn_detect:
 
         out = (ttnn.concat(z, 1), x)
         for t in z:
+            ttnn.deallocate(t)
+        if i == 3:
+            ttnn.deallocate(x)
+        return out
+
+    def detect(self, x):
+        for i in range(self.nl):
+            x[i] = self.m[i](self.device, x[i])
+
+            bs, _, ny, nx = x[i].shape
+
+            x[i] = ttnn.reshape(x[i], (bs, self.na, self.no, ny, nx))
+            x[i] = ttnn.to_layout(x[i], ttnn.TILE_LAYOUT)
+
+            c = x[i][:, :, 0:2, :, :]
+            d = x[i][:, :, 2:4, :, :]
+            e = x[i][:, :, 4:, :, :]
+
+            ttnn_grid = ttnn.permute(self.grid[i], (0, 1, 4, 2, 3))
+            ttnn_grid = concat(1, False, ttnn_grid, ttnn_grid, ttnn_grid)
+            ttnn_anchor_grid = ttnn.permute(self.anchor_grid[i : i + 1], (0, 1, 4, 2, 3))
+
+            ttnn.mul_(c, 2)
+            ttnn.sub_(c, 0.5)
+            ttnn.add_(c, ttnn_grid)
+            ttnn.mul_(c, self.stride[i])
+
+            d = ttnn.pow((d * 2), 2) * ttnn_anchor_grid
+
+            y_cat = concat(2, False, c, d, e)
+
+            ttnn.deallocate(c)
+            ttnn.deallocate(d)
+            ttnn.deallocate(e)
+
+            y_cat = ttnn.to_memory_config(y_cat, memory_config=ttnn.L1_MEMORY_CONFIG)
+            y_cat = ttnn.permute(y_cat, (0, 1, 3, 4, 2))
+
+            reshaped = ttnn.reshape(y_cat, (bs, -1, self.no))
+            if i == 0:
+                z_0 = reshaped
+            if i == 1:
+                z_1 = reshaped
+            if i == 2:
+                z_2 = reshaped
+            ttnn.deallocate(y_cat)
+
+        concatenated = concat(1, False, z_0, z_1, z_2)
+        out = (concatenated, x)
+
+        for t in [z_0, z_1, z_2]:
             ttnn.deallocate(t)
         if i == 3:
             ttnn.deallocate(x)
@@ -985,7 +1041,6 @@ class ttnn_yolov7:
         ttnn.deallocate(conv26)
         ttnn.deallocate(conv28)
 
-        print("conv31 shape: ", conv31.shape, " layout: ", conv31.layout)
         # conv31 = ttnn.sharded_to_interleaved(conv31, ttnn.L1_MEMORY_CONFIG)
         # conv31 = ttnn.to_layout(conv31, ttnn.ROW_MAJOR_LAYOUT)
         mp3 = ttnn.max_pool2d(
