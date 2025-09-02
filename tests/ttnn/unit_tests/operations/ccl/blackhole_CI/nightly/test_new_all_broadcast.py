@@ -240,6 +240,9 @@ def run_all_broadcast_impl(
         (2, 1, [2, 30], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
         (2, 1, [3, 122, 2042], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
         (2, 1, [1, 1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (2, 1, [1, 69, 4000], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        (2, 1, [1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (2, 1, [2, 64, 512], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
     ],
 )
 @pytest.mark.parametrize(
@@ -251,7 +254,58 @@ def run_all_broadcast_impl(
 )
 @pytest.mark.parametrize("num_iters", [3])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_all_broadcast(
+def test_all_broadcast_2_devices(
+    bh_1d_mesh_device,
+    # pcie_mesh_device,
+    num_devices,
+    output_shape,
+    num_links,
+    input_dtype,
+    layout,
+    mem_config,
+    num_iters,
+    function_level_defaults,
+):
+    topology = ttnn.Topology.Linear
+    validate_test(num_devices, topology, bh_1d_mesh_device.shape, 0)
+    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b not supported for row-major")
+
+    run_all_broadcast_impl(
+        bh_1d_mesh_device,
+        num_devices,
+        output_shape,
+        num_links,
+        input_dtype,
+        layout,
+        function_level_defaults,
+        all_broadcast_topology=topology,
+        num_iters=num_iters,
+        rand_tensor=True,
+        mem_config=mem_config,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, num_links, output_shape, layout, input_dtype",
+    [
+        (4, 1, [1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, 1, [2, 64, 512], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (4, 1, [1, 69, 4000], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+    ],
+)
+@pytest.mark.parametrize("num_iters", [3])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_all_broadcast_4_devices(
     bh_1d_mesh_device,
     # pcie_mesh_device,
     num_devices,
@@ -338,6 +392,24 @@ def test_all_broadcast_trace(
     "num_devices, output_shape, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [
         (
+            4,
+            [2, 32, 256],
+            (64, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            None,
+            None,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            4,
+            [192, 64],
+            (32, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 1))}),
+            None,
+            None,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+        (
             2,
             [2, 3, 64, 1024],
             (384, 128),
@@ -350,6 +422,15 @@ def test_all_broadcast_trace(
             None,
             None,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            4,
+            [2, 4, 32, 256],
+            (64, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}),
+            None,
+            None,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ),
     ],
 )
