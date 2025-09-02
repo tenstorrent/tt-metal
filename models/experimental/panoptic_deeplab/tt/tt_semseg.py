@@ -54,16 +54,25 @@ class TtDeepLabV3PlusHead(nn.Module):
 
         # A helper function to create TtConv2d modules, inspired by your TtASPP
         def _create_tt_conv2d(
-            weight: torch.Tensor, in_ch: int, out_ch: int, kernel_size: int, stride: int, padding: int, use_bias: bool
+            weight: torch.Tensor,
+            in_ch: int,
+            out_ch: int,
+            kernel_size: int,
+            stride: int,
+            padding: int,
+            use_bias: bool,
+            slice_num: int = 1,
+            toSlice: bool = False,
         ):
             param_dict = {"weight": weight}
+            param_dict["channel_slice_num"] = slice_num
             if use_bias:
                 # We assume the bias will be fused or handled separately in TTNN.
                 # Here, we can create a dummy bias if the wrapper requires it.
                 param_dict["bias"] = torch.zeros(1, 1, 1, out_ch)
 
             parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
-            return TtConv2d(parameters, stride=(stride, stride), padding=(padding, padding))
+            return TtConv2d(parameters, stride=(stride, stride), padding=(padding, padding), use_slice=toSlice)
 
         self.decoder = {}
         use_bias = norm == ""
@@ -271,54 +280,162 @@ class TtDeepLabV3PlusHead(nn.Module):
                     sliced_results.append(y_slice_upsampled)
 
                     # Clean up intermediate tensors
-                    y_slice.deallocate()
-
+                    ttnn.deallocate(y_slice)
                 # Concatenate all upsampled slices along channel dimension
                 y_upsampled = ttnn.concat(sliced_results, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
                 # Clean up slice result tensors
                 for slice_result in sliced_results:
-                    slice_result.deallocate()
+                    ttnn.deallocate(slice_result)
+
             y_upsampled = ttnn.to_memory_config(y_upsampled, ttnn.DRAM_MEMORY_CONFIG)
             y_upsampled = ttnn.to_layout(y_upsampled, ttnn.TILE_LAYOUT)
-
-            # PRINT MEMORY CONFIGS AND SEE IF EVERYTHING IS IN DRAM TO FIX BANK MANAGER
-            print("THIS IS Y_UPSAMPLED MEMORY CONFIG")
-            print(y_upsampled.memory_config())
-            print("THIS IS PROJ_X MEMORY CONFIG")
-            print(proj_x.memory_config())
 
             if debug_stage == "upsample_out":
                 return y_upsampled
 
-            # proj_x.deallocate()
-            # proj_x_dram.deallocate()
-            # y_upsampled.deallocate()
-            # y_upsampled_dram.deallocate()
-            # previous_y.deallocate()
             # 3. Fuse the features by concatenating along the channel dimension (dim=3 for NHWC).
             y = ttnn.concat([proj_x, y_upsampled], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             if debug_stage == "concat_out":
                 return y
 
-            # previous_y.deallocate()
-            # proj_x.deallocate()
-            # y_upsampled.deallocate()
+            ttnn.deallocate(previous_y)
+            ttnn.deallocate(proj_x)
+            ttnn.deallocate(y_upsampled)
+            print(y)
+            # #y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG) Maybe not needed if Im going to shard
+            # original_height = y.shape[1]
 
-            y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
+            # current_channels = y.shape[-1]
+            # # Pad to next multiple of 32 that also works well with your core grid
+            # cores_count = self.device.core_grid.y * self.device.core_grid.x
+            # padded_channels = ((current_channels + 31) // 32) * 32
+            # # Ensure the padded channels work well with width sharding across cores
+            # while (padded_channels // cores_count) % 32 != 0:
+            #     padded_channels += 32
 
-            # 4. Apply the two 3x3 fuse convolutions, each followed by Norm and Activation.
-            # After each normalization and activation
-            y = stage["fuse_conv_0"](y)  # Input `y` is now gone
-            y = stage["fuse_norm_0"](y)
-            y = self.activation(y)
+            # current_channels = y.shape[-1]
+            # padded_channels = (current_channels + 31) // 32 * 32
+            # padded_y = y
 
-            y = stage["fuse_conv_1"](y)  # Input `y` is now gone
-            y = stage["fuse_norm_1"](y)
-            y = self.activation(y)
+            # if current_channels != padded_channels:
+            #     padding = [[0, 0] for _ in range(len(y.shape))]
+            #     padding[-1] = [0, padded_channels - current_channels]
+            #     padded_y = ttnn.pad(y, padding=padding, value=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            #     y.deallocate()
 
-            # 7. Convert the final result of the block back to DRAM for the next stage.
-            y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
+            # num_cores_in_grid = self.device.core_grid.y * self.device.core_grid.x
+            # padded_height = (original_height + num_cores_in_grid - 1) // num_cores_in_grid * num_cores_in_grid
+
+            # padding = [[0, 0], [0, padded_height - original_height], [0, 0], [0, 0]] # Pad only Height dim
+            # y_padded = ttnn.pad(padded_y, padding=padding, value=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # padded_y.deallocate()
+
+            core_grid = self.device.core_grid
+            num_cores = core_grid.x * core_grid.y
+
+            physical_height = y.shape[1] * y.shape[2]  # H * W flattened
+            physical_width = y.shape[3]  # Channels
+
+            target_shard_height = (physical_height + num_cores - 1) // num_cores
+            # Round up to nearest multiple of 32 for tile alignment
+            target_shard_height = ((target_shard_height + 31) // 32) * 32
+            print("This is the target shard height:", target_shard_height)
+
+            # Calculate required total physical height
+            required_physical_height = target_shard_height * num_cores
+
+            # Calculate required logical height (reverse the flattening)
+            required_logical_height = required_physical_height // y.shape[2]
+
+            print("Required logical height:", required_logical_height)
+
+            if y.shape[1] < required_logical_height:
+                height_padding = required_logical_height - y.shape[1]
+                padding = [[0, 0], [0, height_padding], [0, 0], [0, 0]]
+                # y = ttnn.pad(y, padding=padding, value=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            sharded_memory_config = ttnn.create_sharded_memory_config(
+                shape=(target_shard_height, physical_width),
+                core_grid=core_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            # y_sharded = ttnn.to_memory_config(y, sharded_memory_config)
+            # print("Y after sharding:")
+            # print(y_sharded)
+            # print()
+            # print(y_sharded.memory_config())
+            # 3. Apply the first fuse convolution. NO deallocation or activation fusion.
+            # pad y to add 1 more channel to it
+
+            print("Y right before sharding:")
+            print(y)
+            print()
+
+            y_conv0 = stage["fuse_conv_0"](y)
+
+            ttnn.deallocate(y)  # Manually deallocate the input now
+            # 4. Apply norm and activation
+            y_norm0 = stage["fuse_norm_0"](y_conv0)
+            ttnn.deallocate(y_conv0)
+
+            y_act0 = self.activation(y_norm0)
+            ttnn.deallocate(y_norm0)
+
+            # 5. Re-shard the intermediate result before the next conv
+            # intermediate_sharded_config = ttnn.create_sharded_memory_config(
+            #     y_act0.shape, core_grid=core_grid, strategy=ttnn.ShardStrategy.HEIGHT,
+            #     orientation=ttnn.ShardOrientation.ROW_MAJOR
+            # )
+            # y_sharded_intermediate = ttnn.to_memory_config(y_act0, intermediate_sharded_config)
+            # ttnn.deallocate(y_act0)
+
+            # 6. Apply the second fuse convolution
+            print("Y before second fuse conv:")
+            print(y_act0)
+            print()
+
+            y_conv1 = stage["fuse_conv_1"](y_act0)
+
+            # ttnn.deallocate(y_sharded_intermediate)
+
+            # 7. Apply norm and activation
+            y_norm1 = stage["fuse_norm_1"](y_conv1)
+            ttnn.deallocate(y_conv1)
+
+            y = self.activation(y_norm1)  # `y` is now the final result of the block
+            ttnn.deallocate(y_norm1)
+
+            # 8. Convert back to DRAM for the next loop
+            # y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
+
+            # output_tensor_end = [y.shape[0]-1, original_height-1, y.shape[2]-1, y.shape[3]-1]
+            # y = ttnn.unpad(y, output_tensor_start=[0,0,0,0], output_tensor_end=output_tensor_end)
+
+            # ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
+            # COMMENTED TO TRY SHARDING
+            # # 6. Create a Conv2dConfig for the fuse convolutions
+            # fuse_conv_config = ttnn.Conv2dConfig(
+            #     deallocate_activation=True, # Automatically deallocate input `y`
+            #     activation="relu",          # Fuse the activation
+            # )
+
+            # # 4. Apply the two 3x3 fuse convolutions, each followed by Norm and Activation.
+            # # After each normalization and activation
+            # y = stage["fuse_conv_0"](y, conv_config = fuse_conv_config)  # Input `y` is now gone
+            # y = stage["fuse_norm_0"](y)
+            # y = self.activation(y)
+
+            # y = stage["fuse_conv_1"](y)  # Input `y` is now gone
+            # y = stage["fuse_norm_1"](y)
+            # y = self.activation(y)
+
+            # # 7. Convert the final result of the block back to DRAM for the next stage.
+            # y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
+            # COMMENTED TO TRY SHARDING
 
             # 5. Check for debug hooks after each full fusion stage.
             # i=0 is the first fusion stage (e.g., 'res3')
