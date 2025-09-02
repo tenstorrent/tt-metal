@@ -26,6 +26,7 @@ jobs:
 
   regression-testing:
     uses: ./.github/workflows/regression-testing.yaml
+    secrets: inherit
   create-tag:
     needs: regression-testing
     uses: ./.github/workflows/release-verify-or-create-tag.yaml
