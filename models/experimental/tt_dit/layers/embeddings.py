@@ -482,7 +482,7 @@ class WanPatchEmbed:
         )
 
         if "bias" in state_dict:
-            bias = state_dict["bias"].reshape(1, 1, 1, 1, -1)
+            bias = state_dict["bias"].reshape(1, -1)
             self.proj_bias = bf16_tensor(
                 bias,
                 device=self.mesh_device,
