@@ -39,11 +39,11 @@ def check_noc_location(location: OnChipCoordinate, block_type: BlockType, noc_id
 def run(args, context: Context):
     block_locations_to_check: PerBlockLocationCheck = get_check_per_block_location(args, context)
     block_locations_to_check.run_check(
-        lambda location, block_type: check_noc_location(location, block_type, noc_id=0),
+        lambda location, block_type: check_noc_location(location, block_type, noc_id=0), block_filter=["tensix", "eth"]
     )
 
     block_locations_to_check.run_check(
-        lambda location, block_type: check_noc_location(location, block_type, noc_id=1),
+        lambda location, block_type: check_noc_location(location, block_type, noc_id=1), block_filter=["tensix", "eth"]
     )
 
 

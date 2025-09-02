@@ -1,3 +1,19 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Usage:
+    check_per_block_location
+
+Description:
+    Provides a way to run checks on each block location we want to check.
+    This script will iterate over all block locations and apply the specified checks.
+    If check method returns value, data will be collected and returned.
+    If check method returns None, no data will be collected for that block location.
+"""
+
 from dataclasses import dataclass
 from decimal import Context
 from typing import Callable
