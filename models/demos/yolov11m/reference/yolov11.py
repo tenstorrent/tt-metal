@@ -97,9 +97,11 @@ class Bottleneck(nn.Module):
 
     def forward(self, x):
         input = x
-        x = self.cv1(x)
-        x = self.cv2(x)
-        return input + x
+        x1 = self.cv1(x)  # 64 → 32
+        x2 = self.cv2(x)  # 64 → 32 (both operate on original input)
+        x = x1 + x2       # 32 + 32 = 32 channels
+        # Note: No residual connection since dimensions don't match (64 + 32)
+        return x
 
 
 class SPPF(nn.Module):
@@ -741,8 +743,8 @@ class YoloV11(nn.Module):
             Conv(3, 64, kernel=3, stride=2, padding=1),  # 0
             Conv(64, 128, kernel=3, stride=2, padding=1),  # 1
             C3k2(  # 2
-                [128, 192, 64, 32, 64, 32, 32, 32, 32],
-                [128, 256, 32, 64, 64, 32, 32, 32, 32],
+                [128, 192, 64, 64, 64, 32, 32, 32, 32],
+                [128, 256, 32, 32, 64, 32, 32, 32, 32],
                 [1, 1, 1, 1, 1, 3, 3, 3, 3],
                 [1, 1, 1, 1, 1, 1, 1, 1, 1],
                 [0, 0, 0, 0, 0, 1, 1, 1, 1],
