@@ -6,7 +6,7 @@ on:
       version:
         required: true
         type: string
-      is_major_version:
+      tag-latest:
         required: true
         type: boolean
         default: false
@@ -138,7 +138,7 @@ jobs:
         run: |
           set -eu # basic shell hygiene
           LATEST_TAG=latest
-          if [ "${{  inputs.is_major_version }}" = "true" ]; then
+          if [ "${{ inputs.tag-latest }}" = "true" ]; then
             LATEST_TAG=latest
           else
             LATEST_TAG=latest-rc

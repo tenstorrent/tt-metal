@@ -2,6 +2,12 @@ name: "Create and Publish Release Docker Image"
 
 on:
   workflow_dispatch:
+    inputs:
+      tag-latest:
+        description: 'Tag the image as latest (WARNING: Affects production!)'
+        required: true
+        type: boolean
+        default: false
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
@@ -32,5 +38,5 @@ jobs:
     secrets: inherit
     with:
       version: dev-${{ needs.create-image-tag-name.outputs.image-tag-name }}
-      is_major_version: false
+      tag-latest: ${{ inputs.tag-latest }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
