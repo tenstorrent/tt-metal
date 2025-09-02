@@ -101,7 +101,7 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/setup-job@davidp-bisect-workflow
         timeout-minutes: 10
         with:
-        fetch-depth: 0
+          fetch-depth: 0
 
 
       - name: Run Git Bisect
