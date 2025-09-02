@@ -202,11 +202,14 @@ class Dual2x4FabricFixture : public Fixture {
 template <typename Fixture>
 class NanoExabox2x4FabricFixture : public Fixture {
     std::string get_path_to_mesh_graph_desc() override {
-        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_mesh_graph_descriptor.yaml";
+        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_superpod_mgd.yaml";
     }
 
     std::vector<std::vector<eth_coord_t>> get_eth_coord_mapping() override {
         return {
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
             get_eth_coords_for_2x4_t3k(),
             get_eth_coords_for_2x4_t3k(),
             get_eth_coords_for_2x4_t3k(),
@@ -219,7 +222,7 @@ class NanoExabox2x4FabricFixture : public Fixture {
 template <typename Fixture>
 class NanoExabox1x8FabricFixture : public Fixture {
     std::string get_path_to_mesh_graph_desc() override {
-        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_1x8_mesh_graph_descriptor.yaml";
+        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_superpod_1x8_mgd.yaml";
     }
 
     std::vector<std::vector<eth_coord_t>> get_eth_coord_mapping() override {

@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 #include <tt-metalium/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/fabric/serialization/intermesh_link_table.hpp"
 #include <iomanip>
 #include <sstream>
 #include <set>
@@ -69,48 +68,6 @@ TEST(IntermeshAPIs, ConsistencyChecks) {
 
         EXPECT_EQ(expected_set, actual_set)
             << "Link content mismatch for chip " << chip_id;
-    }
-}
-
-TEST(IntermeshAPIs, LocalIntermeshLinkTable) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
-    if (!control_plane.system_has_intermesh_links()) {
-        GTEST_SKIP() << "Cluster does not support intermesh links";
-    }
-
-    log_info(tt::LogTest, "=== Verifying Local Intermesh Link Table Serialization ===");
-
-    // Get the local intermesh link table
-    const auto& intermesh_link_table = control_plane.get_local_intermesh_link_table();
-    auto serialized_table = serialize_to_bytes(intermesh_link_table);
-    IntermeshLinkTable deserialized_table = deserialize_from_bytes(serialized_table);
-    EXPECT_EQ(intermesh_link_table.local_mesh_id, deserialized_table.local_mesh_id)
-        << "Deserialized local mesh ID does not match original";
-
-    for (const auto& [local_chan, remote_chan] : intermesh_link_table.intermesh_links) {
-        EXPECT_TRUE(deserialized_table.intermesh_links.contains(local_chan))
-            << "Deserialized table does not contain local channel Board " << local_chan.board_id << " Chan "
-            << local_chan.chan_id;
-        EXPECT_EQ(deserialized_table.intermesh_links.at(local_chan), remote_chan)
-            << "Remote channel for Board " << local_chan.board_id << " Chan "
-            << local_chan.chan_id << " does not match after deserialization";
-
-        auto board_id = local_chan.board_id;
-        bool chip_found = false;
-        for (auto chip_id : cluster.user_exposed_chip_ids()) {
-            if (control_plane.has_intermesh_links(chip_id) == false) {
-                continue;
-            }
-            if (control_plane.get_asic_id(chip_id) == board_id) {
-                EXPECT_TRUE(control_plane.is_intermesh_eth_link(chip_id, CoreCoord{0, local_chan.chan_id}))
-                    << "Expected valid intermesh links in the local intermesh link table";
-                chip_found = true;
-                break;
-            }
-        }
-        EXPECT_TRUE(chip_found) << "No chip found with ASIC ID " << board_id;
     }
 }
 

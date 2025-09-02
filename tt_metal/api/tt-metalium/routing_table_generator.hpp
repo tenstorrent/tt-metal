@@ -52,6 +52,10 @@ public:
     // MeshID.
     const std::vector<FabricNodeId>& get_exit_nodes_routing_to_mesh(MeshId mesh_id) const;
 
+    void load_intermesh_connections(
+        const std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>>&
+            intermesh_connections);
+
     std::unique_ptr<MeshGraph> mesh_graph;
 
 private:

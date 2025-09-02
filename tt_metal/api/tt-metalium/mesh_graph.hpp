@@ -59,6 +59,13 @@ enum class RoutingDirection {
     NONE = 32,  // No direction, means that destination is not reachable
 };
 
+struct PortIdentifier {
+    std::string port_tag;
+    std::size_t connection_hash;
+};
+
+using PortIdTable = std::unordered_map<MeshId, std::unordered_map<MeshId, std::vector<PortIdentifier>>>;
+
 struct RouterEdge {
     // TODO: change this to be port_id_t
     RoutingDirection port_direction;  // Assume all ports in one direction connect to the same chip
@@ -118,6 +125,18 @@ public:
     static std::filesystem::path get_mesh_graph_descriptor_path_for_cluster_type(
         tt::tt_metal::ClusterType cluster_type, const std::string& root_dir);
 
+    const std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>>& get_requested_intermesh_connections()
+        const;
+
+    const std::unordered_map<uint32_t, std::unordered_map<uint32_t, std::vector<std::pair<std::string, std::string>>>>&
+    get_requested_intermesh_ports() const;
+
+    const std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>>& get_mesh_edge_ports_to_chip_id() const;
+
+    void load_intermesh_connections(
+        const std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>>&
+            intermesh_connections);
+
 private:
     void validate_mesh_id(MeshId mesh_id) const;
     std::unordered_map<chip_id_t, RouterEdge> get_valid_connections(
@@ -142,6 +161,10 @@ private:
 
     static const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
         cluster_type_to_mesh_graph_descriptor;
+    std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>> mesh_edge_ports_to_chip_id_;
+    std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>> requested_intermesh_connections_;
+    std::unordered_map<uint32_t, std::unordered_map<uint32_t, std::vector<std::pair<std::string, std::string>>>>
+        requested_intermesh_ports_;
 };
 
 }  // namespace tt::tt_fabric

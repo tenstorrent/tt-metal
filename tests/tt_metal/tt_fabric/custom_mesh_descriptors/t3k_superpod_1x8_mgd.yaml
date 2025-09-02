@@ -1,0 +1,57 @@
+ChipSpec: {
+  arch: wormhole_b0,
+  ethernet_ports: {
+    N: 2,
+    E: 2,
+    S: 2,
+    W: 2,
+  }
+}
+
+Board: [
+  { name: 1x8,
+    type: Mesh,
+    topology: [1, 8]}
+]
+
+Mesh: [
+{
+  id: 0,
+  board: 1x8,
+  device_topology: [1, 8],
+  host_topology: [1, 1],
+},
+{
+  id: 1,
+  board: 1x8,
+  device_topology: [1, 8],
+  host_topology: [1, 1],
+
+},
+{
+  id: 2,
+  board: 1x8,
+  device_topology: [1, 8],
+  host_topology: [1, 1],
+},
+{
+  id: 3,
+  board: 1x8,
+  device_topology: [1, 8],
+  host_topology: [1, 1],
+},
+{
+  id: 4,
+  board: 1x8,
+  device_topology: [1, 8],
+  host_topology: [1, 1],
+}
+]
+
+Graph: [
+  [M0, M2, 1],
+  [M1, M2, 1],
+  [M2, M3, 1],
+
+  [M2, M4, 1]
+]
