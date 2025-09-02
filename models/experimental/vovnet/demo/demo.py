@@ -7,11 +7,10 @@ import torch
 import ttnn
 from loguru import logger
 from tqdm import tqdm
-from transformers import AutoImageProcessor
 from models.experimental.vovnet.runner.performant_runner import VovnetPerformantRunner
-from models.demos.ttnn_resnet.tests.demo_utils import get_batch, get_data_loader
+from models.demos.utils.common_demo_utils import get_batch, get_data_loader, load_imagenet_dataset
 from models.utility_functions import profiler, run_for_wormhole_b0
-from models.demos.vovnet.common import VOVNET_L1_SMALL_SIZE
+from models.experimental.vovnet.common import VOVNET_L1_SMALL_SIZE
 
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
 
@@ -25,6 +24,7 @@ def run_vovnet_imagenet_demo(
     weight_dtype,
     model_location_generator,
     entire_imagenet_dataset=False,
+    resolution=224,
 ):
     batch_size = device_batch_size * device.get_num_devices()
     if entire_imagenet_dataset:
@@ -38,23 +38,21 @@ def run_vovnet_imagenet_demo(
             device_batch_size,
             act_dtype,
             weight_dtype,
-            resolution=(224, 224),
+            resolution=(resolution, resolution),
             model_location_generator=model_location_generator,
         )
 
         profiler.start(f"compile")
         vovnet_trace_2cq._capture_vovnet_trace_2cqs()
         profiler.end(f"compile")
-        model_version = "microsoft/resnet-50"
-        image_processor = AutoImageProcessor.from_pretrained(model_version)
         logger.info("ImageNet-1k validation Dataset")
-        input_loc = str(model_location_generator("ImageNet_data"))
+        input_loc = load_imagenet_dataset(model_location_generator)
         data_loader = get_data_loader(input_loc, batch_size, iterations, entire_imagenet_dataset)
 
         input_tensors_all = []
         input_labels_all = []
         for iter in tqdm(range(iterations), desc="Preparing images"):
-            inputs, labels = get_batch(data_loader, image_processor)
+            inputs, labels = get_batch(data_loader, resolution)
             input_tensors_all.append(inputs)
             input_labels_all.append(labels)
         logger.info("Processed ImageNet-1k validation Dataset")

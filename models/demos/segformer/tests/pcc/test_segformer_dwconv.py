@@ -9,8 +9,8 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.demos.segformer.common import load_torch_model
 from models.demos.segformer.reference.segformer_dwconv import SegformerDWConv
-from models.demos.segformer.tt.common import get_mesh_mappers
 from models.demos.segformer.tt.ttnn_segformer_dwconv import TtSegformerDWConv
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
