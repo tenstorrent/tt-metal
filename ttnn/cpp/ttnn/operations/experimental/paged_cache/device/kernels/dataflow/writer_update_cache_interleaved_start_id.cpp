@@ -14,27 +14,29 @@ void kernel_main() {
     const uint32_t send_core_x = get_arg_val<uint32_t>(5);
     const uint32_t send_core_y = get_arg_val<uint32_t>(6);
 
-    constexpr bool cache_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t cache_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t untilized_cache_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t untilized_cache2_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t untilized_input_cb_id = get_compile_time_arg_val(4);
-    constexpr bool use_index_tensor = get_compile_time_arg_val(5) == 1;
-    constexpr uint32_t cb_index_id = get_compile_time_arg_val(6);
-    constexpr uint32_t cache_batch_num_tiles = get_compile_time_arg_val(7);
-    constexpr uint32_t Wt = get_compile_time_arg_val(8);
-    constexpr uint32_t Wbytes = get_compile_time_arg_val(9);
+    constexpr uint32_t cache_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t untilized_cache_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t untilized_cache2_cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t untilized_input_cb_id = get_compile_time_arg_val(3);
+    constexpr bool use_index_tensor = get_compile_time_arg_val(4) == 1;
+    constexpr uint32_t cb_index_id = get_compile_time_arg_val(5);
+    constexpr uint32_t cache_batch_num_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t Wt = get_compile_time_arg_val(7);
+    constexpr uint32_t Wbytes = get_compile_time_arg_val(8);
 
     // paged_cache args
-    constexpr bool is_paged_cache = get_compile_time_arg_val(10) == 1;
-    constexpr uint32_t num_heads = get_compile_time_arg_val(11);
-    constexpr uint32_t block_size = get_compile_time_arg_val(12);
-    constexpr uint32_t block_size_t = get_compile_time_arg_val(13);
-    constexpr uint32_t max_blocks_per_seq = get_compile_time_arg_val(14);
-    constexpr uint32_t page_table_cb_id = get_compile_time_arg_val(15);
+    constexpr bool is_paged_cache = get_compile_time_arg_val(9) == 1;
+    constexpr uint32_t num_heads = get_compile_time_arg_val(10);
+    constexpr uint32_t block_size = get_compile_time_arg_val(11);
+    constexpr uint32_t block_size_t = get_compile_time_arg_val(12);
+    constexpr uint32_t max_blocks_per_seq = get_compile_time_arg_val(13);
+    constexpr uint32_t page_table_cb_id = get_compile_time_arg_val(14);
 
-    constexpr uint32_t St = get_compile_time_arg_val(16);
-    uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(17));  // semaphore for receiver
+    constexpr uint32_t St = get_compile_time_arg_val(15);
+    uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(16));  // semaphore for receiver
+
+    constexpr auto s0_args = TensorAccessorArgs<17>();
+
     constexpr uint32_t head_offset_t = Wt * St;
 
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
@@ -42,8 +44,7 @@ void kernel_main() {
 
     constexpr uint32_t TILE_HEIGHT = 32;
 
-    const InterleavedAddrGenFast<cache_is_dram> s0 = {
-        .bank_base_address = cache_addr, .page_size = cache_tile_bytes, .data_format = cache_data_format};
+    const auto s0 = TensorAccessor(s0_args, cache_addr, cache_tile_bytes);
 
     uint32_t cache_id = cache_start_id;
     uint32_t update_idx = 0;
