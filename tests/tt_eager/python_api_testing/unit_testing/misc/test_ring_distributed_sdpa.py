@@ -146,9 +146,11 @@ def run_test_ring_distributed_sdpa(
     tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
-
+    print(tt_Q)
+    print(tt_K)
+    print(tt_V)
     # Debug output for walkthrough example
-    if b == 1 and nh == 1 and s == 32 and ring_size == 4:
+    if b == 1 and nh == 1 and s == 256 and ring_size == 4:
         chunk_size = s // (2 * ring_size)
         print(f"\n=== WALKTHROUGH DEBUG INFO ===")
         print(f"Chunk size: {chunk_size} positions = {chunk_size//4} tiles")
@@ -169,7 +171,7 @@ def run_test_ring_distributed_sdpa(
 
     # Run ring-distributed SDPA for each device
     ring_outputs = []
-    for ring_id in range(1):
+    for ring_id in range(4):
         logger.debug(f"Running ring-distributed SDPA for device {ring_id}/{ring_size}")
 
         # Call ring-distributed SDPA for this device
@@ -197,6 +199,7 @@ def run_test_ring_distributed_sdpa(
     tt_baseline = ttnn.transformer.scaled_dot_product_attention(
         tt_Q, tt_K, tt_V, is_causal=True, program_config=program_config, compute_kernel_config=compute_kernel_config
     )
+    print(tt_baseline)
     baseline_output = ttnn.to_torch(tt_baseline)
     baseline_output = baseline_output[:, :, :s, :]  # Remove tile padding
 

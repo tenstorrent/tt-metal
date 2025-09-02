@@ -12,14 +12,12 @@ set_target_properties(
 )
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(GLOB_RECURSE kernels sdpa_decode/device/kernels/*)
-file(GLOB_RECURSE sdpa_kernels sdpa/device/kernels/*)
 target_sources(
     ttnn_op_transformer
     PUBLIC
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels} ${sdpa_kernels}
     PRIVATE
         attention_softmax/attention_softmax.cpp
         concatenate_heads/concatenate_heads.cpp

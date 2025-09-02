@@ -51,6 +51,7 @@ void kernel_main() {
     if constexpr (is_chunked) {
         valid_Skt_bound += chunked_q_chunk_offset * Sq_chunk_t;
     }
+    // uint32_t valid_Skt_bound = valid_Skt + chunked_q_chunk_offset * Sq_chunk_t;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -153,6 +154,7 @@ void kernel_main() {
                 if constexpr (is_chunked) {
                     q_chunk = chunked_q_chunk_offset + q_chunk;
                 }
+                // fix this ^
                 uint32_t q_low_idx =
                     q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
                 uint32_t q_high_idx;
