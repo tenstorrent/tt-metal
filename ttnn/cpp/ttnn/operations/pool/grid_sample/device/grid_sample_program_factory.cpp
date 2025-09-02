@@ -17,6 +17,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
+#include "ttnn/operations/data_movement/fill_pad/device/fill_pad_program_factory.hpp"
 
 namespace ttnn::operations::grid_sample {
 

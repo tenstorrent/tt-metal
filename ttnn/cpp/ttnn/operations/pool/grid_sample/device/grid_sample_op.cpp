@@ -190,17 +190,17 @@ std::vector<TensorSpec> GridSample::compute_output_specs(const std::vector<Tenso
     uint32_t grid_batching_factor = grid_last_dim / num_of_elements_per_grid_point;
 
     // Define output shape based on batch_output_channels flag
-    ttnn::Shape output_shape;
+    ttnn::Shape output_logical_shape;
     if (batch_output_channels_) {
-        // batch_output_channels=True: batch output channels
+        // batch_output_channels=True: extend channels (legacy behavior)
         // Output shape: (N, H_out, W_out, C * grid_batching_factor)
         uint32_t C_out = C * grid_batching_factor;
-        output_shape = ttnn::Shape({N, H_out, W_out, C_out});
+        output_logical_shape = ttnn::Shape({N, H_out, W_out, C_out});
     } else {
         // batch_output_channels=False: extend W dimension (default behavior)
         // Output shape: (N, H_out, W_out * grid_batching_factor, C)
         uint32_t W_out_extended = W_out * grid_batching_factor;
-        output_shape = ttnn::Shape({N, H_out, W_out_extended, C});
+        output_logical_shape = ttnn::Shape({N, H_out, W_out_extended, C});
     }
 
     // Output has same data type as input
@@ -227,7 +227,7 @@ std::vector<TensorSpec> GridSample::compute_output_specs(const std::vector<Tenso
         const uint32_t output_shard_height = grid_shard_spec.shape[0];  // Same height as grid
         const uint32_t input_padded_channel_width = input_tensor.padded_shape()[-1];
         const uint32_t output_shard_width =
-            input_padded_channel_width * channel_extend_factor;  // Input channels * channel extend factor
+            input_padded_channel_width * (batch_output_channels_ ? grid_batching_factor : 1);  // Input channels * channel extend factor
 
         // Use the same core grid and orientation as the grid tensor
         const CoreRangeSet output_core_range_set = grid_shard_spec.grid;
@@ -241,12 +241,37 @@ std::vector<TensorSpec> GridSample::compute_output_specs(const std::vector<Tenso
         output_memory_config = MemoryConfig(output_memory_layout, output_buffer_type, output_shard_spec);
     }
 
-    ttnn::Shape output_padded_shape = output_shape;  // Default: same as logical
+    // Calculate padded shape following pool operation pattern
+    // Grid sample doesn't support input padding, so we only pad for memory alignment
+
+    const auto& grid_padded_shape = grid_tensor.padded_shape();
+    const auto& input_padded_shape = input_tensor.padded_shape();
+
+    // Batch and height dimensions: same as grid tensor's padded shape
+    uint32_t N_padded = grid_padded_shape[0];
+    uint32_t H_out_padded = grid_padded_shape[1];
+
+    // Width dimension: expand by grid_batching_factor if batch_output_channels=false
+    uint32_t W_out_padded;
+    if (batch_output_channels_) {
+        W_out_padded = grid_padded_shape[2];  // batch_output_channels=true: use grid's padded width
+    } else {
+        W_out_padded = grid_padded_shape[2] * grid_batching_factor;  // batch_output_channels=false: expand width
+    }
+
+    // Channel dimension: use input tensor's padded channels and apply channel extend factor
+    uint32_t C_padded = input_padded_shape[-1] * (batch_output_channels_ ? grid_batching_factor : 1);
+
+    ttnn::Shape output_padded_shape({N_padded, H_out_padded, W_out_padded, C_padded});
 
     return {TensorSpec(
-        output_shape,
+        output_logical_shape,
         TensorLayout::fromPaddedShape(
-            output_data_type, PageConfig(output_layout), output_memory_config, output_shape, output_padded_shape))};
+            output_data_type,
+            PageConfig(output_layout),
+            output_memory_config,
+            output_logical_shape,
+            output_padded_shape))};
 }
 
 operation::ProgramWithCallbacks GridSample::create_program(
