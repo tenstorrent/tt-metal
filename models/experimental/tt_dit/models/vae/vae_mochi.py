@@ -167,10 +167,21 @@ class ResBlock:
         torch_ref=None,
     ):
         self.num_out_blocks_map = {
-            60 * 106: 8,
-            120 * 212: 10,
-            240 * 424: 40,
-            480 * 848: 140,
+            # small latent
+            30 * 53 * 768: 2,
+            60 * 106 * 512: 3,
+            120 * 212 * 256: 10,
+            240 * 424 * 128: 35,
+            # medium latent
+            40 * 76 * 768: 4,
+            80 * 152 * 512: 5,
+            160 * 304 * 256: 20,
+            320 * 608 * 128: 70,
+            # large latent
+            60 * 106 * 768: 8,
+            120 * 212 * 512: 10,
+            240 * 424 * 256: 40,
+            480 * 848 * 128: 140,
         }
 
         grid_size_x = mesh_device.core_grid.x
@@ -241,8 +252,8 @@ class ResBlock:
         residual_tiled_NTHWC = x_tiled_NTHWC
         ttnn.deallocate(x_NTHWC)
 
-        HW = x_tiled_NTHWC.shape[2]
-        num_out_blocks = self.num_out_blocks_map[HW] if HW in self.num_out_blocks_map else math.ceil(HW / 2000)
+        HWC = x_tiled_NTHWC.shape[2] * x_tiled_NTHWC.shape[3]
+        num_out_blocks = self.num_out_blocks_map[HWC]
         x_norm_tiled_NTHWC = self.norm1(x_tiled_NTHWC, num_out_blocks)
 
         # TODO: Investigate packing more data into a tile
@@ -255,8 +266,8 @@ class ResBlock:
         x_conv1_tiled_NTHWC = self.reshape_tilize(x_conv1_NTHWC, shapes)
         ttnn.deallocate(x_conv1_NTHWC)
 
-        HW = x_conv1_tiled_NTHWC.shape[2]
-        num_out_blocks = self.num_out_blocks_map[HW] if HW in self.num_out_blocks_map else math.ceil(HW / 2000)
+        HWC = x_conv1_tiled_NTHWC.shape[2] * x_tiled_NTHWC.shape[3]
+        num_out_blocks = self.num_out_blocks_map[HWC]
         x_tiled_NTHWC = self.norm2(x_conv1_tiled_NTHWC, num_out_blocks)
         ttnn.deallocate(x_conv1_tiled_NTHWC)
 
@@ -299,9 +310,18 @@ class CausalUpsampleBlock:
         bias: bool = True,
     ):
         self.reshard_time_map = {
-            120 * 212: 82,
-            240 * 424: 163,
-            480 * 848: 163,
+            # small latent
+            512 * 60 * 106: 82,
+            256 * 120 * 212: 163,
+            128 * 240 * 424: 163,
+            # medium latent
+            512 * 80 * 152: 82,
+            256 * 160 * 304: 163,
+            128 * 320 * 608: 163,
+            # large latent
+            512 * 120 * 212: 82,
+            256 * 240 * 424: 163,
+            128 * 480 * 848: 163,
         }
 
         assert causal
@@ -388,9 +408,9 @@ class CausalUpsampleBlock:
                     self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[0, 1]
                 ),
             )
-            HW = x_NTHWC.shape[2] * x_NTHWC.shape[3]
+            HWC = x_NTHWC.shape[2] * x_NTHWC.shape[3] * x_NTHWC.shape[4]
             num_devices = self.mesh_device.get_num_devices()
-            padded_T = ((self.reshard_time_map[HW] + num_devices - 1) // num_devices) * num_devices
+            padded_T = ((self.reshard_time_map[HWC] + num_devices - 1) // num_devices) * num_devices
             x_NTHWC_host = x_NTHWC_host[
                 :, self.temporal_expansion - 1 : padded_T + (self.temporal_expansion - 1), :, :, :
             ]
@@ -421,6 +441,8 @@ class Decoder:
         self,
         mesh_device: ttnn.MeshDevice,
         torch_ref=None,
+        parallel_config=None,
+        ccl_manager=None,
         out_channels=3,
         base_channels=128,
         channel_multipliers=[1, 2, 4, 6],
@@ -473,6 +495,8 @@ class Decoder:
                     causal=causal,
                     padding_mode="replicate",
                     torch_ref=first_block_torch_ref[i + 1],
+                    parallel_config=parallel_config,
+                    ccl_manager=ccl_manager,
                 )
             )
 
@@ -492,6 +516,8 @@ class Decoder:
                     causal=causal,
                     padding_mode="replicate",
                     torch_ref=upsample_block_torch_ref,
+                    parallel_config=parallel_config,
+                    ccl_manager=ccl_manager,
                 )
             )
 
@@ -505,6 +531,8 @@ class Decoder:
                     causal=causal,
                     padding_mode="replicate",
                     torch_ref=last_block_torch_ref[i],
+                    parallel_config=parallel_config,
+                    ccl_manager=ccl_manager,
                 )
             )
 
