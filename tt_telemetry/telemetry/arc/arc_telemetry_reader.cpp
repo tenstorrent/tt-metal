@@ -21,26 +21,7 @@ ARCTelemetryReader::ARCTelemetryReader(ChipIdentifier chip_id, std::unique_ptr<t
     // Use is_valid() to check before reading
 }
 
-uint32_t ARCTelemetryReader::read_value(tt::umd::wormhole::TelemetryTag tag) const {
-    TT_ASSERT(
-        device_->get_arch() == tt::ARCH::WORMHOLE_B0,
-        "Attempting to read Wormhole telemetry tag on non-Wormhole chip {}",
-        id);
-    
-    if (!is_valid()) {
-        log_error(tt::LogAlways, "Cannot read telemetry value: ARC telemetry reader is not available for chip {}", id);
-        return 0;
-    }
-    
-    return telemetry_reader_->read_entry(tag);
-}
-
-uint32_t ARCTelemetryReader::read_value(tt::umd::blackhole::TelemetryTag tag) const {
-    TT_ASSERT(
-        device_->get_arch() == tt::ARCH::BLACKHOLE,
-        "Attempting to read Blackhole telemetry tag on non-Blackhole chip {}",
-        id);
-    
+uint32_t ARCTelemetryReader::read_value(tt::umd::TelemetryTag tag) const {
     if (!is_valid()) {
         log_error(tt::LogAlways, "Cannot read telemetry value: ARC telemetry reader is not available for chip {}", id);
         return 0;

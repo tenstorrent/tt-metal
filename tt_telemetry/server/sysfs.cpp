@@ -58,12 +58,10 @@ There's an attribute named asic_id that will show up if your FW is new enough.  
 #include <telemetry/ethernet/ethernet_endpoint.hpp>
 #include <telemetry/arc/arc_telemetry_reader.hpp>
 #include <tt-metalium/control_plane.hpp>
-#include <third_party/umd/device/api/umd/device/types/wormhole_telemetry.h>
-#include <third_party/umd/device/api/umd/device/types/blackhole_telemetry.h>
-#include <third_party/umd/device/api/umd/device/chip/local_chip.h>
+
+
 #include <third_party/umd/device/api/umd/device/tt_device/tt_device.h>
 
-#include <third_party/umd/device/api/umd/device/topology/topology_discovery.h>
 #include <telemetry/ethernet/chip_identifier.hpp>
 
  static auto make_ordered_ethernet_connections(const auto& unordered_connections) {
@@ -82,7 +80,7 @@ There's an attribute named asic_id that will show up if your FW is new enough.  
  }
 
  std::unordered_map<tt::umd::ethernet_channel_t, CoreCoord> map_ethernet_channel_to_core_coord(
-     const tt::umd::tt_SocDescriptor& soc_desc, tt::umd::chip_id_t chip_id) {
+     const tt_SocDescriptor& soc_desc, tt::umd::chip_id_t chip_id) {
      // logical_eth_core_to_chan_map should be a 1:1 mapping and therefore easily invertible
      std::unordered_map<tt::umd::ethernet_channel_t, CoreCoord> ethernet_channel_to_core_coord;
      for (auto channel = 0; channel < soc_desc.get_num_eth_channels(); channel++) {
@@ -586,20 +584,23 @@ There's an attribute named asic_id that will show up if your FW is new enough.  
 
          std::cout << chip_identifier << " -> ASIC ID " << asic_id << std::endl;
 
-         // Read telemetry data based on chip architecture
-         tt::ARCH arch = reader->get_arch();
-         if (arch == tt::ARCH::WORMHOLE_B0) {
-             // Read ASIC temperature for Wormhole
-             uint32_t temp_raw = reader->read_value(tt::umd::wormhole::TelemetryTag::ASIC_TEMPERATURE);
-             float temperature = (temp_raw & 0xFFFF) / 16.0f;
-             std::cout << "  ASIC Temperature: " << temperature << "°C" << std::endl;
-         } else if (arch == tt::ARCH::BLACKHOLE) {
-             // Read ASIC temperature for Blackhole
-             uint32_t temp_raw = reader->read_value(tt::umd::blackhole::TelemetryTag::ASIC_TEMPERATURE);
-             float temperature = static_cast<int32_t>(temp_raw) / 65536.0f;
-             std::cout << "  ASIC Temperature: " << temperature << "°C" << std::endl;
-         } else {
-             std::cout << "  ASIC Temperature: Unsupported architecture" << std::endl;
-         }
+                 // Read ASIC temperature using common telemetry tag
+        uint32_t temp_raw = reader->read_value(tt::umd::TelemetryTag::ASIC_TEMPERATURE);
+        
+        // Apply architecture-specific scaling
+        float temperature;
+        tt::ARCH arch = reader->get_arch();
+        if (arch == tt::ARCH::WORMHOLE_B0) {
+            // Wormhole scaling: 16-bit value, scale by 1/16
+            temperature = (temp_raw & 0xFFFF) / 16.0f;
+        } else if (arch == tt::ARCH::BLACKHOLE) {
+            // Blackhole scaling: 32-bit value, scale by 1/65536
+            temperature = static_cast<int32_t>(temp_raw) / 65536.0f;
+        } else {
+            std::cout << "  ASIC Temperature: Unsupported architecture" << std::endl;
+            continue;
+        }
+        
+        std::cout << "  ASIC Temperature: " << temperature << "°C" << std::endl;
      }
  }

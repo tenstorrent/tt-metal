@@ -106,7 +106,7 @@ static void test_print_link_health() {
 
     for (const auto& [chip_id, remote_chip_and_channel_by_channel] : ethernet_connections) {
         // Create a SOC descriptor just for the purpose of mapping Ethernet channel to core coordinates
-        const tt::umd::tt_SocDescriptor& soc_desc = cluster->get_soc_descriptor(chip_id);
+        const tt_SocDescriptor& soc_desc = cluster->get_soc_descriptor(chip_id);
 
         // This chip...
         tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);
@@ -120,7 +120,7 @@ static void test_print_link_health() {
             tt::umd::ethernet_channel_t remote_channel;
             std::tie(remote_chip_id, remote_channel) = remote_chip_and_channel;
             tt::umd::TTDevice* remote_device = cluster->get_tt_device(remote_chip_id);
-            const tt::umd::tt_SocDescriptor& remote_soc_desc = cluster->get_soc_descriptor(remote_chip_id);
+            const tt_SocDescriptor& remote_soc_desc = cluster->get_soc_descriptor(remote_chip_id);
             ChipIdentifier remote_chip = get_chip_identifier_from_umd_chip_id(remote_device, remote_chip_id);
 
             // Local EthernetEndpoint

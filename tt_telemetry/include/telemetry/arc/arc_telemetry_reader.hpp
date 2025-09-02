@@ -14,8 +14,7 @@
 
 #include <telemetry/ethernet/chip_identifier.hpp>
 #include <third_party/umd/device/api/umd/device/tt_device/tt_device.h>
-#include <third_party/umd/device/api/umd/device/types/wormhole_telemetry.h>
-#include <third_party/umd/device/api/umd/device/types/blackhole_telemetry.h>
+#include <third_party/umd/device/api/umd/device/types/telemetry.hpp>
 #include <tt-metalium/cluster.hpp>
 
 class ARCTelemetryReader {
@@ -25,11 +24,8 @@ public:
     // Constructor takes ownership of TTDevice
     explicit ARCTelemetryReader(ChipIdentifier chip_id, std::unique_ptr<tt::umd::TTDevice> device);
 
-    // Read telemetry value for Wormhole chips
-    uint32_t read_value(tt::umd::wormhole::TelemetryTag tag) const;
-
-    // Read telemetry value for Blackhole chips
-    uint32_t read_value(tt::umd::blackhole::TelemetryTag tag) const;
+    // Read telemetry value using common telemetry tags
+    uint32_t read_value(tt::umd::TelemetryTag tag) const;
 
     // Get the chip architecture
     tt::ARCH get_arch() const;

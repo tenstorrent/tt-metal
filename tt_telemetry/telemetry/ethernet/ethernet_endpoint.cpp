@@ -96,7 +96,7 @@ std::map<ChipIdentifier, std::vector<EthernetEndpoint>> get_ethernet_endpoints_b
         tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);
 
         // Create a SOC descriptor just for the purpose of mapping Ethernet channel to core coordinates
-        const tt::umd::tt_SocDescriptor& soc_desc = cluster->get_soc_descriptor(chip_id);
+        const tt_SocDescriptor& soc_desc = cluster->get_soc_descriptor(chip_id);
 
         ChipIdentifier chip = get_chip_identifier_from_umd_chip_id(device, chip_id);
         std::vector<EthernetEndpoint>& endpoints_this_chip = ethernet_endpoints_by_chip[chip];
