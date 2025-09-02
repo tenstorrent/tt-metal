@@ -35,7 +35,7 @@ TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
 using TensorSerializationFlatbufferTest = GenericMeshDeviceFixture;
 
 TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorRoundtrip) {
-    TemporaryFile test_file("flatbuffer.bin");
+    TemporaryFile test_file("flatbuffer.tensorbin");
     std::vector<float> test_data{1.0f, 2.5f, -3.7f, 42.0f, -0.5f, 100.0f};
 
     Tensor original_tensor =
@@ -57,7 +57,7 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorRoundtrip) {
 
 TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorDifferentDataTypes) {
     {
-        TemporaryFile test_file("uint32.bin");
+        TemporaryFile test_file("uint32.tensorbin");
         std::vector<uint32_t> test_data{1, 2, 3, 4, 5, 6};
         Tensor original_tensor = Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{2, 3}, DataType::UINT32));
 
@@ -69,7 +69,7 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorDifferentDataTypes) {
     }
 
     {
-        TemporaryFile test_file("bfloat16.bin");
+        TemporaryFile test_file("bfloat16.tensorbin");
         std::vector<bfloat16> test_data{bfloat16(1.5f), bfloat16(2.5f), bfloat16(-3.5f), bfloat16(4.5f)};
         Tensor original_tensor = Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, 4}, DataType::BFLOAT16));
 
@@ -88,7 +88,7 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorDifferentDataTypes) {
 }
 
 TEST_F(TensorSerializationFlatbufferTest, WithMemoryConfig) {
-    TemporaryFile test_file("flatbuffer.bin");
+    TemporaryFile test_file("flatbuffer.tensorbin");
     std::vector<float> test_data{1.0f, 2.5f, -3.7f, 42.0f, -0.5f, 100.0f};
 
     Tensor original_tensor = Tensor::from_vector(
@@ -126,7 +126,7 @@ TEST_F(TensorSerializationFlatbufferTest, WithMemoryConfig) {
 using TensorSerializationFlatbuffer2x4Test = MeshDevice2x4Fixture;
 
 TEST_F(TensorSerializationFlatbuffer2x4Test, Shard1DTensorRoundtrip) {
-    TemporaryFile test_file("shard1d_flatbuffer.bin");
+    TemporaryFile test_file("shard1d_flatbuffer.tensorbin");
     const int num_devices = mesh_device_->num_devices();
     constexpr int kNumElements = 1024;
     std::vector<float> test_data;
@@ -164,7 +164,7 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, Shard1DTensorRoundtrip) {
 }
 
 TEST_F(TensorSerializationFlatbuffer2x4Test, Shard2DTensorRoundtrip) {
-    TemporaryFile test_file("shard2d_flatbuffer.bin");
+    TemporaryFile test_file("shard2d_flatbuffer.tensorbin");
     constexpr int kNumRows = 2;
     constexpr int kNumCols = 4;
     constexpr int kNumElements = 1024;
@@ -212,7 +212,7 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, Shard2DTensorRoundtrip) {
 }
 
 TEST_F(TensorSerializationFlatbuffer2x4Test, Shard1DFewerShardsThanDevicesRoundtrip) {
-    TemporaryFile test_file("shard1d_fewer_flatbuffer.bin");
+    TemporaryFile test_file("shard1d_fewer_flatbuffer.tensorbin");
     const int num_devices = mesh_device_->num_devices();
     constexpr int kNumElements = 1024;
     std::vector<float> test_data;
@@ -251,7 +251,7 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, Shard1DFewerShardsThanDevicesRoundt
 }
 
 TEST_F(TensorSerializationFlatbuffer2x4Test, Shard2x3SubmeshRoundtrip) {
-    TemporaryFile test_file("shard2x3_flatbuffer.bin");
+    TemporaryFile test_file("shard2x3_flatbuffer.tensorbin");
     constexpr int kNumRows = 2;
     constexpr int kNumCols = 3;
     constexpr int kNumElements = 1024;
@@ -300,7 +300,7 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, Shard2x3SubmeshRoundtrip) {
 }
 
 TEST_F(TensorSerializationFlatbuffer2x4Test, PartiallyReplicatedRoundtrip) {
-    TemporaryFile test_file("partially_replicated_flatbuffer.bin");
+    TemporaryFile test_file("partially_replicated_flatbuffer.tensorbin");
     constexpr int kNumRows = 2;
     constexpr int kNumCols = 4;
     constexpr int kNumElements = 1024;
