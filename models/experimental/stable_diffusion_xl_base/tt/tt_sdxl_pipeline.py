@@ -30,11 +30,11 @@ from models.utility_functions import profiler
 class TtSDXLPipelineConfig:
     num_inference_steps: int
     guidance_scale: float
+    is_galaxy: bool
     capture_trace: bool = True
     vae_on_device: bool = True
     encoders_on_device: bool = True
     use_cfg_parallel: bool = False
-    is_galaxy: bool
 
 
 class TtSDXLPipeline(LightweightModule):

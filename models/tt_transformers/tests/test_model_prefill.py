@@ -123,7 +123,11 @@ def test_model_inference(
         num_layers=num_layers,
     )
 
-    if model_args.base_model_name.startswith("Mistral-") or model_args.base_model_name.startswith("Qwen3-"):
+    if (
+        model_args.base_model_name.startswith("Mistral-")
+        or model_args.base_model_name.startswith("Qwen3-")
+        or model_args.base_model_name.startswith("Phi-3-mini-")
+    ):
         # TODO: Per layer KV cache fetching is not implemented for all models
         # See issue https://github.com/tenstorrent/tt-metal/issues/19806"
         cache_pcc = False
@@ -133,7 +137,10 @@ def test_model_inference(
     # This sets the minimum PCC for each iteration based on optimization mode
     # TODO: See issue https://github.com/tenstorrent/tt-metal/issues/19806
     perf_out_pcc_map = {"Mistral-7B-Instruct-v0.3": 0.73}
-    acc_out_pcc_map = {"Mistral-7B-Instruct-v0.3": 0.75}
+    acc_out_pcc_map = {
+        "Mistral-7B-Instruct-v0.3": 0.75,
+        "Phi-3-mini-128k-instruct": 0.89,
+    }
     kv_cache_pcc_map = {"Mistral-7B-Instruct-v0.3": 0.75}
 
     if num_layers == 1:

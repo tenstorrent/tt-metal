@@ -30,7 +30,6 @@ inputs = [
 
 def run_sentence_bert_demo_inference(device, inputs, model_name, sequence_length, model_location_generator):
     inputs = inputs * device.get_num_devices()
-    transformers_model = transformers.AutoModel.from_pretrained(model_name).eval()
     config = transformers.BertConfig.from_pretrained(model_name)
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
     encoded_input = tokenizer(
