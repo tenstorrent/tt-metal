@@ -48,7 +48,7 @@ uint32_t all_gather_async_core_count(
 uint32_t default_workers(
     const MeshDevice& mesh_device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    Topology topology,
+    ccl::Topology topology,
     uint32_t output_data_size_bytes,
     uint32_t num_links,
     uint32_t ring_size,
