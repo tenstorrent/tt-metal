@@ -52,6 +52,7 @@ def test_yolov11(device, reset_seeds, resolution, use_pretrained_weights, model_
     ttnn_input = ttnn_input.to(device, input_mem_config)
     torch_output = torch_model(torch_input)
     parameters = create_yolov11_model_parameters(torch_model, torch_input, device=device)
+    # print("params are",parameters)
     ttnn_model = ttnn_yolov11.TtnnYoloV11(device, parameters)
     ttnn_output = ttnn_model(ttnn_input)
     ttnn_output = ttnn.to_torch(ttnn_output)
