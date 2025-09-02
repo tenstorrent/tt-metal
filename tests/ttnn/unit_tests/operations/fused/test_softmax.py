@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 from models.utility_functions import skip_for_wormhole_b0, is_grayskull
 from models.utility_functions import torch_random
 
@@ -457,3 +457,39 @@ def test_softmax_dtypes(device, shape, dim, dtype):
     ttnn_output = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_output, ttnn_output, 0.997)
+
+
+@pytest.mark.parametrize(
+    "accuracy_config",
+    [
+        (True, False, 3),
+        (False, True, 11),
+        (True, True, 9),
+        (False, False, 7),
+    ],
+)
+@pytest.mark.parametrize("shape", [(1, 1, 16384, 256)])
+def test_softmax_accuracy(device, shape, accuracy_config):
+    torch.manual_seed(0)
+
+    # Reference output
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    torch_output = torch.ops.aten._softmax.default(torch_tensor, dim=-1, half_to_float=False)
+
+    # TTNN Softmax
+    fp32_acc_en, math_approx_mode, expected_ulp = accuracy_config
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=math_approx_mode,
+        fp32_dest_acc_en=fp32_acc_en,
+        packer_l1_acc=True,
+    )
+
+    ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.softmax(ttnn_tensor, dim=-1, compute_kernel_config=compute_kernel_config)
+
+    ttnn_output = ttnn.to_layout(ttnn_output, ttnn.ROW_MAJOR_LAYOUT)
+    output_torch = ttnn_output.cpu().to_torch()
+
+    assert_with_ulp(torch_output, output_torch, expected_ulp)
