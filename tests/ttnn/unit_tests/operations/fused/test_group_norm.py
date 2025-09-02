@@ -427,6 +427,20 @@ def generate_sdxl_test_inputs():
     # VAE inputs
     inputs.append((1, 512, 128, 128))
 
+    # Refiner UNet inputs
+    inputs.append((1, 1152, 64, 64))
+    inputs.append((1, 1536, 16, 16))
+    inputs.append((1, 1536, 32, 32))
+    inputs.append((1, 1536, 64, 64))
+    inputs.append((1, 2304, 32, 32))
+    inputs.append((1, 2304, 64, 64))
+    inputs.append((1, 3072, 16, 16))
+    inputs.append((1, 3072, 32, 32))
+    inputs.append((1, 384, 128, 128))
+    inputs.append((1, 384, 64, 64))
+    inputs.append((1, 768, 32, 32))
+    inputs.append((1, 768, 64, 64))
+
     return inputs
 
 
@@ -498,6 +512,7 @@ def generate_sdxl_test_inputs_neg_mask():
     inputs = []
     inputs.append((1, 640, 128, 128))
     inputs.append((1, 960, 128, 128))
+    inputs.append((1, 768, 128, 128))
     return inputs
 
 
