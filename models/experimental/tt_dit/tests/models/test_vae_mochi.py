@@ -580,5 +580,9 @@ def test_tt_decoder_forward(mesh_device, config, divide_T, reset_seeds, use_real
         ref_output = reference_model(torch_input)
     logger.info(f"Reference output shape: {ref_output.shape}")
 
+    # unpad tt output
+    if mesh_device.get_num_devices() > 1:
+        tt_output_torch = tt_output_torch[:, :, 0 : ref_output.shape[2], :, :]
+
     logger.info("assert quality")
     assert_quality(ref_output, tt_output_torch, pcc=0.999)
