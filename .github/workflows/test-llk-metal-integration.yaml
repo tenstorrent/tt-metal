@@ -221,7 +221,7 @@ jobs:
           ALL_POST_COMMIT_RUN_ID: ${{ steps.trigger-workflows.outputs.all-post-commit-run-id }}
           BLACKHOLE_RUN_ID: ${{ steps.trigger-workflows.outputs.blackhole-run-id }}
         run: |
-          # Common monitoring function
+          # Helper function for workflow monitoring
           monitor_workflow() {
             local run_id="$1"
             local workflow_name="$2"
@@ -236,9 +236,7 @@ jobs:
             local timeout_seconds=$((WORKFLOW_TIMEOUT * 60))
             local elapsed=0
             local run_url="https://github.com/tenstorrent/tt-metal/actions/runs/$run_id"
-
             echo "🚀 Monitoring $workflow_name (run ID: $run_id) - $run_url"
-
             while [ $retries -lt $MAX_RETRIES ]; do
               while [ $elapsed -lt $timeout_seconds ]; do
                 status=$(gh run view "$run_id" --json status,conclusion --jq '.status + ":" + (.conclusion // "unknown")' --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "unknown:unknown")
@@ -259,11 +257,10 @@ jobs:
                     break
                   fi
                 fi
-
                 sleep $POLL_INTERVAL
                 elapsed=$((elapsed + POLL_INTERVAL))
               done
-
+              # Handle timeout
               if [ $elapsed -ge $timeout_seconds ]; then
                 echo "⏰ $workflow_name timed out after ${WORKFLOW_TIMEOUT}m: $run_url"
                 echo "$output_var=timeout:$run_url" >> $GITHUB_OUTPUT
