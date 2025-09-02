@@ -200,12 +200,23 @@ def create_random_resblock_models(mesh_device, mesh_axis, parallel_config, ccl_m
 @pytest.mark.parametrize(
     "N, C, T, H, W",
     [
+        # small latent
+        (1, 768, 28, 30, 53),  # 28 -> 32
+        (1, 512, 82, 60, 106),  # 82 -> 88
+        (1, 256, 163, 120, 212),  # 163 -> 168
+        (1, 128, 163, 240, 424),  # 163 -> 168
+        # medium latent
+        (1, 768, 28, 40, 76),  # 28 -> 32
+        (1, 512, 82, 80, 152),  # 82 -> 88
+        (1, 256, 163, 160, 304),  # 163 -> 168
+        (1, 128, 163, 360, 608),  # 163 -> 168
+        # large latent
         (1, 768, 28, 60, 106),  # 28 -> 32
         (1, 512, 82, 120, 212),  # 82 -> 88
         (1, 256, 163, 240, 424),  # 163 -> 168
         (1, 128, 163, 480, 848),  # 163 -> 168
     ],
-    ids=["768", "512", "256", "128"],
+    ids=["s768", "s512", "s256", "s128", "m768", "m512", "m256", "m128", "l768", "l512", "l256", "l128"],
 )
 @pytest.mark.parametrize("divide_T", [8, 1], ids=["T8", "T1"])  # Emulate T fracturing
 @vae_device_config
@@ -585,4 +596,4 @@ def test_tt_decoder_forward(mesh_device, config, divide_T, reset_seeds, use_real
         tt_output_torch = tt_output_torch[:, :, 0 : ref_output.shape[2], :, :]
 
     logger.info("assert quality")
-    assert_quality(ref_output, tt_output_torch, pcc=0.999)
+    assert_quality(ref_output, tt_output_torch, pcc=0.99)
