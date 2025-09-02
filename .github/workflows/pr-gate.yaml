@@ -183,6 +183,7 @@ jobs:
     strategy:
       fail-fast: false
     uses: ./.github/workflows/ttsim.yaml
+    secrets: inherit
     with:
       docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
       package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
