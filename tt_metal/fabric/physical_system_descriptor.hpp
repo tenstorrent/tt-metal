@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -69,6 +70,47 @@ struct ExitNodeConnection {
         return eth_conn < other.eth_conn;
     }
 };
+
+}  // namespace tt::tt_metal
+
+// Hash specialization for ExitNodeConnection that provides associative hashing
+// The hash is the same regardless of src/dst order and eth_conn channel order
+namespace std {
+template <>
+struct hash<tt::tt_metal::ExitNodeConnection> {
+    std::size_t operator()(const tt::tt_metal::ExitNodeConnection& conn) const noexcept {
+        // Get the underlying values from the StrongType wrappers
+        uint64_t src_id = *conn.src_exit_node;
+        uint64_t dst_id = *conn.dst_exit_node;
+
+        // Sort the node IDs to make the hash associative
+        uint64_t min_node = std::min(src_id, dst_id);
+        uint64_t max_node = std::max(src_id, dst_id);
+
+        // Sort the channel IDs to make the eth_conn hash associative
+        uint8_t min_chan = std::min(conn.eth_conn.src_chan, conn.eth_conn.dst_chan);
+        uint8_t max_chan = std::max(conn.eth_conn.src_chan, conn.eth_conn.dst_chan);
+
+        // Combine hashes using a method similar to boost::hash_combine
+        std::size_t seed = 0;
+
+        // Hash the sorted node IDs
+        seed ^= std::hash<uint64_t>{}(min_node) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        seed ^= std::hash<uint64_t>{}(max_node) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+
+        // Hash the sorted channel IDs
+        seed ^= std::hash<uint8_t>{}(min_chan) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        seed ^= std::hash<uint8_t>{}(max_chan) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+
+        // Hash the is_local flag (this doesn't need sorting)
+        seed ^= std::hash<bool>{}(conn.eth_conn.is_local) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+
+        return seed;
+    }
+};
+}  // namespace std
+
+namespace tt::tt_metal {
 
 using ExitNodeConnectionTable = std::unordered_map<std::string, std::vector<ExitNodeConnection>>;
 using AsicConnectionEdge = std::pair<AsicID, std::vector<EthConnection>>;
