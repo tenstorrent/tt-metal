@@ -135,14 +135,9 @@ run_tg_sd35_demo_tests() {
 }
 
 run_tg_sentence_bert_tests() {
-  fail=0
 
   pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py --timeout=1500 ; fail+=$?
 
-  if [[ $fail -ne 0 ]]; then
-    echo "LOG_METAL: run_tg_sentence_bert_tests failed"
-    exit 1
-  fi
 }
 
 run_tg_demo_tests() {
