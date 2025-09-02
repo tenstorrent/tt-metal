@@ -58,6 +58,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/base_transformer.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/bert.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/bert.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/linear_regression.cpp
@@ -76,6 +78,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/llama_block.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/multi_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/multi_head_attention.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/bert_block.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/bert_block.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/dropout_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/dropout_module.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/embedding_module.cpp
