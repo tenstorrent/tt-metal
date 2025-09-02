@@ -22,6 +22,7 @@ class TtnnBottleneck:
             print(f"DEBUG TtnnBottleneck: conv_pt.cv1.conv.weight shape = {conv_pt.cv1.conv.weight.shape}")
         if hasattr(conv_pt.cv2, 'conv') and hasattr(conv_pt.cv2.conv, 'weight'):
             print(f"DEBUG TtnnBottleneck: conv_pt.cv2.conv.weight shape = {conv_pt.cv2.conv.weight.shape}")
+
         self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1)
         self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2)
 
