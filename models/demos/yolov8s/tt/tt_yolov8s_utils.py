@@ -41,7 +41,15 @@ def fold_batch_norm2d_into_conv2d_split(device, state_dict, path, eps=1e-03, bfl
     bias = bias.reshape(1, 1, 1, -1)
 
     chunk_size = bias.shape[-1] // 2
-
+    print("wt and bias", bn_weight.shape, bn_bias.shape, bn_running_mean.shape, bn_running_var.shape)
+    print("trasnformed wttt and bias, chunk", weight.shape, bias.shape, chunk_size)
+    print(
+        " ttnn w1,b1,w2,b2",
+        weight[:chunk_size, :, :, :].shape,
+        bias[:, :, :, :chunk_size].shape,
+        weight[chunk_size:, :, :, :].shape,
+        bias[:, :, :, chunk_size:].shape,
+    )
     if bfloat8:
         return (
             ttnn.from_torch(weight[:chunk_size, :, :, :], dtype=ttnn.float32, mesh_mapper=mesh_mapper),
