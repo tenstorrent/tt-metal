@@ -125,6 +125,12 @@ add_custom_command(
 )
 list(APPEND IMPL_SRC ${INSPECTOR_RPC_GENERATED_SOURCE})
 
+# Define dependency for CI small build for clang-tidy
+if(TARGET all_generated_files)
+    add_custom_target(capnp_generated_files DEPENDS ${INSPECTOR_RPC_CAPNP_HEADER} ${INSPECTOR_RPC_GENERATED_HEADER})
+    add_dependencies(all_generated_files capnp_generated_files)
+endif()
+
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 
