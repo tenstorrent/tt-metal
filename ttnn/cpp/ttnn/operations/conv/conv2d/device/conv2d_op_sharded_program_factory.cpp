@@ -385,6 +385,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
         conv_reader_indices_tensor, parallel_config, block_sharded, a.device(), config_tensors_in_dram);
 
+    log_info(tt::LogOp, "Config Tensor : {}", conv_reader_indices_tensor);
     const tt::tt_metal::DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
 
     TT_FATAL(act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0, "Error");
@@ -643,17 +644,19 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
         get_cb_info_by_name(cb_info, Conv2dCb::L1_ARRAY).index,
-        config_tensors_in_dram};
-    if (config_tensors_in_dram) {
-        reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->address());
-        reader_compile_time_args.push_back(out_block_h_ntiles * tt::constants::TILE_HEIGHT * 2);
-        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_storage.get_buffer()).append_to(reader_compile_time_args);
-    }
+    };
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
     std::map<std::string, std::string> writer_mcast_sender_defines;
     std::map<std::string, std::string> compute_defines;
+
+    if (config_tensors_in_dram) {
+        reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
+        reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->address());
+        reader_compile_time_args.push_back(out_block_h_ntiles * tt::constants::TILE_HEIGHT * 2);
+        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_storage.get_buffer()).append_to(reader_compile_time_args);
+    }
     if (skip_activation_mcast) {
         reader_defines["SKIP_MCAST"] = "1";
     }
@@ -894,7 +897,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             }
             reader_rt_args.insert(reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());
         } else {
-            reader_rt_args = {(uint32_t)noop_core};
+            reader_rt_args = {(uint32_t)noop_core, core_i};
         }
         SetRuntimeArgs(program, reader_id, core, reader_rt_args);
 

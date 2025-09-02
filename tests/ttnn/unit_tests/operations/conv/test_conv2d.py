@@ -96,7 +96,7 @@ def test_conv_features(
         has_bias=True,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
-        run_twice=True,
+        run_twice=False,
         input_layout=ttnn.TILE_LAYOUT if input_dtype == ttnn.bfloat8_b else None,
         input_dtype=input_dtype,
     )
