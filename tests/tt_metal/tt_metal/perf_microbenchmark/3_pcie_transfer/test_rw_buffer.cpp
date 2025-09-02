@@ -5,6 +5,7 @@
 #include <chrono>
 #include <errno.h>
 #include <fmt/base.h>
+#include <math.h>
 #include <stdint.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -59,8 +60,8 @@ int main(int argc, char** argv) {
     std::vector<double> h2d_bandwidth;
     std::vector<double> d2h_bandwidth;
     int32_t buffer_type = 0;
-    uint32_t transfer_size;
-    uint32_t page_size;
+    uint32_t transfer_size = 0;
+    uint32_t page_size = 0;
     uint32_t device_id = 0;
 
     try {
@@ -208,8 +209,8 @@ int main(int argc, char** argv) {
     if (pass && !bypass_check) {
         // TODO: check the theoritical peak of wormhole
         static constexpr double k_PcieMax = 16.0;  // GB/s
-        double target_read_bandwidth;
-        double target_write_bandwidth;
+        double target_read_bandwidth = NAN;
+        double target_write_bandwidth = NAN;
 
         if (device_is_mmio) {
             // MMIO

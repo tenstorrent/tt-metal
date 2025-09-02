@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
         std::vector<std::string> input_args(argv, argv + argc);
 
         std::string buffer_type_string = "";
-        uint32_t iter;
+        uint32_t iter = 0;
         try {
             std::tie(iter, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--iter", 1);

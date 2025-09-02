@@ -276,7 +276,7 @@ void run_single_core_reduce_program(
     uint32_t Wt = W / tile_W;
     uint32_t Ht = H / tile_H;
 
-    uint32_t num_golden_elements;
+    uint32_t num_golden_elements = 0;
     switch (test_config.reduce_dim) {
         case ReduceDim::H:
             num_golden_elements = NC * W * 32 / 2;
@@ -306,7 +306,7 @@ void run_single_core_reduce_program(
         .page_size = src_page_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
     distributed::ReplicatedBufferConfig src_buffer_config{.size = dram_buffer_size};
 
-    uint32_t output_size_bytes;
+    uint32_t output_size_bytes = 0;
     switch (test_config.reduce_dim) {
         case ReduceDim::H: output_size_bytes = dram_buffer_size / Ht; break;
         case ReduceDim::W: output_size_bytes = dram_buffer_size / Wt; break;

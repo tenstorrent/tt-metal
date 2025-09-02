@@ -280,7 +280,7 @@ inline CoreResources& TestDeviceResources::get_or_create_core_resources(const Co
 }
 
 inline void TestDeviceResources::refill_pool(CorePool& pool) {
-    uint32_t refill_count;
+    uint32_t refill_count = 0;
     if (pool.active_pool.empty()) {
         refill_count = pool.policy.initial_pool_size;
     } else {

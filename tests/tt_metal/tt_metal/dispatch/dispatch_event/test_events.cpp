@@ -68,7 +68,7 @@ TEST_F(CommandQueueEventFixture, TestEventsDataMovementWrittenToCompletionQueueI
         log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 
         // Read completion queue and ensure we see events 0-99 inclusive in order
-        uint32_t event;
+        uint32_t event = 0;
         if (data_movement_mode == DataMovementMode::WRITE) {
             for (size_t i = 0; i < num_buffers; i++) {
                 uint32_t host_addr = last_read_address + i * completion_queue_page_size + completion_queue_event_offset;
@@ -237,7 +237,7 @@ TEST_F(CommandQueueEventFixture, TestEventsQueueWaitForEventBasic) {
 TEST_F(CommandQueueEventFixture, TestEventsEventsQueryBasic) {
     const size_t num_events = 50;
     const size_t num_events_between_query = 5;
-    bool event_status;
+    bool event_status = false;
 
     auto start = std::chrono::system_clock::now();
     std::vector<std::shared_ptr<Event>> sync_events;
@@ -312,7 +312,7 @@ TEST_F(CommandQueueEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize
     Finish(this->device_->command_queue());
 
     // Read completion queue and ensure we see expected event IDs
-    uint32_t event_id;
+    uint32_t event_id = 0;
     for (size_t i = 0; i < num_buffers * num_events_per_cq; i++) {
         uint32_t host_addr = completion_queue_base + i * completion_queue_page_size + completion_queue_event_offset;
         tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(

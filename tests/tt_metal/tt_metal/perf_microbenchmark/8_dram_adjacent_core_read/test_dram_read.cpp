@@ -122,7 +122,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
     uint32_t cb_index = 0;
     uint32_t cb_size = block_h * block_w * single_tile_size;
-    uint32_t page_size, num_pages;
+    uint32_t page_size = 0, num_pages = 0;
     get_max_page_size_and_num_pages(block_num_tiles, single_tile_size, page_size, num_pages);
 
     uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);

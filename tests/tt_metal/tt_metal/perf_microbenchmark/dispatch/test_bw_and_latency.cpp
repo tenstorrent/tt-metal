@@ -191,9 +191,9 @@ void init(int argc, char** argv) {
 void nt_memcpy(uint8_t* __restrict dst, const uint8_t* __restrict src, size_t n) {
     size_t num_lines = n / CACHE_LINE_SIZE;
 
-    size_t i;
+    size_t i = 0;
     for (i = 0; i < num_lines; i++) {
-        size_t j;
+        size_t j = 0;
         for (j = 0; j < CACHE_LINE_SIZE / sizeof(__m128i); j++) {
             __m128i blk = _mm_loadu_si128((const __m128i*)src);
             /* non-temporal store */
@@ -222,7 +222,7 @@ int main(int argc, char** argv) {
         tt_metal::Program program = tt_metal::CreateProgram();
 
         std::string src_mem;
-        uint32_t noc_addr_x, noc_addr_y;
+        uint32_t noc_addr_x = 0, noc_addr_y = 0;
         uint64_t noc_mem_addr = 0;
         uint32_t dram_banked = 0;
         uint32_t issue_mcast = 0;

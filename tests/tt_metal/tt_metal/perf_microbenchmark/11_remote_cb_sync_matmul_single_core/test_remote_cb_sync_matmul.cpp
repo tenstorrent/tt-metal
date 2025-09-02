@@ -174,11 +174,11 @@ create_programs(
     // DRAM reader CB
     uint32_t in1_reader_cb_index = 0;
     uint32_t in1_reader_cb_size = in1_block_h * in1_block_w * single_tile_size * 3;
-    uint32_t in1_reader_page_size, in1_reader_num_pages;
+    uint32_t in1_reader_page_size = 0, in1_reader_num_pages = 0;
     get_max_page_size_and_num_pages(in1_block_num_tiles, single_tile_size, in1_reader_page_size, in1_reader_num_pages);
 
     uint32_t in1_receiver_block_num_tile = in1_block_h * in1_block_w / num_receivers;
-    uint32_t in1_writer_page_size, in1_writer_num_pages;
+    uint32_t in1_writer_page_size = 0, in1_writer_num_pages = 0;
     get_max_page_size_and_num_pages(
         in1_block_w / num_receivers, single_tile_size, in1_writer_page_size, in1_writer_num_pages);
 
@@ -570,8 +570,8 @@ std::shared_ptr<tt_metal::distributed::MeshBuffer> create_and_transfer_data_shar
     CoreRangeSet cores,
     uint32_t num_receivers,
     std::optional<DeviceAddr> address = std::nullopt) {
-    uint32_t size_bytes;
-    uint32_t page_size_bytes;
+    uint32_t size_bytes = 0;
+    uint32_t page_size_bytes = 0;
     if (data_format == tt::DataFormat::Bfp8_b) {
         size_bytes = ht * wt * 1088;
         page_size_bytes = 1088;

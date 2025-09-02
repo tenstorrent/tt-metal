@@ -446,7 +446,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
     vector<uint32_t> dm_kernel1_args;
     vector<uint32_t> compute_kernel_args;
 
-    uint32_t idx;
+    uint32_t idx = 0;
     for (idx = 0; idx < num_runtime_args_dm0; idx++) {
         dm_kernel0_args.push_back(idx);
     }
@@ -818,8 +818,8 @@ bool verify_rt_args(
 
 // Returns L1 address for {unique RTA, common RTA}
 std::pair<uint32_t, uint32_t> get_args_addr(const IDevice* device, HalProcessorIdentifier processor) {
-    uint32_t unique_args_addr;
-    uint32_t common_args_addr;
+    uint32_t unique_args_addr = 0;
+    uint32_t common_args_addr = 0;
     auto [core_type, processor_class, processor_id] = processor;
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX:
@@ -1803,8 +1803,8 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
         std::map<std::string, std::string> compute_defines = {{"COMPUTE", "1"}};
 
         // brisc
-        uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;
-        bool USE_MAX_RT_ARGS;
+        uint32_t BRISC_OUTER_LOOP = 0, BRISC_MIDDLE_LOOP = 0, BRISC_INNER_LOOP = 0, NUM_CBS = 0, NUM_SEMS = 0;
+        bool USE_MAX_RT_ARGS = false;
 
         if (i == 0) {
             // Ensures that we get at least one compilation with the max amount to
@@ -1861,7 +1861,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
             page_size};
 
         // ncrisc
-        uint32_t NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP;
+        uint32_t NCRISC_OUTER_LOOP = 0, NCRISC_MIDDLE_LOOP = 0, NCRISC_INNER_LOOP = 0;
         if (i == 0) {
             NCRISC_OUTER_LOOP = MAX_LOOP;
             NCRISC_MIDDLE_LOOP = MAX_LOOP;
@@ -1886,7 +1886,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
             page_size};
 
         // trisc
-        uint32_t TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP;
+        uint32_t TRISC_OUTER_LOOP = 0, TRISC_MIDDLE_LOOP = 0, TRISC_INNER_LOOP = 0;
         if (i == 0) {
             TRISC_OUTER_LOOP = MAX_LOOP;
             TRISC_MIDDLE_LOOP = MAX_LOOP;
@@ -2080,8 +2080,8 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
         std::map<std::string, std::string> compute_defines = {{"COMPUTE", "1"}};
 
         // brisc
-        uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;
-        bool USE_MAX_RT_ARGS;
+        uint32_t BRISC_OUTER_LOOP = 0, BRISC_MIDDLE_LOOP = 0, BRISC_INNER_LOOP = 0, NUM_CBS = 0, NUM_SEMS = 0;
+        bool USE_MAX_RT_ARGS = false;
 
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Compiling program {} of {}", i + 1, NUM_WORKLOADS);
@@ -2141,7 +2141,7 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
             num_brisc_common_rtargs,
             page_size};
         // ncrisc
-        uint32_t NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP;
+        uint32_t NCRISC_OUTER_LOOP = 0, NCRISC_MIDDLE_LOOP = 0, NCRISC_INNER_LOOP = 0;
         if (i == 0) {
             NCRISC_OUTER_LOOP = MAX_LOOP;
             NCRISC_MIDDLE_LOOP = MAX_LOOP;
@@ -2166,7 +2166,7 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
             page_size};
 
         // trisc
-        uint32_t TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP;
+        uint32_t TRISC_OUTER_LOOP = 0, TRISC_MIDDLE_LOOP = 0, TRISC_INNER_LOOP = 0;
         if (i == 0) {
             TRISC_OUTER_LOOP = MAX_LOOP;
             TRISC_MIDDLE_LOOP = MAX_LOOP;

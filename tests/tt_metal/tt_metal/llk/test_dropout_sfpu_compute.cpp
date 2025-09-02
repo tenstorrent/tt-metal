@@ -104,7 +104,7 @@ bool test_dropout_standalone(
     bool pass = true;
     uint32_t int_probability = probability * (double)INT_MAX;
     float scale_factor_f = 1.0f / (1.0f - probability);
-    uint32_t scale_factor;
+    uint32_t scale_factor = 0;
     std::memcpy(&scale_factor, &scale_factor_f, sizeof(uint32_t));
 
     try {

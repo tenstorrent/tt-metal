@@ -796,7 +796,7 @@ inline void debug_epilogue(std::vector<uint32_t>& cmds, size_t prior_end) {
         // command is processed.  So, limit this to doing a checksum on the first page
         // (which is disappointing).  Any other value requires the checksum code to handle
         // buffer wrap which then messes up the routines w/ the embedded insn - not worth it
-        CQDispatchCmd* debug_cmd_ptr;
+        CQDispatchCmd* debug_cmd_ptr = nullptr;
         debug_cmd_ptr = (CQDispatchCmd*)&cmds[prior_end];
         uint32_t full_size = (cmds.size() - prior_end) * sizeof(uint32_t) - sizeof(CQDispatchCmd);
         uint32_t max_size = dispatch_buffer_page_size_g - sizeof(CQDispatchCmd);

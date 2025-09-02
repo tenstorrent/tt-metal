@@ -137,7 +137,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     // DRAM reader CB
     uint32_t reader_cb_index = 0;
     uint32_t reader_cb_size = block_h * block_w * single_tile_size * 3;
-    uint32_t page_size, num_pages, num_pages_w_per_receiver;
+    uint32_t page_size = 0, num_pages = 0, num_pages_w_per_receiver = 0;
     get_max_page_size_and_num_pages(block_w, block_h, single_tile_size, page_size, num_pages, num_pages_w_per_receiver);
 
     log_info(tt::LogTest, "Input block size: {}x{}, num_blocks: {}", block_h, block_w, num_blocks);

@@ -235,8 +235,8 @@ int main(int argc, char** argv) {
                         num_samples,
                         sample_page_size,
                         max_channels_per_direction);
-                    tt_metal::KernelHandle local_kernel;
-                    tt_metal::KernelHandle remote_kernel;
+                    tt_metal::KernelHandle local_kernel = 0;
+                    tt_metal::KernelHandle remote_kernel = 0;
                     try {
                         auto [program0, program1] = build(
                             device_0,

@@ -155,11 +155,11 @@ create_mesh_workloads(
     uint32_t writer_cb_index = 31;
     // For debug purpose
     // uint32_t reader_cb_size = block_h * block_w * single_tile_size;
-    uint32_t reader_page_size, reader_num_pages;
+    uint32_t reader_page_size = 0, reader_num_pages = 0;
     get_max_page_size_and_num_pages(block_num_tiles, single_tile_size, reader_page_size, reader_num_pages);
 
     uint32_t receiver_block_num_tile = block_h * block_w / num_receivers;
-    uint32_t writer_page_size, writer_num_pages;
+    uint32_t writer_page_size = 0, writer_num_pages = 0;
     get_max_page_size_and_num_pages(block_w / num_receivers, single_tile_size, writer_page_size, writer_num_pages);
 
     log_info(tt::LogTest, "writer_page_size: {}", writer_page_size);
@@ -189,14 +189,14 @@ create_mesh_workloads(
     } else {
         next_layer_single_tile_size = 2048;
     }
-    uint32_t next_layer_reader_page_size, next_layer_reader_num_pages;
+    uint32_t next_layer_reader_page_size = 0, next_layer_reader_num_pages = 0;
     get_max_page_size_and_num_pages(
         next_layer_block_num_tiles,
         next_layer_single_tile_size,
         next_layer_reader_page_size,
         next_layer_reader_num_pages);
 
-    uint32_t next_layer_writer_page_size, next_layer_writer_num_pages;
+    uint32_t next_layer_writer_page_size = 0, next_layer_writer_num_pages = 0;
     get_max_page_size_and_num_pages(
         block_w / num_receivers, next_layer_single_tile_size, next_layer_writer_page_size, next_layer_writer_num_pages);
 
@@ -496,7 +496,7 @@ bool validation_mixed_df(
     auto num_datums_per_cb = kt * nt * 32 * 32 / num_blocks * cb_num_blocks / num_receivers;
     int start_index = 0;
     int fifo_size = kt * 32 / num_blocks * cb_num_blocks * nt * 32 * 2 / num_receivers;
-    int page_size, layer_transfer_size, fifo_wr_ptr = 0;
+    int page_size = 0, layer_transfer_size = 0, fifo_wr_ptr = 0;
     for (int l = 0; l < num_mixed_df_layers; ++l) {
         if (l % 2 == 0) {  // fp16
             page_size = 2048;
@@ -596,8 +596,8 @@ std::shared_ptr<tt_metal::distributed::MeshBuffer> create_and_transfer_data_shar
     CoreRangeSet cores,
     uint32_t num_receivers,
     std::optional<DeviceAddr> address = std::nullopt) {
-    uint32_t size_bytes;
-    uint32_t page_size_bytes;
+    uint32_t size_bytes = 0;
+    uint32_t page_size_bytes = 0;
     if (data_format == tt::DataFormat::Bfp8_b) {
         size_bytes = ht * wt * 1088;
         page_size_bytes = 1088;

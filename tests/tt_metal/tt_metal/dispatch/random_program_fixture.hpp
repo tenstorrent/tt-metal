@@ -241,7 +241,7 @@ private:
             SEM_VAL,
             num_cbs};
 
-        uint32_t divisible_by;
+        uint32_t divisible_by = 0;
         if (create_eth_config) {
             divisible_by = 4;
         } else {

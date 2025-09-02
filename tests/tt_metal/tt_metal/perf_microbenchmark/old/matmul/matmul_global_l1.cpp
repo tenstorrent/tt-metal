@@ -943,23 +943,23 @@ int main(int argc, char** argv) {
         //                      Initial Runtime Args Parse
         ////////////////////////////////////////////////////////////////////////////
         std::vector<std::string> input_args(argv, argv + argc);
-        uint32_t dprint;
-        uint32_t print_tensor;
-        uint32_t debug;
-        uint32_t Mt;
-        uint32_t Nt;
-        uint32_t Kt;
-        uint32_t num_cores_y;
-        uint32_t num_cores_x;
-        uint32_t in0_block_w;
-        uint32_t out_subblock_h;
-        uint32_t out_subblock_w;
-        uint32_t per_core_Mt;
-        uint32_t per_core_Nt;
-        uint32_t l1_in0;
-        uint32_t l1_in1;
-        uint32_t l1_out;
-        uint32_t validation;
+        uint32_t dprint = 0;
+        uint32_t print_tensor = 0;
+        uint32_t debug = 0;
+        uint32_t Mt = 0;
+        uint32_t Nt = 0;
+        uint32_t Kt = 0;
+        uint32_t num_cores_y = 0;
+        uint32_t num_cores_x = 0;
+        uint32_t in0_block_w = 0;
+        uint32_t out_subblock_h = 0;
+        uint32_t out_subblock_w = 0;
+        uint32_t per_core_Mt = 0;
+        uint32_t per_core_Nt = 0;
+        uint32_t l1_in0 = 0;
+        uint32_t l1_in1 = 0;
+        uint32_t l1_out = 0;
+        uint32_t validation = 0;
         try {
             std::tie(debug, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--debug", 0);
