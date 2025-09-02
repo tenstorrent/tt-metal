@@ -404,7 +404,7 @@ def test_demo(
         # FIXME: on-host embeddings - run as part of vision model prefill when merge_vision_tokens is ported to ttnn
         text_embeds = reference_model.model.language_model.embed_tokens(inputs.input_ids)
         input_embeds = merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, reference_model.config)
-        pad_token_id = tokenizer.tokenizer.pad_token_id
+        pad_token_id = tokenizer.pad_token_id
         assert (
             model_args.max_seq_len >= max(len(x) for x in input_embeds) + max_generated_tokens
         ), f"max_seq_len ({model_args.max_seq_len}) must be >= than max prompt length ({max(len(x) for x in input_embeds)}) + max generated tokens ({max_generated_tokens})"
