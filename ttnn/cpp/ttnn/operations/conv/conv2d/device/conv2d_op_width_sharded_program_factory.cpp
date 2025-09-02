@@ -377,6 +377,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         p_config,
         b.padded_shape(),
         {filter_h, filter_w},
+        {dilation_h, dilation_w},
         conv_config,
         a.dtype(),
         output.dtype(),

@@ -275,6 +275,7 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         parallelization_config,
         weights_shape,
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second}),
+        std::array<uint32_t, 2>({sliding_window_config.dilation_hw.first, sliding_window_config.dilation_hw.second}),
         Conv2dConfig{
             .weights_dtype = input_tensor_b.dtype(),
             .shard_layout = this->memory_config.memory_layout(),
