@@ -52,7 +52,6 @@ class TtFalconCausalLM(TtFalconModelShared):
             memory_config=self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"],
             mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
             cache_file_name=lm_head_path,
-            enable_multihost_format=True,
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
         )
         self.perf_e2e_test_tile_tensor = ttnn.from_torch(torch.zeros((1, 1, 32, 32)), device=mesh_device)

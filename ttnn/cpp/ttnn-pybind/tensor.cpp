@@ -490,24 +490,6 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def(py::self == py::self)
         .def(py::self != py::self);
 
-    // TODO: #16067 - Remove the legacy format.
-    m_tensor.def(
-        "dump_tensor",
-        &dump_tensor,
-        py::arg("filename"),
-        py::arg("tensor"),
-        R"doc(
-            Dump tensor to file
-        )doc");
-
-    // TODO: #16067 - Remove the legacy format.
-    m_tensor.def(
-        "load_tensor",
-        py::overload_cast<const std::string&, MeshDevice*>(&load_tensor),
-        py::arg("file_name"),
-        py::arg("device") = nullptr,
-        R"doc(Load tensor to file)doc");
-
     m_tensor
         .def(
             "dump_tensor_flatbuffer",
