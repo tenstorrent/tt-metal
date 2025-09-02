@@ -277,8 +277,7 @@ private:
 
     // Helper to populate fabric connection info for both router and mux configurations
     void populate_fabric_connection_info(
-        tt::tt_fabric::fabric_connection_info_t& worker_connection_info,
-        tt::tt_fabric::fabric_connection_info_t& dispatcher_connection_info,
+        tt::tt_fabric::fabric_connection_info_t& connection_info,
         tt::tt_fabric::fabric_connection_info_t& tensix_connection_info,
         chip_id_t physical_chip_id,
         chan_id_t eth_channel_id,
