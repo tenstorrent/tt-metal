@@ -64,6 +64,7 @@ class Yolov11Conv2D:
             self.bias = None
 
         weight = ttnn.from_device(conv_pth.weight)
+        print(f"DEBUG Yolov11Conv2D: Weight shape = {conv_pth.weight}")
         self.weight = weight
 
     def __call__(self, x):
