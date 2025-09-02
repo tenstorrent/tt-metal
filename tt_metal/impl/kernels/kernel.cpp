@@ -101,7 +101,7 @@ Kernel::Kernel(
     core_with_max_runtime_args_({0, 0}),
     compile_time_args_(compile_args),
     defines_(defines),
-    compile_time_args_by_name_(named_compile_time_args) {
+    named_compile_time_args_(named_compile_time_args) {
     this->register_kernel_with_watcher();
 
     size_t max_x = 0, max_y = 0;
