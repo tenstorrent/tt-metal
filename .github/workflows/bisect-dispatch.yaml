@@ -14,11 +14,6 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
-      build-wheel:
-        required: true
-        type: boolean
-        default: false
-        description: "Build Python Wheel"
       runner-label:
         required: true
         type: choice
