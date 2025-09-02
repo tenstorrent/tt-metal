@@ -1,0 +1,9 @@
+# Loading weights here
+python_env/lib/python3.10/site-packages/diffusers/loaders/lora_pipeline.py
+
+- changes unet, text_encoder and text_encoder_1
+- lora sto sam ja nasao menja unet attentione, unclear da li menja nesto drugo ?
+
+# Loading lora layers into unet by changing the model
+load_lora_adapter() <- function that changes the unet
+python_env/lib/python3.10/site-packages/diffusers/loaders/peft.py
