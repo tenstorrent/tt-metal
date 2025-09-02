@@ -12,8 +12,16 @@ class TtnnBottleneck:
         print(f"DEBUG TtnnBottleneck: parameter.cv1 = {type(parameter.cv1) if hasattr(parameter, 'cv1') else 'NO cv1'}")
         print(f"DEBUG TtnnBottleneck: parameter.cv2 = {type(parameter.cv2) if hasattr(parameter, 'cv2') else 'NO cv2'}")
         print(f"DEBUG TtnnBottleneck: conv_pt object = {type(conv_pt)}")
-        print(f"DEBUG TtnnBottleneck: conv_pt.cv1 channels = {conv_pt.cv1.conv.in_channels} -> {conv_pt.cv1.conv.out_channels}")
-        print(f"DEBUG TtnnBottleneck: conv_pt.cv2 channels = {conv_pt.cv2.conv.in_channels} -> {conv_pt.cv2.conv.out_channels}")
+        print(f"DEBUG TtnnBottleneck: conv_pt attributes = {dir(conv_pt)}")
+        print(f"DEBUG TtnnBottleneck: conv_pt.cv1 = {type(conv_pt.cv1)}")
+        print(f"DEBUG TtnnBottleneck: conv_pt.cv1 attributes = {dir(conv_pt.cv1)}")
+        if hasattr(conv_pt.cv1, 'conv'):
+            print(f"DEBUG TtnnBottleneck: conv_pt.cv1.conv = {type(conv_pt.cv1.conv)}")
+            print(f"DEBUG TtnnBottleneck: conv_pt.cv1.conv attributes = {dir(conv_pt.cv1.conv)}")
+        if hasattr(conv_pt.cv1, 'conv') and hasattr(conv_pt.cv1.conv, 'weight'):
+            print(f"DEBUG TtnnBottleneck: conv_pt.cv1.conv.weight shape = {conv_pt.cv1.conv.weight.shape}")
+        if hasattr(conv_pt.cv2, 'conv') and hasattr(conv_pt.cv2.conv, 'weight'):
+            print(f"DEBUG TtnnBottleneck: conv_pt.cv2.conv.weight shape = {conv_pt.cv2.conv.weight.shape}")
         self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1)
         self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2)
 
