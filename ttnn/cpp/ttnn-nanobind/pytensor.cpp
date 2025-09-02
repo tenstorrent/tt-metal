@@ -40,6 +40,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/storage.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -184,9 +185,7 @@ PreprocessedPyTensor parse_py_tensor(const nb::handle& py_tensor, std::optional<
             data_type = optional_data_type.value();
         } else if (py_dtype.equal(torch.attr("float32"))) {
             data_type = DataType::FLOAT32;
-        } else if (py_dtype.equal(torch.attr("float16"))) {
-            data_type = DataType::BFLOAT16;
-        } else if (py_dtype.equal(torch.attr("bfloat16"))) {
+        } else if (py_dtype.equal(torch.attr("float16")) || py_dtype.equal(torch.attr("bfloat16"))) {
             data_type = DataType::BFLOAT16;
         } else if (py_dtype.equal(torch.attr("int64"))) {
             data_type = DataType::UINT32;
@@ -355,7 +354,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         }
     }();
 
-    // NANOBIND_TODO: validate this comment
+    // TODO_NANOBIND: validate this comment
     // Important: `nb::object` copying and destruction must be done while holding GIL, which pybind ensures for a thread
     // that calls the C++ APIs. We wrap `nb::object` in `MemoryPin` so that multi-threaded C++ code only increments /
     // decrements the reference count on the memory pin; the last decrement to the pin should be triggered from the
@@ -517,7 +516,7 @@ nb::object convert_tt_tensor_to_torch_tensor(const RowMajorHostBuffer& row_major
         switch (row_major_host_buffer.data_type) {
             case DataType::UINT8: return torch.attr("uint8");
             case DataType::UINT16: return torch.attr("int16");
-            case DataType::INT32: return torch.attr("int32");
+            case DataType::INT32:
             case DataType::UINT32: return torch.attr("int32");
             case DataType::BFLOAT16: return torch.attr("bfloat16");
             case DataType::BFLOAT8_B:
@@ -554,7 +553,7 @@ nb::object convert_tt_tensor_to_numpy_tensor(const RowMajorHostBuffer& row_major
         switch (row_major_host_buffer.data_type) {
             case DataType::UINT8: return np.attr("ubyte");
             case DataType::UINT16: return np.attr("int16");
-            case DataType::INT32: return np.attr("int32");
+            case DataType::INT32:
             case DataType::UINT32: return np.attr("int32");
             case DataType::BFLOAT16: TT_THROW("Bfloat16 is not supported for numpy!");
             case DataType::BFLOAT8_B:
@@ -968,7 +967,9 @@ void pytensor_module(nb::module_& mod) {
             )doc")
         .def(
             "to",
-            nb::overload_cast<IDevice*, const MemoryConfig&, QueueId>(&Tensor::to_device, nb::const_),
+            [](const Tensor& self, MeshDevice* device, std::optional<const MemoryConfig>& mem_config, QueueId cq_id) {
+                return self.to_device(device, mem_config, cq_id);
+            },
             nb::arg("device").noconvert(),
             nb::arg("mem_config").noconvert() = MemoryConfig{},
             nb::arg("cq_id") = ttnn::DefaultQueueId,
@@ -978,35 +979,7 @@ void pytensor_module(nb::module_& mod) {
 
             Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
 
-            If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
-
-            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-            | Argument  | Description                                     | Data type                  | Valid range           | Required |
-            +===========+=================================================+============================+=======================+==========+
-            | arg0      | Device to which tensor will be moved            | ttnn.Device                | TT accelerator device | Yes      |
-            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-            | arg1      | MemoryConfig of tensor of TT accelerator device | ttnn.MemoryConfig          |                       | No       |
-            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-            | arg2      | CQ ID of TT accelerator device to use           | uint8_t                    |                       | No       |
-            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-
-            .. code-block:: python
-
-                tt_tensor = tt_tensor.to(tt_device)
-        )doc")
-        .def(
-            "to",
-            nb::overload_cast<MeshDevice*, const MemoryConfig&, QueueId>(&Tensor::to_device, nb::const_),
-            nb::arg("device").noconvert(),
-            nb::arg("mem_config").noconvert() = MemoryConfig{},
-            nb::arg("cq_id") = ttnn::DefaultQueueId,
-            nb::keep_alive<0, 2>(),
-            R"doc(
-            Move TT Tensor from host device to TT accelerator device.
-
-            Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
-
-            If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
+            If ``arg1`` is not supplied, memory config from the source tensor will be used.
 
             +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
             | Argument  | Description                                     | Data type                  | Valid range           | Required |
@@ -1530,36 +1503,19 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
-            "buffer",
-            [](const Tensor& self) -> HostBuffer {
-                return std::visit(
-                    tt::stl::overloaded{
-                        [](const HostStorage& s) -> HostBuffer {
-                            std::vector<HostBuffer> buffers;
-                            s.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
-                            TT_FATAL(
-                                buffers.size() == 1,
-                                "Can't get a single buffer from host storage distributed over mesh shape {}. Did you "
-                                "forget to use mesh composer to concatenate tensor shards?",
-                                s.buffer().shape());
-                            return buffers.front();
-                        },
-                        [&](const DeviceStorage& s) -> HostBuffer {
-                            TT_THROW(
-                                "{} doesn't support buffer method",
-                                tt::stl::get_active_type_name_in_variant(self.storage()));
-                        },
-                    },
-                    self.storage());
+            "host_buffer",
+            [](Tensor& self) -> DistributedHostBuffer {
+                TT_FATAL(self.storage_type() == StorageType::HOST, "Tensor must be on host to access host_buffer");
+                return self.host_storage().buffer();
             },
             R"doc(
-            Get the underlying buffer.
+            Get the underlying host buffer.
 
             The tensor must be on the cpu when calling this function.
 
             .. code-block:: python
 
-                buffer = tt_tensor.cpu().buffer() # move TT Tensor to host and get the buffer
+                buffer = tt_tensor.cpu().host_buffer() # move TT Tensor to host and get the buffer
 
         )doc")
         .def(
@@ -1678,7 +1634,7 @@ void pytensor_module(nb::module_& mod) {
             )doc")
         .def(
             "to_list",
-            [](Tensor& self) {
+            [](Tensor& self) {  // TODO_NANOBIND
                 using namespace tt::tt_metal::tensor_impl;
                 return dispatch(self.dtype(), [&]<typename T>() -> nb::list {
                     const auto& logical_shape = self.logical_shape();
@@ -1705,7 +1661,17 @@ void pytensor_module(nb::module_& mod) {
 
                     py_list = tt_tensor.to_list()
             )doc")
-        .def_prop_rw(
+        .def(
+            "tensor_topology",
+            [](const Tensor& self) { return self.tensor_topology(); },
+            R"doc(
+                Get the topology of the tensor.
+
+                .. code-block:: python
+
+                    topology = tt_tensor.tensor_topology()
+            )doc")
+        .def_prop(
             "tensor_id",
             [](const Tensor& self) { return self.tensor_id; },
             [](Tensor& self, std::size_t tensor_id) { self.tensor_id = tensor_id; });

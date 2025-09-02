@@ -23,6 +23,7 @@
 #include "ttnn-nanobind/operations/trace.hpp"
 #include "ttnn-nanobind/profiler.hpp"
 #include "ttnn-nanobind/program_descriptors.hpp"
+#include "ttnn-nanobind/tensor_accessor_args.hpp"
 #include "ttnn-nanobind/reports.hpp"
 #include "ttnn-nanobind/tensor.hpp"
 #include "ttnn-nanobind/types.hpp"
@@ -34,6 +35,7 @@
 #include "ttnn/operations/bernoulli/bernoulli_nanobind.hpp"
 #include "ttnn/operations/ccl/ccl_nanobind.hpp"
 #include "ttnn/operations/conv/conv_nanobind.hpp"
+#include "ttnn/operations/debug/debug_nanobind.hpp"
 #include "ttnn/operations/data_movement/data_movement_nanobind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_nanobind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_nanobind.hpp"
@@ -58,9 +60,11 @@
 #include "ttnn/operations/matmul/matmul_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_nanobind.hpp"
 #include "ttnn/operations/normalization/normalization_nanobind.hpp"
+#include "ttnn/operations/point_to_point/point_to_point_nanobind.hpp"
 #include "ttnn/operations/pool/generic/generic_pools_nanobind.hpp"
 #include "ttnn/operations/pool/global_avg_pool/global_avg_pool_nanobind.hpp"
 #include "ttnn/operations/pool/upsample/upsample_nanobind.hpp"
+#include "ttnn/operations/pool/grid_sample/grid_sample_nanobind.hpp"
 #include "ttnn/operations/prefetcher/prefetcher_nanobind.hpp"
 #include "ttnn/operations/reduction/reduction_nanobind.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_nanobind.hpp"
@@ -118,6 +122,9 @@ void py_module(nb::module_& mod) {
     auto m_ccl = mod.def_submodule("ccl", "collective communication operations");
     ccl::py_module(m_ccl);
 
+    auto m_debug = mod.def_submodule("debug", "debug operations");
+    debug::py_module(m_debug);
+
     auto m_creation = mod.def_submodule("creation", "creation operations");
     creation::py_module(m_creation);
 
@@ -149,6 +156,7 @@ void py_module(nb::module_& mod) {
     pool::py_module(m_pool);
     avgpool::py_module(m_pool);
     upsample::py_module(m_pool);
+    grid_sample::bind_grid_sample(m_pool);
 
     auto m_normalization = mod.def_submodule("normalization", "normalization operations");
     normalization::py_module(m_normalization);
@@ -191,6 +199,9 @@ void py_module(nb::module_& mod) {
 
     auto m_rand = mod.def_submodule("rand", "ttnn rand operation");
     rand::bind_rand_operation(m_rand);
+
+    auto m_point_to_point = mod.def_submodule("point_to_point", "point_to_point operations");
+    point_to_point::bind_point_to_point(m_point_to_point);
 }
 }  // namespace ttnn::operations
 
@@ -227,6 +238,7 @@ NB_MODULE(_ttnn, mod) {
     auto m_operations = mod.def_submodule("operations", "ttnn Operations");
     auto m_fabric = mod.def_submodule("fabric", "Fabric instantiation APIs");
     auto m_program_descriptors = mod.def_submodule("program_descriptor", "Program descriptors types");
+    auto m_tensor_accessor_args = mod.def_submodule("tensor_accessor_args", "Tensor accessor args types");
 
     // TYPES
     ttnn::tensor::tensor_mem_config_module_types(m_tensor);
@@ -235,6 +247,7 @@ NB_MODULE(_ttnn, mod) {
 
     ttnn::types::py_module_types(m_types);
     ttnn::activation::py_module_types(m_activation);
+    ttnn::cluster::py_cluster_module_types(m_cluster);
     ttnn::core::py_module_types(m_core);
     ttnn::device::py_device_module_types(m_device);
     ttnn::fabric::bind_fabric_api(m_fabric);
@@ -245,6 +258,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::mesh_socket::py_module_types(m_mesh_socket);
     ttnn::reports::py_module_types(m_reports);
     ttnn::program_descriptors::py_module_types(m_program_descriptors);
+    ttnn::tensor_accessor_args::py_module_types(m_tensor_accessor_args);
 
     // FUNCTIONS / OPERATIONS
     ttnn::tensor::tensor_mem_config_module(m_tensor);
@@ -271,6 +285,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::mesh_socket::py_module(m_mesh_socket);
     ttnn::profiler::py_module(m_profiler);
     ttnn::reports::py_module(m_reports);
+    ttnn::tensor_accessor_args::py_module(m_tensor_accessor_args);
 
     // ttnn operations have to come before the deprecated ones,
     // because ttnn defines additional type bindings.

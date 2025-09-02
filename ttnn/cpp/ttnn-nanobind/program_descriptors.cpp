@@ -241,7 +241,19 @@ void py_module_types(nb::module_& mod) {
     )pbdoc")
         .def(nb::init<>(), R"pbdoc(
         Default constructor for SemaphoreDescriptor.
-    )pbdoc");
+    )pbdoc")
+        .def(  // TODO_NANOBIND
+            py::init<CoreType, CoreRangeSet, uint32_t>(),
+            py::arg("core_type") = CoreType::WORKER,
+            py::arg("core_ranges"),
+            py::arg("initial_value"),
+            R"pbdoc(
+                Initialize a SemaphoreDescriptor with core type, core ranges, and initial value.
+            )pbdoc")
+        .def_readwrite("core_type", &tt::tt_metal::SemaphoreDescriptor::core_type, "Type of core for the semaphore")
+        .def_readwrite("core_ranges", &tt::tt_metal::SemaphoreDescriptor::core_ranges, "Core ranges for the semaphore")
+        .def_readwrite(
+            "initial_value", &tt::tt_metal::SemaphoreDescriptor::initial_value, "Initial value for the semaphore");
 
     nb::class_<tt::tt_metal::ProgramDescriptor>(mod, "ProgramDescriptor", R"pbdoc(
         Descriptor for a complete program.
@@ -272,6 +284,7 @@ void py_module_types(nb::module_& mod) {
         .def_rw("semaphores", &tt::tt_metal::ProgramDescriptor::semaphores, "Collection of semaphore descriptors")
         .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors");
 
+    // TODO_NANOBIND
     [[maybe_unused]]
     auto e_CBIndex = export_enum<tt::CBIndex>(mod, "CBIndex");
     // e_CBIndex

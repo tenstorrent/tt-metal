@@ -89,15 +89,6 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "to_device",
-        nb::overload_cast<const ttnn::Tensor&, IDevice*, const std::optional<MemoryConfig>&, QueueId>(
-            &ttnn::operations::core::to_device),
-        nb::arg("tensor"),
-        nb::arg("device"),
-        nb::arg("memory_config") = nb::none(),
-        nb::arg("cq_id") = ttnn::DefaultQueueId);
-
-    mod.def(
-        "to_device",
         nb::overload_cast<const ttnn::Tensor&, MeshDevice*, const std::optional<MemoryConfig>&, QueueId>(
             &ttnn::operations::core::to_device),
         nb::arg("tensor"),

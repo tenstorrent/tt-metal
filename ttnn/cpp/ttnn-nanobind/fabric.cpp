@@ -32,12 +32,22 @@ void bind_fabric_api(nb::module_& mod) {
         .value("RELAXED_INIT", tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE)
         .value("DYNAMIC_RECONFIG", tt::tt_fabric::FabricReliabilityMode::DYNAMIC_RECONFIGURATION_SETUP_MODE);
 
-    mod.def(
+    nb::enum_<tt::tt_fabric::FabricTensixConfig>(mod, "FabricTensixConfig", R"(
+        Specifies the fabric tensix configuration mode for mux functionality. Enabling a FabricTensixConfig will result in fabric permanently reserving additional worker cores for the duration of the workload.
+        Values:
+            DISABLED: Fabric tensix mux functionality is disabled (default).
+            MUX: Enable fabric tensix mux mode for worker → mux → fabric router routing.
+        )")
+        .value("DISABLED", tt::tt_fabric::FabricTensixConfig::DISABLED)
+        .value("MUX", tt::tt_fabric::FabricTensixConfig::MUX);
+
+    module.def(
         "set_fabric_config",
         &tt::tt_fabric::SetFabricConfig,
         nb::arg("config"),
         nb::arg("reliability_mode") = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-        nb::arg("num_planes") = nb::none());
+        nb::arg("num_planes") = nb::none(),
+        nb::arg("fabric_tensix_config") = tt::tt_fabric::FabricTensixConfig::DISABLED);
 }
 
 }  // namespace ttnn::fabric

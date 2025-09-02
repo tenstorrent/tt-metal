@@ -163,7 +163,7 @@ void device_module(nb::module_& m_device) {
         .def(nb::self == nb::self)
         .def(nb::self != nb::self);
 
-    // May need a placement new impl?
+    // TODO_NANOBIND: May need a placement new impl?
     m_device.def(
         "CreateDevice",
         [](int device_id,
@@ -512,19 +512,19 @@ void device_module(nb::module_& m_device) {
         nb::arg("cq_id") = nb::none(),
         nb::arg("sub_device_ids") = std::vector<SubDeviceId>());
     m_device.def(
-        "DumpDeviceProfiler",
+        "ReadDeviceProfiler",
         [](MeshDevice* device) {
             ProfilerOptionalMetadata prof_metadata(tt::tt_metal::op_profiler::runtime_id_to_opname_.export_map());
-            tt::tt_metal::DumpMeshDeviceProfileResults(*device, ProfilerDumpState::NORMAL, prof_metadata);
+            tt::tt_metal::ReadMeshDeviceProfilerResults(*device, ProfilerReadState::NORMAL, prof_metadata);
         },
         nb::arg("device"),
         R"doc(
-        Dump device side profiling data.
+        Read device side profiling data.
 
         +------------------+----------------------------------+-----------------------+-------------+----------+
         | Argument         | Description                      | Data type             | Valid range | Required |
         +==================+==================================+=======================+=============+==========+
-        | device           | Device to dump profiling data of | ttnn.Device           |             | Yes      |
+        | device           | Device to read profiling data of | ttnn.Device           |             | Yes      |
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
 

@@ -22,13 +22,11 @@ void py_module_types(nb::module_& mod) {
 
 void py_module(nb::module_& mod) {
     auto py_buffer_info = static_cast<nb::class_<ttnn::reports::BufferInfo>>(mod.attr("BufferInfo"));
-    py_buffer_info
-        .def_prop_ro("device_id", [](const ttnn::reports::BufferInfo& self) { return self.device_id; })
+    py_buffer_info.def_prop_ro("device_id", [](const ttnn::reports::BufferInfo& self) { return self.device_id; })
         .def_prop_ro("address", [](const ttnn::reports::BufferInfo& self) { return self.address; })
-        .def_prop_ro(
-            "max_size_per_bank", [](const ttnn::reports::BufferInfo& self) { return self.max_size_per_bank; })
-        .def_prop_ro("buffer_type", [](const ttnn::reports::BufferInfo& self) { return self.buffer_type; });
-
+        .def_prop_ro("max_size_per_bank", [](const ttnn::reports::BufferInfo& self) { return self.max_size_per_bank; })
+        .def_prop_ro("buffer_type", [](const ttnn::reports::BufferInfo& self) { return self.buffer_type; })
+        .def_prop_ro("buffer_layout", [](const ttnn::reports::BufferInfo& self) { return self.buffer_layout; });
     mod.def("get_buffers", &get_buffers, nb::arg("devices"));
     mod.def("get_buffers", [](MeshDevice* device) { return get_buffers({device}); }, nb::arg("device"));
 

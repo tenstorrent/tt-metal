@@ -22,6 +22,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
 
+enum class CoreType;
 namespace ttnn::types {
 
 void py_module_types(nb::module_& mod) {
@@ -47,14 +48,18 @@ void py_module_types(nb::module_& mod) {
             })
         ;
 
-    nb::implicitly_convertible<nb::int_, ttnn::QueueId>();
-    nb::implicitly_convertible<unsigned char, ttnn::QueueId>();
-
     export_enum<ttnn::BcastOpMath>(mod, "BcastOpMath");
     export_enum<ttnn::BcastOpDim>(mod, "BcastOpDim");
+    export_enum<CoreType>(mod, "CoreType");
+
+    nb::implicitly_convertible<nb::int_, ttnn::QueueId>();
+    nb::implicitly_convertible<unsigned char, ttnn::QueueId>();
+    nb::implicitly_convertible<nb::int_, CoreType>();
 
     mod.attr("DRAM_MEMORY_CONFIG") = nb::cast(DRAM_MEMORY_CONFIG);
     mod.attr("L1_MEMORY_CONFIG") = nb::cast(L1_MEMORY_CONFIG);
+    mod.attr("DEVICE_STORAGE_TYPE") = nb::cast(DEVICE_STORAGE_TYPE);
+    mod.attr("HOST_STORAGE_TYPE") = nb::cast(HOST_STORAGE_TYPE);
 }
 
 void py_module(nb::module_& mod) {
@@ -77,7 +82,7 @@ void py_module(nb::module_& mod) {
         .def("__len__", [](const Shape& self) { return self.rank(); })
         .def("__getitem__", [](const Shape& self, std::int64_t index) { return self[index]; })
         .def(
-            "__iter__",  // TODO: make sure there doesn't need to be an additional cast to SmallVector
+            "__iter__",  // TODO_NANOBIND: make sure there doesn't need to be an additional cast to SmallVector
             [](const Shape& self) {
                 return nb::make_iterator(nb::type<ttnn::Shape>(), "iterator", self.cbegin(), self.cend());
             },

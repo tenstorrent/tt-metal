@@ -31,10 +31,13 @@
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/distributed/types.hpp"
 
 #include <tt-metalium/bfloat16.hpp>
 
+// TODO_NANOBIND: move to the dedicated caster header(s)
+// TODO_NANOBIND: use the namespace macros (see small_vector_caster.hpp)
 namespace nanobind::detail {
 template <>
 struct dtype_traits<::bfloat16> {
@@ -95,6 +98,8 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
     export_enum<DataType>(m_tensor);
     export_enum<StorageType>(m_tensor);
     // export_enum<MathFidelity>(m_tensor);
+
+    // TODO_NANOBIND: See if this problem goes away now that we are on enchantum
 
     // for whatever reason using magic_enum for this in particular just threw
     // std::bad_cast errors in the binding code when trying to import ttnn
@@ -595,6 +600,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
         .def(nb::self == nb::self)
         .def(nb::self != nb::self);
 
+    // TODO: #16067 - Remove the legacy format.
     m_tensor.def(
         "dump_tensor",
         &dump_tensor,
@@ -604,12 +610,31 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             Dump tensor to file
         )doc");
 
+    // TODO: #16067 - Remove the legacy format.
     m_tensor.def(
         "load_tensor",
         nb::overload_cast<const std::string&, ttnn::MeshDevice*>(&load_tensor),
         nb::arg("file_name"),
         nb::arg("device") = nullptr,
         R"doc(Load tensor to file)doc");
+
+    m_tensor
+        .def(
+            "dump_tensor_flatbuffer",
+            &dump_tensor_flatbuffer,
+            nb::arg("filename"),
+            nb::arg("tensor"),
+            R"doc(
+                Dump tensor to file using FlatBuffer format with inline file storage.
+            )doc")
+        .def(
+            "load_tensor_flatbuffer",
+            nb::overload_cast<const std::string&, MeshDevice*>(&load_tensor_flatbuffer),
+            nb::arg("file_name"),
+            nb::arg("device") = nullptr,
+            R"doc(
+                Load tensor to file using FlatBuffer format with inline file storage.
+            )doc");
 }
 
 }  // namespace ttnn::tensor
