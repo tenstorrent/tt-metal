@@ -1,0 +1,35 @@
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 28
+  host: "metal-wh-08"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 20
+  host: "metal-wh-01"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 16
+  host: "metal-wh-02"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 12
+  host: "metal-wh-03"
+}
+hosts: {
+  hall: "SC_Floor_5"
+  aisle: "A"
+  rack: 1
+  shelf_u: 4
+  host: "metal-wh-05"
+}
