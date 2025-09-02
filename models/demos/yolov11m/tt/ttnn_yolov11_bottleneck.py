@@ -12,9 +12,12 @@ class TtnnBottleneck:
         self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2)
 
     def __call__(self, device, x, tile_shape=32):
+        print(f"DEBUG Bottleneck: Input shape = {x.shape}")
         input = x
         x = self.cv1(device, x)
+        print(f"DEBUG Bottleneck: After cv1 shape = {x.shape}")
         x = self.cv2(device, x)
+        print(f"DEBUG Bottleneck: After cv2 shape = {x.shape}")
         if x.shape[3] < tile_shape:
             input = ttnn.to_layout(input, layout=ttnn.TILE_LAYOUT)
             x = ttnn.add(input, x, memory_config=x.memory_config())

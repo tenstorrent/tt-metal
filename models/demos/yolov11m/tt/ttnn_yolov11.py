@@ -38,14 +38,23 @@ class TtnnYoloV11:
         self.detect = TtnnDetect(device, parameters.model_args.model[23], parameters.model[23])
 
     def __call__(self, input, min_channels=8):
+        print(f"DEBUG YoloV11: Original input shape = {input.shape}")
         n, c, h, w = input.shape
         channel_padding_needed = min_channels - c
         x = ttnn.pad(input, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
         ttnn.deallocate(input)
+        print(f"DEBUG YoloV11: After padding shape = {x.shape}")
         x = ttnn.permute(x, (0, 2, 3, 1))
+        print(f"DEBUG YoloV11: After permute shape = {x.shape}")
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
+        print(f"DEBUG YoloV11: After reshape shape = {x.shape}")
+        print(f"DEBUG YoloV11: About to call conv1")
         x = self.conv1(self.device, x)
+        print(f"DEBUG YoloV11: After conv1 shape = {x.shape}")
+        print(f"DEBUG YoloV11: About to call conv2")
         x = self.conv2(self.device, x)
+        print(f"DEBUG YoloV11: After conv2 shape = {x.shape}")
+        print(f"DEBUG YoloV11: About to call c3k2_1")
         x = self.c3k2_1(self.device, x)
         x = self.conv3(self.device, x)
         x = self.c3k2_2(self.device, x)
