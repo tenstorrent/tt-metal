@@ -175,6 +175,8 @@ def run_test_paged_fused_update_cache_decode(
 
     breakpoint()
 
+    breakpoint()
+
     # Perform fused update cache operation
     cachett1, cachett2 = ttnn.experimental.paged_fused_update_cache(
         cachett1, xt1, cachett2, xt2, update_idxs_tensor=cache_idxs_tt, page_table=page_table_tt

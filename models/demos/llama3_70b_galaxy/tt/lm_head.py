@@ -226,16 +226,7 @@ class LMHead(LightweightModule):
         outputs_reduced = []
         for output in outputs:
             output_reduced = self.tt_ccl.line_all_reduce(
-<<<<<<< HEAD
-                output,
-                cluster_axis=1,
-                num_links=num_links,
-                memory_config=output.memory_config(),
-                lm_head=True,
-                buffer_key="LM_HEAD",
-=======
-                output, cluster_axis=1, num_links=3, memory_config=output.memory_config(), lm_head=True
->>>>>>> e97cfb66d6 (WIP LM head commits)
+                output, cluster_axis=1, num_links=num_links, memory_config=output.memory_config(), lm_head=True
             )  # self.output_memory_config
             outputs_reduced.append(ttnn.sharded_to_interleaved(output_reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG))
         return outputs_reduced

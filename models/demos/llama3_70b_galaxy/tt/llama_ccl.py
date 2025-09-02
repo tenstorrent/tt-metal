@@ -290,15 +290,6 @@ class TT_CCL:
         )
         persistent_buffers["BINARY_MUL"] = tt_buffer
 
-        # tt_buffer = ttnn.from_torch(
-        #     torch.zeros((1, 1, 32, 1280)),
-        #     device=self.mesh_device,
-        #     layout=ttnn.TILE_LAYOUT,
-        #     dtype=ttnn.bfloat8_b,
-        #     memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
-        # )
-        # persistent_buffers["W2_AR"] = tt_buffer
-
         return persistent_buffers
 
     def get_persistent_buffers(self):
@@ -590,28 +581,15 @@ class TT_CCL:
         for seqlen in self.support_seqlens:
             ag_persistent_buffers = {}
 
-            buffers_dict = (
-                {
-                    "QKV": [(1, 1, seqlen, 1280)],
-                    "WO": [(1, 1, seqlen, 2048)],
-                    "FF1": [(1, 1, seqlen, 3584)],
-                    "FF3": [(1, 1, seqlen, 3584)],
-                    "FF2": [(1, 1, seqlen, 2048)],
-                    "LAYERNORM": [(1, 1, seqlen, 128)],
-                    "LM_HEAD": [(1, 1, 32, 16384)],
-                    "SAMPLING": [(1, 1, 32, 128 * 1024)],
-                }
-                if not self.use_qwen_mlp
-                else {
-                    "QKV": [(1, 1, seqlen, 1280)],
-                    "WO": [(1, 1, seqlen, 1280)],
-                    "FF1": [(1, 1, seqlen, 3200)],
-                    "FF3": [(1, 1, seqlen, 3200)],
-                    "FF2": [(1, 1, seqlen, 1280)],
-                    "LAYERNORM": [(1, 1, seqlen, 128)],
-                }
-            )
-
+            buffers_dict = {
+                "QKV": [(1, 1, seqlen, 1280)],
+                "WO": [(1, 1, seqlen, 2048)],
+                "FF1": [(1, 1, seqlen, 3584)],
+                "FF3": [(1, 1, seqlen, 3584)],
+                "FF2": [(1, 1, seqlen, 2048)],
+                "LAYERNORM": [(1, 1, seqlen, 128)],
+                # "SAMPLING": [(1, 1, 32, 128 * 1024)]
+            }
             for key, shape in buffers_dict.items():
                 tt_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),
@@ -1261,7 +1239,6 @@ def tt_sharded_distributed_rmsnorm(
     cluster_axis = 1
     semaphore = tt_ccl.gather_semaphore_handles[cluster_axis][tt_ccl.gather_idx[cluster_axis]]
     persistent_buffer = tt_ccl.all_gather_buffers.get("LAYERNORM", None)
-    # breakpoint()
     tt_out = ttnn.fused_rms_1_1_32_8192(
         inp,
         ln_sharded_progcfg,
