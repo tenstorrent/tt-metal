@@ -626,7 +626,8 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArg
         kernel,
         "Attempted to SetRuntimeArgs() using a Kernel w/ global_id: {} that was not previously created.",
         cmd->kernel_global_id());
-    SetRuntimeArgs(this->device_, kernel, core_spec, runtime_args);
+    // TODO: Cleanup Reference to this command
+    // SetRuntimeArgs(this->device_, kernel, core_spec, runtime_args);
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* cmd) {

@@ -529,11 +529,11 @@ void SetRuntimeArgs(
  * | runtime_args | The runtime args to be written                                         | std::shared_ptr<RuntimeArgs>                           |                                                                            | Yes      |
 */
 // clang-format on
-void SetRuntimeArgs(
-    IDevice* device,
-    const std::shared_ptr<Kernel>& kernel,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::shared_ptr<RuntimeArgs>& runtime_args);
+// void SetRuntimeArgs(
+//     IDevice* device,
+//     const std::shared_ptr<Kernel>& kernel,
+//     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+//     const std::shared_ptr<RuntimeArgs>& runtime_args);
 
 // clang-format off
 /**
@@ -549,11 +549,11 @@ void SetRuntimeArgs(
  * | runtime_args | The runtime args to be written                                         | const std::vector<std::shared_ptr<RuntimeArgs>>        | Outer vector size must be equal to size of core_spec vector                | Yes      |
  */
 // clang-format on
-void SetRuntimeArgs(
-    IDevice* device,
-    const std::shared_ptr<Kernel>& kernel,
-    const std::vector<CoreCoord>& core_spec,
-    const std::vector<std::shared_ptr<RuntimeArgs>>& runtime_args);
+// void SetRuntimeArgs(
+//     IDevice* device,
+//     const std::shared_ptr<Kernel>& kernel,
+//     const std::vector<CoreCoord>& core_spec,
+//     const std::vector<std::shared_ptr<RuntimeArgs>>& runtime_args);
 
 // clang-format off
 /**
