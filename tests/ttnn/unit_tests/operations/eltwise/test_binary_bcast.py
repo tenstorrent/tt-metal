@@ -2608,12 +2608,12 @@ def test_small_fp32_multiply(device):
     b = ttnn.from_torch(0.01 * torch.randn((4, 32, 2048), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
 
     out_torch = torch.multiply(ttnn.to_torch(a), ttnn.to_torch(b))
-    print("Torch multiply result:")
-    print(out_torch)
+    # print("Torch multiply result:")
+    # print(out_torch)
 
     out = ttnn.multiply(a, b)
-    print("TTNN multiply result:")
-    print(out)
+    # print("TTNN multiply result:")
+    # print(out)
 
     # assert_allclose(out_torch, ttnn.to_torch(out))
     assert_with_pcc(out_torch, ttnn.to_torch(out))

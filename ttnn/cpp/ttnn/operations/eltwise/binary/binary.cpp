@@ -191,6 +191,11 @@ inline auto any_non_llk_row_broadcasted(const Tensor& a, const auto& b) {
             if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16) {
                 return false;
             }
+            // for float32 to use SFPU, go with binary_ng
+            if (a_dtype == DataType::FLOAT32 and b_dtype == DataType::FLOAT32) {
+                return false;
+            }
+
             return true;
         }
     }
@@ -312,11 +317,6 @@ inline auto is_binary_ng_only(const Tensor& a, const auto& b, BinaryOpType binar
         if (a.dtype() == DataType::INT32 or b.dtype() == DataType::INT32 or a.dtype() == DataType::UINT32 or
             b.dtype() == DataType::UINT32 or a.dtype() == DataType::UINT16 or b.dtype() == DataType::UINT16 or
             a.dtype() == DataType::UINT8 or b.dtype() == DataType::UINT8) {
-            return true;
-        }
-
-        // for float32 to use SFPU, go with binary_ng
-        if (a.dtype() == DataType::FLOAT32 and b.dtype() == DataType::FLOAT32) {
             return true;
         }
 
