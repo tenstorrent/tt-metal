@@ -220,6 +220,7 @@ void append_fabric_connection_rt_args(
 void append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& next_hop_nodes,
+    const std::vector<FabricNodeId>& dst_nodes,
     tt::tt_metal::Program& worker_program,
     tt::tt_metal::KernelHandle& kernel_id,
     const CoreCoord& worker_core,
@@ -287,11 +288,11 @@ void append_routing_plane_connection_manager_rt_args(
         worker_args.push_back(src_fabric_node_id.mesh_id.get());  // my_mesh_id
 
         // For each target, append dst_dev_id and dst_mesh_id (per-header)
-        for (const auto& next_hop_node : next_hop_nodes) {
+        for (const auto& dst_node : dst_nodes) {
             // dst_dev_id
-            worker_args.push_back(static_cast<uint16_t>(next_hop_node.chip_id));
+            worker_args.push_back(static_cast<uint16_t>(dst_node.chip_id));
             // dst_mesh_id
-            worker_args.push_back(static_cast<uint16_t>(*next_hop_node.mesh_id));
+            worker_args.push_back(static_cast<uint16_t>(*dst_node.mesh_id));
         }
     }
 }

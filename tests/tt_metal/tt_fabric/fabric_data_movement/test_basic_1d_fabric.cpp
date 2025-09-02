@@ -2126,6 +2126,7 @@ void FabricUnicastCommon(
     }
 
     std::vector<tt::tt_metal::IDevice*> receiver_devices;
+    std::vector<FabricNodeId> dest_fabric_node_ids;
     std::vector<chip_id_t> first_hop_phys_chip_ids;
     receiver_devices.reserve(dir_configs.size());
     first_hop_phys_chip_ids.reserve(dir_configs.size());
@@ -2136,6 +2137,7 @@ void FabricUnicastCommon(
         receiver_devices.push_back(DevicePool::instance().get_active_device(dst_physical_device_id));
         // connection is to first hop for each direction
         first_hop_phys_chip_ids.push_back(physical_end_device_ids_by_dir[dir][0]);
+        dest_fabric_node_ids.push_back(tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_physical_device_id));
     }
     auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
     CoreCoord receiver_virtual_core = receiver_devices.back()->worker_core_from_logical_core(receiver_logical_core);
@@ -2193,6 +2195,7 @@ void FabricUnicastCommon(
     append_routing_plane_connection_manager_rt_args(
         src_fabric_node_id,
         next_hop_nodes,
+        dest_fabric_node_ids,
         sender_program,
         sender_kernel,
         {sender_logical_core},
@@ -2301,6 +2304,7 @@ void FabricMulticastCommon(
 
     // Adjust lists to start from start_distance for each direction
     std::vector<chip_id_t> first_hop_phys_chip_ids;
+    std::vector<FabricNodeId> dest_fabric_node_ids;
     for (auto [dir, start_distance, range] : dir_configs) {
         first_hop_phys_chip_ids.push_back(physical_end_device_ids_by_dir[dir][0]);
         physical_end_device_ids_by_dir[dir] = std::vector(
@@ -2308,6 +2312,7 @@ void FabricMulticastCommon(
             physical_end_device_ids_by_dir[dir].end());
         end_fabric_node_ids_by_dir[dir] = std::vector(
             end_fabric_node_ids_by_dir[dir].begin() + (start_distance - 1), end_fabric_node_ids_by_dir[dir].end());
+        dest_fabric_node_ids.push_back(end_fabric_node_ids_by_dir[dir][0]);
     }
 
     // Choose a receiver device to compute RX core coords (use last device from first configured dir)
@@ -2370,6 +2375,7 @@ void FabricMulticastCommon(
     append_routing_plane_connection_manager_rt_args(
         src_fabric_node_id,
         next_hop_nodes,
+        dest_fabric_node_ids,
         sender_program,
         sender_kernel,
         {sender_logical_core},
