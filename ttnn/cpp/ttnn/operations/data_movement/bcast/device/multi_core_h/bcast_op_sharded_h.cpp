@@ -203,15 +203,15 @@ operation::ProgramWithCallbacks bcast_sharded_h(
         uint32_t N = ashape[0], C = ashape[1];
         uint32_t bN = input_tensors.at(1).padded_shape()[0];
         uint32_t NC = N * C;
-        if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-            Wt = shard_spec.shape[1] / TILE_WIDTH;
-            Ht = shard_spec.shape[0] / TILE_HEIGHT;
-        } else if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            Wt = shard_spec.shape[1] / TILE_WIDTH;
-            Ht = shard_spec.shape[0] / TILE_HEIGHT;
-        } else {
-            TT_THROW("Unsupported memory layout");
+        switch (a.memory_config().memory_layout()) {
+            case TensorMemoryLayout::BLOCK_SHARDED:
+            case TensorMemoryLayout::WIDTH_SHARDED:
+                Wt = shard_spec.shape[1] / TILE_WIDTH;
+                Ht = shard_spec.shape[0] / TILE_HEIGHT;
+                break;
+            default: TT_THROW("Unsupported memory layout");
         }
+
         uint32_t Ht_per_core = 0, ncores_y = ncores / ncores_x;
         for (uint32_t i = 0; i < ncores; i++) {
             CoreCoord core;
