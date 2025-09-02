@@ -188,9 +188,11 @@ void MAIN {
                 }
 
                 pack_reconfig_data_format(out_cb_id);
-                pack_untilize_dest<topk_output_tiles>(out_cb_id, 1, 0, num_out_sticks, output_faces, data_dst_idx);
+                pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, data_dst_idx>(
+                    out_cb_id, 1, 0, num_out_sticks, output_faces);
                 pack_reconfig_data_format(out_idx_cb_id);
-                pack_untilize_dest<topk_output_tiles>(out_idx_cb_id, 1, 0, num_out_sticks, output_faces, index_dst_idx);
+                pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, index_dst_idx>(
+                    out_idx_cb_id, 1, 0, num_out_sticks, output_faces);
 
                 if constexpr (pack_untilize_reinit) {
                     tensix_sync();

@@ -191,16 +191,17 @@ template <
     uint32_t full_ct_dim = block_ct_dim,
     bool diagonal = false,
     bool narrow_row = false,
-    std::uint32_t row_num_datums = TILE_C_DIM>
+    std::uint32_t row_num_datums = TILE_C_DIM,
+    uint32_t tile_dst_ct_offset = 0>
 ALWI void pack_untilize_dest(
     uint32_t ocb,
     uint32_t block_rt_dim = 1,
     uint32_t block_c_index = 0 /* used when full_ct_dim > block_ct_dim*/,
     uint32_t face_r_dim = 16,
     uint32_t num_faces = 4,
-    uint32_t tile_dst_offset = 0) {
-    PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
-        block_rt_dim, ocb, face_r_dim, num_faces, block_c_index, tile_dst_offset)));
+    uint32_t tile_dst_rt_offset = 0) {
+    PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
+        block_rt_dim, ocb, face_r_dim, num_faces, block_c_index, tile_dst_rt_offset)));
 }
 
 // clang-format off
