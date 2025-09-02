@@ -428,6 +428,11 @@ constexpr bool enable_trid_flush_check_on_noc_txn = false;
 
 constexpr bool is_persistent_fabric = true;
 
+// TODO: get from CT args
+constexpr bool ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES = is_2d_fabric;
+// NoC Programming Constants
+constexpr bool ENABLE_FORWARD_WRITE_STATEFUL_API_USE = !is_2d_fabric && !ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES;
+
 namespace tt::tt_fabric {
 static_assert(
     receiver_channel_local_write_noc_ids[0] == edm_to_local_chip_noc,

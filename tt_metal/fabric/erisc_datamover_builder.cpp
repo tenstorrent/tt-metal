@@ -588,6 +588,80 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     }
 }
 
+void FabricEriscDatamoverConfig::initialize_noc_command_buffer_assignments(Topology topology) {
+    auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+
+    bool is_mesh_topology = topology == Topology::Mesh || topology == Topology::Torus;
+    bool enable_dual_noc_write_mode = arch == tt::ARCH::WORMHOLE_B0 && is_mesh_topology;
+
+    if (enable_dual_noc_write_mode) {
+        for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
+            this->receiver_channel_forwarding_noc_ids[i] =
+                FabricEriscDatamoverConfig::DEFAULT_RECEIVER_FORWARDING_NOC_WHEN_NOC_SWITCHING;
+            this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
+            this->receiver_channel_forwarding_sync_cmd_buf_ids[i] = FabricEriscDatamoverConfig::RD_CMD_BUF;
+
+            this->receiver_channel_local_write_noc_ids[i] =
+                FabricEriscDatamoverConfig::DEFAULT_RECEIVER_LOCAL_WRITE_NOC;
+            this->receiver_channel_local_write_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
+        }
+        for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+            this->sender_channel_ack_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_SENDER_ACK_NOC;
+            this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::AT_CMD_BUF;
+        }
+    } else {
+        for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
+            this->receiver_channel_forwarding_noc_ids[i] =
+                FabricEriscDatamoverConfig::DEFAULT_RECEIVER_FORWARDING_NOC_WHEN_NOT_NOC_SWITCHING;
+            this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_REG_CMD_BUF;
+            this->receiver_channel_forwarding_sync_cmd_buf_ids[i] = FabricEriscDatamoverConfig::RD_CMD_BUF;
+
+            this->receiver_channel_local_write_noc_ids[i] =
+                FabricEriscDatamoverConfig::DEFAULT_RECEIVER_LOCAL_WRITE_NOC;
+            this->receiver_channel_local_write_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
+        }
+        for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+            this->sender_channel_ack_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_SENDER_ACK_NOC;
+            this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::AT_CMD_BUF;
+        }
+    }
+
+    this->edm_noc_vc = FabricEriscDatamoverConfig::DEFAULT_NOC_VC;
+
+    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
+        log_info(
+            tt::LogFabric,
+            "FabricEriscDatamoverBuilder.cpp: Setting forwarding noc to {}",
+            this->receiver_channel_forwarding_noc_ids[i]);
+        log_info(
+            tt::LogFabric,
+            "FabricEriscDatamoverBuilder.cpp: Setting forwarding cmd buf to {}",
+            this->receiver_channel_forwarding_data_cmd_buf_ids[i]);
+        log_info(
+            tt::LogFabric,
+            "FabricEriscDatamoverBuilder.cpp: Setting forwarding sync cmd buf to {}",
+            this->receiver_channel_forwarding_sync_cmd_buf_ids[i]);
+        log_info(
+            tt::LogFabric,
+            "FabricEriscDatamoverBuilder.cpp: Setting local write noc to {}",
+            this->receiver_channel_local_write_noc_ids[i]);
+        log_info(
+            tt::LogFabric,
+            "FabricEriscDatamoverBuilder.cpp: Setting local write cmd buf to {}",
+            this->receiver_channel_local_write_cmd_buf_ids[i]);
+    }
+    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+        log_info(
+            tt::LogFabric,
+            "FabricEriscDatamoverBuilder.cpp: Setting ack noc to {}",
+            this->sender_channel_ack_noc_ids[i]);
+        log_info(
+            tt::LogFabric,
+            "FabricEriscDatamoverBuilder.cpp: Setting ack cmd buf to {}",
+            this->sender_channel_ack_cmd_buf_ids[i]);
+    }
+}
+
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes, Topology topology, FabricEriscDatamoverOptions options) :
     FabricEriscDatamoverConfig(topology) {
@@ -808,18 +882,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         "Internal error - channel buffers spilled past the end of usable L1 region.");
 
     // set default noc and cmd bufs (current setup in TG 4U)
-    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
-        this->receiver_channel_forwarding_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_RECEIVER_FORWARDING_NOC;
-        this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_REG_CMD_BUF;
-        this->receiver_channel_forwarding_sync_cmd_buf_ids[i] = FabricEriscDatamoverConfig::RD_CMD_BUF;
-        this->receiver_channel_local_write_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_RECEIVER_LOCAL_WRITE_NOC;
-        this->receiver_channel_local_write_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
-    }
-    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
-        this->sender_channel_ack_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_SENDER_ACK_NOC;
-        this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::AT_CMD_BUF;
-    }
-    this->edm_noc_vc = FabricEriscDatamoverConfig::DEFAULT_NOC_VC;
+    this->initialize_noc_command_buffer_assignments(topology);
 }
 
 void get_runtime_args_for_edm_termination_infos(
