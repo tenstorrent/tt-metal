@@ -2134,29 +2134,6 @@ class ModelArgs:
             "Directory should contain either config.json (HuggingFace) or params.json (Meta)."
         )
 
-    def remove_prebuilt_system_prompt_in_chat_template(self, tokenizer):
-        """Removing LLaMA models added addiotional system prompt in Jinja template which is usually about the Cutting Knowledge Date
-        Example from https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct/blob/main/tokenizer_config.json#L2053
-        {{- "Cutting Knowledge Date: December 2023\\n" }}
-        {{- "Today Date: " + date_string + "\\n\\n" }}
-        """
-
-        if tokenizer is None:
-            return tokenizer
-        if self.checkpoint_type == CheckpointType.Meta:
-            return tokenizer
-        if (not hasattr(tokenizer, "chat_template")) or (tokenizer.chat_template is None):
-            return tokenizer
-
-        new_template = [
-            line
-            for line in tokenizer.chat_template.splitlines()
-            if "Cutting Knowledge Date:" not in line and "Today Date:" not in line
-        ]
-        tokenizer.chat_template = "\n".join(new_template)
-
-        return tokenizer
-
     def create_tokenizer(self):
         """Create and return a Tokenizer instance based on the checkpoint type."""
         if self.checkpoint_type == CheckpointType.Meta:
@@ -2250,9 +2227,6 @@ class ModelArgs:
             # Add meta-compatible stop token list to the HF tokenizer
             if not "stop_tokens" in tokenizer.__dict__:
                 tokenizer.stop_tokens = self.eos_token_id if self.eos_token_id is not None else [tokenizer.eos_token_id]
-
-            tokenizer = self.remove_prebuilt_system_prompt_in_chat_template(tokenizer)
-
             return tokenizer
 
     def create_processor(self):
@@ -2267,8 +2241,6 @@ class ModelArgs:
                 logger.info(f"Successfully loaded processor from {self.TOKENIZER_PATH}")
             except Exception as e:
                 logger.warning(f"Failed to load processor from {self.TOKENIZER_PATH}: {e}")
-
-        processor = self.remove_prebuilt_system_prompt_in_chat_template(processor)
 
         return processor
 

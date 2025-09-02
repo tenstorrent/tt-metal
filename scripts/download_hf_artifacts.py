@@ -4,6 +4,7 @@
 
 import argparse
 
+import evaluate
 from datasets import load_dataset
 from huggingface_hub import snapshot_download
 from loguru import logger
@@ -87,6 +88,13 @@ DATASETS = [
     "wikitext",
 ]
 
+METRICS = [
+    "accuracy",
+    "bertscore",
+    "mean_iou",
+    "squad_v2",
+]
+
 ARGUMENT_TO_MODELS = {
     "bh": BH_MODELS,
     "tg": TG_MODELS,
@@ -138,6 +146,13 @@ def download_datasets(args):
     logger.info("Finished downloading datasets")
 
 
+def download_metrics(args):
+    logger.info("Downloading metrics...")
+    for metric in METRICS:
+        _ = evaluate.load(metric)
+    logger.info("Finished downloading metrics")
+
+
 def get_parser():
     parser = argparse.ArgumentParser(
         epilog="Example: HF_HOME=/mnt/MLPerf/huggingface python scripts/download_hf_artifacts.py --all --hf_token <your_hf_token>"
@@ -166,6 +181,7 @@ def get_parser():
     parser.add_argument("--single", action="store_true", help="download Single Card models")
     parser.add_argument("--t3k", action="store_true", help="download T3000 models")
     parser.add_argument("--datasets", action="store_true", help="download datasets")
+    parser.add_argument("--metrics", action="store_true", help="download metrics")
     return parser
 
 
@@ -175,6 +191,8 @@ def main():
     download_models(args)
     if args.datasets:
         download_datasets(args)
+    if args.metrics:
+        download_metrics(args)
 
 
 if __name__ == "__main__":
