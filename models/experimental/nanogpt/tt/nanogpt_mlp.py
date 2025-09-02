@@ -11,16 +11,22 @@ class TtMLP(torch.nn.Module):
     def __init__(self, base_address, config, device, tt_cache_path, dtype):
         super().__init__()
         # Get the weights
-        self.tt_weight_c_fc = ttnn.load_tensor(tt_cache_path + base_address + ".c_fc.weight" + str(dtype) + ".bin")
-        self.tt_weight_c_proj = ttnn.load_tensor(tt_cache_path + base_address + ".c_proj.weight" + str(dtype) + ".bin")
+        self.tt_weight_c_fc = ttnn.load_tensor(
+            tt_cache_path + base_address + ".c_fc.weight" + str(dtype) + ".tensorbin"
+        )
+        self.tt_weight_c_proj = ttnn.load_tensor(
+            tt_cache_path + base_address + ".c_proj.weight" + str(dtype) + ".tensorbin"
+        )
 
         self.config = config
         self.device = device
 
         # Load biases
-        self.tt_bias_c_fc = ttnn.load_tensor(tt_cache_path + base_address + ".c_fc.bias" + str(dtype) + ".bin")
+        self.tt_bias_c_fc = ttnn.load_tensor(tt_cache_path + base_address + ".c_fc.bias" + str(dtype) + ".tensorbin")
 
-        self.tt_bias_c_proj = ttnn.load_tensor(tt_cache_path + base_address + ".c_proj.bias" + str(dtype) + ".bin")
+        self.tt_bias_c_proj = ttnn.load_tensor(
+            tt_cache_path + base_address + ".c_proj.bias" + str(dtype) + ".tensorbin"
+        )
 
         self.tt_weight_c_fc = ttnn.transpose(self.tt_weight_c_fc, -2, -1)
         self.tt_weight_c_proj = ttnn.transpose(self.tt_weight_c_proj, -2, -1)

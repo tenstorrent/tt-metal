@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_fabric {
