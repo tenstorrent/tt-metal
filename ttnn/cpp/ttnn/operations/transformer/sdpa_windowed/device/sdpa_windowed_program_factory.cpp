@@ -266,7 +266,7 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
     union {
         float f;
         uint32_t u;
-    } scale_union;
+    } scale_union{};
     scale_union.f = scale.value_or(1.0f);
 
     std::vector<uint32_t> reader_compile_time_args = {
