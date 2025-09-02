@@ -98,7 +98,7 @@ class TtConv2d:
         stride: tuple[int, int] = (1, 1),
         padding: tuple[int, int] = (0, 0),
         slice_count: Optional[int] = None,
-        use_slice: Optional[bool] = False,
+        toSlice: bool = False,
     ) -> None:
         self._stride = stride
         self._padding = padding
@@ -114,7 +114,8 @@ class TtConv2d:
         self._device = parameters.device
         self._weightSlices = []
         self._biasSlices = []
-        self.use_slice = use_slice
+
+        self.toSlice = toSlice
 
         self._slice_count = slice_count
 
@@ -125,10 +126,11 @@ class TtConv2d:
         conv_config: ttnn.Conv2dConfig | None = None,
         memory_config: ttnn.MemoryConfig | None = None,
         slice_config: Optional[ttnn.Conv2dSliceConfig] = None,
+        toSlice: Optional[bool] = False,
     ) -> tuple[ttnn.Tensor, list[int]]:
         (batch_size, height, width, _) = x.shape
 
-        if self._in_channels >= CHANNEL_SLICE_THRESHOLD or self.use_slice == True:
+        if (self._in_channels >= CHANNEL_SLICE_THRESHOLD and self._channel_slice_num > 1) or toSlice:
             print(f"--- Running Conv2d with Channel Slicing (factor={self._channel_slice_num}) ---")
             assert (
                 self._in_channels % self._channel_slice_num == 0
@@ -212,7 +214,6 @@ class TtConv2d:
             return accumulated_output, final_shape
         # No channel slicing needed, proceed with normal conv2d
         else:
-            print("Running Conv2d without Channel Slicing")
             conv_config = ttnn.Conv2dConfig(
                 weights_dtype=ttnn.bfloat16,
                 shard_layout=None,
@@ -226,13 +227,8 @@ class TtConv2d:
                 in_place=False,
                 enable_kernel_stride_folding=False,
                 full_inner_dim=False,
+                act_block_h_override=32,
             )
-            # compute_config = ttnn.init_device_compute_kernel_config(
-            #     math_approx_mode=True,
-            #     math_fidelity=ttnn.MathFidelity.HiFi4,
-            #     fp32_dest_acc_en=False,
-            #     packer_l1_acc=False,
-            # )
 
             def call_conv2d(t: ttnn.Tensor, w: ttnn.Tensor, b: ttnn.Tensor | None) -> _Conv2dRawResult:
                 output, [output_height, output_width], [prepared_weight, prepared_bias] = ttnn.conv2d(
@@ -278,9 +274,10 @@ class TtConv2d:
         memory_config: ttnn.MemoryConfig | None = None,
         conv_config: Optional[ttnn.Conv2dConfig] = None,
         slice_config: Optional[ttnn.Conv2dSliceConfig] = None,
+        toChannelSlice: Optional[bool] = False,
     ) -> ttnn.Tensor:
         x, shape = self.call_without_reshape(
-            x, memory_config=memory_config, conv_config=conv_config, slice_config=slice_config
+            x, memory_config=memory_config, conv_config=conv_config, slice_config=slice_config, toSlice=toChannelSlice
         )
 
         # workaround
