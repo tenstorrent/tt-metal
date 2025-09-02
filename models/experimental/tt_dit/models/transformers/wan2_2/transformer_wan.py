@@ -328,6 +328,7 @@ class WanTransformerBlock:
             )
 
         spatial_normed_1BND = spatial_normed_1BND * (1 + c_scale_msa_1B1D) + c_shift_msa_1B1D
+        # NOTE: Cannot set core_grid for FF or you get L1 OOM. Needs to be fixed.
         spatial_ff_1BND = self.ff(
             spatial_normed_1BND, core_grid=None, compute_kernel_config=self.ff_compute_kernel_config
         )
