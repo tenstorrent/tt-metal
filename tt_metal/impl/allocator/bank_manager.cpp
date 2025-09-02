@@ -9,6 +9,7 @@
 #include <limits>
 #include <string_view>
 #include <utility>
+#include <algorithm>
 
 #include "allocator/algorithms/allocator_algorithm.hpp"
 #include "allocator_types.hpp"
@@ -166,7 +167,6 @@ static std::vector<std::pair<DeviceAddr, DeviceAddr>> subtract_ranges(
 BankManager::StateDependencies::StateDependencies() {
     // Default: single state (0) with no dependencies
     dependencies = AdjacencyList{{}};
-    dependents = AdjacencyList{{}};
 }
 
 BankManager::StateDependencies::StateDependencies(
@@ -174,45 +174,74 @@ BankManager::StateDependencies::StateDependencies(
     // Determine total number of states as max state id seen anywhere (keys or values)
     if (dependencies_map.empty()) {
         dependencies = AdjacencyList{{}};
-        dependents = AdjacencyList{{}};
-    } else {
-        uint32_t max_id = 0;
-        for (const auto& kv : dependencies_map) {
-            max_id = std::max(max_id, kv.first.value);
-            for (const auto dep_state : kv.second) {
-                max_id = std::max(max_id, dep_state.value);
-            }
-        }
-        const uint32_t num_states = static_cast<uint32_t>(max_id) + 1;  // +1 because state ids are zero-indexed
-        dependencies.resize(num_states);
-        dependents.resize(num_states);
+        return;
+    }
 
-        // Build dependency list: for each state s, which states does s depend on
-        for (const auto& kv : dependencies_map) {
-            // Ensure uniqueness of dependency values per state
-            std::unordered_set<uint32_t> seen_values;
-            for (const auto dep_state : kv.second) {
-                const bool inserted = seen_values.insert(dep_state.value).second;
-                TT_FATAL(
-                    inserted,
-                    "Duplicate dependency for state {}: {} appears more than once!",
-                    kv.first.value,
-                    dep_state.value);
-            }
-            dependencies[kv.first.value] = kv.second;
+    uint32_t max_id = 0;
+    for (const auto& kv : dependencies_map) {
+        max_id = std::max(max_id, kv.first.value);
+        for (const auto dep_state : kv.second) {
+            max_id = std::max(max_id, dep_state.value);
         }
-        // Build dependents list: for each state s, which states depend on s
-        // Note: Dependents are not sorted because dependencies_map is unordered
-        // If we want to sort it, we can build it directly from dependencies
-        for (const auto& kv : dependencies_map) {
-            for (const auto dep_state : kv.second) {
-                dependents[dep_state.value].push_back(kv.first);
-            }
+    }
+    const uint32_t num_states = static_cast<uint32_t>(max_id) + 1;  // +1 because state ids are zero-indexed
+
+    // Use set form to ensure uniqueness while building undirected adjacency list
+    ttsl::SmallVector<std::unordered_set<uint32_t>> undirected_sets(num_states);
+
+    // Build undirected adjacency: for each edge (u -> v), add v to u and u to v
+    for (const auto& kv : dependencies_map) {
+        // Ensure uniqueness of dependency values per state input (catch duplicates in provided list)
+        std::unordered_set<uint32_t> seen_values;
+        for (const auto dep_state : kv.second) {
+            const bool inserted = seen_values.insert(dep_state.value).second;
+            TT_FATAL(
+                inserted,
+                "Duplicate dependency for state {}: {} appears more than once!",
+                kv.first.value,
+                dep_state.value);
+        }
+
+        for (const auto dep_state : kv.second) {
+            const uint32_t u = kv.first.value;
+            const uint32_t v = dep_state.value;
+            undirected_sets[u].insert(v);
+            undirected_sets[v].insert(u);
+        }
+    }
+
+    // Build dependencies list: for each state s, which states s depends on / depends on s
+    // Note: Dependencies are not sorted because dependencies_map is unordered
+    dependencies.clear();
+    dependencies.resize(num_states);
+    for (uint32_t i = 0; i < num_states; ++i) {
+        auto& dst = dependencies[i];
+        dst.clear();
+        dst.reserve(undirected_sets[i].size());
+        for (uint32_t neighbor : undirected_sets[i]) {
+            dst.push_back(StateId{neighbor});
         }
     }
 }
 
 uint32_t BankManager::StateDependencies::num_states() const { return static_cast<uint32_t>(dependencies.size()); }
+
+bool BankManager::StateDependencies::operator==(const BankManager::StateDependencies& other) const noexcept {
+    if (dependencies.size() != other.dependencies.size()) {
+        return false;
+    }
+    // Compare as sorted adjacency lists per row, without mutating originals
+    for (size_t i = 0; i < dependencies.size(); ++i) {
+        auto a = dependencies[i];
+        auto b = other.dependencies[i];
+        std::sort(a.begin(), a.end());
+        std::sort(b.begin(), b.end());
+        if (a != b) {
+            return false;
+        }
+    }
+    return true;
+}
 
 void BankManager::init_allocators_across_states(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset) {
     const uint32_t n = state_dependencies_.num_states();
@@ -418,12 +447,8 @@ uint64_t BankManager::allocate_buffer(
         TT_THROW("Allocator failed to place at chosen address {}", chosen.value());
     }
 
-    // Track allocation and update dependents' overlays
+    // Track allocation (overlay logic removed with undirected graph simplification)
     allocated_buffers_[state.value][address.value()] = size_per_bank;
-    for (auto dependent_state : state_dependencies_.dependents[state.value]) {
-        auto y = dependent_state.value;
-        reservations_by_source_[y][state.value].add(address.value(), address.value() + size_per_bank);
-    }
 
     return address.value();
     */

@@ -29,8 +29,6 @@ struct StateDependenciesParam {
         input;
     // Expected dependencies per state (missing keys imply empty list)
     tt::tt_metal::BankManager::StateDependencies::AdjacencyList expected_dependencies;
-    // Expected reverse edges: for each state, which states depend on it
-    tt::tt_metal::BankManager::StateDependencies::AdjacencyList expected_dependents;
 };
 
 }  // namespace
@@ -158,7 +156,6 @@ using StateId = BankManager::StateDependencies::StateId;
 TEST(StateDependencies, DefaultStateDependencies) {
     BankManager::StateDependencies state_dependencies;
     EXPECT_EQ(state_dependencies.dependencies, BankManager::StateDependencies::AdjacencyList{{}});
-    EXPECT_EQ(state_dependencies.dependents, BankManager::StateDependencies::AdjacencyList{{}});
 }
 
 TEST(StateDependencies, DuplicateDependencies) {
@@ -171,6 +168,18 @@ TEST(StateDependencies, DuplicateDependencies) {
             ::testing::HasSubstr("Duplicate dependency for state 0: 1 appears more than once!")));
 }
 
+TEST(StateDependencies, EquivalentDependenciesMaps) {
+    const std::unordered_map<StateId, ttsl::SmallVector<StateId>> dependencies_map1 = {
+        {StateId{0}, ttsl::SmallVector<StateId>{StateId{1}}}, {StateId{1}, ttsl::SmallVector<StateId>{StateId{0}}}};
+    const std::unordered_map<StateId, ttsl::SmallVector<StateId>> dependencies_map2 = {
+        {StateId{0}, ttsl::SmallVector<StateId>{StateId{1}}}};
+    const std::unordered_map<StateId, ttsl::SmallVector<StateId>> dependencies_map3 = {
+        {StateId{1}, ttsl::SmallVector<StateId>{StateId{0}}}};
+
+    EXPECT_EQ(BankManager::StateDependencies(dependencies_map1), BankManager::StateDependencies(dependencies_map2));
+    EXPECT_EQ(BankManager::StateDependencies(dependencies_map1), BankManager::StateDependencies(dependencies_map3));
+}
+
 class StateDependenciesParamTest : public ::testing::TestWithParam<StateDependenciesParam> {};
 
 TEST_P(StateDependenciesParamTest, BuildsAdjacencyAndInfersAllowedStates) {
@@ -179,18 +188,13 @@ TEST_P(StateDependenciesParamTest, BuildsAdjacencyAndInfersAllowedStates) {
     BankManager::StateDependencies state_dependencies{params.input};
 
     // Validate dependencies
-    EXPECT_EQ(state_dependencies.dependencies, params.expected_dependencies);
-
-    // Validate dependents (order-insensitive per state)
-    // Dependents are not guaranteed to be sorted since it is built directly from unordered map
-    // So, we sort the returned dependents for testing
     auto sort_nested_vector = [](BankManager::StateDependencies::AdjacencyList a) {
         for (auto& v : a) {
             std::sort(v.begin(), v.end());
         }
         return a;
     };
-    EXPECT_EQ(sort_nested_vector(state_dependencies.dependents), params.expected_dependents);
+    EXPECT_EQ(sort_nested_vector(state_dependencies.dependencies), params.expected_dependencies);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -200,48 +204,39 @@ INSTANTIATE_TEST_SUITE_P(
         // Empty input
         StateDependenciesParam{
             /*input=*/{},
-            /*expected_dependencies=*/{{}},
-            /*expected_dependents=*/{{}}},
+            /*expected_dependencies=*/{{}}},
         // Single state default behavior (explicit input)
         StateDependenciesParam{
             /*input=*/{{StateId{0}, {}}},
-            /*expected_dependencies=*/{{}},
-            /*expected_dependents=*/{{}}},
+            /*expected_dependencies=*/{{}}},
         // Two-way dependency
         StateDependenciesParam{
             /*input=*/{{StateId{0}, {StateId{1}}}, {StateId{1}, {StateId{0}}}},
-            /*expected_dependencies=*/{{StateId{1}}, {StateId{0}}},
-            /*expected_dependents=*/{{StateId{1}}, {StateId{0}}}},
+            /*expected_dependencies=*/{{StateId{1}}, {StateId{0}}}},
         // Sparse keys with one dependency specified
         StateDependenciesParam{
             /*input=*/{{StateId{3}, {StateId{0}, StateId{1}}}},
-            /*expected_dependencies=*/{{}, {}, {}, {StateId{0}, StateId{1}}},
-            /*expected_dependents=*/{{StateId{3}}, {StateId{3}}, {}, {}}},
+            /*expected_dependencies=*/{{StateId{3}}, {StateId{3}}, {}, {StateId{0}, StateId{1}}}},
         // Sparse keys with one dependency specified (value of dependents imply more states)
         StateDependenciesParam{
             /*input=*/{{StateId{1}, {StateId{3}}}},
-            /*expected_dependencies=*/{{}, {StateId{3}}, {}, {}},
-            /*expected_dependents=*/{{}, {}, {}, {StateId{1}}}},
+            /*expected_dependencies=*/{{}, {StateId{3}}, {}, {StateId{1}}}},
         // Fan-in: 1,2,3 depend on 0
         StateDependenciesParam{
             /*input=*/{{StateId{1}, {StateId{0}}}, {StateId{2}, {StateId{0}}}, {StateId{3}, {StateId{0}}}},
-            /*expected_dependencies=*/{{}, {StateId{0}}, {StateId{0}}, {StateId{0}}},
-            /*expected_dependents=*/{{StateId{1}, StateId{2}, StateId{3}}, {}, {}, {}}},
+            /*expected_dependencies=*/{{StateId{1}, StateId{2}, StateId{3}}, {StateId{0}}, {StateId{0}}, {StateId{0}}}},
         // Fan-out: 0 depends on 1,2,3
         StateDependenciesParam{
             /*input=*/{{StateId{0}, {StateId{1}, StateId{2}, StateId{3}}}},
-            /*expected_dependencies=*/{{StateId{1}, StateId{2}, StateId{3}}, {}, {}, {}},
-            /*expected_dependents=*/{{}, {StateId{0}}, {StateId{0}}, {StateId{0}}}},
+            /*expected_dependencies=*/{{StateId{1}, StateId{2}, StateId{3}}, {StateId{0}}, {StateId{0}}, {StateId{0}}}},
         // Chain: 0->1->2->3
         StateDependenciesParam{
             /*input=*/{{StateId{0}, {StateId{1}}}, {StateId{1}, {StateId{2}}}, {StateId{2}, {StateId{3}}}},
-            /*expected_dependencies=*/{{StateId{1}}, {StateId{2}}, {StateId{3}}, {}},
-            /*expected_dependents=*/{{}, {StateId{0}}, {StateId{1}}, {StateId{2}}}},
+            /*expected_dependencies=*/{{StateId{1}}, {StateId{0}, StateId{2}}, {StateId{1}, StateId{3}}, {StateId{2}}}},
         // Cycle: 0->1->2->0
         StateDependenciesParam{
             /*input=*/{{StateId{0}, {StateId{1}}}, {StateId{1}, {StateId{2}}}, {StateId{2}, {StateId{0}}}},
-            /*expected_dependencies=*/{{StateId{1}}, {StateId{2}}, {StateId{0}}},
-            /*expected_dependents=*/{{StateId{2}}, {StateId{0}}, {StateId{1}}}}));
+            /*expected_dependencies=*/{{StateId{1}, StateId{2}}, {StateId{0}, StateId{2}}, {StateId{0}, StateId{1}}}}));
 
 TEST(OverlappedAllocator, IndependentStates) {
     // This test sets up a BankManager for DRAM and L1, mimicking Allocator initialization.
@@ -324,7 +319,8 @@ TEST(OverlappedAllocator, OverlappedStates) {
         const uint64_t dram_size = 1024 * 1024 * 1024;
 
         // Set up BankManager for DRAM with default single-state dependencies
-        BankManager::StateDependencies deps{{{StateId{0}, {}}, {StateId{1}, {}}}};  // 2 states, no overlaps
+        BankManager::StateDependencies deps{
+            {{StateId{0}, {StateId{2}}}, {StateId{1}, {StateId{2}}}}};  // 2 states, no overlaps
         BankManager dram_bank_manager(
             BufferType::DRAM,
             bank_desc,

@@ -43,12 +43,14 @@ public:
 
         using AdjacencyList = tt::stl::SmallVector<tt::stl::SmallVector<StateId>>;
         AdjacencyList dependencies{};
-        AdjacencyList dependents{};
 
         StateDependencies();
         explicit StateDependencies(const std::unordered_map<StateId, tt::stl::SmallVector<StateId>>& dependencies_map);
 
         uint32_t num_states() const;
+
+        bool operator==(const StateDependencies& other) const noexcept;
+        bool operator!=(const StateDependencies& other) const noexcept { return !(*this == other); }
     };
 
     struct IntervalSet {
