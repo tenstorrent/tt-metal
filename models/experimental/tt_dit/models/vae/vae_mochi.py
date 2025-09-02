@@ -167,21 +167,27 @@ class ResBlock:
         torch_ref=None,
     ):
         self.num_out_blocks_map = {
-            # small latent
-            30 * 53 * 768: 2,
-            60 * 106 * 512: 3,
-            120 * 212 * 256: 10,
-            240 * 424 * 128: 35,
-            # medium latent
-            40 * 76 * 768: 4,
-            80 * 152 * 512: 5,
-            160 * 304 * 256: 20,
-            320 * 608 * 128: 70,
-            # large latent
-            60 * 106 * 768: 8,
-            120 * 212 * 512: 10,
-            240 * 424 * 256: 40,
-            480 * 848 * 128: 140,
+            # small latent, medium latent, large latent
+            768: {
+                30 * 53: 2,
+                40 * 76: 4,
+                60 * 106: 8,
+            },
+            512: {
+                60 * 106: 3,
+                80 * 152: 5,
+                120 * 212: 10,
+            },
+            256: {
+                120 * 212: 10,
+                160 * 304: 20,
+                240 * 424: 40,
+            },
+            128: {
+                240 * 424: 35,
+                320 * 608: 70,
+                480 * 848: 140,
+            },
         }
 
         grid_size_x = mesh_device.core_grid.x
@@ -252,8 +258,10 @@ class ResBlock:
         residual_tiled_NTHWC = x_tiled_NTHWC
         ttnn.deallocate(x_NTHWC)
 
-        HWC = x_tiled_NTHWC.shape[2] * x_tiled_NTHWC.shape[3]
-        num_out_blocks = self.num_out_blocks_map[HWC]
+        HW = x_tiled_NTHWC.shape[2]
+        C = x_tiled_NTHWC.shape[3]
+        num_out_blocks = self.num_out_blocks_map[C][HW]
+        breakpoint()
         x_norm_tiled_NTHWC = self.norm1(x_tiled_NTHWC, num_out_blocks)
 
         # TODO: Investigate packing more data into a tile
@@ -266,8 +274,9 @@ class ResBlock:
         x_conv1_tiled_NTHWC = self.reshape_tilize(x_conv1_NTHWC, shapes)
         ttnn.deallocate(x_conv1_NTHWC)
 
-        HWC = x_conv1_tiled_NTHWC.shape[2] * x_tiled_NTHWC.shape[3]
-        num_out_blocks = self.num_out_blocks_map[HWC]
+        HW = x_conv1_tiled_NTHWC.shape[2]
+        C = x_conv1_tiled_NTHWC.shape[3]
+        num_out_blocks = self.num_out_blocks_map[C][HW]
         x_tiled_NTHWC = self.norm2(x_conv1_tiled_NTHWC, num_out_blocks)
         ttnn.deallocate(x_conv1_tiled_NTHWC)
 
