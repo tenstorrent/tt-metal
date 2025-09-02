@@ -381,7 +381,6 @@ def test_all_broadcast_sharded(
 ):
     topology = ttnn.Topology.Linear
     validate_test(num_devices, topology, bh_1d_mesh_device.shape, 0)
-    pytest.skip("This is currently not functional")
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         pytest.skip("bfloat8_b not supported for row-major")
 
