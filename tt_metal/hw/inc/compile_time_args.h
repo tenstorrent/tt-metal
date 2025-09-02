@@ -28,14 +28,19 @@ constexpr uint32_t get_ct_arg() {
     return kernel_compile_time_args[Idx];
 }
 
-// Expands to a series of if statements that return the value of the named argument if it is found.
+#ifdef KERNEL_COMPILE_TIME_ARG_MAP
+namespace {
+constexpr std::pair<std::string_view, uint32_t> named_args_map[] = {KERNEL_COMPILE_TIME_ARG_MAP};
+}
+#endif
+
 constexpr uint32_t get_named_ct_arg(std::string_view name) {
 #ifdef KERNEL_COMPILE_TIME_ARG_MAP
-#define X(name_str, value) \
-    if (name == name_str)  \
-        return value;
-    KERNEL_COMPILE_TIME_ARG_MAP
-#undef X
+    for (const auto& [arg_name, arg_value] : named_args_map) {
+        if (name == arg_name) {
+            return arg_value;
+        }
+    }
 #endif
     // This should never be reached if the named argument is defined in KERNEL_COMPILE_TIME_ARG_MAP.
     // Upon reaching this point, compilation should fail, but it currently does not.
