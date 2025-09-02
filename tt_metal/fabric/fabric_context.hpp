@@ -8,10 +8,11 @@
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_graph.hpp>                   // FabricType
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
-#include <tt-metalium/erisc_datamover_builder.hpp>
+#include "erisc_datamover_builder.hpp"
 #include <vector>
 #include <limits>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/fabric_tensix_builder.hpp"
 
 namespace tt::tt_fabric {
 
@@ -27,8 +28,14 @@ public:
 
     static tt::tt_fabric::Topology get_topology_from_config(tt::tt_fabric::FabricConfig fabric_config);
 
+    static bool is_2D_topology(tt::tt_fabric::Topology topology);
+    static bool is_dynamic_routing_config(tt::tt_fabric::FabricConfig fabric_config);
+
     tt::tt_fabric::Topology get_fabric_topology() const;
-    tt::tt_fabric::FabricConfig get_fabric_config() const { return fabric_config_; }
+    bool is_2D_routing_enabled() const;
+    bool is_dynamic_routing_enabled() const;
+
+    bool need_deadlock_avoidance_support(eth_chan_directions direction) const;
 
     size_t get_fabric_packet_header_size_bytes() const;
     size_t get_fabric_max_payload_size_bytes() const;
@@ -36,7 +43,15 @@ public:
 
     tt::tt_fabric::FabricEriscDatamoverConfig& get_fabric_router_config(
         tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default,
-        tt::tt_fabric::FabricEriscDatamoverAxis fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short) const;
+        tt::tt_fabric::FabricEriscDatamoverAxis fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short,
+        tt::tt_fabric::FabricTensixConfig fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED,
+        eth_chan_directions direction = eth_chan_directions::EAST) const;
+
+    // Get fabric tensix config for mux configuration
+    tt::tt_fabric::FabricTensixDatamoverConfig& get_tensix_config() const;
+
+    // Initialize fabric tensix config (call after routing tables are configured)
+    void initialize_tensix_config();
 
     void set_num_fabric_initialized_routers(chip_id_t chip_id, size_t num_routers);
     uint32_t get_num_fabric_initialized_routers(chip_id_t chip_id) const;
@@ -58,13 +73,20 @@ private:
     size_t get_packet_header_size_bytes() const;
     size_t get_max_payload_size_bytes() const;
     std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType edm_type, tt::tt_fabric::FabricEriscDatamoverAxis edm_axis);
+        tt::tt_fabric::FabricEriscDatamoverType edm_type,
+        tt::tt_fabric::FabricEriscDatamoverAxis edm_axis,
+        tt::tt_fabric::FabricTensixConfig fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED,
+        eth_chan_directions direction = eth_chan_directions::EAST);
 
     bool initialized_ = false;
     tt::tt_fabric::FabricConfig fabric_config_{};
+    tt::tt_fabric::Topology topology_{};
+
+    bool is_2D_routing_enabled_ = false;
+    bool is_dynamic_routing_enabled_ = false;
 
     std::unordered_map<MeshId, bool> wrap_around_mesh_{};
-    tt::tt_fabric::Topology topology_{};
+
     size_t packet_header_size_bytes_ = 0;
     size_t max_payload_size_bytes_ = 0;
     size_t channel_buffer_size_bytes_ = 0;
@@ -74,8 +96,12 @@ private:
     std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2> dateline_upstream_router_config_ = {};
     std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2> dateline_upstream_adjcent_router_config_ =
         {};
-    std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2>
-        dateline_upstream_adjcent_upstream_router_config_ = {};
+
+    std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, eth_chan_directions::COUNT>
+        router_with_mux_config_ = {};  // for E W N S.
+
+    // Tensix config for fabric mux configuration (same for all devices)
+    std::unique_ptr<tt::tt_fabric::FabricTensixDatamoverConfig> tensix_config_;
 
     // Using vectors. Use Device IDs as indices
     size_t num_devices = 0;

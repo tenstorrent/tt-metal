@@ -28,6 +28,8 @@ void kernel_main() {
     constexpr uint32_t use_padded_mask = get_compile_time_arg_val(17) == 1;
     constexpr uint32_t is_chunked = get_compile_time_arg_val(18) == 1;
 
+    constexpr auto out_args = TensorAccessorArgs<19>();
+
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(2);
@@ -43,15 +45,12 @@ void kernel_main() {
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    constexpr bool is_dram = true;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
-    constexpr DataFormat data_format = get_dataformat(cb_out);
 
-    const InterleavedAddrGenFast<is_dram> out_writer = {
-        .bank_base_address = out_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
 
     const auto out_tile_shape = TensorTileShape(B, NQH, valid_Sqt, vDHt);
 

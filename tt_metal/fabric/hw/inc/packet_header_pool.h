@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "dev_mem_map.h"
 #include "debug/assert.h"
 #include "debug/dprint.h"
@@ -94,6 +94,14 @@ public:
             func(packet_headers, i);
             packet_headers++;
         }
+    }
+
+    FORCE_INLINE static uint8_t get_num_headers(uint8_t route_id) {
+        ASSERT(route_id < route_id_);
+        if (route_id >= route_id_) {
+            return 0;
+        }
+        return header_table[route_id].second;
     }
 };
 

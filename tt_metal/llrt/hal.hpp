@@ -9,13 +9,17 @@
 // level APIs
 //
 
+#include <sys/types.h>
+#include <cstddef>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/utils.hpp>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <ostream>
 #include <unordered_set>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -31,6 +35,20 @@ namespace tt {
 enum class ARCH;
 
 namespace tt_metal {
+
+// Struct of core type, processor class, and processor type to uniquely identify any processor.
+struct HalProcessorIdentifier {
+    HalProgrammableCoreType core_type = HalProgrammableCoreType::TENSIX;
+    HalProcessorClassType processor_class = HalProcessorClassType::DM;
+    int processor_type = 0;
+};
+
+std::ostream& operator<<(std::ostream&, const HalProcessorIdentifier&);
+bool operator<(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
+bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
+
+// Compile-time maximum for processor types count for any arch.  Useful for creating bitsets.
+static constexpr int MAX_PROCESSOR_TYPES_COUNT = 3;
 
 // Note: nsidwell will be removing need for fw_base_addr and local_init_addr
 // fw_launch_addr is programmed with fw_launch_addr_value on the master risc
@@ -96,6 +114,8 @@ public:
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
     uint32_t get_processor_classes_count() const;
     uint32_t get_processor_types_count(uint32_t processor_class_idx) const;
+    uint32_t get_processor_index(HalProcessorClassType processor_class, uint32_t processor_type_idx) const;
+    std::pair<HalProcessorClassType, uint32_t> get_processor_class_and_type_from_index(uint32_t processor_index) const;
     const HalJitBuildConfig& get_jit_build_config(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 };
 
@@ -116,7 +136,9 @@ inline uint32_t HalCoreInfoType::get_processor_classes_count() const { return th
 
 inline uint32_t HalCoreInfoType::get_processor_types_count(uint32_t processor_class_idx) const {
     TT_ASSERT(processor_class_idx < this->processor_classes_.size());
-    return this->processor_classes_[processor_class_idx].size();
+    uint32_t count = this->processor_classes_[processor_class_idx].size();
+    TT_ASSERT(count <= MAX_PROCESSOR_TYPES_COUNT);
+    return count;
 }
 
 inline const HalJitBuildConfig& HalCoreInfoType::get_jit_build_config(
@@ -179,27 +201,27 @@ private:
     std::vector<uint32_t> mem_read_alignments_;
     std::vector<uint32_t> mem_write_alignments_;
     std::vector<uint32_t> mem_alignments_with_pcie_;
-    uint32_t num_nocs_;
-    uint32_t noc_addr_node_id_bits_;
+    uint32_t num_nocs_{};
+    uint32_t noc_addr_node_id_bits_{};
     uint32_t noc_node_id_ = 0;
     uint32_t noc_node_id_mask_ = 0;
     uint32_t noc_encoding_reg_ = 0;
-    uint32_t noc_coord_reg_offset_;
-    uint32_t noc_overlay_start_addr_;
-    uint32_t noc_stream_reg_space_size_;
-    uint32_t noc_stream_remote_dest_buf_size_reg_index_;
-    uint32_t noc_stream_remote_dest_buf_start_reg_index_;
-    uint32_t noc_stream_remote_dest_buf_space_available_reg_index_;
-    uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_;
+    uint32_t noc_coord_reg_offset_{};
+    uint32_t noc_overlay_start_addr_{};
+    uint32_t noc_stream_reg_space_size_{};
+    uint32_t noc_stream_remote_dest_buf_size_reg_index_{};
+    uint32_t noc_stream_remote_dest_buf_start_reg_index_{};
+    uint32_t noc_stream_remote_dest_buf_space_available_reg_index_{};
+    uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_{};
     std::vector<uint32_t> noc_x_id_translate_table_;
     std::vector<uint32_t> noc_y_id_translate_table_;
-    bool coordinate_virtualization_enabled_;
-    uint32_t virtual_worker_start_x_;
-    uint32_t virtual_worker_start_y_;
-    bool eth_fw_is_cooperative_ = false;        // set when eth riscs have to context switch
+    bool coordinate_virtualization_enabled_{};
+    uint32_t virtual_worker_start_x_{};
+    uint32_t virtual_worker_start_y_{};
+    bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
     bool intermesh_eth_links_enabled_ = false;  // set when an architecture enable intermesh routing
     std::unordered_set<AddressableCoreType> virtualized_core_types_;
-    HalTensixHarvestAxis tensix_harvest_axis_;
+    HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
@@ -281,6 +303,8 @@ public:
     const std::unordered_set<AddressableCoreType>& get_virtualized_core_types() const {
         return this->virtualized_core_types_;
     }
+
+    bool get_supports_eth_fw_mailbox() const;
     uint32_t get_eth_fw_mailbox_val(FWMailboxMsg msg) const;
     uint32_t get_eth_fw_mailbox_arg_addr(uint32_t arg_index) const;
     uint32_t get_eth_fw_mailbox_arg_count() const;
@@ -316,6 +340,17 @@ public:
     bool get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const;
 
     uint32_t get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const;
+    // Returns the processor index within a core.  There is a 1-1 mapping between
+    // (processor_class, processor_type) and processor_index.  This is useful
+    // For indexing data structures on devices (only 1-d arrays are needed).
+    // Should only be used internally and not expose this index to the user.
+    uint32_t get_processor_index(
+        HalProgrammableCoreType programmable_core_type,
+        HalProcessorClassType processor_class,
+        uint32_t processor_type_idx) const;
+    // Inverse function of get_processor_index.
+    std::pair<HalProcessorClassType, uint32_t> get_processor_class_and_type_from_index(
+        HalProgrammableCoreType programmable_core_type, uint32_t processor_index) const;
 
     uint32_t get_total_num_risc_processors() const;
 
@@ -464,6 +499,19 @@ inline uint32_t Hal::get_num_risc_processors(HalProgrammableCoreType programmabl
     }
     return num_riscs;
 }
+inline uint32_t Hal::get_processor_index(
+    HalProgrammableCoreType programmable_core_type,
+    HalProcessorClassType processor_class,
+    uint32_t processor_type_idx) const {
+    auto idx = get_programmable_core_type_index(programmable_core_type);
+    return this->core_info_[idx].get_processor_index(processor_class, processor_type_idx);
+}
+
+inline std::pair<HalProcessorClassType, uint32_t> Hal::get_processor_class_and_type_from_index(
+    HalProgrammableCoreType programmable_core_type, uint32_t processor_index) const {
+    auto idx = get_programmable_core_type_index(programmable_core_type);
+    return this->core_info_[idx].get_processor_class_and_type_from_index(processor_index);
+}
 
 inline const HalJitBuildConfig& Hal::get_jit_build_config(
     uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const {
@@ -472,6 +520,10 @@ inline const HalJitBuildConfig& Hal::get_jit_build_config(
 }
 
 uint32_t generate_risc_startup_addr(uint32_t firmware_base);  // used by Tensix initializers to build HalJitBuildConfig
+
+inline bool Hal::get_supports_eth_fw_mailbox() const {
+    return this->get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_FW_MAILBOX) != 0;
+}
 
 inline uint32_t Hal::get_eth_fw_mailbox_val(FWMailboxMsg msg) const {
     const auto index = utils::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
@@ -492,6 +544,11 @@ inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
 
 }  // namespace tt_metal
 }  // namespace tt
+
+template <>
+struct std::hash<tt::tt_metal::HalProcessorIdentifier> {
+    std::size_t operator()(const tt::tt_metal::HalProcessorIdentifier&) const;
+};
 
 #define HAL_MEM_L1_BASE                                          \
     ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \

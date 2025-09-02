@@ -5,12 +5,8 @@
 #define COMPILE_FOR_IDLE_ERISC
 
 #include "dev_msgs.h"
-#include <algorithm>
-#include <cstddef>
 #include <cstdint>
-#include <vector>
 
-#include "core_config.h"
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
 #include "llrt_common/mailbox.hpp"
@@ -24,8 +20,11 @@
 
 namespace tt::tt_metal::wormhole {
 
+// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
+#include "core_config.h"
+
 HalCoreInfoType create_idle_eth_mem_map() {
-    std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
+    constexpr std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
     static_assert(MEM_IERISC_MAP_END % L1_ALIGNMENT == 0);
 

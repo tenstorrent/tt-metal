@@ -40,6 +40,8 @@ void MAIN {
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(10);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
+    constexpr uint32_t num_of_output_pages_to_reserve = get_compile_time_arg_val(13);
+
     constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT ? window_size_hw : FACE_HEIGHT;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0 && in_c % TILE_WIDTH <= FACE_WIDTH;
     constexpr uint32_t num_faces_in_input_tile =
@@ -88,6 +90,9 @@ void MAIN {
         if constexpr (!one_scalar_per_core) {
             cb_wait_front(curr_scalar_cb_id, 1);
         }
+        if constexpr (num_of_output_pages_to_reserve > 0) {
+            cb_reserve_back(out_cb_id, num_of_output_pages_to_reserve);
+        }
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             const bool last_c_block = c_i == in_nblocks_c - 1;
             const bool first_c_block = c_i == 0;
@@ -98,7 +103,6 @@ void MAIN {
                 (last_tile_is_partial && last_c_block)
                     ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
                     : number_of_tiles * num_faces_in_output_tile;
-            cb_reserve_back(out_cb_id, num_faces_to_reserve);
             if constexpr (tilize_reconfig) {
                 if (first_c_block || last_c_block) {
                     UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(

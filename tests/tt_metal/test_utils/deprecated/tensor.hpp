@@ -38,8 +38,8 @@ public:
 
 private:
     std::vector<T> values;
-    std::array<uint32_t, 4> shape;    // outer-most dimension first
-    std::array<uint32_t, 4> strides;  // outer-most dimension first
+    std::array<uint32_t, 4> shape{};    // outer-most dimension first
+    std::array<uint32_t, 4> strides{};  // outer-most dimension first
 };
 
 template <class T>

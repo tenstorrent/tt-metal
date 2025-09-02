@@ -9,10 +9,11 @@
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
 #include <enchantum/enchantum.hpp>
+#include "erisc_datamover_builder.hpp"
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
@@ -47,9 +48,14 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
     switch (fabric_config) {
         case tt::tt_fabric::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D: return tt::tt_fabric::Topology::Mesh;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS: return tt::tt_fabric::Topology::Torus;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D:
         case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC: return tt::tt_fabric::Topology::Mesh;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X:
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y:
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY:
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X:
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y:
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY: return tt::tt_fabric::Topology::Torus;
         case tt::tt_fabric::FabricConfig::DISABLED:
         case tt::tt_fabric::FabricConfig::CUSTOM:
             TT_THROW("Unsupported fabric config: {}", enchantum::to_string(fabric_config));
@@ -57,18 +63,28 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
     return tt::tt_fabric::Topology::Linear;
 }
 
+bool FabricContext::is_2D_topology(tt::tt_fabric::Topology topology) {
+    return topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus;
+}
+
+bool FabricContext::is_dynamic_routing_config(tt::tt_fabric::FabricConfig fabric_config) {
+    return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY;
+}
+
 size_t FabricContext::get_packet_header_size_bytes() const {
-    if (this->topology_ == Topology::Mesh) {
-        return (this->fabric_config_ == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC)
-                   ? sizeof(tt::tt_fabric::MeshPacketHeader)
-                   : sizeof(tt::tt_fabric::LowLatencyMeshPacketHeader);
+    if (this->is_2D_routing_enabled()) {
+        return (this->is_dynamic_routing_enabled()) ? sizeof(tt::tt_fabric::MeshPacketHeader)
+                                                    : sizeof(tt::tt_fabric::LowLatencyMeshPacketHeader);
     } else {
         return sizeof(tt::tt_fabric::PacketHeader);
     }
 }
 
 size_t FabricContext::get_max_payload_size_bytes() const {
-    if (this->topology_ == Topology::Mesh) {
+    if (this->is_2D_routing_enabled()) {
         return tt::tt_fabric::FabricEriscDatamoverBuilder::default_mesh_packet_payload_size_bytes;
     } else {
         return tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
@@ -76,7 +92,10 @@ size_t FabricContext::get_max_payload_size_bytes() const {
 }
 
 std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> FabricContext::get_edm_config_options(
-    tt::tt_fabric::FabricEriscDatamoverType edm_type, tt::tt_fabric::FabricEriscDatamoverAxis edm_axis) {
+    tt::tt_fabric::FabricEriscDatamoverType edm_type,
+    tt::tt_fabric::FabricEriscDatamoverAxis edm_axis,
+    tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
+    eth_chan_directions direction) {
     auto edm_buffer_config = tt::tt_fabric::FabricRouterBufferConfig{
         .enable_dateline_sender_extra_buffer_slots = true,
         .enable_dateline_receiver_extra_buffer_slots = true,
@@ -89,6 +108,8 @@ std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> FabricContext::get_ed
         .edm_type = edm_type,
         .edm_axis = edm_axis,
         .edm_buffer_config = edm_buffer_config,
+        .fabric_tensix_config = fabric_tensix_config,
+        .direction = direction,
     };
 
     return std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
@@ -104,6 +125,9 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
 
     this->wrap_around_mesh_ = this->check_for_wrap_around_mesh();
     this->topology_ = this->get_topology_from_config(fabric_config);
+
+    this->is_2D_routing_enabled_ = this->is_2D_topology(this->topology_);
+    this->is_dynamic_routing_enabled_ = this->is_dynamic_routing_config(fabric_config);
 
     this->packet_header_size_bytes_ = this->get_packet_header_size_bytes();
     this->max_payload_size_bytes_ = this->get_max_payload_size_bytes();
@@ -136,13 +160,18 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
         tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice,
         tt::tt_fabric::FabricEriscDatamoverAxis::Long);
 
-    // dateline upstream adjacent upstream edm router
-    this->dateline_upstream_adjcent_upstream_router_config_[short_axis] = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Short);
-    this->dateline_upstream_adjcent_upstream_router_config_[long_axis] = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Long);
+    // default router config with mux extension, for now no need to differentiate dateline, dateline-upstream, etc.
+    // Initialize for all directions: EAST, WEST, NORTH, SOUTH
+    for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
+        this->router_with_mux_config_[direction] = get_edm_config_options(
+            tt::tt_fabric::FabricEriscDatamoverType::Default,
+            tt::tt_fabric::FabricEriscDatamoverAxis::Short,
+            tt::tt_fabric::FabricTensixConfig::MUX,
+            static_cast<eth_chan_directions>(direction));
+    }
+
+    // Tensix config will be initialized later after routing tables are configured
+    tensix_config_ = nullptr;
 
     this->num_devices = tt::tt_metal::GetNumAvailableDevices();
     auto num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
@@ -164,6 +193,31 @@ bool FabricContext::is_wrap_around_mesh(MeshId mesh_id) const {
 
 tt::tt_fabric::Topology FabricContext::get_fabric_topology() const { return this->topology_; }
 
+bool FabricContext::is_2D_routing_enabled() const { return this->is_2D_routing_enabled_; }
+
+bool FabricContext::is_dynamic_routing_enabled() const { return this->is_dynamic_routing_enabled_; }
+
+bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions direction) const {
+    if (topology_ == Topology::Ring) {
+        return true;
+    } else if (topology_ == Topology::Torus) {
+        const auto fabric_type = get_fabric_type(fabric_config_);
+        // if we are not torused along a dimension, we dont need deadlock avoidance for that direction
+        const bool is_north_south =
+            (direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH);
+        const bool is_east_west = (direction == eth_chan_directions::EAST || direction == eth_chan_directions::WEST);
+
+        if ((fabric_type == FabricType::TORUS_X && is_north_south) ||
+            (fabric_type == FabricType::TORUS_Y && is_east_west)) {
+            // torused along one dimension, but connecting along the other dimension
+            return false;
+        }
+        return true;
+    }
+
+    return false;
+}
+
 size_t FabricContext::get_fabric_packet_header_size_bytes() const { return this->packet_header_size_bytes_; }
 
 size_t FabricContext::get_fabric_max_payload_size_bytes() const { return this->max_payload_size_bytes_; }
@@ -172,38 +226,46 @@ size_t FabricContext::get_fabric_channel_buffer_size_bytes() const { return this
 
 tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_config(
     tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type,
-    tt::tt_fabric::FabricEriscDatamoverAxis fabric_edm_axis) const {
+    tt::tt_fabric::FabricEriscDatamoverAxis fabric_edm_axis,
+    tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
+    eth_chan_directions direction) const {
     auto axis_index = static_cast<std::size_t>(fabric_edm_axis);
-    switch (fabric_edm_type) {
-        case tt::tt_fabric::FabricEriscDatamoverType::Default:
-            TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");
-            return *this->router_config_.get();
+    switch (fabric_tensix_config) {
+        case tt::tt_fabric::FabricTensixConfig::DISABLED:
+            switch (fabric_edm_type) {
+                case tt::tt_fabric::FabricEriscDatamoverType::Default:
+                    TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");
+                    return *this->router_config_.get();
+                    break;
+                case tt::tt_fabric::FabricEriscDatamoverType::Dateline:
+                    TT_FATAL(
+                        this->dateline_router_config_[axis_index] != nullptr,
+                        "Error, fabric dateline router config is uninitialized");
+                    return *this->dateline_router_config_[axis_index].get();
+                    break;
+                case tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream:
+                    TT_FATAL(
+                        this->dateline_upstream_router_config_[axis_index] != nullptr,
+                        "Error, fabric dateline upstream router config is uninitialized");
+                    return *this->dateline_upstream_router_config_[axis_index].get();
+                    break;
+                case tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice:
+                    TT_FATAL(
+                        this->dateline_upstream_adjcent_router_config_[axis_index] != nullptr,
+                        "Error, fabric dateline upstream adjacent device router config is uninitialized");
+                    return *this->dateline_upstream_adjcent_router_config_[axis_index].get();
+                    break;
+                default: TT_FATAL(false, "Error, invalid fabric edm type");
+            }
             break;
-        case tt::tt_fabric::FabricEriscDatamoverType::Dateline:
+        case tt::tt_fabric::FabricTensixConfig::MUX:
             TT_FATAL(
-                this->dateline_router_config_[axis_index] != nullptr,
-                "Error, fabric dateline router config is uninitialized");
-            return *this->dateline_router_config_[axis_index].get();
+                this->router_with_mux_config_[direction] != nullptr,
+                "Error, fabric router config with mux extension is uninitialized for direction {}",
+                direction);
+            return *this->router_with_mux_config_[direction].get();
             break;
-        case tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream:
-            TT_FATAL(
-                this->dateline_upstream_router_config_[axis_index] != nullptr,
-                "Error, fabric dateline upstream router config is uninitialized");
-            return *this->dateline_upstream_router_config_[axis_index].get();
-            break;
-        case tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice:
-            TT_FATAL(
-                this->dateline_upstream_adjcent_router_config_[axis_index] != nullptr,
-                "Error, fabric dateline upstream adjacent device router config is uninitialized");
-            return *this->dateline_upstream_adjcent_router_config_[axis_index].get();
-            break;
-        case tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream:
-            TT_FATAL(
-                this->dateline_upstream_adjcent_upstream_router_config_[axis_index] != nullptr,
-                "Error, fabric dateline upstream adjacent device upstream router config is uninitialized");
-            return *this->dateline_upstream_adjcent_upstream_router_config_[axis_index].get();
-            break;
-        default: TT_FATAL(false, "Error, invalid fabric edm type");
+        default: TT_FATAL(false, "Error, invalid fabric_tensix_config: {}", fabric_tensix_config);
     }
 };
 
@@ -259,6 +321,22 @@ std::optional<std::pair<uint32_t, tt::tt_fabric::EDMStatus>> FabricContext::get_
 std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_termination_address_and_signal() const {
     return std::make_pair(
         this->router_config_->termination_signal_address, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+}
+
+tt::tt_fabric::FabricTensixDatamoverConfig& FabricContext::get_tensix_config() const {
+    TT_FATAL(tensix_config_ != nullptr, "Error, fabric tensix config is uninitialized");
+    return *tensix_config_.get();
+}
+
+void FabricContext::initialize_tensix_config() {
+    TT_FATAL(tensix_config_ == nullptr, "Trying to re-initialize fabric tensix config");
+
+    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    if (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        // Now it's safe to call get_active_fabric_eth_channels() because
+        // configure_routing_tables_for_fabric_ethernet_channels() has already run
+        tensix_config_ = std::make_unique<tt::tt_fabric::FabricTensixDatamoverConfig>();
+    }
 }
 
 }  // namespace tt::tt_fabric

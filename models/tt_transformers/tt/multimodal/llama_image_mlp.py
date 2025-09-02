@@ -6,7 +6,6 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.utility_functions import is_blackhole
 
 
 class TtLlamaImageFeedForward(LightweightModule):
@@ -22,15 +21,12 @@ class TtLlamaImageFeedForward(LightweightModule):
     ):
         super().__init__()
 
-        self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
         self.args = args
         self.model_config = args.get_model_config()
-        torch_weight = lambda name, suffix: torch.transpose(
-            self.state_dict[f"{state_dict_prefix}{name}.{suffix}"], -2, -1
-        )
-        torch_bias = lambda name, suffix: self.state_dict[f"{state_dict_prefix}{name}.{suffix}"]
+        torch_weight = lambda name, suffix: torch.transpose(state_dict[f"{state_dict_prefix}{name}.{suffix}"], -2, -1)
+        torch_bias = lambda name, suffix: state_dict[f"{state_dict_prefix}{name}.{suffix}"]
 
         if args.dummy_weights:
             cache_name = lambda *_: None
@@ -107,23 +103,18 @@ class TtLlamaImageFeedForward(LightweightModule):
 
         # All reduce
         if self.args.num_devices > 1:  # replace with reduce_scatter and all_gather
-            # TODO: 26411
-            # Remove this blackhole condition once fabric CCLs are working on blackhole
-            if is_blackhole():
-                w2_out_gathered = ttnn.all_gather(c_proj_out, dim=1, num_links=1, topology=ttnn.Topology.Linear)
-            else:
-                w2_out_gathered = ttnn.experimental.all_gather_async(
-                    c_proj_out,
-                    persistent_output_buffer=None,
-                    dim=1,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                    num_links=1,
-                    topology=ttnn.Topology.Linear,
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                    chunks_per_sync=10,
-                    num_workers_per_link=2,
-                    num_buffers_per_channel=2,
-                )
+            w2_out_gathered = ttnn.experimental.all_gather_async(
+                c_proj_out,
+                persistent_output_buffer=None,
+                dim=1,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
             pre_bias_output = ttnn.experimental.fast_reduce_nc(
                 w2_out_gathered, dims=[1], output=None, compute_kernel_config=None
             )

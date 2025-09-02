@@ -16,8 +16,6 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
             hw/inc/tt_fabric_api.h
-            hw/inc/tt_fabric.h
-            hw/inc/tt_fabric_interface.h
             hw/inc/tt_fabric_mux.hpp
             hw/inc/tt_fabric_mux_interface.hpp
             hw/inc/fabric_routing_mode.h
@@ -31,6 +29,7 @@ target_sources(
             hw/inc/edm_fabric/fabric_txq_setup.h
             hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
             hw/inc/fabric_routing_table_interface.h
+            fabric_edm_packet_header.hpp
     PRIVATE
         control_plane.cpp
         routing_table_generator.cpp
@@ -40,15 +39,21 @@ target_sources(
         fabric_host_utils.cpp
         fabric_context.cpp
         fabric_mux_config.cpp
+        fabric_tensix_builder.cpp
         compressed_routing_table.cpp
         serialization/intermesh_link_table.cpp
+        serialization/physical_desc.cpp
         erisc_datamover_builder_helper.cpp
         ccl/ccl_common.cpp
+        physical_system_descriptor.cpp
 )
 
 # Include helper functions and generate headers from flatbuffer schemas
 include(flatbuffers)
-set(FLATBUFFER_SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/serialization/intermesh_link_table.fbs)
+set(FLATBUFFER_SCHEMAS
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/intermesh_link_table.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/physical_desc.fbs
+)
 
 # Collect all generated headers
 set(GENERATED_FBS_HEADERS)

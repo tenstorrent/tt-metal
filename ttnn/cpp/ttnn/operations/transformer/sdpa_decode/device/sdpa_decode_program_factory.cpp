@@ -14,6 +14,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::constants;
@@ -29,6 +30,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     std::optional<const Tensor> cur_pos_tensor,
     std::optional<const Tensor> page_table_tensor,
     std::optional<const Tensor> attn_mask,
+    std::optional<const Tensor> attention_sink,
     const Tensor& output_tensor,
     bool is_causal,
     const std::vector<uint32_t>& cur_pos_ids,
@@ -140,9 +142,11 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     bool use_cur_pos_tensor = cur_pos_tensor.has_value();
     bool use_attention_mask = attn_mask.has_value();
+    bool use_attention_sink = attention_sink.has_value();
 
     log_debug(tt::LogOp, "use_cur_pos_tensor: {}", use_cur_pos_tensor);
     log_debug(tt::LogOp, "use_attention_mask: {}", use_attention_mask);
+    log_debug(tt::LogOp, "use_attention_sink: {}", use_attention_sink);
 
     // Parallelization scheme
     // We will assign cores to batches
@@ -386,6 +390,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     const bool use_half_tile =
         (is_causal and num_q_heads <= 16 and q_df == tt::DataFormat::Float16_b and
          device->arch() == tt::ARCH::WORMHOLE_B0);
+
     if (use_half_tile) {
         q_tile = half_tile;
         mask_tile = half_tile;
@@ -411,6 +416,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     uint32_t pos_tensor_tile_size = 0;
     uint32_t index_stick_size = 0;
+    bool is_cur_pos_tensor_sharded = false;
+    CBHandle cb_in8_id = 0;
     if (use_cur_pos_tensor) {
         auto pos_buffer = cur_pos_tensor.value().buffer();
         tt::DataFormat pos_df = tt_metal::datatype_to_dataformat_converter(cur_pos_tensor.value().dtype());
@@ -418,21 +425,33 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         index_stick_size = pos_buffer->aligned_page_size();
 
         // cb pos
-        auto c_in8_config = CircularBufferConfig(pos_tensor_tile_size, {{CBIndex::c_8, pos_df}})
-                                .set_page_size(CBIndex::c_8, pos_tensor_tile_size);
-        CreateCircularBuffer(program, core_grid, c_in8_config);
+        auto c_in8_config = CircularBufferConfig(index_stick_size, {{CBIndex::c_8, pos_df}})
+                                .set_page_size(CBIndex::c_8, index_stick_size);
+        if (cur_pos_tensor.value().is_sharded()) {
+            is_cur_pos_tensor_sharded = true;
+            c_in8_config.set_globally_allocated_address(*pos_buffer);
+        }
+        cb_in8_id = CreateCircularBuffer(program, core_grid, c_in8_config);
     }
 
     uint32_t page_table_stick_size = 0;
+    uint32_t shard_size = 0;
+    bool is_page_table_sharded = false;
+    CBHandle cb_in9_id = 0;
     if (is_paged_attention) {
         auto page_table_buffer = page_table_tensor.value().buffer();
+        is_page_table_sharded = page_table_tensor.value().is_sharded();
         tt::DataFormat page_table_df = tt_metal::datatype_to_dataformat_converter(page_table_tensor.value().dtype());
         page_table_stick_size = page_table_buffer->aligned_page_size();
-
+        shard_size = is_page_table_sharded ? B * page_table_stick_size : page_table_stick_size;
         // cb page_table
-        auto c_in9_config = CircularBufferConfig(page_table_stick_size, {{CBIndex::c_9, page_table_df}})
+        auto c_in9_config = CircularBufferConfig(shard_size, {{CBIndex::c_9, page_table_df}})
                                 .set_page_size(CBIndex::c_9, page_table_stick_size);
-        CreateCircularBuffer(program, core_grid, c_in9_config);
+
+        if (is_page_table_sharded) {
+            c_in9_config.set_globally_allocated_address(*page_table_buffer);
+        }
+        cb_in9_id = CreateCircularBuffer(program, core_grid, c_in9_config);
     }
 
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
@@ -466,6 +485,14 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
                             .set_tile_dims(CBIndex::c_3, mask_tile);
     CreateCircularBuffer(program, core_grid, c_in3_config);
 
+    // attention_sink input (conditionally created based on use_attention_sink)
+    if (use_attention_sink) {
+        auto c_in4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CBIndex::c_4, stats_df}})
+                                .set_page_size(CBIndex::c_4, stats_tile_size)
+                                .set_tile_dims(CBIndex::c_4, stats_tile);
+        CreateCircularBuffer(program, core_grid, c_in4_config);
+    }
+
     // identity scale input
     auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{CBIndex::c_5, scalar_df}})
                             .set_page_size(CBIndex::c_5, scalar_tile_size)
@@ -485,10 +512,11 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     CreateCircularBuffer(program, core_grid, c_in7_config);
 
     // tilizedQ input
-    auto c_in8_config = CircularBufferConfig(q_tiles * q_tile_size, {{CBIndex::c_10, q_df}})
-                            .set_page_size(CBIndex::c_10, q_tile_size)
-                            .set_tile_dims(CBIndex::c_10, q_tile);
-    CreateCircularBuffer(program, core_grid, c_in8_config);
+
+    auto c_tilized_q_config = CircularBufferConfig(q_tiles * q_tile_size, {{CBIndex::c_10, q_df}})
+                                  .set_page_size(CBIndex::c_10, q_tile_size)
+                                  .set_tile_dims(CBIndex::c_10, q_tile);
+    auto cb_tilized_q_id = CreateCircularBuffer(program, core_grid, c_tilized_q_config);
 
     // cb_col_identity
     auto col_identity_tile = full_tile;
@@ -619,7 +647,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     union {
         float f;
         uint32_t u;
-    } scale_union;
+    } scale_union{};
     scale_union.f = scale.value_or(1.0f);
 
     // Create core groups for reduce cores
@@ -705,12 +733,30 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         num_output_cores,
         is_causal,
         use_attention_mask,
+        use_attention_sink,
         max_dynamic_chunk_size,
         tilize_q,
         (uint32_t)use_mla,
         use_half_tile,
         q_chunk_size_bytes,
+        is_cur_pos_tensor_sharded,
+        is_page_table_sharded,
+        full_tile.get_tile_size(q_df),
     };
+    tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(attn_mask ? attn_mask->buffer() : nullptr).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(cur_pos_tensor ? cur_pos_tensor->buffer() : nullptr)
+        .append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(page_table_tensor ? page_table_tensor->buffer() : nullptr)
+        .append_to(reader_compile_time_args_common);
+
+    if (use_attention_sink) {
+        tt_metal::TensorAccessorArgs(*attention_sink->buffer()).append_to(reader_compile_time_args_common);
+    } else {
+        reader_compile_time_args_common.push_back(0);
+    }
 
     std::vector<uint32_t> writer_compile_time_args_common = {
         B,
@@ -739,6 +785,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         max_dynamic_chunk_size,
         q_heads_parallel_factor,
     };
+    tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
 
     std::vector<uint32_t> compute_compile_time_args_common = {
         St,
@@ -764,6 +811,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         num_heads_per_core,
         is_causal,
         use_attention_mask,
+        use_attention_sink,
         max_dynamic_chunk_size,
         tilize_q,
         q_heads_parallel_factor,
@@ -846,6 +894,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t pos_addr = use_cur_pos_tensor ? cur_pos_tensor.value().buffer()->address() : 0;
     uint32_t page_table_addr = is_paged_attention ? page_table_tensor.value().buffer()->address() : 0;
     uint32_t attn_mask_addr = use_attention_mask ? attn_mask.value().buffer()->address() : 0;
+    uint32_t attention_sink_addr = use_attention_sink ? attention_sink.value().buffer()->address() : 0;
     uint32_t out_addr = out0_buffer->address();
 
     // Set rt args
@@ -883,6 +932,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             pos_addr,
             page_table_addr,
             attn_mask_addr,
+            attention_sink_addr,
             page_table_stick_size,
             do_reduce,
             do_output,
@@ -946,12 +996,15 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
          num_cores_per_batch,
          num_cores_per_head,
          num_output_cores,
+         cb_in8_id,
+         cb_in9_id,
          is_output_sharded,
          cb_out4_id,
          B,
          q_heads_parallel_factor,
          use_cur_pos_tensor,
          use_attention_mask,
+         use_attention_sink,
          is_paged_attention,
          is_causal,
          use_mla](
@@ -968,16 +1021,23 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             auto v_buffer = use_mla ? input_tensors.at(1).buffer() : input_tensors.at(2).buffer();
 
             auto out0_buffer = output_tensors.at(0).buffer();
+
             uint32_t q_addr = q_buffer->address();
             uint32_t k_addr = k_buffer->address();
             uint32_t v_addr = v_buffer->address();
-            uint32_t pos_addr = use_cur_pos_tensor ? optional_input_tensors.at(0).value().buffer()->address() : 0;
+            uint32_t out_addr = out0_buffer->address();
+
+            const auto& cur_pos_tensor = optional_input_tensors.at(0);
+            const auto& page_table_tensor = optional_input_tensors.at(1);
+            uint32_t pos_addr = use_cur_pos_tensor ? cur_pos_tensor.value().buffer()->address() : 0;
+
             uint32_t page_table_addr =
                 is_paged_attention ? optional_input_tensors.at(1).value().buffer()->address() : 0;
             uint32_t attn_mask_addr = use_attention_mask ? optional_input_tensors.at(2).value().buffer()->address() : 0;
+            uint32_t attention_sink_addr =
+                use_attention_sink ? optional_input_tensors.at(3).value().buffer()->address() : 0;
             auto page_table_buffer = is_paged_attention ? optional_input_tensors.at(1).value().buffer() : nullptr;
             uint32_t page_table_stick_size = is_paged_attention ? page_table_buffer->aligned_page_size() : 0;
-            uint32_t out_addr = out0_buffer->address();
 
             auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
             auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
@@ -1010,6 +1070,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
                 reader_args[arg_idx++] = pos_addr;
                 reader_args[arg_idx++] = page_table_addr;
                 reader_args[arg_idx++] = attn_mask_addr;
+                reader_args[arg_idx++] = attention_sink_addr;
                 reader_args[arg_idx++] = page_table_stick_size;
                 reader_args[arg_idx++] = do_reduce;
                 reader_args[arg_idx++] = do_output;
@@ -1042,13 +1103,16 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
                 compute_args[arg_idx++] = core_num_in_output;
                 compute_args[arg_idx++] = cur_pos;
             }
-
+            if (use_cur_pos_tensor and cur_pos_tensor.value().is_sharded()) {
+                UpdateDynamicCircularBufferAddress(program, cb_in8_id, *cur_pos_tensor.value().buffer());
+            }
+            if (is_paged_attention and page_table_tensor.value().is_sharded()) {
+                UpdateDynamicCircularBufferAddress(program, cb_in9_id, *page_table_tensor.value().buffer());
+            }
             if (is_output_sharded) {
                 UpdateDynamicCircularBufferAddress(program, cb_out4_id, *out0_buffer);
             }
         };
-
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
-
 }  // namespace ttnn::operations::transformer::detail

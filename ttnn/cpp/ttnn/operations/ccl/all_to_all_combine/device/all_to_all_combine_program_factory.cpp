@@ -13,6 +13,8 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -24,10 +26,24 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_mesh_workload(
     tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    auto mesh_device = tensor_args.input_tensor.mesh_device();
+
+    auto mesh_device = tensor_args.input_tensor.device();
+    auto init_barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
+    auto final_barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
+    tt::tt_metal::distributed::Synchronize(
+        mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
+
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program =
-            create_at(operation_attributes, coord, tensor_coords.coords(), tensor_args, tensor_return_value);
+        auto cached_program = create_at(
+            operation_attributes,
+            coord,
+            tensor_coords.coords(),
+            tensor_args,
+            tensor_return_value,
+            init_barrier_semaphore,
+            final_barrier_semaphore);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
@@ -40,7 +56,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const ttnn::MeshCoordinate& mesh_coordinate,
     const std::vector<ttnn::MeshCoordinate>& all_mesh_coordinates,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& tensor_return_value,
+    const GlobalSemaphore& init_semaphore,
+    const GlobalSemaphore& cross_device_semaphore) {
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
     using namespace ttnn::ccl;
@@ -56,7 +74,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     const auto input_dtype = input_tensor.dtype();
 
-    auto mesh_device = input_tensor.mesh_device();
+    auto mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
     const auto fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
@@ -136,10 +154,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         CircularBufferConfig(num_headers * CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
             .set_page_size(client_interface_cb_id, CLIENT_INTERFACE_SIZE);
 
-    const auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, subdevice_id);
-
-    const auto subdevice_cores = corerange_to_cores(subdevice_core_range_set);
+    const auto subdevice_cores = corerange_to_cores(operation_attributes.worker_core_range_set);
 
     TT_FATAL(
         subdevice_cores.size() >= num_links,
@@ -152,7 +167,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     uint32_t tokens_per_core = tt::div_up(tokens_per_device, num_links);
     uint32_t num_cores = std::min(num_links, tt::div_up(tokens_per_device, tokens_per_core));
     auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
-        subdevice_cores.at(0), num_cores, subdevice_core_range_set, true);
+        subdevice_cores.at(0), num_cores, operation_attributes.worker_core_range_set, true);
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
 
     // create circular buffers
@@ -164,7 +179,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     const uint32_t flat_mesh_idx = common::get_linearized_index(mesh_coordinate, mesh_view);
 
-    const std::vector<uint32_t> reader_compile_time_args = {
+    std::vector<uint32_t> reader_compile_time_args = {
         mapping_tensor_cb_id,
         local_experts_cb_id,
         metadata_cb_id,
@@ -178,11 +193,11 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         selected_experts_k,
         mapping_page_size_bytes,
         metadata_page_size_bytes,
-        input_is_dram,
-        mapping_is_dram,
-        metadata_is_dram,
         operation_attributes.locally_reduced,
     };
+    TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
 
     const DataMovementConfig reader_config{
         .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = reader_compile_time_args};
@@ -199,7 +214,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const uint32_t max_packet_size_bytes =
         input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
 
-    const std::vector<uint32_t> writer_compile_time_args = {
+    std::vector<uint32_t> writer_compile_time_args = {
         metadata_cb_id,
         local_experts_cb_id,
         client_interface_cb_id,
@@ -212,7 +227,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         src_chip_id,
         input_page_size_bytes,
         l1_alignment,
-        output_is_dram,
         mesh_view.num_rows(),
         mesh_view.num_cols(),
         max_packet_size_bytes,
@@ -220,6 +234,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         (uint32_t)topology,
         operation_attributes.locally_reduced,
     };
+    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
     // fabric routing info
     std::vector<uint32_t> dest_mesh_id, dest_chip_id, route;
@@ -265,8 +280,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     for (uint32_t i = 0; i < sender_cores.size(); i++) {
         std::vector<uint32_t> writer_runtime_args = {
             output_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
-            (uint32_t)operation_attributes.cross_device_semaphore->address(),
-            (uint32_t)operation_attributes.init_semaphore->address(),
+            (uint32_t)cross_device_semaphore.address(),
+            (uint32_t)init_semaphore.address(),
             0,
             0,
         };
@@ -281,7 +296,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
             sender_cores.at(i),
             reader_runtime_args[3],
             reader_runtime_args[4],
-            (uint32_t)operation_attributes.cross_device_semaphore->address());
+            (uint32_t)cross_device_semaphore.address());
 
         for (auto& neighbor_coordinate : neighbors) {
             const auto neighbor_fabric_id = mesh_device->get_fabric_node_id(neighbor_coordinate);
@@ -297,7 +312,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         std::move(program),
         {.ternary_reader_kernel_id = ternary_reader_kernel_id,
          .unary_writer_kernel_id = unary_writer_kernel_id,
-         .cores = sender_cores}};
+         .cores = sender_cores,
+         .init_semaphore = init_semaphore,
+         .cross_device_semaphore = cross_device_semaphore}};
 }
 
 void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime_arguments(
@@ -323,8 +340,8 @@ void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime
             reader_runtime_args.at(2) = tensor_args.input_tensor.mesh_buffer()->get_device_buffer(coord)->address();
 
             writer_runtime_args.at(0) = tensor_return_value.mesh_buffer()->get_device_buffer(coord)->address();
-            writer_runtime_args.at(1) = (uint32_t)operation_attributes.cross_device_semaphore->address();
-            writer_runtime_args.at(2) = (uint32_t)operation_attributes.init_semaphore->address();
+            writer_runtime_args.at(1) = (uint32_t)shared_variables.cross_device_semaphore.address();
+            writer_runtime_args.at(2) = (uint32_t)shared_variables.init_semaphore.address();
         }
     }
 }

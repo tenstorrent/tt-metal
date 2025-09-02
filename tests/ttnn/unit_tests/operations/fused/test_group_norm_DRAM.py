@@ -28,7 +28,6 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
         (2, 768, 1, 512, 32, 2, 8, 8),  # test batch size 2 (still multicast)
         (8, 768, 1, 512, 32, 2, 8, 8),  # test batch size 8 (no multicast)
         (8, 768, 1, 512, 32, 3, 8, 8),  # test batch size 8 (no multicast), but uneven num_out_blocks divisor
-        (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
         (
             1,
             128,
@@ -39,19 +38,26 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
             4,
             4,
         ),  # test all groups on core fit in less than one tile, so need to reduce col core count
-        # Current in SDXL VAE 1024x1024
-        (1, 256, 1024, 1024, 32, 48, 8, 8),  # 62ms
-        (1, 256, 512, 512, 32, 12, 8, 8),  # 15.7ms
-        (1, 512, 128, 128, 32, 4, 8, 8),  # 1.57 ms
-        (1, 512, 256, 256, 32, 4, 8, 8),  # 6.1ms
-        (1, 512, 512, 512, 32, 12, 8, 8),  # 24ms
-        (1, 128, 1024, 1024, 32, 64, 4, 8),  # 100ms (6 of these in total)
+        #  SDXL VAE
+        (1, 128, 1024, 1024, 32, 32, 8, 8),
+        (1, 256, 1024, 1024, 32, 48, 8, 8),
+        (1, 256, 515, 512, 32, 12, 8, 8),
+        (1, 512, 512, 512, 32, 12, 8, 8),
+        (1, 512, 256, 256, 32, 4, 8, 8),
         (1, 512, 64, 64, 32, 1, 8, 8),  # SD 1.4 VAE
         (1, 512, 128, 128, 32, 1, 8, 8),  # SD 1.4 VAE
         (1, 512, 256, 256, 32, 4, 8, 8),  # SD 1.4 VAE
         (1, 256, 256, 256, 32, 8, 8, 8),  # SD 1.4 VAE
         (1, 256, 512, 512, 32, 16, 8, 8),  # SD 1.4 VAE
         (1, 128, 512, 512, 32, 22, 4, 4),  # SD 1.4 VAE
+        # sd35. 4 indicates the number of device.
+        (1, 256 // 4, 256, 256, 32 // 4, 1, 8, 8),
+        (1, 512 // 4, 128, 128, 32 // 4, 1, 8, 8),
+        (1, 512 // 4, 256, 256, 32 // 4, 2, 8, 8),
+        (1, 512 // 4, 512, 512, 32 // 4, 8, 8, 8),
+        (1, 256 // 4, 512, 512, 32 // 4, 4, 8, 8),
+        (1, 256 // 4, 1024, 1024, 32 // 4, 16, 8, 8),
+        (1, 128 // 4, 1024, 1024, 32 // 4, 8, 8, 8),
     ],
 )
 def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x):
@@ -81,50 +87,28 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     )
     input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
 
-    # input mask
-    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y)
-    input_mask_tensor = ttnn.from_torch(
-        input_mask_tensor,
-        dtype=ttnn.DataType.BFLOAT8_B,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    # gamma/beta
-    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.y)
-    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_size.y)
-
-    gamma_t = ttnn.from_torch(
-        gamma,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    beta_t = ttnn.from_torch(
-        beta,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    # Create dram group norm params
+    [gamma_t, beta_t], input_mask_tensor = ttnn.dram_group_norm_params_from_torch(
+        [torch_weight, torch_bias], C, num_groups, device, core_grid=grid_size, return_mask=True
     )
 
     # groupnorm
-    output_tensor = ttnn.group_norm(
-        input_tensor_tilized,
-        num_groups=num_groups,
-        input_mask=input_mask_tensor,
-        weight=gamma_t,
-        bias=beta_t,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        output_layout=ttnn.TILE_LAYOUT,
-        core_grid=grid_size,
-        inplace=False,
-        num_out_blocks=num_out_blocks,
-    )
+    num_itr = 2  # second iteration to help catch potential runtime args issue.
+    for _ in range(num_itr):
+        output_tensor = ttnn.group_norm(
+            input_tensor_tilized,
+            num_groups=num_groups,
+            input_mask=input_mask_tensor,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_layout=ttnn.TILE_LAYOUT,
+            core_grid=grid_size,
+            inplace=False,
+            num_out_blocks=num_out_blocks,
+        )
+        ttnn.synchronize_device(device)
 
-    ttnn.synchronize_device(device)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 

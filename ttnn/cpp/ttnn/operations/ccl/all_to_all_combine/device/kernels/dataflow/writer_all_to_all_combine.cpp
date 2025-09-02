@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
@@ -57,13 +56,13 @@ void kernel_main() {
     constexpr uint32_t src_chip_id = get_compile_time_arg_val(9);
     constexpr uint32_t data_size_bytes = get_compile_time_arg_val(10);  // hidden dim * datum size
     constexpr uint32_t alignment = get_compile_time_arg_val(11);
-    constexpr uint32_t output_is_dram = get_compile_time_arg_val(12);
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(13);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(14);  // ew_dim
-    constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(15);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(16);
-    constexpr tt::tt_fabric::Topology topology = tt::tt_fabric::Topology(get_compile_time_arg_val(17));
-    constexpr uint32_t locally_reduced = get_compile_time_arg_val(18);
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(12);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(13);  // ew_dim
+    constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(14);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(15);
+    constexpr tt::tt_fabric::Topology topology = tt::tt_fabric::Topology(get_compile_time_arg_val(16));
+    constexpr uint32_t locally_reduced = get_compile_time_arg_val(17);
+    constexpr auto output_args = TensorAccessorArgs<18>();
 
 #ifdef REPLICATE_GROUP_AXIS
     constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
@@ -72,12 +71,12 @@ void kernel_main() {
     constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
     constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
 
-    constexpr uint32_t device_begin_idx = REPLICATE_GROUP_AXIS == 0 ? col : row * mesh_cols;
+    constexpr uint32_t device_begin_idx = replicate_axis == ReplicateGroup::COLS ? col : row * mesh_cols;
     constexpr uint32_t device_end_idx =
-        (REPLICATE_GROUP_AXIS == 0)
+        (replicate_axis == ReplicateGroup::COLS)
             ? (col + mesh_rows * mesh_cols)   // last is col+(mesh_rows-1)*mesh_cols; add one stride
             : (row * mesh_cols + mesh_cols);  // last is row*mesh_cols+(mesh_cols-1); add one
-    constexpr uint32_t device_stride = REPLICATE_GROUP_AXIS == 0 ? mesh_cols : 1;
+    constexpr uint32_t device_stride = replicate_axis == ReplicateGroup::COLS ? mesh_cols : 1;
 #else
     constexpr ReplicateGroup replicate_axis = ReplicateGroup::NONE;
     constexpr uint8_t replicate_group_devices = num_devices;
@@ -108,8 +107,7 @@ void kernel_main() {
     std::array<WorkerToFabricEdmSender, Num_Directions> fabric_connections;
     open_direction_connections_async(directions, fabric_connections, rt_arg_count);
 
-    InterleavedAddrGen<output_is_dram> output_addrgen{
-        .bank_base_address = output_base_addr, .page_size = data_size_bytes};
+    const auto output_addrgen = TensorAccessor(output_args, output_base_addr, data_size_bytes);
 
     volatile PACKET_HEADER_TYPE * packet_headers[2];
     for(uint8_t i =0;i<2;++i){
@@ -174,11 +172,12 @@ void kernel_main() {
                             mesh_rows,
                             mesh_cols,
                             fabric_max_packet_size_bytes>(
+                            output_addrgen,
                             fabric_connections,
                             packet_headers[0],
                             dest_device_idx,
                             src_data_l1_ptr,
-                            output_noc_addr,
+                            output_page_idx,
                             data_size_bytes,
                             alignment);
                     } else {
@@ -188,12 +187,13 @@ void kernel_main() {
                             mesh_rows,
                             mesh_cols,
                             fabric_max_packet_size_bytes>(
+                            output_addrgen,
                             fabric_connections,
                             packet_headers[0],
                             dest_chip_id,
                             dest_mesh_id,
                             src_data_l1_ptr,
-                            output_noc_addr,
+                            output_page_idx,
                             data_size_bytes,
                             alignment);
                     }

@@ -1701,7 +1701,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
 
     auto shape_wh = input.padded_shape();
     TT_FATAL(shape_wh[0] == 1 && "input shape[0] should be 1", "Error");
-    auto ttnn_device = input.mesh_device();
+    auto ttnn_device = input.device();
     // input.padded_shape()[0]
     // If repeat shape has 0's, it returns zeros of given input
     if (shape[0] == 0 || shape[1] == 0 || shape[2] == 0 || shape[3] == 0) {
@@ -1848,7 +1848,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     } else if (*dim == 1 || *dim == -3) {
         Tensor tensor_1_temp = reciprocal_input;
         if (reciprocal_input.padded_shape()[1] % 32 != 0) {
-            ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {
+            ttnn::SmallVector<std::array<uint32_t, 2>> padding = {
                 {0, 0}, {0, 32 - (reciprocal_input.padded_shape()[1] % 32)}, {0, 0}, {0, 0}};
             tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, true, std::nullopt);
         }
@@ -1886,7 +1886,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     // dim 0
     Tensor tensor_1_temp = reciprocal_input;
     if (reciprocal_input.padded_shape()[0] % 32 != 0) {
-        ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {
+        ttnn::SmallVector<std::array<uint32_t, 2>> padding = {
             {0, (32 - (reciprocal_input.padded_shape()[0] % 32))}, {0, 0}, {0, 0}, {0, 0}};
         tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, false, std::nullopt);
     }

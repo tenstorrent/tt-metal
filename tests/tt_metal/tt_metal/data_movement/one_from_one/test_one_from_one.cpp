@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device_fixture.hpp"
+#include "multi_device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -12,14 +14,14 @@ namespace tt::tt_metal {
 
 using namespace std;
 using namespace tt;
-using namespace tt::test_utils;
+using namespace test_utils;
 
 namespace unit_tests::dm::core_from_core {
 // Test config, i.e. test parameters
 struct OneFromOneConfig {
     uint32_t test_id = 0;
-    CoreCoord master_core_coord = CoreCoord();
-    CoreCoord subordinate_core_coord = CoreCoord();
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord subordinate_core_coord = {0, 0};
     uint32_t num_of_transactions = 0;
     uint32_t transaction_size_pages = 0;
     uint32_t page_size_bytes = 0;
@@ -35,8 +37,10 @@ struct OneFromOneConfig {
 /// @brief Does Requestor Core --> L1 Responder Core --> L1 Requestor Core
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
+/// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
-bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
+bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneFromOneConfig& test_config) {
+    IDevice* device = mesh_device->get_device(0);
     // Program
     Program program = CreateProgram();
 
@@ -48,19 +52,18 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
     // Obtain L1 Address for Storing Data
     // NOTE: We don't know if the whole block of memory is actually available.
     //       This is something that could probably be checked
-    L1AddressInfo master_l1_info =
-        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.master_core_coord);
+    L1AddressInfo master_l1_info = unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.master_core_coord);
     L1AddressInfo subordinate_l1_info =
-        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.subordinate_core_coord);
+        unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.subordinate_core_coord);
     // Checks that both master and subordinate cores have the same L1 base address and size
     if (master_l1_info.base_address != subordinate_l1_info.base_address ||
         master_l1_info.size != subordinate_l1_info.size) {
-        log_error(tt::LogTest, "Mismatch in L1 address or size between master and subordinate cores");
+        log_error(LogTest, "Mismatch in L1 address or size between master and subordinate cores");
         return false;
     }
     // Check if the L1 size is sufficient for the test configuration
     if (master_l1_info.size < transaction_size_bytes) {
-        log_error(tt::LogTest, "Insufficient L1 size for the test configuration");
+        log_error(LogTest, "Insufficient L1 size for the test configuration");
         return false;
     }
     // Assigns a "safe" L1 local address for the master and subordinate cores
@@ -90,7 +93,7 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
         program, requestor_kernel, master_core_set, {physical_subordinate_core.x, physical_subordinate_core.y});
 
     // Assign unique id
-    log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Input
@@ -106,7 +109,15 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
     // Launch program and record outputs
     detail::WriteToDeviceL1(device, test_config.subordinate_core_coord, l1_base_address, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-    detail::LaunchProgram(device, program);
+
+    auto mesh_workload = distributed::CreateMeshWorkload();
+    vector<uint32_t> coord_data = {0, 0};
+    auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
+    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
+    Finish(cq);
     vector<uint32_t> packed_output;
     detail::ReadFromDeviceL1(
         device, test_config.master_core_coord, l1_base_address, transaction_size_bytes, packed_output);
@@ -116,10 +127,10 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
         packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
 
     if (!pcc) {
-        log_error(tt::LogTest, "PCC Check failed");
-        log_info(tt::LogTest, "Golden vector");
+        log_error(LogTest, "PCC Check failed");
+        log_info(LogTest, "Golden vector");
         print_vector<uint32_t>(packed_golden);
-        log_info(tt::LogTest, "Output vector");
+        log_info(LogTest, "Output vector");
         print_vector<uint32_t>(packed_output);
     }
 
@@ -127,16 +138,15 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
 }
 
 void directed_ideal_test(
-    ARCH arch_,
-    vector<IDevice*>& devices_,
-    uint32_t num_devices_,
+    shared_ptr<distributed::MeshDevice> mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord,
     CoreCoord subordinate_core_coord,
     NOC noc_id = NOC::RISCV_1_default) {
+    IDevice* device = mesh_device->get_device(0);
     // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
 
     // Parameters
     // Ideal: Less transactions, more data per transaction
@@ -156,27 +166,24 @@ void directed_ideal_test(
     };
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-    }
+    EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
 void packet_sizes_test(
-    ARCH arch_,
-    vector<IDevice*>& devices_,
-    uint32_t num_devices_,
+    shared_ptr<distributed::MeshDevice> mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord,
     CoreCoord subordinate_core_coord,
     NOC noc_id = NOC::RISCV_1_default) {
+    IDevice* device = mesh_device->get_device(0);
     // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        unit_tests::dm::compute_physical_constraints(mesh_device);
 
     // Parameters
     uint32_t max_transactions = 256;
     uint32_t max_transaction_size_pages =
-        arch_ == tt::ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
+        device->arch() == ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
 
     for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
@@ -198,23 +205,19 @@ void packet_sizes_test(
             };
 
             // Run
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-            }
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
         }
     }
 }
 
 void virtual_channels_test(
-    ARCH arch_,
-    vector<IDevice*>& devices_,
-    uint32_t num_devices_,
+    shared_ptr<distributed::MeshDevice> mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {1, 1}) {
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
 
     std::uint32_t max_num_pages_per_transaction = 1 << 12;
     std::uint32_t num_of_transactions = 256;  // Constant value
@@ -247,18 +250,14 @@ void virtual_channels_test(
                 };
 
                 // Run
-                for (unsigned int id = 0; id < num_devices_; id++) {
-                    EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-                }
+                EXPECT_TRUE(run_dm(mesh_device, test_config));
             }
         }
     }
 }
 
 void custom_test(
-    ARCH arch_,
-    vector<IDevice*>& devices_,
-    uint32_t num_devices_,
+    shared_ptr<distributed::MeshDevice> mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord,
     CoreCoord subordinate_core_coord,
@@ -268,7 +267,7 @@ void custom_test(
     NOC noc_id = NOC::RISCV_1_default) {
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
 
     if (pages_per_transaction > max_transmittable_pages) {
         log_trace(LogTest, "Skipping test due to page size limitations");
@@ -289,51 +288,47 @@ void custom_test(
     };
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-    }
+    EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
 }  // namespace unit_tests::dm::core_from_core
 
 /* ========== Test case for one from one data movement; Test id = 5 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
     uint32_t test_id = 5;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {1, 1};
 
     unit_tests::dm::core_from_core::packet_sizes_test(
-        arch_, devices_, num_devices_, test_id, master_core_coord, subordinate_core_coord);
+        get_mesh_device(), test_id, master_core_coord, subordinate_core_coord);
 }
 
 /* ========== Test case for one from one data movement; Test id = 51 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
     uint32_t test_id = 51;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {0, 1};
 
     unit_tests::dm::core_from_core::directed_ideal_test(
-        arch_, devices_, num_devices_, test_id, master_core_coord, subordinate_core_coord);
+        get_mesh_device(), test_id, master_core_coord, subordinate_core_coord);
 }
 
-TEST_F(DeviceFixture, TensixDataMovementOneFromOneVirtualChannels) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneVirtualChannels) {
     GTEST_SKIP() << "Skipping test";
     // Test ID (Arbitrary)
-    uint32_t test_id = 151;
+    uint32_t test_id = 152;
 
     unit_tests::dm::core_from_core::virtual_channels_test(
-        arch_,
-        devices_,
-        num_devices_,
+        get_mesh_device(),
         test_id,
         CoreCoord(0, 0),  // Master Core
         CoreCoord(0, 1)   // Subordinate Core
     );
 }
 
-TEST_F(DeviceFixture, TensixDataMovementOneFromOneCustom) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneCustom) {
     GTEST_SKIP() << "Skipping test";
-    uint32_t test_id = 160;
+    uint32_t test_id = 153;
 
     // Parameters
     uint32_t num_of_transactions = 256;
@@ -341,9 +336,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromOneCustom) {
     uint32_t num_virtual_channels = 4;
 
     unit_tests::dm::core_from_core::custom_test(
-        arch_,
-        devices_,
-        num_devices_,
+        get_mesh_device(),
         test_id,
         CoreCoord(0, 0),  // Master Core
         CoreCoord(0, 1),  // Subordinate Core

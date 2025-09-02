@@ -21,6 +21,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/core/device.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/distributed.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/distributed.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/ccl_resources.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/ccl_resources.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/not_null.hpp
@@ -55,6 +57,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/gpt2.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/base_transformer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/linear_regression.cpp
@@ -145,6 +148,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/step_scheduler.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/msgpack_file.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/msgpack_file.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/safetensors.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/safetensors.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serializable.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serialization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serialization.hpp
@@ -269,6 +274,22 @@ if(NOT TARGET Metalium::Metal)
     find_library(TTNN_LIBRARY NAMES "_ttnn.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
     find_library(TTNNCPP_LIBRARY NAMES "_ttnncpp.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
     find_library(DEVICE_LIBRARY NAMES "device" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
+    find_library(TT_STL_LIBRARY NAMES "libtt_stl.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
+
+    if(TT_STL_LIBRARY)
+        add_library(Metalium::TT_STL SHARED IMPORTED)
+        set_target_properties(
+            Metalium::TT_STL
+            PROPERTIES
+                IMPORTED_LOCATION
+                    "${TT_STL_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES
+                    "$ENV{TT_METAL_HOME}/tt_stl"
+        )
+        message(STATUS "Successfully found libtt_stl.so at ${TT_STL_LIBRARY}")
+    else()
+        message(FATAL_ERROR "libtt_stl.so not found in ${METALIUM_LIB_PATH}")
+    endif()
 
     if(TT_METAL_LIBRARY)
         add_library(Metalium::Metal SHARED IMPORTED)
@@ -284,6 +305,7 @@ if(NOT TARGET Metalium::Metal)
             Metalium::Metal
             INTERFACE
                 ${DEVICE_LIBRARY}
+                Metalium::TT_STL
                 nlohmann_json::nlohmann_json
         )
         message(STATUS "Successfully found libtt_metal.so at ${TT_METAL_LIBRARY}")
@@ -300,6 +322,7 @@ if(NOT TARGET Metalium::Metal)
                 INTERFACE_INCLUDE_DIRECTORIES
                     "${METALIUM_INCLUDE_DIRS}"
         )
+        target_link_libraries(Metalium::TTNN INTERFACE Metalium::TT_STL)
         message(STATUS "Successfully found _ttnn.so at ${TTNN_LIBRARY}")
     else()
         message(FATAL_ERROR "_ttnn.so not found in ${METALIUM_LIB_PATH}")
@@ -387,9 +410,7 @@ endif()
 
 add_definitions(-DTOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
 
-set(GPT2_TOKENIZER_URL
-    "https://huggingface.co/togethercomputer/RedPajama-INCITE-Chat-3B-v1/resolve/main/tokenizer.json"
-)
+set(GPT2_TOKENIZER_URL "https://huggingface.co/openai-community/gpt2/resolve/main/tokenizer.json")
 set(GPT2_TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/gpt2-tokenizer.json")
 
 # Check if the file already exists before downloading

@@ -32,7 +32,6 @@
 #include "fabric_types.hpp"
 #include "hal_types.hpp"
 #include "host_api.hpp"
-#include "intermesh_constants.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/common/env_lib.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -73,21 +72,6 @@ UbbId get_ubb_id(chip_id_t chip_id) {
         return UbbId{tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id};
     }
     return UbbId{0, 0};  // Invalid UBB ID if not found
-}
-
-// Helper to extract intermesh ports from config value
-std::vector<chan_id_t> extract_intermesh_eth_links(uint32_t config_value, chip_id_t chip_id) {
-    std::vector<chan_id_t> intermesh_eth_links;
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& soc_desc = cluster.get_soc_desc(chip_id);
-    uint32_t intermesh_eth_links_bits = (config_value >> intermesh_constants::INTERMESH_ETH_LINK_BITS_SHIFT) &
-                                        intermesh_constants::INTERMESH_ETH_LINK_BITS_MASK;
-    for (chan_id_t link = 0; link < static_cast<chan_id_t>(soc_desc.get_num_eth_channels()); ++link) {
-        if (intermesh_eth_links_bits & (1 << link)) {
-            intermesh_eth_links.push_back(link);
-        }
-    }
-    return intermesh_eth_links;
 }
 
 // TODO: Support custom operator< for eth_coord_t to allow usage in std::set
@@ -143,6 +127,9 @@ std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto eth_links = cluster.get_ethernet_cores_grouped_by_connected_chips(chip_id);
     bool is_ubb = cluster.get_board_type(chip_id) == BoardType::UBB;
+
+    auto mmio_chip_ids = cluster.mmio_chip_ids();
+
     std::vector<chip_id_t> adjacent_chips;
 
     for (const auto& [connected_chip_id, eth_ports] : eth_links) {
@@ -150,7 +137,21 @@ std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(
         if (is_ubb && cluster.is_external_cable(chip_id, eth_ports[0])) {
             continue;
         }
-        if (eth_ports.size() >= num_ports_per_side) {
+        if (eth_ports.size() > 0) {
+            // Special case for TG not to include MMIO devices in adjacency map because they are control chips
+            if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::TG && mmio_chip_ids.contains(connected_chip_id)) {
+                continue;
+            }
+
+            if (eth_ports.size() < num_ports_per_side) {
+                log_warning(
+                    tt::LogFabric,
+                    "Ethernet between chip {} and chip {} have {} expected ethernet ports, but only {} present",
+                    chip_id,
+                    connected_chip_id,
+                    num_ports_per_side,
+                    eth_ports.size());
+            }
             adjacent_chips.push_back(connected_chip_id);
         }
     }
@@ -544,7 +545,11 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     std::optional<chip_id_t> nw_corner_chip_id) const {
     // Convert the coordinate range to a set of chip IDs using MeshContainer iterator
     const auto& user_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
-    TT_ASSERT(user_chip_ids.size() >= mesh_container.size());
+    TT_FATAL(
+        user_chip_ids.size() >= mesh_container.size(),
+        "Number of chips visible ({}) is less than number of chips specified in mesh graph descriptor ({})",
+        user_chip_ids.size(),
+        mesh_container.size());
 
     // Special case for 1x1 mesh
     if (mesh_container.shape() == tt::tt_metal::distributed::MeshShape(1, 1)) {
@@ -624,6 +629,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
             std::optional<chip_id_t> nw_chip_physical_id = std::nullopt;
             const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
             // TODO: remove once we use global physical graph to map logical big mesh to physical chips
+            // NOTE: This nw chip may not be set the same for UBB devices when using the Mock Cluster Descriptor
             if (cluster.get_board_type(0) == BoardType::UBB) {
                 for (const auto& chip_id : cluster.all_chip_ids()) {
                     auto candidate_ubb_id = get_ubb_id(chip_id);
@@ -1076,7 +1082,7 @@ void ControlPlane::write_routing_tables_to_eth_cores(MeshId mesh_id, chip_id_t c
             // eth_chans are the active ethernet channels on this chip
             const auto& eth_chan_intra_mesh_routing_table = chip_intra_mesh_routing_tables[eth_chan];
             const auto& eth_chan_inter_mesh_routing_table = chip_inter_mesh_routing_tables[eth_chan];
-            tt::tt_fabric::fabric_router_l1_config_t fabric_router_config;
+            tt::tt_fabric::fabric_router_l1_config_t fabric_router_config{};
             std::fill_n(
                 fabric_router_config.intra_mesh_table.dest_entry,
                 tt::tt_fabric::MAX_MESH_SIZE,
@@ -1445,7 +1451,78 @@ std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_channels_in_direction
     return {};
 }
 
-static void write_to_all_tensix_cores(
+void write_to_worker_or_fabric_tensix_cores(
+    const void* worker_data,
+    const void* dispatcher_data,
+    const void* tensix_extension_data,
+    size_t size,
+    tt::tt_metal::HalL1MemAddrType addr_type,
+    chip_id_t physical_chip_id) {
+    TT_FATAL(
+        size ==
+            tt_metal::MetalContext::instance().hal().get_dev_size(tt_metal::HalProgrammableCoreType::TENSIX, addr_type),
+        "ControlPlane: Tensix core data size mismatch expected {} but got {}",
+        size,
+        tt_metal::MetalContext::instance().hal().get_dev_size(tt_metal::HalProgrammableCoreType::TENSIX, addr_type));
+
+    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
+    const std::vector<tt::umd::CoreCoord>& all_tensix_cores =
+        soc_desc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
+
+    // Check if tensix config is enabled
+    bool tensix_config_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
+                                 tt::tt_fabric::FabricTensixConfig::DISABLED;
+
+    // Get pre-computed translated fabric mux cores from tensix config
+    std::unordered_set<CoreCoord> fabric_mux_cores_translated;
+    std::unordered_set<CoreCoord> dispatch_mux_cores_translated;
+    if (tensix_config_enabled) {
+        const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+        const auto& tensix_config = fabric_context.get_tensix_config();
+        fabric_mux_cores_translated = tensix_config.get_translated_fabric_mux_cores();
+        dispatch_mux_cores_translated = tensix_config.get_translated_dispatch_mux_cores();
+    }
+
+    enum class CoreType { Worker, FabricTensixExtension, DispatcherMux };
+
+    auto get_core_type = [&](const CoreCoord& core_coord) -> CoreType {
+        if (fabric_mux_cores_translated.find(core_coord) != fabric_mux_cores_translated.end()) {
+            return CoreType::FabricTensixExtension;
+        }
+        if (dispatch_mux_cores_translated.find(core_coord) != dispatch_mux_cores_translated.end()) {
+            return CoreType::DispatcherMux;
+        }
+        return CoreType::Worker;
+    };
+
+    auto select_data = [&](CoreType core_type) -> const void* {
+        if (tensix_config_enabled) {
+            switch (core_type) {
+                case CoreType::FabricTensixExtension: return worker_data;
+                case CoreType::DispatcherMux: return dispatcher_data;
+                case CoreType::Worker: return tensix_extension_data;
+                default: TT_THROW("unknown core type: {}", core_type);
+            }
+        } else {
+            return worker_data;
+        }
+    };
+
+    for (const auto& tensix_core : all_tensix_cores) {
+        CoreCoord core_coord(tensix_core.x, tensix_core.y);
+        CoreType core_type = get_core_type(core_coord);
+        const void* data_to_write = select_data(core_type);
+
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            data_to_write,
+            size,
+            tt_cxy_pair(physical_chip_id, core_coord),
+            tt_metal::MetalContext::instance().hal().get_dev_addr(
+                tt_metal::HalProgrammableCoreType::TENSIX, addr_type));
+    }
+}
+
+void write_to_all_tensix_cores(
     const void* data, size_t size, tt::tt_metal::HalL1MemAddrType addr_type, chip_id_t physical_chip_id) {
     TT_FATAL(
         size ==
@@ -1548,12 +1625,9 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
     FabricNodeId src_fabric_node_id{mesh_id, chip_id};
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
 
-    const auto& fabric_context = this->get_fabric_context();
-    const auto& edm_config = fabric_context.get_fabric_router_config();
-    const auto topology = fabric_context.get_fabric_topology();
-    const bool is_2d_fabric = topology == Topology::Mesh;
-
-    tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_connections = {};
+    tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_worker_connections = {};
+    tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_dispatcher_connections = {};
+    tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_tensix_connections = {};
 
     // Get all physically connected ethernet channels directly from the cluster
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -1575,35 +1649,41 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
                 break;
             }
 
-            CoreCoord fabric_router_virtual_core =
-                cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
+            // Populate connection info for regular fabric connections (for tensix mux cores)
+            auto& worker_connection_info = fabric_worker_connections.read_only[eth_channel_id];
+            worker_connection_info.edm_direction = router_direction;
 
-            // Populate connection info for fabric-routed channels
-            const auto sender_channel = is_2d_fabric ? router_direction : 0;
-            auto& connection_info = fabric_connections.read_only[eth_channel_id];
-            connection_info.edm_direction = router_direction;
-            connection_info.edm_noc_x = static_cast<uint8_t>(fabric_router_virtual_core.x);
-            connection_info.edm_noc_y = static_cast<uint8_t>(fabric_router_virtual_core.y);
-            connection_info.edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel];
-            connection_info.num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel];
-            connection_info.edm_l1_sem_addr =
-                edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel];
-            connection_info.edm_connection_handshake_addr =
-                edm_config.sender_channels_connection_semaphore_address[sender_channel];
-            connection_info.edm_worker_location_info_addr =
-                edm_config.sender_channels_worker_conn_info_base_address[sender_channel];
-            connection_info.buffer_size_bytes = edm_config.channel_buffer_size_bytes;
-            connection_info.buffer_index_semaphore_id =
-                edm_config.sender_channels_buffer_index_semaphore_address[sender_channel];
+            // Populate connection info for dispatcher fabric connections
+            auto& dispatcher_connection_info = fabric_dispatcher_connections.read_only[eth_channel_id];
+            dispatcher_connection_info.edm_direction = router_direction;
+
+            // Populate connection info for tensix mux connections (for normal worker cores)
+            auto& tensix_connection_info = fabric_tensix_connections.read_only[eth_channel_id];
+            tensix_connection_info.edm_direction = router_direction;
+
+            // Use helper function to populate both connection types
+            this->populate_fabric_connection_info(
+                worker_connection_info,
+                dispatcher_connection_info,
+                tensix_connection_info,
+                physical_chip_id,
+                eth_channel_id,
+                router_direction);
 
             // Mark this connection as valid for fabric communication
-            fabric_connections.valid_connections_mask |= (1u << eth_channel_id);
+            fabric_worker_connections.valid_connections_mask |= (1u << eth_channel_id);
+            fabric_dispatcher_connections.valid_connections_mask |= (1u << eth_channel_id);
+            fabric_tensix_connections.valid_connections_mask |= (1u << eth_channel_id);
             num_eth_endpoint++;
         }
     }
 
-    write_to_all_tensix_cores(
-        &fabric_connections,
+    // Write fabric connections (fabric router config) to mux cores and tensix connections (tensix config) to worker
+    // cores
+    write_to_worker_or_fabric_tensix_cores(
+        &fabric_worker_connections,      // worker_data - goes to mux cores
+        &fabric_dispatcher_connections,  // dispatcher_data - goes to dispatcher cores
+        &fabric_tensix_connections,      // tensix_extension_data - goes to worker cores
         sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t),
         tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS,
         physical_chip_id);
@@ -1748,23 +1828,21 @@ FabricContext& ControlPlane::get_fabric_context() const {
 
 void ControlPlane::clear_fabric_context() { this->fabric_context_.reset(nullptr); }
 
+void ControlPlane::initialize_fabric_tensix_datamover_config() {
+    TT_FATAL(this->fabric_context_ != nullptr, "Fabric context must be initialized first");
+    this->fabric_context_->initialize_tensix_config();
+}
+
 void ControlPlane::initialize_intermesh_eth_links() {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    // If intermesh links are not enabled, set all intermesh_eth_links_ to empty
-    if (not this->is_intermesh_enabled()) {
-        for (const auto& chip_id : cluster.all_chip_ids()) {
-            intermesh_eth_links_[chip_id] = {};
-        }
-        return;
-    }
 
     // Iterate over all chips in the cluster and populate the intermesh_eth_links
     for (const auto& chip_id : cluster.all_chip_ids()) {
-        std::vector<std::pair<CoreCoord, chan_id_t>> intermesh_eth_links;
-        const auto& soc_desc = cluster.get_soc_desc(chip_id);
+        auto& intermesh_eth_links = intermesh_eth_links_[chip_id];
         // Remote connections visible to UMD
         auto remote_connections = cluster.get_ethernet_connections_to_remote_devices().find(chip_id);
         if (remote_connections != cluster.get_ethernet_connections_to_remote_devices().end()) {
+            const auto& soc_desc = cluster.get_soc_desc(chip_id);
             for (auto [link, _] : remote_connections->second) {
                 // Find the CoreCoord for this channel
                 for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
@@ -1775,73 +1853,7 @@ void ControlPlane::initialize_intermesh_eth_links() {
                 }
             }
         }
-        if (cluster.get_board_type(chip_id) != BoardType::UBB) {
-            // TODO: remove branch here once get_ethernet_connections_to_remote_devices() contains
-            // all cross host links, currently on T3K there are some cross host links that are not
-            // visible to UMD
-            if (soc_desc.logical_eth_core_to_chan_map.empty()) {
-                intermesh_eth_links_[chip_id] = {};
-                continue;
-            }
-            // Remote connections not visible to UMD
-            // Read multi-mesh configuration from the first available eth core
-            auto first_eth_core = soc_desc.logical_eth_core_to_chan_map.begin()->first;
-            tt_cxy_pair virtual_eth_core(
-                chip_id,
-                cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, first_eth_core, CoreType::ETH));
-
-            std::vector<uint32_t> config_data(1, 0);
-            auto multi_mesh_config_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
-                tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::INTERMESH_ETH_LINK_CONFIG);
-            cluster.read_core(config_data, sizeof(uint32_t), virtual_eth_core, multi_mesh_config_addr);
-            for (auto link : extract_intermesh_eth_links(config_data[0], chip_id)) {
-                // Find the CoreCoord for this channel
-                for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
-                    if (channel == link and this->is_intermesh_eth_link_trained(chip_id, core_coord)) {
-                        intermesh_eth_links.push_back({core_coord, link});
-                        break;
-                    }
-                }
-            }
-        }
-        intermesh_eth_links_[chip_id] = intermesh_eth_links;
     }
-}
-
-// TODO: all of this can be removed once cluster.get_ethernet_connections_to_remote_devices()
-// contains all the cross host links
-bool ControlPlane::is_intermesh_enabled() const {
-    // Check if the architecture and system support intermesh routing
-    if (not tt_metal::MetalContext::instance().hal().intermesh_eth_links_enabled()) {
-        return false;
-    }
-
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto first_chip_id = *(cluster.all_pci_chip_ids().begin());
-
-    // Check if there are any ethernet cores available on the first chip
-    const auto& soc_desc = cluster.get_soc_desc(first_chip_id);
-    if (soc_desc.logical_eth_core_to_chan_map.empty()) {
-        return false;
-    }
-
-    // UMD Visible Intermesh Links
-    if (!cluster.get_ethernet_connections_to_remote_devices().empty()) {
-        return true;
-    }
-
-    // UMD Hidden Intermesh Links
-    std::vector<uint32_t> config_data(1, 0);
-    auto first_eth_core = soc_desc.logical_eth_core_to_chan_map.begin()->first;
-    tt_cxy_pair virtual_eth_core(
-        first_chip_id,
-        cluster.get_virtual_coordinate_from_logical_coordinates(first_chip_id, first_eth_core, CoreType::ETH));
-    auto multi_mesh_config_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
-        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::INTERMESH_ETH_LINK_CONFIG);
-    cluster.read_core(config_data, sizeof(uint32_t), virtual_eth_core, multi_mesh_config_addr);
-    bool intermesh_enabled =
-        (config_data[0] & intermesh_constants::MULTI_MESH_MODE_MASK) == intermesh_constants::MULTI_MESH_ENABLED_VALUE;
-    return intermesh_enabled;
 }
 
 bool ControlPlane::system_has_intermesh_links() const { return !this->get_all_intermesh_eth_links().empty(); }
@@ -1857,29 +1869,6 @@ bool ControlPlane::is_intermesh_eth_link(chip_id_t chip_id, CoreCoord eth_core) 
         }
     }
     return false;
-}
-
-// TODO: Support Intramesh links through this API as well
-bool ControlPlane::is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord eth_core) const {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto remote_connections = cluster.get_ethernet_connections_to_remote_devices();
-    const auto& soc_desc = cluster.get_soc_desc(chip_id);
-    auto chan_id = soc_desc.logical_eth_core_to_chan_map.at(eth_core);
-
-    if (remote_connections.find(chip_id) != remote_connections.end() and
-        remote_connections.at(chip_id).find(chan_id) != remote_connections.at(chip_id).end()) {
-        return true;
-    }
-    // Read the link status from designated L1 address
-    tt_cxy_pair virtual_eth_core(
-        chip_id, cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
-    std::vector<uint32_t> status_data(1, 0);
-    auto multi_mesh_link_status_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
-        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::INTERMESH_ETH_LINK_STATUS);
-    cluster.read_core(status_data, sizeof(uint32_t), virtual_eth_core, multi_mesh_link_status_addr);
-
-    // Check if the link is trained
-    return (status_data[0] & intermesh_constants::LINK_CONNECTED_MASK) == intermesh_constants::LINK_CONNECTED_MASK;
 }
 
 const std::vector<std::pair<CoreCoord, chan_id_t>>& ControlPlane::get_intermesh_eth_links(chip_id_t chip_id) const {
@@ -1949,23 +1938,6 @@ std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(
                 }
             }
         }
-
-        if (cluster.get_board_type(chip_id) != BoardType::UBB) {
-            // For Non-UBB Wormhole systems, intermesh links must also be marked as active ethernet cores
-            // These cores are not seen by UMD or the cluster descriptor as active. Control Plane is
-            // responsible for querying this information.
-            // Note: On UBB systems, intermesh links are already identified as active by UMD, so control
-            // plane does not need to do this.
-            const auto& eth_routing_info = cluster.get_eth_routing_info(chip_id);
-            auto intermesh_links = this->get_intermesh_eth_links(chip_id);
-            for (const auto& [eth_coord, eth_chan] : intermesh_links) {
-                if (eth_routing_info.find(eth_coord) != eth_routing_info.end() and
-                    eth_routing_info.at(eth_coord) == EthRouterMode::FABRIC_ROUTER and skip_reserved_cores) {
-                    continue;
-                }
-                active_ethernet_cores.insert(eth_coord);
-            }
-        }
     }
     return active_ethernet_cores;
 }
@@ -1991,64 +1963,25 @@ void ControlPlane::generate_local_intermesh_link_table() {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     intermesh_link_table_.local_mesh_id = local_mesh_binding_.mesh_ids[0];
     intermesh_link_table_.local_host_rank_id = this->get_local_host_rank_id_binding();
-    const uint32_t remote_config_base_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
-        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ETH_LINK_REMOTE_INFO);
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
-        if (this->has_intermesh_links(chip_id)) {
-            for (const auto& [eth_core, chan_id] : this->get_intermesh_eth_links(chip_id)) {
-                // TODO: remove below logic, should at very least be using UMD apis to get ids
-                // But all this data can be provided by UMD
-                tt_cxy_pair virtual_eth_core(
-                    chip_id, cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
-                uint64_t local_board_id = 0;
-                uint64_t remote_board_id = 0;
-                uint32_t remote_chan_id = 0;
-                cluster.read_core(
-                    &local_board_id,
-                    sizeof(uint64_t),
-                    virtual_eth_core,
-                    remote_config_base_addr + intermesh_constants::LOCAL_BOARD_ID_OFFSET);
-                cluster.read_core(
-                    &remote_board_id,
-                    sizeof(uint64_t),
-                    virtual_eth_core,
-                    remote_config_base_addr + intermesh_constants::REMOTE_BOARD_ID_OFFSET);
-                cluster.read_core(
-                    &remote_chan_id,
-                    sizeof(uint32_t),
-                    virtual_eth_core,
-                    remote_config_base_addr + intermesh_constants::REMOTE_ETH_CHAN_ID_OFFSET);
-                auto local_eth_chan_desc = EthChanDescriptor{
-                    .board_id = local_board_id,
-                    .chan_id = chan_id,
-                };
-                auto remote_eth_chan_desc = EthChanDescriptor{
-                    .board_id = remote_board_id,
-                    .chan_id = remote_chan_id,
-                };
-                intermesh_link_table_.intermesh_links[local_eth_chan_desc] = remote_eth_chan_desc;
-                chip_id_to_asic_id_[chip_id] = local_board_id;
-            }
-        } else if (cluster.arch() != ARCH::BLACKHOLE) {
-            // For chips without intermesh links, we still need to populate the asic IDs
-            // for consistency.
-            // Skip this on Blackhole for now.
-            if (this->get_active_ethernet_cores(chip_id).size() == 0) {
-                // No Active Ethernet Cores found. Not querying the board id off ethernet cores.
-                chip_id_to_asic_id_[chip_id] = chip_id;
-            } else {
-                auto first_eth_core = *(this->get_active_ethernet_cores(chip_id).begin());
-                tt_cxy_pair virtual_eth_core(
-                    chip_id,
-                    cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, first_eth_core, CoreType::ETH));
-                uint64_t local_board_id = 0;
-                cluster.read_core(
-                    &local_board_id,
-                    sizeof(uint64_t),
-                    virtual_eth_core,
-                    remote_config_base_addr + intermesh_constants::LOCAL_BOARD_ID_OFFSET);
-                chip_id_to_asic_id_[chip_id] = local_board_id;
-            }
+        auto local_board_id = cluster.get_unique_chip_ids().find(chip_id);
+        if (local_board_id == cluster.get_unique_chip_ids().end()) {
+            chip_id_to_asic_id_[chip_id] = chip_id;
+            continue;
+        }
+        chip_id_to_asic_id_[chip_id] = local_board_id->second;
+        for (const auto& [eth_core, chan_id] : this->get_intermesh_eth_links(chip_id)) {
+            auto [remote_board_id, remote_chan_id] =
+                cluster.get_ethernet_connections_to_remote_devices().at(chip_id).at(chan_id);
+            auto local_eth_chan_desc = EthChanDescriptor{
+                .board_id = local_board_id->second,
+                .chan_id = chan_id,
+            };
+            auto remote_eth_chan_desc = EthChanDescriptor{
+                .board_id = remote_board_id,
+                .chan_id = remote_chan_id,
+            };
+            intermesh_link_table_.intermesh_links[local_eth_chan_desc] = remote_eth_chan_desc;
         }
     }
 }
@@ -2251,6 +2184,106 @@ const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>&
 const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& ControlPlane::get_host_local_context()
     const {
     return host_local_context_;
+}
+
+// Helper function to fill connection info with common fields for fabric router configs
+void fill_connection_info_fields(
+    tt::tt_fabric::fabric_connection_info_t& connection_info,
+    const CoreCoord& virtual_core,
+    const FabricEriscDatamoverConfig& config,
+    uint32_t sender_channel,
+    uint16_t worker_free_slots_stream_id) {
+    connection_info.edm_noc_x = static_cast<uint8_t>(virtual_core.x);
+    connection_info.edm_noc_y = static_cast<uint8_t>(virtual_core.y);
+    connection_info.edm_buffer_base_addr = config.sender_channels_base_address[sender_channel];
+    connection_info.num_buffers_per_channel = config.sender_channels_num_buffers[sender_channel];
+    connection_info.edm_connection_handshake_addr = config.sender_channels_connection_semaphore_address[sender_channel];
+    connection_info.edm_worker_location_info_addr =
+        config.sender_channels_worker_conn_info_base_address[sender_channel];
+    connection_info.buffer_size_bytes = config.channel_buffer_size_bytes;
+    connection_info.buffer_index_semaphore_id = config.sender_channels_buffer_index_semaphore_address[sender_channel];
+    connection_info.worker_free_slots_stream_id = worker_free_slots_stream_id;
+}
+
+// Helper function to fill tensix connection info with tensix-specific configuration
+void fill_tensix_connection_info_fields(
+    tt::tt_fabric::fabric_connection_info_t& connection_info,
+    const CoreCoord& mux_core_virtual,
+    const tt::tt_fabric::FabricTensixDatamoverConfig& tensix_config,
+    chip_id_t physical_chip_id,
+    chan_id_t eth_channel_id,
+    uint32_t sender_channel,
+    uint32_t risc_id) {
+    connection_info.edm_noc_x = static_cast<uint8_t>(mux_core_virtual.x);
+    connection_info.edm_noc_y = static_cast<uint8_t>(mux_core_virtual.y);
+    connection_info.edm_buffer_base_addr = tensix_config.get_channels_base_address(risc_id, sender_channel);
+    connection_info.num_buffers_per_channel = tensix_config.get_num_buffers_per_channel();
+    connection_info.buffer_size_bytes = tensix_config.get_buffer_size_bytes_full_size_channel();
+    connection_info.edm_connection_handshake_addr =
+        tensix_config.get_connection_semaphore_address(physical_chip_id, eth_channel_id, sender_channel);
+    connection_info.edm_worker_location_info_addr =
+        tensix_config.get_worker_conn_info_base_address(physical_chip_id, eth_channel_id, sender_channel);
+    connection_info.buffer_index_semaphore_id =
+        tensix_config.get_buffer_index_semaphore_address(physical_chip_id, eth_channel_id, sender_channel);
+    connection_info.worker_free_slots_stream_id =
+        tensix_config.get_channel_credits_stream_id(physical_chip_id, eth_channel_id, sender_channel);
+}
+
+void ControlPlane::populate_fabric_connection_info(
+    tt::tt_fabric::fabric_connection_info_t& worker_connection_info,
+    tt::tt_fabric::fabric_connection_info_t& dispatcher_connection_info,
+    tt::tt_fabric::fabric_connection_info_t& tensix_connection_info,
+    chip_id_t physical_chip_id,
+    chan_id_t eth_channel_id,
+    eth_chan_directions router_direction) const {
+    constexpr uint16_t WORKER_FREE_SLOTS_STREAM_ID = 17;
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& fabric_context = this->get_fabric_context();
+    const auto topology = fabric_context.get_fabric_topology();
+    const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
+    const auto sender_channel = is_2d_fabric ? router_direction : 0;
+
+    const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    // Always populate fabric router config for normal workers
+    const auto& edm_config = fabric_context.get_fabric_router_config(
+        tt::tt_fabric::FabricEriscDatamoverType::Default,
+        tt::tt_fabric::FabricEriscDatamoverAxis::Short,
+        fabric_tensix_config,
+        static_cast<eth_chan_directions>(sender_channel));
+    CoreCoord fabric_router_virtual_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
+
+    fill_connection_info_fields(
+        worker_connection_info, fabric_router_virtual_core, edm_config, sender_channel, WORKER_FREE_SLOTS_STREAM_ID);
+
+    // Check if fabric tensix config is enabled, if so populate different configs for dispatcher and tensix
+    if (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        // dispatcher uses different fabric router, which still has the default buffer size.
+        const auto& default_edm_config = fabric_context.get_fabric_router_config();
+        fill_connection_info_fields(
+            dispatcher_connection_info,
+            fabric_router_virtual_core,
+            default_edm_config,
+            sender_channel,
+            WORKER_FREE_SLOTS_STREAM_ID);
+
+        const auto& tensix_config = fabric_context.get_tensix_config();
+        CoreCoord mux_core_logical = tensix_config.get_core_for_channel(physical_chip_id, eth_channel_id);
+        CoreCoord mux_core_virtual = cluster.get_virtual_coordinate_from_logical_coordinates(
+            physical_chip_id, mux_core_logical, CoreType::WORKER);
+        // Get the RISC ID that handles this ethernet channel
+        auto risc_id = tensix_config.get_risc_id_for_channel(physical_chip_id, eth_channel_id);
+
+        fill_tensix_connection_info_fields(
+            tensix_connection_info,
+            mux_core_virtual,
+            tensix_config,
+            physical_chip_id,
+            eth_channel_id,
+            sender_channel,
+            risc_id);
+    } else {
+        dispatcher_connection_info = worker_connection_info;
+    }
 }
 
 ControlPlane::~ControlPlane() = default;

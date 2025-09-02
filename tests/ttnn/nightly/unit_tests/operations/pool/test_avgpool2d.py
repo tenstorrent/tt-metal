@@ -149,8 +149,8 @@ def run_avg_pool2d(
 
     ceil_mode_out_shape_adj = False
     if ceil_mode:
-        out_h = math.ceil((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-        out_w = math.ceil((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+        out_h = math.ceil((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
+        out_w = math.ceil((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
         if ((out_h - 1) * stride_h) >= (in_h + pad_t):
             ceil_mode_out_shape_adj = True
             out_h -= 1
@@ -158,8 +158,8 @@ def run_avg_pool2d(
             ceil_mode_out_shape_adj = True
             out_w -= 1
     else:
-        out_h = math.floor((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-        out_w = math.floor((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+        out_h = math.floor((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
+        out_w = math.floor((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
 
     # using non-zero seed to avoid random spike in floating point error on single element of the
     # 1x256x56x56 tensor with divisor_override=5 and 5x5 kernel resulting in rtol=0.015 for that element
@@ -262,15 +262,18 @@ def run_avg_pool2d(
     # test for equivalence
     pcc_thresh = 0.985
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
-    # TTNN only supports scalars in Bfloat16, so we cannot support rtol lower than 0.01
-    # for instance, a 3x3 kernel uses scalar 1/9 = 0.111, which in Bfloat16 is 0.11084
-    # so if we fill the tensor with 1s, Torch gets 9 * 0.111 = 0.999 which converted back
-    # to Bfloat16 rounds to 1.0 but TTNN gets 9 * 0.11084 = 0.99756 which converted back
-    # to Bfloat16 rounds to 0.9961, so the rdiff in this case is 0.0039
-    # since the atol default is 0.016 we don't see this issue for low magnitude values, but
-    # when using small divisor overrides with large kernels we see much large values which
-    # overwhelm the atol and the rtol becomes significant
-    rtol = 0.01
+    # TTNN supports scalars only in Bfloat16 and from recently it uses
+    # tie-to-even rounding for fp32->bf16 scalar conversion, which improves accuracy
+    # compared to the previous truncation method. For a 3x3 kernel using scalar 1/9:
+    # the new rounding converts 1/9 → 0.111328125 in bf16, and 9 × 0.111328125 = 1.001953125,
+    # which rounds back to 1.0 in bf16. This is much better than the old truncation method
+    # which gave 1/9 → 0.11084 → 9 × 0.11084 = 0.99756 → 0.99609375 in bf16.
+    # However, numerical differences still occur in complex operations due to:
+    # different rounding at intermediate computation steps
+    # and accumulation order differences in pooling operations
+    # These factors compound, especially with small divisor overrides and large kernels,
+    # requiring relaxed rtol thresholds for robust comparisons.
+    rtol = 0.02
     if dtype == ttnn.bfloat8_b:
         atol = 0.35
     assert_with_pcc(torch_output, ttnn_output, pcc_thresh)

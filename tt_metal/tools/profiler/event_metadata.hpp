@@ -118,7 +118,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         FabricNoCEvent fabric_event;
         FabricNoCScatterEvent fabric_scatter_event;
         FabricRoutingFields fabric_routing_fields;
-    } data;
+    } data{};
 
     KernelProfilerNocEventMetadata() : data{.raw_event = {NocEventType::UNDEF}} {}
 

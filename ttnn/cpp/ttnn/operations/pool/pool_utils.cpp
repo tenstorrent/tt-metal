@@ -7,7 +7,6 @@
 #include <tt-metalium/assert.hpp>
 
 #include "tt-metalium/constants.hpp"
-#include "tt-metalium/hal.hpp"
 
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 namespace ttnn::operations::pool {
@@ -225,14 +224,8 @@ uint32_t calculate_L1_usage(
     uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] * params.out_ntiles_c;
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
-    uint32_t alignment_bytes = tt::tt_metal::hal::get_dram_alignment();
-    auto align = [alignment_bytes](uint32_t size) {
-        uint32_t factor = (size + alignment_bytes - 1) / alignment_bytes;
-        return factor * alignment_bytes;
-    };
-
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
-           align(out_cb_config_size) /* global, involved */;
+           sliding_window::align_buffer(out_cb_config_size) /* global, involved */;
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
@@ -247,7 +240,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     auto compute_grid_size = input_tensor.device()->compute_with_storage_grid_size();
 
     struct l1_usage_config {
-        uint32_t l1_usage;
+        uint32_t l1_usage{};
         std::optional<ParallelConfig> config;
     };
 
