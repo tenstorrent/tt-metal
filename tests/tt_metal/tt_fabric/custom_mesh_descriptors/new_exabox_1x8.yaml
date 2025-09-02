@@ -1,0 +1,75 @@
+ChipSpec: {
+  arch: wormhole_b0,
+  ethernet_ports: {
+    N: 2,
+    E: 2,
+    S: 2,
+    W: 2,
+  }
+}
+
+Board: [
+  { name: 2x4,
+    type: Mesh,
+    topology: [1, 8]}
+]
+
+Mesh: [
+{
+  id: 4,
+  board: 2x4,
+  device_topology: [1, 8],
+  host_topology: [1, 1],
+
+},
+{
+  id: 0,
+  board: 2x4,
+  device_topology: [1, 8],
+  host_topology: [1, 1],
+},
+{
+  id: 1,
+  board: 2x4,
+  device_topology: [1, 8],
+  host_topology: [1, 1],
+
+},
+{
+  id: 2,
+  board: 2x4,
+  device_topology: [1, 8],
+  host_topology: [1, 1],
+},
+{
+  id: 3,
+  board: 2x4,
+  device_topology: [1, 8],
+  host_topology: [1, 1],
+}
+]
+
+Graph: [
+
+  [[0, N10], [2, S2]],
+  [[0, N11], [2, S3]],
+
+  [[1, N10], [2, N10]],
+  [[1, N11], [2, N11]],
+
+  [[2, S2], [0, N10]],
+  [[2, S3], [0, N11]],
+  [[2, N10], [1, N10]],
+  [[2, N11], [1, N11]],
+  [[2, N12], [3, N12]],
+  [[2, N13], [3, N13]],
+
+  [[3, N12], [2, N12]],
+  [[3, N13], [2, N13]],
+
+  # Cross Super-Pod Connections
+  [[2, S4], [4, S4]],
+  [[2, S5], [4, S5]],
+  [[4, S4], [2, S4]],
+  [[4, S5], [2, S5]]
+]
