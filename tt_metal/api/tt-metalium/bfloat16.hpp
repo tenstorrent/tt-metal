@@ -23,6 +23,9 @@ public:
     // create from float: tie-to-even rounding
     bfloat16(float float_num);
 
+    // create from float: truncate rounding
+    static bfloat16 truncate(float float_num);
+
     // store lower 16 as 16-bit uint
     bfloat16(uint32_t uint32_data);
 
