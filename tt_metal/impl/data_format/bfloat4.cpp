@@ -55,6 +55,16 @@ template std::vector<uint32_t> pack_as_bfp4_tiles<uint32_t>(
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile);
+template std::vector<uint32_t> pack_as_bfp4_tiles<uint8_t>(
+    tt::stl::Span<const uint8_t> data,
+    bool row_major_input,
+    bool is_exp_a,
+    const std::optional<tt::tt_metal::Tile>& tile);
+template std::vector<uint32_t> pack_as_bfp4_tiles<uint16_t>(
+    tt::stl::Span<const uint16_t> data,
+    bool row_major_input,
+    bool is_exp_a,
+    const std::optional<tt::tt_metal::Tile>& tile);
 
 std::vector<float> unpack_bfp4_tiles_into_float_vec(
     tt::stl::Span<const uint32_t> bfp_tiles,
