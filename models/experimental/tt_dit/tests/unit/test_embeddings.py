@@ -16,6 +16,7 @@ from ...layers.embeddings import (
     SD35CombinedTimestepTextProjEmbeddings,
     PatchEmbed,
     MochiPatchEmbed,
+    WanPatchEmbed,
 )
 from ....stable_diffusion_35_large.reference import SD3Transformer2DModel as TorchSD3Transformer2DModel
 from diffusers.models.transformers.transformer_mochi import MochiTransformer3DModel
@@ -124,6 +125,37 @@ class TorchPatchEmbed(torch.nn.Module):
         spatial_pos_embed = self.pos_embed.reshape(1, self.pos_embed_max_size, self.pos_embed_max_size, -1)
         spatial_pos_embed = spatial_pos_embed[:, top : top + height, left : left + width, :]
         return spatial_pos_embed.reshape(1, -1, spatial_pos_embed.shape[-1])
+
+
+class TorchWanPatchEmbed(torch.nn.Module):
+    def __init__(
+        self,
+        patch_size: tuple,
+        in_channels: int,
+        embed_dim: int,
+    ) -> None:
+        super().__init__()
+
+        self.patch_size = patch_size
+
+        self.proj = torch.nn.Conv3d(
+            in_channels,
+            embed_dim,
+            kernel_size=patch_size,
+            stride=patch_size,
+        )
+
+    def forward(self, latent: torch.Tensor) -> torch.Tensor:
+        # latent: (B, C, T, H, W)
+        latent = self.proj(latent)
+        # latent: (B, embed_dim, T', H', W')
+        B, embed_dim, T_out, H_out, W_out = latent.shape
+
+        # Flatten spatial dimensions and permute: BCTHW -> B(THW)C
+        latent = latent.permute(0, 2, 3, 4, 1)  # (B, T', H', W', embed_dim)
+        latent = latent.reshape(B, T_out * H_out * W_out, embed_dim)
+
+        return latent
 
 
 @pytest.mark.parametrize(
@@ -475,3 +507,89 @@ def test_patch_embed_mochi(
         assert_quality(
             torch_output_flattened, tt_output_torch[i], pcc=0.999_994, relative_rmse=0.05
         )  # Lower PCC due to conv2d approximation
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(1, 1)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    ("B, T, H, W, patch_size, in_channels, embed_dim"),
+    [
+        (1, 21, 60, 104, (1, 2, 2), 16, 5120),  # WAN config - similar to test_transformer_wan
+        (1, 31, 40, 80, (1, 2, 2), 16, 5120),  # Alternative WAN config
+        (1, 16, 32, 32, (2, 2, 2), 12, 3072),  # Smaller test case
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_wan_patch_embed(
+    mesh_device: ttnn.MeshDevice,
+    B: int,
+    T: int,
+    H: int,
+    W: int,
+    patch_size: tuple,
+    in_channels: int,
+    embed_dim: int,
+) -> None:
+    torch_dtype = torch.bfloat16
+
+    # Create Torch model
+    torch_model = TorchWanPatchEmbed(
+        patch_size=patch_size,
+        in_channels=in_channels,
+        embed_dim=embed_dim,
+    ).to(torch_dtype)
+    torch_model.eval()
+
+    # Create TT model
+    tt_model = WanPatchEmbed(
+        patch_size=patch_size,
+        in_channels=in_channels,
+        embed_dim=embed_dim,
+        mesh_device=mesh_device,
+        init=False,
+    )
+    tt_model.load_state_dict(torch_model.state_dict())
+
+    # Create input tensors
+    torch.manual_seed(0)
+    input_tensor_bcthw = torch.randn((B, in_channels, T, H, W), dtype=torch_dtype)
+
+    # Calculate output dimensions
+    pt, ph, pw = patch_size
+    patches_t = T // pt
+    patches_h = H // ph
+    patches_w = W // pw
+
+    # Create the patched input tensor for TT model (1, B, patches_total, pt*ph*pw*in_channels)
+    # The expected format is (1, batch, num_patches, patch_size_flat * in_channels)
+    input_tensor_patched = input_tensor_bcthw.clone().reshape(
+        B, in_channels, patches_t, pt, patches_h, ph, patches_w, pw
+    )
+    input_tensor_patched = input_tensor_patched.permute(
+        0, 2, 4, 6, 3, 5, 7, 1
+    )  # (B, patches_t, patches_h, patches_w, pt, ph, pw, in_channels)
+    input_tensor_patched = input_tensor_patched.reshape(
+        1, B, patches_t * patches_h * patches_w, pt * ph * pw * in_channels
+    )
+
+    # Run torch model
+    torch_output = torch_model(input_tensor_bcthw)
+
+    # Convert to TT tensor
+    tt_input = bf16_tensor(input_tensor_patched, device=mesh_device)
+
+    # Run TT model
+    tt_output = tt_model(tt_input)
+
+    # Convert back to torch and compare
+    tt_output_torch = ttnn.to_torch(tt_output)
+
+    # Extract the batch output (remove the leading 1 dimension)
+    tt_output_batch = tt_output_torch[0]
+
+    assert_quality(
+        torch_output, tt_output_batch, pcc=0.999_994, relative_rmse=0.05
+    )  # Lower PCC due to conv3d approximation
