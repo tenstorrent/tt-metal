@@ -350,6 +350,20 @@ uint64_t BankManager::allocate_buffer(
     }
     TT_ASSERT(bool(allocators_[state.value]), "Allocator not initialized!");
 
+    auto address = allocator_->allocate(size_per_bank, bottom_up, address_limit);
+    if (not address.has_value()) {
+        TT_THROW(
+            "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
+            "store {} B",
+            size,
+            enchantum::to_string(buffer_type_),
+            num_banks,
+            size_per_bank);
+    }
+    allocated_buffers_.insert(address.value());
+
+    return address.value();
+    /*
     // Compute candidate ranges from allocator and subtract overlay
     std::vector<std::pair<DeviceAddr, DeviceAddr>> free_abs;
     for (auto r : allocators_[state.value]->available_addresses(size_per_bank)) {
@@ -408,6 +422,7 @@ uint64_t BankManager::allocate_buffer(
     }
 
     return address.value();
+    */
 }
 
 void BankManager::deallocate_buffer(DeviceAddr address, BankManager::StateDependencies::StateId state) {

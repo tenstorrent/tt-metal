@@ -243,34 +243,26 @@ INSTANTIATE_TEST_SUITE_P(
             /*expected_dependencies=*/{{StateId{1}}, {StateId{2}}, {StateId{0}}},
             /*expected_dependents=*/{{StateId{2}}, {StateId{0}}, {StateId{1}}}}));
 
-TEST_F(DeviceSingleCardBufferFixture, TestOverlappedBankManager) {
+TEST(OverlappedAllocator, TestOverlappedBankManager) {
     // This test sets up a BankManager for DRAM and L1, mimicking Allocator initialization.
 
     // Get device and soc descriptor
-    IDevice* device = this->device_;
-    const metal_SocDescriptor& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
+    // Single logical bank with offset 0 for simplicity
+    std::vector<int64_t> bank_desc = {0};
 
     // DRAM setup
     {
-        // Gather all DRAM bank descriptors (address offsets per channel, as in Allocator)
-        const size_t num_channels = soc_desc.get_num_dram_views();
-        std::vector<int64_t> dram_bank_descriptors(num_channels);
-        for (size_t channel = 0; channel < num_channels; ++channel) {
-            dram_bank_descriptors.at(channel) =
-                static_cast<int64_t>(soc_desc.get_address_offset(static_cast<int>(channel)));
-        }
         // Use per-channel DRAM size adjusted by allocator bases and alignment
-        const uint64_t dram_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
-        const uint32_t dram_alignment = device->allocator()->get_alignment(BufferType::DRAM);
-        const uint64_t dram_trace_region_size = device->allocator()->get_config().trace_region_size;
-        const uint64_t dram_size =
-            static_cast<uint64_t>(device->dram_size_per_channel()) - dram_unreserved_base - dram_trace_region_size;
+        const uint64_t dram_unreserved_base = 0;
+        const uint32_t dram_alignment = 1024;
+        const uint64_t dram_trace_region_size = 0;
+        const uint64_t dram_size = 1024 * 1024 * 1024;
 
         // Set up BankManager for DRAM with default single-state dependencies
-        BankManager::StateDependencies deps;  // defaults to single state, no overlaps
+        BankManager::StateDependencies deps{{{StateId{0}, {}}, {StateId{1}, {}}}};  // 2 states, no overlaps
         BankManager dram_bank_manager(
             BufferType::DRAM,
-            dram_bank_descriptors,
+            bank_desc,
             dram_size,
             dram_alignment,
             /*alloc_offset=*/dram_unreserved_base,
@@ -286,8 +278,15 @@ TEST_F(DeviceSingleCardBufferFixture, TestOverlappedBankManager) {
             CoreRangeSet(std::vector<CoreRange>{}),  // Not used for DRAM
             std::nullopt,
             BankManager::StateDependencies::StateId{0});
-        EXPECT_GT(addr, 0u);
-        dram_bank_manager.deallocate_buffer(addr, BankManager::StateDependencies::StateId{0});
+        auto addr2 = dram_bank_manager.allocate_buffer(
+            alloc_size,
+            alloc_size,
+            /*bottom_up=*/true,
+            CoreRangeSet(std::vector<CoreRange>{}),  // Not used for DRAM
+            std::nullopt,
+            BankManager::StateDependencies::StateId{1});
+        EXPECT_EQ(addr, 0);
+        EXPECT_EQ(addr2, 0);
     }
 }
 
