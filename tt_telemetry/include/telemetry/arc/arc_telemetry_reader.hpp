@@ -13,9 +13,8 @@
 #include <map>
 
 #include <telemetry/ethernet/chip_identifier.hpp>
-#include <third_party/umd/device/api/umd/device/tt_device/tt_device.h>
+#include <third_party/umd/device/api/umd/device/cluster.hpp>
 #include <third_party/umd/device/api/umd/device/types/telemetry.hpp>
-#include <tt-metalium/cluster.hpp>
 
 class ARCTelemetryReader {
 public:
@@ -40,4 +39,4 @@ private:
 
 // Utility function to create ARC telemetry readers for all MMIO-capable chips
 std::map<ChipIdentifier, std::shared_ptr<ARCTelemetryReader>> create_arc_telemetry_readers_for_mmio_chips(
-    const tt::Cluster& cluster);
+    const std::unique_ptr<tt::umd::Cluster>& cluster);

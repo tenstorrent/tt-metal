@@ -11,10 +11,10 @@
  #include <string>
  #include <vector>
 
- #include <tt-metalium/core_coord.hpp>
+#include <third_party/umd/device/api/umd/device/cluster.hpp>
 
- #include <telemetry/metric.hpp>
- #include <telemetry/ethernet/ethernet_endpoint.hpp>
+#include <telemetry/metric.hpp>
+#include <telemetry/ethernet/ethernet_endpoint.hpp>
 
 class EthernetEndpointUpMetric: public BoolMetric {
 public:
@@ -28,7 +28,9 @@ public:
     }
 
     const std::vector<std::string> telemetry_path() const override;
-    void update(const tt::Cluster &cluster, std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::chrono::steady_clock::time_point start_of_update_cycle) override;
 
 private:
     EthernetEndpoint endpoint_;
@@ -37,52 +39,64 @@ private:
 
 class EthernetCRCErrorCountMetric: public UIntMetric {
 public:
-    EthernetCRCErrorCountMetric(size_t id, const EthernetEndpoint &endpoint, const tt::Cluster &cluster);
+    EthernetCRCErrorCountMetric(
+        size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster);
 
     const std::vector<std::string> telemetry_path() const override;
-    void update(const tt::Cluster &cluster, std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::chrono::steady_clock::time_point start_of_update_cycle) override;
 
 private:
     EthernetEndpoint endpoint_;
-    std::optional<tt_cxy_pair> virtual_eth_core_;
+    std::optional<tt::umd::CoreCoord> ethernet_core_;
     uint32_t crc_addr_;
 };
 
 class EthernetRetrainCountMetric: public UIntMetric {
 public:
-    EthernetRetrainCountMetric(size_t id, const EthernetEndpoint &endpoint, const tt::Cluster &cluster);
+    EthernetRetrainCountMetric(
+        size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster);
 
     const std::vector<std::string> telemetry_path() const override;
-    void update(const tt::Cluster &cluster, std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::chrono::steady_clock::time_point start_of_update_cycle) override;
 
 private:
     EthernetEndpoint endpoint_;
-    tt_cxy_pair virtual_eth_core_;
+    tt::umd::CoreCoord ethernet_core_;
     uint32_t retrain_count_addr_;
 };
 
 class EthernetCorrectedCodewordCountMetric: public UIntMetric {
 public:
-    EthernetCorrectedCodewordCountMetric(size_t id, const EthernetEndpoint &endpoint, const tt::Cluster &cluster);
+    EthernetCorrectedCodewordCountMetric(
+        size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster);
 
     const std::vector<std::string> telemetry_path() const override;
-    void update(const tt::Cluster &cluster, std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::chrono::steady_clock::time_point start_of_update_cycle) override;
 
 private:
     EthernetEndpoint endpoint_;
-    std::optional<tt_cxy_pair> virtual_eth_core_;
+    std::optional<tt::umd::CoreCoord> ethernet_core_;
     uint32_t corr_addr_;
 };
 
 class EthernetUncorrectedCodewordCountMetric: public UIntMetric {
 public:
-    EthernetUncorrectedCodewordCountMetric(size_t id, const EthernetEndpoint &endpoint, const tt::Cluster &cluster);
+    EthernetUncorrectedCodewordCountMetric(
+        size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster);
 
     const std::vector<std::string> telemetry_path() const override;
-    void update(const tt::Cluster &cluster, std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::chrono::steady_clock::time_point start_of_update_cycle) override;
 
 private:
     EthernetEndpoint endpoint_;
-    std::optional<tt_cxy_pair> virtual_eth_core_;
+    std::optional<tt::umd::CoreCoord> ethernet_core_;
     uint32_t uncorr_addr_;
 };

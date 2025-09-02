@@ -11,7 +11,7 @@
 #include <string>
 #include <unordered_map>
 
-#include <llrt/tt_cluster.hpp>
+#include <third_party/umd/device/api/umd/device/cluster.hpp>
 
 enum class MetricUnit : uint16_t {
     UNITLESS = 0,
@@ -47,7 +47,8 @@ public:
         return { "dummy", "metric", "someone", "forgot", "to", "implement", "telemetry", "path", "function" };
     }
 
-    virtual void update(const tt::Cluster &cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    virtual void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     }
 
     bool changed_since_transmission() const {

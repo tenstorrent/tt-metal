@@ -20,7 +20,9 @@ public:
     ARCTelemetryAvailableMetric(size_t chip_id, std::shared_ptr<ARCTelemetryReader> reader);
 
     const std::vector<std::string> telemetry_path() const override;
-    void update(const tt::Cluster& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::chrono::steady_clock::time_point start_of_update_cycle) override;
 
 private:
     std::shared_ptr<ARCTelemetryReader> reader_;
@@ -38,7 +40,9 @@ public:
         MetricUnit units = MetricUnit::UNITLESS);
 
     const std::vector<std::string> telemetry_path() const override;
-    void update(const tt::Cluster& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::chrono::steady_clock::time_point start_of_update_cycle) override;
 
 private:
     std::shared_ptr<ARCTelemetryReader> reader_;
@@ -60,7 +64,9 @@ public:
         MetricUnit units = MetricUnit::UNITLESS);
 
     const std::vector<std::string> telemetry_path() const override;
-    void update(const tt::Cluster& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::chrono::steady_clock::time_point start_of_update_cycle) override;
 
 private:
     std::shared_ptr<ARCTelemetryReader> reader_;

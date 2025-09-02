@@ -1,5 +1,3 @@
-#include "impl/context/metal_context.hpp"
-
 #include <telemetry/ethernet/ethernet_metrics.hpp>
 #include <telemetry/ethernet/ethernet_helpers.hpp>
 #include <chrono>
@@ -17,15 +15,16 @@ const std::vector<std::string> EthernetEndpointUpMetric::telemetry_path() const 
     return path;
 }
 
-void EthernetEndpointUpMetric::update(const tt::Cluster &cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+void EthernetEndpointUpMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     // Check if enough time has elapsed since last force refresh
     bool should_force_refresh = (start_of_update_cycle - last_force_refresh_time_) >= FORCE_REFRESH_LINK_STATUS_TIMEOUT;
-    
+
     // If we're forcing a refresh, update the timestamp
     if (should_force_refresh) {
         last_force_refresh_time_ = start_of_update_cycle;
     }
-    
+
     bool is_up_now = is_ethernet_endpoint_up(cluster, endpoint_, should_force_refresh);
     bool is_up_old = value_;
     changed_since_transmission_ = is_up_now != is_up_old;
@@ -34,7 +33,6 @@ void EthernetEndpointUpMetric::update(const tt::Cluster &cluster, std::chrono::s
         std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
-
 /**************************************************************************************************
  EthernetCRCErrorCountMetric
 
@@ -42,12 +40,17 @@ void EthernetEndpointUpMetric::update(const tt::Cluster &cluster, std::chrono::s
 **************************************************************************************************/
 
 EthernetCRCErrorCountMetric::EthernetCRCErrorCountMetric(
-    size_t id, const EthernetEndpoint& endpoint, const tt::Cluster& cluster) :
+    size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster) :
     UIntMetric(id), endpoint_(endpoint) {
     value_ = 0;
-    if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
-        virtual_eth_core_ = tt_cxy_pair(endpoint.chip.id, cluster.get_virtual_coordinate_from_logical_coordinates(endpoint.chip.id, endpoint.ethernet_core, CoreType::ETH));
-        crc_addr_ = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CRC_ERR);
+    tt::umd::TTDevice* device = cluster->get_tt_device(endpoint_.chip.id);
+    if (device->get_arch() == tt::ARCH::WORMHOLE_B0) {
+        ethernet_core_ = tt::umd::CoreCoord(
+            endpoint_.ethernet_core.x,
+            endpoint_.ethernet_core.y,
+            tt::umd::CoreType::ETH,
+            tt::umd::CoordSystem::LOGICAL);
+        crc_addr_ = 0x100;
     }
 }
 
@@ -57,18 +60,18 @@ const std::vector<std::string> EthernetCRCErrorCountMetric::telemetry_path() con
     return path;
 }
 
-void EthernetCRCErrorCountMetric::update(const tt::Cluster &cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
-    if (!virtual_eth_core_.has_value()) {
+void EthernetCRCErrorCountMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    if (!ethernet_core_.has_value()) {
         // Architecture not yet supported
         return;
     }
     uint32_t crc_error_val = 0;
-    cluster.read_core(&crc_error_val, sizeof(uint32_t), virtual_eth_core_.value(), crc_addr_);
+    cluster->read_from_device(&crc_error_val, endpoint_.chip.id, ethernet_core_.value(), crc_addr_, sizeof(uint32_t));
     value_ = uint64_t(crc_error_val);
     timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
 }
-
 
 /**************************************************************************************************
  EthernetRetrainCountMetric
@@ -77,11 +80,12 @@ void EthernetCRCErrorCountMetric::update(const tt::Cluster &cluster, std::chrono
 **************************************************************************************************/
 
 EthernetRetrainCountMetric::EthernetRetrainCountMetric(
-    size_t id, const EthernetEndpoint& endpoint, const tt::Cluster& cluster) :
+    size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster) :
     UIntMetric(id), endpoint_(endpoint) {
     value_ = 0;
-    virtual_eth_core_ = tt_cxy_pair(endpoint.chip.id, cluster.get_virtual_coordinate_from_logical_coordinates(endpoint.chip.id, endpoint.ethernet_core, CoreType::ETH));
-    retrain_count_addr_ = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
+    ethernet_core_ = tt::umd::CoreCoord(
+        endpoint_.ethernet_core.x, endpoint_.ethernet_core.y, tt::umd::CoreType::ETH, tt::umd::CoordSystem::LOGICAL);
+    retrain_count_addr_ = 0x100;
 }
 
 const std::vector<std::string> EthernetRetrainCountMetric::telemetry_path() const {
@@ -90,16 +94,14 @@ const std::vector<std::string> EthernetRetrainCountMetric::telemetry_path() cons
     return path;
 }
 
-void EthernetRetrainCountMetric::update(const tt::Cluster &cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
-    std::vector<uint32_t> data;
-    cluster.read_core(data, sizeof(uint32_t), virtual_eth_core_, retrain_count_addr_);
-    if (data.size() >= 1) {
-        value_ = uint64_t(data[0]);
-    }
+void EthernetRetrainCountMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    uint32_t data = 0;
+    cluster->read_from_device(&data, endpoint_.chip.id, ethernet_core_, retrain_count_addr_, sizeof(uint32_t));
+    value_ = uint64_t(data);
     timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
 }
-
 
 /**************************************************************************************************
  EthernetCorrectedCodewordCountMetric
@@ -108,12 +110,17 @@ void EthernetRetrainCountMetric::update(const tt::Cluster &cluster, std::chrono:
 **************************************************************************************************/
 
 EthernetCorrectedCodewordCountMetric::EthernetCorrectedCodewordCountMetric(
-    size_t id, const EthernetEndpoint& endpoint, const tt::Cluster& cluster) :
+    size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster) :
     UIntMetric(id), endpoint_(endpoint) {
     value_ = 0;
-    if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
-        virtual_eth_core_ = tt_cxy_pair(endpoint.chip.id, cluster.get_virtual_coordinate_from_logical_coordinates(endpoint.chip.id, endpoint.ethernet_core, CoreType::ETH));
-        corr_addr_ = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CORR_CW);
+    tt::umd::TTDevice* device = cluster->get_tt_device(endpoint_.chip.id);
+    if (device->get_arch() == tt::ARCH::WORMHOLE_B0) {
+        ethernet_core_ = tt::umd::CoreCoord(
+            endpoint_.ethernet_core.x,
+            endpoint_.ethernet_core.y,
+            tt::umd::CoreType::ETH,
+            tt::umd::CoordSystem::LOGICAL);
+        corr_addr_ = 0x100;
     }
 }
 
@@ -123,20 +130,20 @@ const std::vector<std::string> EthernetCorrectedCodewordCountMetric::telemetry_p
     return path;
 }
 
-void EthernetCorrectedCodewordCountMetric::update(const tt::Cluster &cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
-    if (!virtual_eth_core_.has_value()) {
+void EthernetCorrectedCodewordCountMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    if (!ethernet_core_.has_value()) {
         // Architecture not yet supported
         return;
     }
     uint32_t hi = 0;
     uint32_t lo = 0;
-    cluster.read_core(&hi, sizeof(uint32_t), virtual_eth_core_.value(), corr_addr_ + 0);
-    cluster.read_core(&lo, sizeof(uint32_t), virtual_eth_core_.value(), corr_addr_ + 4);
+    cluster->read_from_device(&hi, endpoint_.chip.id, ethernet_core_.value(), corr_addr_ + 0, sizeof(uint32_t));
+    cluster->read_from_device(&lo, endpoint_.chip.id, ethernet_core_.value(), corr_addr_ + 4, sizeof(uint32_t));
     value_ = (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
     timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
 }
-
 
 /**************************************************************************************************
  EthernetUncorrectedCodewordCountMetric
@@ -145,12 +152,17 @@ void EthernetCorrectedCodewordCountMetric::update(const tt::Cluster &cluster, st
 **************************************************************************************************/
 
 EthernetUncorrectedCodewordCountMetric::EthernetUncorrectedCodewordCountMetric(
-    size_t id, const EthernetEndpoint& endpoint, const tt::Cluster& cluster) :
+    size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster) :
     UIntMetric(id), endpoint_(endpoint) {
     value_ = 0;
-    if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
-        virtual_eth_core_ = tt_cxy_pair(endpoint.chip.id, cluster.get_virtual_coordinate_from_logical_coordinates(endpoint.chip.id, endpoint.ethernet_core, CoreType::ETH));
-        uncorr_addr_ = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW);
+    tt::umd::TTDevice* device = cluster->get_tt_device(endpoint_.chip.id);
+    if (device->get_arch() == tt::ARCH::WORMHOLE_B0) {
+        ethernet_core_ = tt::umd::CoreCoord(
+            endpoint_.ethernet_core.x,
+            endpoint_.ethernet_core.y,
+            tt::umd::CoreType::ETH,
+            tt::umd::CoordSystem::LOGICAL);
+        uncorr_addr_ = 0x100;
     }
 }
 
@@ -160,15 +172,16 @@ const std::vector<std::string> EthernetUncorrectedCodewordCountMetric::telemetry
     return path;
 }
 
-void EthernetUncorrectedCodewordCountMetric::update(const tt::Cluster &cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
-    if (!virtual_eth_core_.has_value()) {
+void EthernetUncorrectedCodewordCountMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    if (!ethernet_core_.has_value()) {
         // Architecture not yet supported
         return;
     }
     uint32_t hi = 0;
     uint32_t lo = 0;
-    cluster.read_core(&hi, sizeof(uint32_t), virtual_eth_core_.value(), uncorr_addr_ + 0);
-    cluster.read_core(&lo, sizeof(uint32_t), virtual_eth_core_.value(), uncorr_addr_ + 4);
+    cluster->read_from_device(&hi, endpoint_.chip.id, ethernet_core_.value(), uncorr_addr_ + 0, sizeof(uint32_t));
+    cluster->read_from_device(&lo, endpoint_.chip.id, ethernet_core_.value(), uncorr_addr_ + 4, sizeof(uint32_t));
     value_ = (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
     timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();

@@ -568,39 +568,39 @@ There's an attribute named asic_id that will show up if your FW is new enough.  
      return mmio_chips;
  }
 
- void report_chip_telemetry() {
-     // Get cluster instance
-     tt::tt_metal::MetalContext& instance = tt::tt_metal::MetalContext::instance();
-     const tt::Cluster& cluster = instance.get_cluster();
-     const tt::tt_fabric::ControlPlane& control_plane = instance.get_control_plane();
+ //  void report_chip_telemetry() {
+ //      // Get cluster instance
+ //      tt::tt_metal::MetalContext& instance = tt::tt_metal::MetalContext::instance();
+ //      const tt::Cluster& cluster = instance.get_cluster();
+ //      const tt::tt_fabric::ControlPlane& control_plane = instance.get_control_plane();
 
-     // Create ARC telemetry readers for all MMIO-capable chips
-     std::map<ChipIdentifier, std::shared_ptr<ARCTelemetryReader>> arc_readers =
-         create_arc_telemetry_readers_for_mmio_chips(cluster);
+ //      // Create ARC telemetry readers for all MMIO-capable chips
+ //      std::map<ChipIdentifier, std::shared_ptr<ARCTelemetryReader>> arc_readers =
+ //          create_arc_telemetry_readers_for_mmio_chips(cluster);
 
-     for (const auto& [chip_identifier, reader] : arc_readers) {
-         // Get ASIC ID for this chip
-         uint64_t asic_id = control_plane.get_asic_id(chip_identifier.id);
+ //      for (const auto& [chip_identifier, reader] : arc_readers) {
+ //          // Get ASIC ID for this chip
+ //          uint64_t asic_id = control_plane.get_asic_id(chip_identifier.id);
 
-         std::cout << chip_identifier << " -> ASIC ID " << asic_id << std::endl;
+ //          std::cout << chip_identifier << " -> ASIC ID " << asic_id << std::endl;
 
-                 // Read ASIC temperature using common telemetry tag
-        uint32_t temp_raw = reader->read_value(tt::umd::TelemetryTag::ASIC_TEMPERATURE);
-        
-        // Apply architecture-specific scaling
-        float temperature;
-        tt::ARCH arch = reader->get_arch();
-        if (arch == tt::ARCH::WORMHOLE_B0) {
-            // Wormhole scaling: 16-bit value, scale by 1/16
-            temperature = (temp_raw & 0xFFFF) / 16.0f;
-        } else if (arch == tt::ARCH::BLACKHOLE) {
-            // Blackhole scaling: 32-bit value, scale by 1/65536
-            temperature = static_cast<int32_t>(temp_raw) / 65536.0f;
-        } else {
-            std::cout << "  ASIC Temperature: Unsupported architecture" << std::endl;
-            continue;
-        }
-        
-        std::cout << "  ASIC Temperature: " << temperature << "°C" << std::endl;
-     }
- }
+ //                  // Read ASIC temperature using common telemetry tag
+ //         uint32_t temp_raw = reader->read_value(tt::umd::TelemetryTag::ASIC_TEMPERATURE);
+
+ //         // Apply architecture-specific scaling
+ //         float temperature;
+ //         tt::ARCH arch = reader->get_arch();
+ //         if (arch == tt::ARCH::WORMHOLE_B0) {
+ //             // Wormhole scaling: 16-bit value, scale by 1/16
+ //             temperature = (temp_raw & 0xFFFF) / 16.0f;
+ //         } else if (arch == tt::ARCH::BLACKHOLE) {
+ //             // Blackhole scaling: 32-bit value, scale by 1/65536
+ //             temperature = static_cast<int32_t>(temp_raw) / 65536.0f;
+ //         } else {
+ //             std::cout << "  ASIC Temperature: Unsupported architecture" << std::endl;
+ //             continue;
+ //         }
+
+ //         std::cout << "  ASIC Temperature: " << temperature << "°C" << std::endl;
+ //      }
+ //  }
