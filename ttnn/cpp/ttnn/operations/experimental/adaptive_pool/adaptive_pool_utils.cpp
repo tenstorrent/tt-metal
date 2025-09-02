@@ -148,10 +148,39 @@ bool are_borders_correctable_with_padding(const std::vector<uint32_t>& kernels) 
     return (first <= middle_value) && (last <= middle_value);
 }
 
+// Calculate actual stride pattern between consecutive output positions (like PyTorch)
+std::vector<uint32_t> calculate_stride_pattern(uint32_t input_size, uint32_t output_size) {
+    std::vector<uint32_t> strides;
+
+    for (uint32_t out_idx = 1; out_idx < output_size; out_idx++) {
+        uint32_t prev_start = ((out_idx - 1) * input_size) / output_size;
+        uint32_t curr_start = (out_idx * input_size) / output_size;
+        strides.push_back(curr_start - prev_start);
+    }
+
+    return strides;
+}
+
+// Check if stride pattern is uniform (can be approximated with fixed stride)
+bool are_strides_uniform(const std::vector<uint32_t>& strides) {
+    if (strides.size() <= 1) {
+        return true;
+    }
+
+    uint32_t expected_stride = strides[0];
+    for (uint32_t stride : strides) {
+        if (stride != expected_stride) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Validation function to check if adaptive pooling approach is feasible
 void validate_adaptive_pool_feasibility(uint32_t input_h, uint32_t input_w, uint32_t output_h, uint32_t output_w) {
     auto [h_kernels, w_kernels] = analyze_adaptive_kernels(input_h, input_w, output_h, output_w);
 
+    // Check kernel pattern correctability
     bool h_uniform_middle = are_middle_kernels_uniform(h_kernels);
     bool h_borders_ok = are_borders_correctable_with_padding(h_kernels);
     bool h_correctable = h_uniform_middle && h_borders_ok;
@@ -160,7 +189,13 @@ void validate_adaptive_pool_feasibility(uint32_t input_h, uint32_t input_w, uint
     bool w_borders_ok = are_borders_correctable_with_padding(w_kernels);
     bool w_correctable = w_uniform_middle && w_borders_ok;
 
-    if (!h_correctable || !w_correctable) {
+    // Check stride pattern uniformity
+    auto h_strides = calculate_stride_pattern(input_h, output_h);
+    auto w_strides = calculate_stride_pattern(input_w, output_w);
+    bool h_strides_uniform = are_strides_uniform(h_strides);
+    bool w_strides_uniform = are_strides_uniform(w_strides);
+
+    if (!h_correctable || !w_correctable || !h_strides_uniform || !w_strides_uniform) {
         std::string error_msg = "Adaptive pooling configuration not supported. ";
 
         if (!h_correctable) {
@@ -197,7 +232,29 @@ void validate_adaptive_pool_feasibility(uint32_t input_h, uint32_t input_w, uint
             }
         }
 
-        error_msg += "Correctable patterns require uniform middle kernels AND borders <= middle. ";
+        if (!h_strides_uniform) {
+            error_msg += "Height stride pattern [";
+            for (size_t i = 0; i < h_strides.size(); i++) {
+                error_msg += std::to_string(h_strides[i]);
+                if (i < h_strides.size() - 1) {
+                    error_msg += ",";
+                }
+            }
+            error_msg += "] not uniform, ";
+        }
+
+        if (!w_strides_uniform) {
+            error_msg += "Width stride pattern [";
+            for (size_t i = 0; i < w_strides.size(); i++) {
+                error_msg += std::to_string(w_strides[i]);
+                if (i < w_strides.size() - 1) {
+                    error_msg += ",";
+                }
+            }
+            error_msg += "] not uniform, ";
+        }
+
+        error_msg += "Correctable patterns require uniform middle kernels AND borders <= middle AND uniform strides. ";
         error_msg += "Input shape: (" + std::to_string(input_h) + "," + std::to_string(input_w) + "), Output shape: (" +
                      std::to_string(output_h) + "," + std::to_string(output_w) + ").";
 
