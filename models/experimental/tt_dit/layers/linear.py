@@ -2,9 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import torch
 import ttnn
 from ..utils.tensor import bf16_tensor, bf16_tensor_2dshard
+
+
+def gelu(x: ttnn.Tensor) -> ttnn.Tensor:
+    # GELU(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
+    # ttnn.gelu is the same, but avoiding for potential issues (see ttnn.layernorm)
+    sqrt_2 = math.sqrt(2.0)
+    x_div_sqrt2 = ttnn.multiply(x, 1.0 / sqrt_2)
+    erf_x = ttnn.erf(x_div_sqrt2)
+    one_plus_erf = ttnn.add(erf_x, 1.0)
+    x_times_bracket = ttnn.multiply(x, one_plus_erf)
+    return ttnn.multiply(x_times_bracket, 0.5)
 
 
 class Linear:
@@ -81,7 +93,7 @@ class Linear:
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
         if self.activation_fn == "gelu":
-            output = ttnn.gelu(output, fast_and_approximate_mode=False)
+            output = gelu(output)
         elif self.activation_fn == "swiglu":
             output, gate = ttnn.chunk(output, 2, -1)
             output = output * ttnn.silu(gate)
@@ -233,7 +245,7 @@ class ColParallelLinear:
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
         if self.activation_fn == "gelu":
-            output = ttnn.gelu(output, fast_and_approximate_mode=False)
+            output = gelu(output)
         elif self.activation_fn == "quick_gelu":
             output = output * ttnn.sigmoid(1.702 * output)  # quick approx gelu
         elif self.activation_fn == "swiglu":
@@ -401,6 +413,6 @@ class RowParallelLinear:
 
         if self.activation_fn is not None:
             assert self.activation_fn == "gelu"
-            output = ttnn.gelu(output, fast_and_approximate_mode=False)
+            output = gelu(output)
 
         return output
