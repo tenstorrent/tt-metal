@@ -4,8 +4,6 @@
 
 #include "no_op.hpp"
 
-#include <fmt/format.h>
-
 #include "core/tt_tensor_utils.hpp"
 #include "serialization/serializable.hpp"
 
