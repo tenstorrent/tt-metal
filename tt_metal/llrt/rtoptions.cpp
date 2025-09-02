@@ -205,6 +205,9 @@ RunTimeOptions::RunTimeOptions() {
     if (std::getenv("TT_METAL_SIMULATOR")) {
         this->simulator_path = std::getenv("TT_METAL_SIMULATOR");
         this->runtime_target_device_ = tt::TargetDevice::Simulator;
+        if (std::getenv("USE_TT_SIM")) {
+            this->use_tt_sim = true;
+        }
     }
 
     // Enable mock cluster if TT_METAL_MOCK is set to a descriptor path

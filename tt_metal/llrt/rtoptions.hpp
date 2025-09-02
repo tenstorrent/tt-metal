@@ -166,6 +166,9 @@ class RunTimeOptions {
 
     std::filesystem::path simulator_path = "";
 
+    // Whether to use ttsim instead of versim/vsc simulators.
+    bool use_tt_sim = false;
+
     bool erisc_iram_enabled = false;
     // a copy for an intermittent period until the environment variable TT_METAL_ENABLE_ERISC_IRAM is removed
     // we keep a copy so that when we teardown the fabric (which enables erisc iram internally), we can recover
@@ -433,6 +436,7 @@ public:
 
     bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
     const std::filesystem::path& get_simulator_path() const { return simulator_path; }
+    bool get_use_tt_sim() const { return use_tt_sim; }
 
     bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size
