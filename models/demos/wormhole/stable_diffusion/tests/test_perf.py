@@ -259,7 +259,8 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
     # Until di/dt issues are resolved
-    os.environ["TT_MM_THROTTLE_PERF"] = "5"
+    if is_wormhole_b0():
+        os.environ["TT_MM_THROTTLE_PERF"] = "5"
     # Clear global profiler state before starting measurements
     profiler.clear()
 

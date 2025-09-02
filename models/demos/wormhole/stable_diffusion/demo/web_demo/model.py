@@ -22,7 +22,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition
     UNet2DConditionModel as UNet2D,
 )
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae import Vae
-from models.utility_functions import disable_persistent_kernel_cache
+from models.utility_functions import disable_persistent_kernel_cache, is_wormhole_b0
 
 
 def constant_prop_time_embeddings(timesteps, sample, time_proj):
@@ -40,7 +40,8 @@ def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
     disable_persistent_kernel_cache()
 
     # Until di/dt issues are resolved
-    os.environ["TT_MM_THROTTLE_PERF"] = "5"
+    if is_wormhole_b0():
+        os.environ["TT_MM_THROTTLE_PERF"] = "5"
     assert (
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
