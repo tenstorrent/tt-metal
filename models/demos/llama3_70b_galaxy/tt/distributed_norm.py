@@ -80,16 +80,6 @@ class DistributedNorm(LightweightModule):
                     output_mem_config=self.norm.output_mem_config,
                     ccl_topology=self.ccl_topology,
                 )
-                # return tt_distributed_rmsnorm(
-                #     x,
-                #     epsilon=self.norm.eps,
-                #     gamma=self.norm.weight_distributed,
-                #     mesh_device=self.args.mesh_device,
-                #     program_config=self.ln_prg_cfg,
-                #     memory_config=self.ln_sharded_stats_memcfg,
-                #     compute_kernel_config=self.ln_cfg,
-                #     tt_ccl=self.tt_ccl,
-                # )
             else:
                 return tt_distributed_rmsnorm(
                     x,

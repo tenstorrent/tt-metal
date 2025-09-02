@@ -78,6 +78,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             # without stalling on the weight prefetch
             # To fit entire MLP we'd need ~742 * 1088 but using block-wise prefetching and 732 tiles this is sufficient for now
             self.global_cb_size = 728 * 1088
+            # self.global_cb_size = 728 * 2048
             self.sender_receiver_mapping = list(zip(self.all_sender_cores, self.all_receiver_cores))
             # self.global_circular_buffer = ttnn.create_global_circular_buffer(
             #     self.mesh_device, self.sender_receiver_mapping, self.global_cb_size

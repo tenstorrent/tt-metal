@@ -29,7 +29,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "weights, layers, iterations",
     [
-        ("instruct", 64, 20),
+        ("instruct", 64, 2000),
     ],
     ids=["quick"],
 )
@@ -53,7 +53,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 64, "page_max_num_blocks": 4096}],
+    [{"page_block_size": 64, "page_max_num_blocks": 256}],
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -96,7 +96,6 @@ def test_qwen_model_ttt_inference(
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 2  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
-    # dtype = ttnn.bfloat16
 
     top_k = sampling_params["top_k"]
     if isinstance(top_k, int):
@@ -263,6 +262,7 @@ def test_qwen_model_ttt_inference(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
+        temperature=temperature,
         tt_ccl=tt_model.tt_ccl,
     )
     logger.info("Qwen Model and caches loaded.")
@@ -326,7 +326,7 @@ def test_qwen_model_ttt_inference(
             )
 
             # Sampling
-            tt_out_tok = tt_sampling(tt_out[0], seed)
+            tt_out_tok = tt_sampling(tt_out[0], top_k, top_p, seed)
             tt_decode_input = tt_embd(tt_out_tok)
 
             # Convert ttnn tensor to torch tensor
