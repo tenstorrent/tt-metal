@@ -3,8 +3,13 @@ on:
   workflow_call:
 
 permissions:
+  actions: read
   contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
   packages: write
+  checks: write
 
 jobs:
   build-artifact:
@@ -16,6 +21,7 @@ jobs:
       version: 22.04
       build-wheel: true
       fetch-depth: 0
+      skip-tt-train: false
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -26,6 +32,7 @@ jobs:
       tracy: true
       build-wheel: true
       fetch-depth: 0
+      skip-tt-train: false
   single-card-demos:
     needs: build-artifact
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
