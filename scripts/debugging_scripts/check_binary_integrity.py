@@ -15,7 +15,7 @@ from collections import namedtuple
 from io import BytesIO
 from check_per_device import run as get_check_per_device
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
-from block_locations_to_check import run as get_block_locations_to_check
+from block_locations_to_check import run as get_block_locations_to_check, BlockLocationsToCheck
 from elftools.elf.elffile import ELFFile
 from elftools.elf.relocation import RelocationSection
 from elftools.elf.sections import Section as ELFSection
@@ -248,9 +248,7 @@ def apply_kernel_relocations(section: ELFSection) -> bytes:
     return section_stream.getvalue()
 
 
-def check_binary_integrity(
-    device: Device, dispatcher_data: DispatcherData, block_locations: dict[str, list[OnChipCoordinate]]
-):
+def check_binary_integrity(device: Device, dispatcher_data: DispatcherData, block_locations: BlockLocationsToCheck):
     elf_cache: dict[str, ELFFile] = {}
 
     def load_elf_file(path: str) -> ELFFile:
@@ -260,7 +258,7 @@ def check_binary_integrity(
 
     block_types = ["tensix", "idle_eth"]
     for block_type in block_types:
-        for location in block_locations[block_type]:
+        for location in block_locations[device, block_type]:
             noc_block = device.get_block(location)
 
             for risc_name in noc_block.risc_names:
@@ -326,9 +324,7 @@ def run(args, context: Context):
     check_per_device = get_check_per_device(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     block_locations_to_check = get_block_locations_to_check(args, context)
-    check_per_device.run_check(
-        lambda device: check_binary_integrity(device, dispatcher_data, block_locations_to_check[device])
-    )
+    check_per_device.run_check(lambda device: check_binary_integrity(device, dispatcher_data, block_locations_to_check))
 
 
 if __name__ == "__main__":

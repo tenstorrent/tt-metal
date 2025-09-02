@@ -12,42 +12,38 @@ Description:
 """
 
 from ttexalens.coordinate import OnChipCoordinate
-from check_per_device import run as get_check_per_device
-from block_locations_to_check import run as get_block_locations_to_check
+from check_per_block_location import run as get_check_per_block_location, PerBlockLocationCheck
 from ttexalens.context import Context
-from ttexalens.device import Device
+from block_locations_to_check import BlockType
 from triage import ScriptConfig, log_check, run_script
 
 script_config = ScriptConfig(
-    depends=["check_per_device", "block_locations_to_check"],
+    depends=["block_locations_to_check"],
 )
 
 
-def check_noc_locations(device: Device, noc_id: int, block_locations: list[OnChipCoordinate]):
+def check_noc_location(location: OnChipCoordinate, block_type: BlockType, noc_id: int):
     noc_str = f"noc{noc_id}"
-    block_types = ["tensix", "eth"]
-    for block_type in block_types:
-        for location in block_locations[block_type]:
-            noc_block = device.get_block(location)
-            register_store = noc_block.get_register_store(noc_id)
-            data = register_store.read_register("NOC_NODE_ID")
-            n_x = data & 0x3F
-            n_y = (data >> 6) & 0x3F
-            loc_to_noc = location.to(noc_str)
-            log_check(
-                loc_to_noc == (n_x, n_y),
-                f"Device {device._id} {block_type} [{location.to_str('logical')}] block at {location.to_str(noc_str)} has wrong NOC location ({n_x}-{n_y})",
-            )
+    noc_block = location._device.get_block(location)
+    register_store = noc_block.get_register_store(noc_id)
+    data = register_store.read_register("NOC_NODE_ID")
+    n_x = data & 0x3F
+    n_y = (data >> 6) & 0x3F
+    loc_to_noc = location.to(noc_str)
+    log_check(
+        loc_to_noc == (n_x, n_y),
+        f"Device {location._device._id} {block_type} [{location.to_str('logical')}] block at {location.to_str(noc_str)} has wrong NOC location ({n_x}-{n_y})",
+    )
 
 
 def run(args, context: Context):
-    check_per_device = get_check_per_device(args, context)
-    block_locations_to_check = get_block_locations_to_check(args, context)
-    check_per_device.run_check(
-        lambda device: check_noc_locations(device, noc_id=0, block_locations=block_locations_to_check[device])
+    block_locations_to_check: PerBlockLocationCheck = get_check_per_block_location(args, context)
+    block_locations_to_check.run_check(
+        lambda location, block_type: check_noc_location(location, block_type, noc_id=0),
     )
-    check_per_device.run_check(
-        lambda device: check_noc_locations(device, noc_id=1, block_locations=block_locations_to_check[device])
+
+    block_locations_to_check.run_check(
+        lambda location, block_type: check_noc_location(location, block_type, noc_id=1),
     )
 
 

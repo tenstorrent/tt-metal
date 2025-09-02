@@ -21,7 +21,7 @@ Description:
 from triage import ScriptConfig, TTTriageError, recurse_field, triage_field, hex_serializer, run_script
 from check_per_device import dataclass, run as get_check_per_device
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
-from block_locations_to_check import run as get_block_locations_to_check
+from block_locations_to_check import run as get_block_locations_to_check, BlockLocationsToCheck
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.device import Device
@@ -233,7 +233,7 @@ def dump_callstacks(
     gdb_callstack: bool,
     active_cores: bool,
     port: int | None,
-    block_locations: list[OnChipCoordinate],
+    block_locations: BlockLocationsToCheck,
 ) -> list[DumpCallstacksData]:
     blocks_to_test = ["tensix", "idle_eth"]
     elfs_cache: dict[str, ParsedElfFile] = {}
@@ -255,7 +255,7 @@ def dump_callstacks(
 
     try:
         for block_to_test in blocks_to_test:
-            for location in block_locations[block_to_test]:
+            for location in block_locations[device, block_to_test]:
                 noc_block = device.get_block(location)
 
                 for risc_name in noc_block.risc_names:
@@ -312,7 +312,7 @@ def run(args, context: Context):
             gdb_callstack,
             active_cores,
             port,
-            block_locations_to_check[device],
+            block_locations_to_check,
         )
     )
 

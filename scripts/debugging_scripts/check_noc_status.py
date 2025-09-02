@@ -21,7 +21,7 @@ from ttexalens.firmware import ELF
 
 from check_per_device import run as get_check_per_device
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
-from block_locations_to_check import run as get_block_locations_to_check
+from block_locations_to_check import run as get_block_locations_to_check, BlockLocationsToCheck
 from triage import ScriptConfig, log_check, run_script
 
 script_config = ScriptConfig(
@@ -33,7 +33,7 @@ def check_noc_status(
     device: Device,
     dispatcher_data: DispatcherData,
     context: Context,
-    locations: list[OnChipCoordinate],
+    block_locations: BlockLocationsToCheck,
     risc_name: str = "brisc",
     noc_id: int = 0,
 ):
@@ -50,6 +50,8 @@ def check_noc_status(
         "noc_nonposted_atomics_acked": "NIU_MST_ATOMIC_RESP_RECEIVED",
         "noc_posted_writes_num_issued": "NIU_MST_POSTED_WR_REQ_SENT",
     }
+
+    locations = block_locations[device, "tensix"]
 
     # Since all firmware elfs are the same, we can query dispatcher data and parse elf only once
     fw_elf_path = dispatcher_data.get_core_data(locations[0], risc_name).firmware_path
@@ -87,7 +89,7 @@ def run(args, context: Context):
     block_locations_to_check = get_block_locations_to_check(args, context)
     check_per_device.run_check(
         lambda device: check_noc_status(
-            device, dispatcher_data, context, block_locations_to_check[device]["tensix"], risc_name="brisc", noc_id=0
+            device, dispatcher_data, context, block_locations_to_check, risc_name="brisc", noc_id=0
         )
     )
 

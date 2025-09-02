@@ -11,6 +11,7 @@ Description:
     Provides list of block locations of supported types that should be checked for other scripts.
 """
 
+from typing import Literal, Tuple, TypeAlias
 from ttexalens.hw.tensix.wormhole.wormhole import WormholeDevice
 from devices_to_check import run as get_devices_to_check
 from triage import triage_singleton, ScriptConfig, run_script
@@ -31,9 +32,11 @@ BLOCK_TYPES = [
     "eth",
 ]
 
+BlockType: TypeAlias = Literal[BLOCK_TYPES]
 
-def is_galaxy(device: Device) -> str:
-    return device.cluster_desc["chip_to_boardtype"] == "GALAXY"
+
+def is_galaxy(device: Device) -> bool:
+    return device.cluster_desc["chip_to_boardtype"][device._id] == "GALAXY"
 
 
 def get_idle_eth_block_locations(device: Device) -> list[OnChipCoordinate]:
@@ -51,7 +54,7 @@ def get_idle_eth_block_locations(device: Device) -> list[OnChipCoordinate]:
     return block_locations
 
 
-def get_block_locations_to_check(block_type: str, device: Device) -> list[OnChipCoordinate]:
+def get_block_locations_to_check(block_type: BlockType, device: Device) -> list[OnChipCoordinate]:
     match block_type:
         case "idle_eth":
             return get_idle_eth_block_locations(device)
@@ -63,13 +66,25 @@ def get_block_locations_to_check(block_type: str, device: Device) -> list[OnChip
             return device.get_block_locations(block_type)
 
 
+class BlockLocationsToCheck:
+    def __init__(self, devices: list[Device]):
+        self._data: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = {
+            device: {block_type: get_block_locations_to_check(block_type, device) for block_type in BLOCK_TYPES}
+            for device in devices
+        }
+
+    def __getitem__(self, key: Tuple[Device, BlockType]) -> list[OnChipCoordinate]:
+        device, block_type = key
+        return self._data[device][block_type]
+
+    def get_devices(self) -> list[Device]:
+        return list(self._data.keys())
+
+
 @triage_singleton
 def run(args, context: Context):
     devices = get_devices_to_check(args, context)
-    return {
-        device: {block_type: get_block_locations_to_check(block_type, device) for block_type in BLOCK_TYPES}
-        for device in devices
-    }
+    return BlockLocationsToCheck(devices)
 
 
 if __name__ == "__main__":
