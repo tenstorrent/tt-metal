@@ -358,17 +358,16 @@ class WanTransformer3DModel:
     def __init__(
         self,
         patch_size: tuple = (1, 2, 2),
-        num_attention_heads: int = 40,
-        attention_head_dim: int = 128,
-        num_layers: int = 32,
-        pooled_projection_dim: int = 1536,
+        num_heads: int = 40,
+        dim: int = 5120,
         in_channels: int = 16,
-        out_channels=None,
-        qk_norm: str = "rms_norm",
-        text_embed_dim: int = 4096,
-        time_embed_dim: int = 256,
-        activation_fn: str = "swiglu",
-        max_sequence_length: int = 1024,
+        out_channels: int = 16,
+        text_dim: int = 4096,
+        freq_dim: int = 256,
+        ffn_dim: int = 13824,
+        num_layers: int = 40,
+        eps: float = 1e-6,
+        rope_max_seq_len: int = 1024,
         mesh_device=None,
         init=False,
         ccl_manager=None,
@@ -382,9 +381,7 @@ class WanTransformer3DModel:
 
         self.patch_size = patch_size
 
-        inner_dim = num_attention_heads * attention_head_dim
-        self.inner_dim = inner_dim
-        self.out_channels = out_channels or in_channels
+        self.out_channels = out_channels
 
         self.patch_embed = WanPatchEmbed(
             patch_size=patch_size,
