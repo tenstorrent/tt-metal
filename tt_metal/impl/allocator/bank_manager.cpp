@@ -383,6 +383,7 @@ uint64_t BankManager::allocate_buffer(
         std::cout << "Available address: " << r.first << " - " << r.second << std::endl;
     }
 
+    /*
     auto address = allocators_[state.value]->allocate(size_per_bank, bottom_up, address_limit);
     if (not address.has_value()) {
         TT_THROW(
@@ -396,7 +397,9 @@ uint64_t BankManager::allocate_buffer(
     allocated_buffers_[state.value].insert(address.value());
 
     return address.value();
-    /*
+    */
+
+    // /*
     // Compute candidate ranges from allocator and subtract overlay
     std::vector<std::pair<DeviceAddr, DeviceAddr>> free_abs;
     for (auto r : allocators_[state.value]->available_addresses(size_per_bank)) {
@@ -448,10 +451,10 @@ uint64_t BankManager::allocate_buffer(
     }
 
     // Track allocation (overlay logic removed with undirected graph simplification)
-    allocated_buffers_[state.value][address.value()] = size_per_bank;
+    allocated_buffers_[state.value].insert(address.value());
 
     return address.value();
-    */
+    // */
 }
 
 void BankManager::deallocate_buffer(DeviceAddr address, BankManager::StateDependencies::StateId state) {

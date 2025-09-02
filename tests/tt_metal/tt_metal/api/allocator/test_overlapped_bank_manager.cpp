@@ -320,7 +320,8 @@ TEST(OverlappedAllocator, OverlappedStates) {
 
         // Set up BankManager for DRAM with default single-state dependencies
         BankManager::StateDependencies deps{
-            {{StateId{0}, {StateId{2}}}, {StateId{1}, {StateId{2}}}}};  // 2 states, no overlaps
+            {{StateId{0}, {StateId{2}}},
+             {StateId{1}, {StateId{2}}}}};  // 2 independent states; overlapped depends on both
         BankManager dram_bank_manager(
             BufferType::DRAM,
             bank_desc,
@@ -351,23 +352,14 @@ TEST(OverlappedAllocator, OverlappedStates) {
             BankManager::StateDependencies::StateId{1});
         EXPECT_EQ(alloc2_addr1, 0);
 
-        auto alloc1_addr2 = dram_bank_manager.allocate_buffer(
+        auto alloc3_addr1 = dram_bank_manager.allocate_buffer(
             alloc_size,
             alloc_size,
             /*bottom_up=*/true,
             CoreRangeSet(std::vector<CoreRange>{}),  // Not used for DRAM
             std::nullopt,
-            BankManager::StateDependencies::StateId{0});
-        EXPECT_EQ(alloc1_addr2, alloc1_addr1 + alloc_size);
-
-        auto alloc2_addr2 = dram_bank_manager.allocate_buffer(
-            alloc_size2,
-            alloc_size2,
-            /*bottom_up=*/true,
-            CoreRangeSet(std::vector<CoreRange>{}),  // Not used for DRAM
-            std::nullopt,
-            BankManager::StateDependencies::StateId{1});
-        EXPECT_EQ(alloc2_addr2, alloc2_addr1 + alloc_size2);
+            BankManager::StateDependencies::StateId{2});
+        EXPECT_EQ(alloc3_addr1, alloc2_addr1 + alloc_size2);
     }
 }
 TEST_F(DeviceSingleCardBufferFixture, Overlay_MergeUnmerge_RG_into_B) {
