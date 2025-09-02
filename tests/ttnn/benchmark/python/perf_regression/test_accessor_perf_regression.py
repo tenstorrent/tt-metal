@@ -12,6 +12,7 @@ against ground truth baselines using the generic performance regression framewor
 import os
 import sys
 from pathlib import Path
+import ttnn
 
 import pytest
 from loguru import logger
@@ -56,6 +57,7 @@ def load_baseline(benchmark_name: str) -> PerformanceData:
         / "perf_regression"
         / "gt"
         / "accessor_benchmarks"
+        / ttnn.get_arch_name()
         / gt_file_map[benchmark_name]
     )
 
