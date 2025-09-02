@@ -10,6 +10,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/core_descriptor.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include "common/thread_pool.hpp"
 #include "dev_msgs.h"
 #include <tt-metalium/allocator_types.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -95,6 +96,9 @@ public:
     // Fabric tensix configuration
     void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
     tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
+
+    // Profiler thread pool
+    std::shared_ptr<tt::tt_metal::ThreadPool> profiler_thread_pool_;
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;
