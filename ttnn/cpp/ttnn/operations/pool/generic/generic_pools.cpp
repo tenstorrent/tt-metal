@@ -26,7 +26,7 @@ namespace operations::pool {
 // Generic invoke function for both max and avg pool operations. Most of the arguments are shared excpet for the
 // dilation which is set to (1,1) for avg pool and count_include_pad and divisor_override which have no effect on
 // maxpool.
-static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
+static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
     Pool2DType pool_type,
@@ -321,14 +321,14 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
             output_tensors.size() == 2,
             "Expected two output tensors when return_indices is true, but got {}.",
             output_tensors.size());
-        return std::make_pair(std::move(output_tensors[0]), std::move(output_tensors[1]));
+        return MaxPoolWithIndicesResult{std::move(output_tensors[0]), std::move(output_tensors[1])};
     } else {
         TT_FATAL(output_tensors.size() == 1, "Expected a single output tensor when return_indices is false.");
         return std::move(output_tensors[0]);
     }
 }
 
-std::variant<Tensor, std::pair<Tensor, Tensor>> MaxPool2DOp::invoke(
+std::variant<Tensor, MaxPoolWithIndicesResult> MaxPool2DOp::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
     uint32_t batch_size,

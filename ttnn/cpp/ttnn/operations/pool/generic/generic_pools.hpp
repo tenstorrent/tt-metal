@@ -14,8 +14,13 @@
 namespace ttnn {
 namespace operations::pool {
 
+struct MaxPoolWithIndicesResult {
+    Tensor output;
+    Tensor indices;
+};
+
 struct MaxPool2DOp {
-    static std::variant<Tensor, std::pair<Tensor, Tensor>> invoke(
+    static std::variant<Tensor, MaxPoolWithIndicesResult> invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
         uint32_t batch_size,

@@ -124,9 +124,9 @@ void bind_max_pool2d_operation(py::module& module) {
                     return_indices);
 
                 // Handle variant return type
-                if (std::holds_alternative<std::pair<ttnn::Tensor, ttnn::Tensor>>(result)) {
-                    auto pair = std::get<std::pair<ttnn::Tensor, ttnn::Tensor>>(result);
-                    return py::make_tuple(pair.first, pair.second);
+                if (std::holds_alternative<MaxPoolWithIndicesResult>(result)) {
+                    auto mpwi_result = std::get<MaxPoolWithIndicesResult>(result);
+                    return py::make_tuple(mpwi_result.output, mpwi_result.indices);
                 } else {
                     return py::cast(std::get<ttnn::Tensor>(result));
                 }
