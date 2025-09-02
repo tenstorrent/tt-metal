@@ -242,17 +242,17 @@ static FORCE_INLINE void fabric_set_mcast_route(
 #if defined(DYNAMIC_ROUTING_ENABLED)
         hop -= 1;
 #endif
-        switch (static_cast<eth_chan_directions>(slot.tag)) {
-            case eth_chan_directions::EAST: {
+        switch (slot.tag) {
+            case 0: {
                 fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, hop, 0, 0, 0);
             } break;
-            case eth_chan_directions::WEST: {
+            case 1: {
                 fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, 0, hop, 0, 0);
             } break;
-            case eth_chan_directions::NORTH: {
+            case 2: {
                 fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, 0, 0, hop, 0);
             } break;
-            case eth_chan_directions::SOUTH: {
+            case 3: {
                 fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, 0, 0, 0, hop);
             } break;
             default: ASSERT(FALSE);
