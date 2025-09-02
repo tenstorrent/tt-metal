@@ -31,10 +31,10 @@ private:
     std::mutex programs_mutex;
     std::mutex mesh_devices_mutex;
     std::mutex mesh_workloads_mutex;
-    std::unordered_map<uint64_t, inspector::ProgramData> programs_data;
-    std::unordered_map<int, uint64_t> kernel_id_to_program_id;
-    std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data;
-    std::unordered_map<uint64_t, inspector::MeshWorkloadData> mesh_workloads_data;
+    std::unordered_map<uint64_t, inspector::ProgramData> programs_data{};
+    std::unordered_map<int, uint64_t> kernel_id_to_program_id{};
+    std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data{};
+    std::unordered_map<uint64_t, inspector::MeshWorkloadData> mesh_workloads_data{};
 
     friend class tt::tt_metal::Inspector;
 };
