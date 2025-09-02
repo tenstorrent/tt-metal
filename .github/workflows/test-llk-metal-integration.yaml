@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       run_all_post_commit:
-        description: 'Run all post-commit tests (Wormhole)'
+        description: 'Run all post-commit tests'
         required: false
         type: boolean
         default: false
@@ -29,7 +29,7 @@ on:
         required: true
         type: string
       run_all_post_commit:
-        description: 'Run all post-commit tests (Wormhole)'
+        description: 'Run all post-commit tests'
         required: false
         type: boolean
         default: false
@@ -376,7 +376,7 @@ jobs:
             echo "**Test Branch:** ${{ needs.setup-and-test.outputs.test-branch-name }}" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Test Configuration:**" >> $GITHUB_STEP_SUMMARY
-            echo "- All Post-Commit Tests (Wormhole): ${{ inputs.run_all_post_commit && '🟢 Enabled' || '⚪ Disabled' }}" >> $GITHUB_STEP_SUMMARY
+            echo "- All Post-Commit Tests: ${{ inputs.run_all_post_commit && '🟢 Enabled' || '⚪ Disabled' }}" >> $GITHUB_STEP_SUMMARY
             echo "- Blackhole Post-Commit Tests: ${{ inputs.run_blackhole_post_commit && '🟢 Enabled' || '⚪ Disabled' }}" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
 
