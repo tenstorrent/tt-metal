@@ -114,7 +114,6 @@ run_t3000_ttnn_tests() {
 
 run_t3000_tt_metal_multiprocess_tests() {
   local mpi_args="--allow-run-as-root --tag-output"
-
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_t3k_2x2.yaml
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/multi_host_fabric_tests
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_t3k_2x2.yaml
@@ -179,7 +178,7 @@ run_t3000_falcon40b_tests() {
 }
 
 run_t3000_gemma3-small_tests() {
-  HF_MODEL="google/gemma-3-4b-it" TT_CACHE_PATH="$HF_HOME/tt_cache/gemma-3-4b-it" pytest models/demos/siglip/tests
+  pytest models/demos/gemma3/tests/test_ci_dispatch.py -k "27b"
 }
 
 run_t3000_llama3-small_tests() {

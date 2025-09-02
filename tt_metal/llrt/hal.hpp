@@ -9,7 +9,6 @@
 // level APIs
 //
 
-#include <sys/types.h>
 #include <cstddef>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -19,7 +18,6 @@
 #include <memory>
 #include <ostream>
 #include <unordered_set>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -114,8 +112,6 @@ public:
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
     uint32_t get_processor_classes_count() const;
     uint32_t get_processor_types_count(uint32_t processor_class_idx) const;
-    uint32_t get_processor_index(HalProcessorClassType processor_class, uint32_t processor_type_idx) const;
-    std::pair<HalProcessorClassType, uint32_t> get_processor_class_and_type_from_index(uint32_t processor_index) const;
     const HalJitBuildConfig& get_jit_build_config(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 };
 
@@ -340,17 +336,6 @@ public:
     bool get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const;
 
     uint32_t get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const;
-    // Returns the processor index within a core.  There is a 1-1 mapping between
-    // (processor_class, processor_type) and processor_index.  This is useful
-    // For indexing data structures on devices (only 1-d arrays are needed).
-    // Should only be used internally and not expose this index to the user.
-    uint32_t get_processor_index(
-        HalProgrammableCoreType programmable_core_type,
-        HalProcessorClassType processor_class,
-        uint32_t processor_type_idx) const;
-    // Inverse function of get_processor_index.
-    std::pair<HalProcessorClassType, uint32_t> get_processor_class_and_type_from_index(
-        HalProgrammableCoreType programmable_core_type, uint32_t processor_index) const;
 
     uint32_t get_total_num_risc_processors() const;
 
@@ -498,19 +483,6 @@ inline uint32_t Hal::get_num_risc_processors(HalProgrammableCoreType programmabl
                          .get_processor_types_count(processor_class_idx);
     }
     return num_riscs;
-}
-inline uint32_t Hal::get_processor_index(
-    HalProgrammableCoreType programmable_core_type,
-    HalProcessorClassType processor_class,
-    uint32_t processor_type_idx) const {
-    auto idx = get_programmable_core_type_index(programmable_core_type);
-    return this->core_info_[idx].get_processor_index(processor_class, processor_type_idx);
-}
-
-inline std::pair<HalProcessorClassType, uint32_t> Hal::get_processor_class_and_type_from_index(
-    HalProgrammableCoreType programmable_core_type, uint32_t processor_index) const {
-    auto idx = get_programmable_core_type_index(programmable_core_type);
-    return this->core_info_[idx].get_processor_class_and_type_from_index(processor_index);
 }
 
 inline const HalJitBuildConfig& Hal::get_jit_build_config(

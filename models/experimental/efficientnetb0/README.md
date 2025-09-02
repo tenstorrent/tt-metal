@@ -1,7 +1,7 @@
 # Efficientnetb0
 
 ## Platforms:
-Wormhole N150, N300
+Wormhole (n150, n300)
 
 ## Introduction
 EfficientNet-B0 is a lightweight and efficient convolutional neural network architecture developed by Google AI. Model is know for its efficiency in image classification tasks. It's a member of the EfficientNet family, which utilizes a compound scaling method to balance model size, accuracy, and computational cost. EfficientNetB0 was trained on the massive ImageNet dataset and can classify images into 1000 object categories.
@@ -56,6 +56,23 @@ EfficientNet-B0 is a lightweight and efficient convolutional neural network arch
 
   ```sh
   pytest models/experimental/efficientnetb0/demo/demo.py::test_demo_dp
+  ```
+
+## Performant Data Evaluation with Trace+2CQ
+
+#### Single Device (BS=1):
+
+- Use the following command to run the performant data evaluation with Trace+2CQs:
+
+  ```
+  pytest models/demos/classification_eval/classification_eval.py::test_efficientnetb0_image_classification_eval
+  ```
+#### Multi Device (DP=2, N300):
+
+- Use the following command to run the performant data evaluation with Trace+2CQs:
+
+  ```
+  pytest models/demos/classification_eval/classification_eval.py::test_efficientnetb0_image_classification_eval_dp
   ```
 
 ## Details
