@@ -108,8 +108,6 @@ def test_clip_encoder(
         pooled_output = hf_output.text_embeds if has_projection else hf_output.pooler_output
     logger.info(f"text encoder 1 CPU runtime: {time.time() - start_time}")
 
-    print(f"HF LIST LEN: {len(hf_output.hidden_states)}")
-
     # debug
     logger.info(f"HF text encoder 1 sequence output shape: {sequence_output.shape}")
     logger.info(f"HF text encoder 1 pooled output shape: {pooled_output.shape}")
@@ -129,9 +127,7 @@ def test_clip_encoder(
     logger.info(f"text encoder TT-NN runtime: {time.time() - start_time}")
     logger.info("text encoder done...")
 
-    print(f"TT LIST LEN: {len(tt_sequence_output)}")
-
-    tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output[-3])[0])
+    tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output[-2])[0])
     tt_projected_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_projected_output)[0])
 
     # debug
