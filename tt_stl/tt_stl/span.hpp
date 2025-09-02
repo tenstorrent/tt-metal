@@ -5,7 +5,6 @@
 #pragma once
 
 #include <span>
-#include <boost/core/span.hpp>
 #include <tt_stl/reflection.hpp>
 
 namespace ttsl {
