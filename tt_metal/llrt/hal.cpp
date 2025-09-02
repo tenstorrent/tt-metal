@@ -82,6 +82,41 @@ HalCoreInfoType::HalCoreInfoType(
     supports_cbs_(supports_cbs),
     supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds) {}
 
+uint32_t HalCoreInfoType::get_processor_index(
+    HalProcessorClassType processor_class, uint32_t processor_type_idx) const {
+    uint32_t processor_class_idx = utils::underlying_type<HalProcessorClassType>(processor_class);
+    // TODO(HalProcessorClassType): fix this after DM0 and DM1 are the same processor class
+    if (processor_class == HalProcessorClassType::DM) {
+        TT_ASSERT(processor_type_idx < static_cast<uint32_t>(HalProcessorClassType::COMPUTE));
+        processor_class_idx = processor_type_idx;
+        processor_type_idx = 0;
+    }
+    uint32_t processor_index = 0;
+    for (uint32_t i = 0; i < processor_class_idx; i++) {
+        processor_index += this->get_processor_types_count(i);
+    }
+    TT_ASSERT(processor_type_idx < this->get_processor_types_count(processor_class_idx));
+    return processor_index + processor_type_idx;
+}
+
+std::pair<HalProcessorClassType, uint32_t> HalCoreInfoType::get_processor_class_and_type_from_index(
+    uint32_t processor_index) const {
+    uint32_t processor_class_idx = 0;
+    for (; processor_class_idx < this->processor_classes_.size(); processor_class_idx++) {
+        auto processor_count = get_processor_types_count(processor_class_idx);
+        if (processor_index < processor_count) {
+            break;
+        }
+        processor_index -= processor_count;
+    }
+    TT_ASSERT(processor_class_idx < this->processor_classes_.size());
+    // TODO(HalProcessorClassType): fix this after DM0 and DM1 are the same processor class
+    if (processor_class_idx < static_cast<uint32_t>(HalProcessorClassType::COMPUTE)) {
+        return {HalProcessorClassType::DM, processor_class_idx};
+    }
+    return {static_cast<HalProcessorClassType>(processor_class_idx), processor_index};
+}
+
 uint32_t generate_risc_startup_addr(uint32_t firmware_base) {
     // Options for handling brisc fw not starting at mem[0]:
     // 1) Program the register for the start address out of reset - no reset PC register on GS/WH/BH
