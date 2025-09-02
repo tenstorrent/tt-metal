@@ -32,6 +32,7 @@ target_sources(
             fabric_edm_packet_header.hpp
     PRIVATE
         control_plane.cpp
+        mesh_graph_descriptor.cpp
         routing_table_generator.cpp
         mesh_graph.cpp
         erisc_datamover_builder.cpp
@@ -48,6 +49,9 @@ target_sources(
         ccl/ccl_common.cpp
         physical_system_descriptor.cpp
 )
+
+# Make .clang-tidy available in the fabric binary directory for generated files
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/.clang-tidy ${CMAKE_CURRENT_BINARY_DIR}/.clang-tidy COPYONLY)
 
 # Include helper functions and generate headers from flatbuffer schemas
 include(flatbuffers)
@@ -66,11 +70,25 @@ endforeach()
 # Add the generated headers to your target
 target_sources(fabric PRIVATE ${GENERATED_FBS_HEADERS})
 
+# Include helper functions and generate headers from protobuf schemas
+include(protobuf)
+set(PROTO_SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/mesh_graph_descriptor.proto)
+
+# Collect all generated protobuf files
+set(GENERATED_PROTO_SRCS)
+foreach(PROTO_FILE ${PROTO_SCHEMAS})
+    GENERATE_PROTO_FILES(${PROTO_FILE} OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
+    list(APPEND GENERATED_PROTO_SRCS ${PROTO_SRCS})
+endforeach()
+
+# Add the generated protobuf files to your target
+target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})
+
 target_include_directories(
     fabric
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
+        ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_link_libraries(
@@ -85,6 +103,7 @@ target_link_libraries(
         Metalium::Metal::Impl
         TT::Metalium::HostDevCommon
         FlatBuffers::FlatBuffers
+        protobuf::libprotobuf
 )
 
 target_precompile_headers(fabric REUSE_FROM TT::CommonPCH)
