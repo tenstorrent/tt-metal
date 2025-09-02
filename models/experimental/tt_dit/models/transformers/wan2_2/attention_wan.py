@@ -95,11 +95,13 @@ class WanAttention:
 
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
 
-        self.shard_qk_on_tp = bf16_tensor(
-            torch.eye(dim),
-            device=mesh_device,
+        self.shard_qk_on_tp = ColParallelLinear(
+            in_features=dim,
+            out_features=dim,
+            bias=False,
+            mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            shard_dim=-1,
+            init=init,
         )
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
@@ -162,6 +164,7 @@ class WanAttention:
         to_k_cache = self.to_k.to_cached_state_dict(path_prefix + "to_k.")
         to_v_cache = self.to_v.to_cached_state_dict(path_prefix + "to_v.")
         to_out_cache = self.to_out.to_cached_state_dict(path_prefix + "to_out.")
+        shard_qk_on_tp_cache = self.shard_qk_on_tp.to_cached_state_dict(path_prefix + "shard_qk_on_tp.")
 
         # Add linear layer prefixes to all keys
         for key, value in to_q_cache.items():
@@ -173,6 +176,9 @@ class WanAttention:
         for key, value in to_out_cache.items():
             cache_dict[f"to_out.{key}"] = value
 
+        for key, value in shard_qk_on_tp_cache.items():
+            cache_dict[f"shard_qk_on_tp.{key}"] = value
+
         return cache_dict
 
     def from_cached_state_dict(self, cache_dict):
@@ -183,6 +189,7 @@ class WanAttention:
         self.to_k.from_cached_state_dict(substate(cache_dict, "to_k"))
         self.to_v.from_cached_state_dict(substate(cache_dict, "to_v"))
         self.to_out.from_cached_state_dict(substate(cache_dict, "to_out"))
+        self.shard_qk_on_tp.from_cached_state_dict(substate(cache_dict, "shard_qk_on_tp"))
 
     def load_state_dict(self, state_dict):
         self.norm_q.load_state_dict(substate(state_dict, "norm_q"))
@@ -193,6 +200,10 @@ class WanAttention:
         self.to_v.load_state_dict(substate(state_dict, "to_v"))
 
         self.to_out.load_state_dict(substate(state_dict, "to_out.0"))
+
+        identity_tensor = torch.eye(self.dim)
+        identity_state = {"weight": identity_tensor}
+        self.shard_qk_on_tp.load_state_dict(identity_state)
 
     def __call__(self, spatial_1BND, N, prompt_1BLP=None, rope_cos=None, rope_sin=None, trans_mat=None):
         """
@@ -251,8 +262,8 @@ class WanAttention:
 
         # Shard back
         if self.parallel_config.tensor_parallel.factor > 1:
-            q_1BNF = ttnn.matmul(q_1BNF, self.shard_qk_on_tp, compute_kernel_config=self.mm_compute_kernel_config)
-            k_1BNF = ttnn.matmul(k_1BNF, self.shard_qk_on_tp, compute_kernel_config=self.mm_compute_kernel_config)
+            q_1BNF = self.shard_qk_on_tp(q_1BNF, compute_kernel_config=self.mm_compute_kernel_config)
+            k_1BNF = self.shard_qk_on_tp(k_1BNF, compute_kernel_config=self.mm_compute_kernel_config)
 
         def create_heads(inp):
             # Unfortunate hack - we don't have a split_heads operation that takes unfused qkv
