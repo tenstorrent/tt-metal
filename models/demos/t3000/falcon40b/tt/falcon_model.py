@@ -108,7 +108,6 @@ class TtFalconModelShared:
             memory_config=self.model_config["LN_F_WEIGHTS_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(mesh_device),
             cache_file_name=layernorm_weights_path,
-            enable_multihost_format=True,
             preprocess=lambda x: x.reshape(1, 1, -1, 32),
         )
 
@@ -120,7 +119,6 @@ class TtFalconModelShared:
             memory_config=self.model_config["LN_F_BIAS_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(mesh_device),
             cache_file_name=layernorm_bias_path,
-            enable_multihost_format=True,
             preprocess=lambda x: x.reshape(1, 1, -1, 32),
         )
 
