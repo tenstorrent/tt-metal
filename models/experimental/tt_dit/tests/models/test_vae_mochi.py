@@ -345,6 +345,7 @@ def create_random_causalupsampleblock_models(
 @pytest.mark.parametrize(
     "config",
     [
+        # large latent
         # First upsample block (768->512), T padded from 28->32
         {
             "name": "block1_768-512",
@@ -378,8 +379,76 @@ def create_random_causalupsampleblock_models(
             "input_shape": [1, 256, 163, 240, 424],
             # "expected_output_shape": (1, 128, 163, 480, 848),
         },
+        # medium latent
+        # First upsample block (768->512), T padded from 28->32
+        {
+            "name": "block1_768-512",
+            "in_channels": 768,
+            "out_channels": 512,
+            "num_res_blocks": 6,
+            "temporal_expansion": 3,
+            "spatial_expansion": 2,
+            "input_shape": [1, 768, 28, 40, 76],
+            # "expected_output_shape": (1, 512, 82, 80, 152),
+        },
+        # Second upsample block (512->256), T padded from 82->88
+        {
+            "name": "block2_512-256",
+            "in_channels": 512,
+            "out_channels": 256,
+            "num_res_blocks": 4,
+            "temporal_expansion": 2,
+            "spatial_expansion": 2,
+            "input_shape": [1, 512, 82, 80, 152],
+            # "expected_output_shape": (1, 256, 163, 160, 304),
+        },
+        # Third upsample block (256->128), T padded from 163->168
+        {
+            "name": "block3_256-128",
+            "in_channels": 256,
+            "out_channels": 128,
+            "num_res_blocks": 3,
+            "temporal_expansion": 1,
+            "spatial_expansion": 2,
+            "input_shape": [1, 256, 163, 160, 304],
+            # "expected_output_shape": (1, 128, 163, 320, 608),
+        },
+        # small latent
+        # First upsample block (768->512), T padded from 28->32
+        {
+            "name": "block1_768-512",
+            "in_channels": 768,
+            "out_channels": 512,
+            "num_res_blocks": 6,
+            "temporal_expansion": 3,
+            "spatial_expansion": 2,
+            "input_shape": [1, 768, 28, 30, 53],
+            # "expected_output_shape": (1, 512, 82, 60, 106),
+        },
+        # Second upsample block (512->256), T padded from 82->88
+        {
+            "name": "block2_512-256",
+            "in_channels": 512,
+            "out_channels": 256,
+            "num_res_blocks": 4,
+            "temporal_expansion": 2,
+            "spatial_expansion": 2,
+            "input_shape": [1, 512, 82, 60, 106],
+            # "expected_output_shape": (1, 256, 163, 120, 212),
+        },
+        # Third upsample block (256->128), T padded from 163->168
+        {
+            "name": "block3_256-128",
+            "in_channels": 256,
+            "out_channels": 128,
+            "num_res_blocks": 3,
+            "temporal_expansion": 1,
+            "spatial_expansion": 2,
+            "input_shape": [1, 256, 163, 120, 212],
+            # "expected_output_shape": (1, 128, 163, 240, 424),
+        },
     ],
-    ids=["768", "512", "256"],
+    ids=["l768", "l512", "l256", "m768", "m512", "m256", "s768", "s512", "s256"],
 )
 @pytest.mark.parametrize("divide_T", [8, 1], ids=["T8", "T1"])  # Emulate T fracturing
 @pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
