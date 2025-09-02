@@ -147,12 +147,12 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
-    uint32_t num_sticks = input_tensor.physical_volume() / input_tensor_shape[-1];
+    uint32_t num_sticks_per_outer_dim = input_tensor_shape[1] * input_tensor_shape[2];
+    uint32_t outer_dim_size = input_tensor_shape[0];
     bool is_first_device = direction ? !forward_device.has_value() : !backward_device.has_value();
     bool is_last_device = direction ? !backward_device.has_value() : !forward_device.has_value();
-    uint32_t stick_offset = input_tensor_shape[1] * input_tensor_shape[2];
 
-    /****TODO****/
+    /****TODO BARRIER SEMAPHORE****/
     // auto [unicast_forward_args, unicast_backward_args] =
     //     ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device,
     //     backward_device);
@@ -174,7 +174,7 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
          core_group_1,
          core_group_2,
          num_sticks_per_core_group_1,
-         num_sticks_per_core_group_2] = tt::tt_metal::split_work_to_cores(core_grid, num_sticks);
+         num_sticks_per_core_group_2] = tt::tt_metal::split_work_to_cores(core_grid, num_sticks_per_outer_dim);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
@@ -205,16 +205,15 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     // KERNEL CREATION
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
-    uint32_t input_stick_start_id = 0;
-    uint32_t output_stick_start_id = 0;
+    uint32_t stick_start_id = 0;
     for (uint32_t link = 0; link < num_links; link++) {
         CoreCoord core = {link, 0};
         CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
-        uint32_t num_sticks_per_core = 0;
+        uint32_t num_sticks_to_read = 0;
         if (core_group_1.contains(core)) {
-            num_sticks_per_core = num_sticks_per_core_group_1;
+            num_sticks_to_read = num_sticks_per_core_group_1;
         } else {
-            num_sticks_per_core = num_sticks_per_core_group_2;
+            num_sticks_to_read = num_sticks_per_core_group_2;
         }
 
         // Reader
@@ -238,10 +237,11 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
             input_tensor.buffer()->address(),   // input_tensor_address
             output_tensor.buffer()->address(),  // output_tensor_address
             page_size,                          // stick_size
-            input_stick_start_id,               // stick_start_id
-            stick_offset,                       // stick_offset
+            stick_start_id,                     // stick_start_id
+            outer_dim_size,                     // outer_dim_size
             padding,                            // padding
-            num_sticks_per_core,                // num_sticks
+            num_sticks_to_read,                 // num_sticks_to_read
+            num_sticks_per_outer_dim,           // num_sticks_per_outer_dim
             final_semaphore.address()           // out_ready_sem_bank_addr (absolute address)
         };
         tt::tt_metal::SetRuntimeArgs(program, worker_reader_kernel_id, {core}, reader_rt_args);
@@ -268,10 +268,11 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
             input_tensor.buffer()->address(),   // input_tensor_address
             output_tensor.buffer()->address(),  // output_tensor_address
             page_size,                          // stick_size
-            output_stick_start_id,              // stick_start_id
-            stick_offset,                       // stick_offset
+            stick_start_id,                     // stick_start_id
+            outer_dim_size,                     // outer_dim_size
             padding,                            // padding
-            num_sticks_per_core,                // num_sticks
+            num_sticks_to_read,                 // num_sticks_to_read
+            num_sticks_per_outer_dim,           // num_sticks_per_outer_dim
             virtual_core.x,                     // out_ready_sem_noc0_x
             virtual_core.y,                     // out_ready_sem_noc0_y
             final_semaphore.address()           // out_ready_sem_bank_addr (absolute address)
@@ -301,8 +302,7 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
         }
         tt::tt_metal::SetRuntimeArgs(program, worker_writer_kernel_id, {core}, writer_rt_args);
 
-        input_stick_start_id += num_sticks_per_core;
-        output_stick_start_id += (num_sticks_per_core + stick_offset * padding);
+        stick_start_id += num_sticks_to_read;
     }
 
     auto override_runtime_arguments_callback =
@@ -328,12 +328,12 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
                 auto& worker_reader_runtime_args = reader_runtime_args[core.x][core.y];
                 worker_reader_runtime_args[0] = input.buffer()->address();
                 worker_reader_runtime_args[1] = output.buffer()->address();
-                worker_reader_runtime_args[7] = out_ready_semaphore.address();
+                worker_reader_runtime_args[8] = out_ready_semaphore.address();
                 // writer
                 auto& worker_writer_runtime_args = writer_runtime_args[core.x][core.y];
                 worker_writer_runtime_args[0] = input.buffer()->address();
                 worker_writer_runtime_args[1] = output.buffer()->address();
-                worker_writer_runtime_args[9] = out_ready_semaphore.address();
+                worker_writer_runtime_args[10] = out_ready_semaphore.address();
 
                 // if (barrier_semaphore.has_value()) {
                 // 	worker_writer_sender_runtime_args[16] = barrier_semaphore.value().address();
