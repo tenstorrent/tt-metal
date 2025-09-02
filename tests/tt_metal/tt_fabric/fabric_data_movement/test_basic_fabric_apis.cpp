@@ -266,7 +266,7 @@ TEST_F(NightlyFabric2DFixture, TestLinearFabricUnicastNocUnicastWrite1DMultiDir)
         this,
         NOC_UNICAST_WRITE,
         {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 1),
+         std::make_tuple(RoutingDirection::W, 2),
          std::make_tuple(RoutingDirection::N, 1),
          std::make_tuple(RoutingDirection::S, 1)});
 }
@@ -275,7 +275,7 @@ TEST_F(NightlyFabric2DFixture, TestLinearFabricUnicastNocUnicastWrite1DWithState
         this,
         NOC_UNICAST_WRITE,
         {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 1),
+         std::make_tuple(RoutingDirection::W, 2),
          std::make_tuple(RoutingDirection::N, 1),
          std::make_tuple(RoutingDirection::S, 1)},
         true);
@@ -291,7 +291,7 @@ TEST_F(NightlyFabric2DFixture, TestLinearFabricUnicastNocInlineWrite1DMultiDir) 
         this,
         NOC_UNICAST_INLINE_WRITE,
         {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 1),
+         std::make_tuple(RoutingDirection::W, 2),
          std::make_tuple(RoutingDirection::N, 1),
          std::make_tuple(RoutingDirection::S, 1)});
 }
@@ -300,7 +300,7 @@ TEST_F(NightlyFabric2DFixture, TestLinearFabricUnicastNocInlineWrite1DWithState)
         this,
         NOC_UNICAST_INLINE_WRITE,
         {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 1),
+         std::make_tuple(RoutingDirection::W, 2),
          std::make_tuple(RoutingDirection::N, 1),
          std::make_tuple(RoutingDirection::S, 1)},
         true);
@@ -317,7 +317,7 @@ TEST_F(NightlyFabric2DFixture, TestLinearFabricUnicastNocScatterWrite1DMultiDir)
         this,
         NOC_UNICAST_SCATTER_WRITE,
         {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 1),
+         std::make_tuple(RoutingDirection::W, 2),
          std::make_tuple(RoutingDirection::N, 1),
          std::make_tuple(RoutingDirection::S, 1)});
 }
@@ -326,7 +326,7 @@ TEST_F(NightlyFabric2DFixture, TestLinearFabricUnicastNocScatterWrite1DWithState
         this,
         NOC_UNICAST_SCATTER_WRITE,
         {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 1),
+         std::make_tuple(RoutingDirection::W, 2),
          std::make_tuple(RoutingDirection::N, 1),
          std::make_tuple(RoutingDirection::S, 1)},
         true);
@@ -343,7 +343,7 @@ TEST_F(NightlyFabric2DFixture, TestLinearFabricUnicastNocAtomicInc1DMultiDir) {
         this,
         NOC_UNICAST_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 1),
+         std::make_tuple(RoutingDirection::W, 2),
          std::make_tuple(RoutingDirection::N, 1),
          std::make_tuple(RoutingDirection::S, 1)});
 }
@@ -352,7 +352,7 @@ TEST_F(NightlyFabric2DFixture, TestLinearFabricUnicastNocAtomicInc1DWithState) {
         this,
         NOC_UNICAST_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 1),
+         std::make_tuple(RoutingDirection::W, 2),
          std::make_tuple(RoutingDirection::N, 1),
          std::make_tuple(RoutingDirection::S, 1)},
         true);
@@ -369,7 +369,7 @@ TEST_F(NightlyFabric2DFixture, TestLinearFabricUnicastNocFusedAtomicInc1DMultiDi
         this,
         NOC_FUSED_UNICAST_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 1),
+         std::make_tuple(RoutingDirection::W, 2),
          std::make_tuple(RoutingDirection::N, 1),
          std::make_tuple(RoutingDirection::S, 1)});
 }
@@ -378,7 +378,7 @@ TEST_F(NightlyFabric2DFixture, TestLinearFabricUnicastNocFusedAtomicInc1DWithSta
         this,
         NOC_FUSED_UNICAST_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 1),
+         std::make_tuple(RoutingDirection::W, 2),
          std::make_tuple(RoutingDirection::N, 1),
          std::make_tuple(RoutingDirection::S, 1)},
         true);
