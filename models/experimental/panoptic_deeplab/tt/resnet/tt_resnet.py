@@ -42,7 +42,10 @@ class TtResNet(nn.Module):
             stride = 1  # res2 uses stride=1 for all blocks
             dilation = 1  # res2 uses dilation=1 for all blocks
             shortcut_stride = 1  # res2 shortcut uses stride=1
-            self.res2.append(TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride))
+            block_id = f"res2.{i}"  # Identifier for logging
+            self.res2.append(
+                TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride, block_id)
+            )
 
         # Initialize res3 (4 blocks, first has shortcut with stride=2)
         self.res3 = nn.ModuleList()
@@ -52,17 +55,40 @@ class TtResNet(nn.Module):
             stride = 2 if i == 0 else 1  # First block uses stride=2, others use stride=1
             dilation = 1  # res3 uses dilation=1 for all blocks
             shortcut_stride = 2 if i == 0 else 1  # First block shortcut uses stride=2
-            self.res3.append(TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride))
+            block_id = f"res3.{i}"  # Identifier for logging
+            self.res3.append(
+                TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride, block_id)
+            )
 
         # Initialize res4 (6 blocks, first has shortcut with stride=2)
         self.res4 = nn.ModuleList()
         for i in range(6):
             block_state = {k.replace(f"res4.{i}.", ""): v for k, v in state_dict.items() if k.startswith(f"res4.{i}.")}
+
+            # Add zero bias to all conv operations in res4 for comparison mode debugging
+            conv_names = ["conv1", "conv2", "conv3"]
+            if i == 0:  # First block has shortcut
+                conv_names.append("shortcut")
+
+            for conv_name in conv_names:
+                conv_state = {
+                    k.replace(f"{conv_name}.", ""): v for k, v in block_state.items() if k.startswith(f"{conv_name}.")
+                }
+                if "weight" in conv_state and "bias" not in conv_state:
+                    # Add zero bias with same shape as output channels
+                    out_channels = conv_state["weight"].shape[0]
+                    block_state[f"{conv_name}.bias"] = torch.zeros(
+                        out_channels, dtype=conv_state["weight"].dtype, device=conv_state["weight"].device
+                    )
+
             has_shortcut = i == 0  # First block has shortcut
             stride = 2 if i == 0 else 1  # First block uses stride=2, others use stride=1
             dilation = 1  # res4 uses dilation=1 for all blocks
             shortcut_stride = 2 if i == 0 else 1  # First block shortcut uses stride=2
-            self.res4.append(TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride))
+            block_id = f"res4.{i}"  # Identifier for logging
+            self.res4.append(
+                TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride, block_id)
+            )
 
         # Initialize res5 (3 blocks, first has shortcut, uses dilated convolutions)
         self.res5 = nn.ModuleList()
@@ -73,7 +99,10 @@ class TtResNet(nn.Module):
             stride = 1  # res5 uses stride=1 for all blocks
             dilation = dilations[i]  # Each block uses different dilation
             shortcut_stride = 1  # res5 shortcut uses stride=1
-            self.res5.append(TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride))
+            block_id = f"res5.{i}"  # Identifier for logging
+            self.res5.append(
+                TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride, block_id)
+            )
 
     def forward(self, x: ttnn.Tensor) -> dict[str, ttnn.Tensor]:
         """
