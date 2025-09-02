@@ -5,7 +5,7 @@
 import torch
 import ttnn
 from .attention_wan import WanAttention
-from ....layers.normalization import DistributedLayerNorm, LayerNorm
+from ....layers.normalization import DistributedLayerNorm
 from ....layers.linear import ColParallelLinear, Linear
 from ....layers.feedforward import ParallelFeedForward
 
@@ -48,11 +48,13 @@ class WanTransformerBlock:
 
         fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
-        self.norm1 = LayerNorm(
+        self.norm1 = DistributedLayerNorm(
             dim,
             norm_eps=eps,
             norm_elementwise_affine=False,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
             init=init,
         )
 
@@ -79,11 +81,13 @@ class WanTransformerBlock:
         )
 
         self.norm2 = (
-            LayerNorm(
+            DistributedLayerNorm(
                 dim,
                 norm_eps=eps,
                 norm_elementwise_affine=True,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
                 init=init,
             )
             if cross_attention_norm
@@ -102,15 +106,25 @@ class WanTransformerBlock:
             fsdp_mesh_axis=fsdp_mesh_axis,
         )
 
-        self.norm3 = LayerNorm(
+        self.norm3 = DistributedLayerNorm(
             dim,
             norm_eps=eps,
             norm_elementwise_affine=False,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
             init=init,
         )
 
         self.scale_shift_table = None
+
+        # Used for DistributedLayerNorm workaround
+        self.shard_spatial_on_tp = bf16_tensor(
+            torch.eye(dim),
+            device=mesh_device,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            shard_dim=-1,
+        )
 
         self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -120,7 +134,15 @@ class WanTransformerBlock:
             packer_l1_acc=True,
         )
 
-        self.rms_compute_kernel_config = None
+        # NOTE: This really should be FP32 acc but there's an L1 OOM issue in distributed LN,
+        # which we're using to work around the large LN hang.
+        self.layernorm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
@@ -207,7 +229,31 @@ class WanTransformerBlock:
             shifted_temb_1BTD, 6, dim=2
         )
 
-        spatial_normed_1BND = self.norm1(spatial_1BND)
+        # DistributedLayerNorm workaround
+        if self.parallel_config.tensor_parallel.factor > 1:
+            spatial_sharded_1BND = ttnn.matmul(
+                spatial_1BND, self.shard_spatial_on_tp, compute_kernel_config=self.ff_compute_kernel_config
+            )
+        else:
+            spatial_sharded_1BND = spatial_1BND
+
+        spatial_normed_1BND = self.norm1(
+            spatial_sharded_1BND, compute_kernel_config=self.layernorm_compute_kernel_config
+        )
+        if self.parallel_config.tensor_parallel.factor > 1:
+            spatial_normed_1BND = ttnn.experimental.all_gather_async(
+                spatial_normed_1BND,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    spatial_normed_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            )
         spatial_normed_1BND = spatial_normed_1BND * (1.0 + scale_msa_1B1D) + shift_msa_1B1D
 
         # Self attention on spatial
@@ -223,7 +269,31 @@ class WanTransformerBlock:
         spatial_1BND = spatial_1BND + spatial_attn_1BND * gate_msa_1B1D
 
         # Cross attention on prompt
-        spatial_normed_1BND = self.norm2(spatial_1BND)
+        # DistributedLayerNorm workaround
+        if self.parallel_config.tensor_parallel.factor > 1:
+            spatial_sharded_1BND = ttnn.matmul(
+                spatial_1BND, self.shard_spatial_on_tp, compute_kernel_config=self.ff_compute_kernel_config
+            )
+        else:
+            spatial_sharded_1BND = spatial_1BND
+        spatial_normed_1BND = self.norm2(
+            spatial_sharded_1BND, compute_kernel_config=self.layernorm_compute_kernel_config
+        )
+        if self.parallel_config.tensor_parallel.factor > 1:
+            spatial_normed_1BND = ttnn.experimental.all_gather_async(
+                spatial_normed_1BND,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    spatial_normed_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            )
+
         attn_output_1BND = self.attn2(
             spatial_1BND=spatial_normed_1BND,
             N=N,
@@ -232,11 +302,52 @@ class WanTransformerBlock:
         spatial_1BND = spatial_1BND + attn_output_1BND
 
         # Feed Forward
-        spatial_normed_1BND = self.norm3(spatial_1BND)
+        # DistributedLayerNorm workaround
+        if self.parallel_config.tensor_parallel.factor > 1:
+            spatial_sharded_1BND = ttnn.matmul(
+                spatial_1BND, self.shard_spatial_on_tp, compute_kernel_config=self.ff_compute_kernel_config
+            )
+        else:
+            spatial_sharded_1BND = spatial_1BND
+        spatial_normed_1BND = self.norm3(
+            spatial_sharded_1BND, compute_kernel_config=self.layernorm_compute_kernel_config
+        )
+        if self.parallel_config.tensor_parallel.factor > 1:
+            spatial_normed_1BND = ttnn.experimental.all_gather_async(
+                spatial_normed_1BND,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    spatial_normed_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            )
+
         spatial_normed_1BND = spatial_normed_1BND * (1 + c_scale_msa_1B1D) + c_shift_msa_1B1D
         spatial_ff_1BND = self.ff(
-            spatial_normed_1BND, core_grid=self.core_grid, compute_kernel_config=self.ff_compute_kernel_config
+            spatial_normed_1BND, core_grid=None, compute_kernel_config=self.ff_compute_kernel_config
         )
+
+        if self.parallel_config.tensor_parallel.factor > 1:
+            # Gather spatial fractured on hidden dim
+            spatial_ff_1BND = ttnn.experimental.all_gather_async(
+                spatial_ff_1BND,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    spatial_ff_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            )
+
         spatial_1BND = spatial_1BND + spatial_ff_1BND * c_gate_msa_1B1D
 
         return spatial_1BND
