@@ -122,7 +122,7 @@ class TestExpOpRuntimeFromModel : public TTNNFixtureWithOfflineModel,
 TEST_P(TestExpOpRuntimeFromModel, ExpOpFromModel) {
     const auto& input_spec = GetParam();
 
-    // Convert TensorSpec to the format expected by mlp-op-perf
+    // Convert TensorSpec to the format expected by ttnn-op-runtime-predictor
     std::vector<int> shape_vec(input_spec.logical_shape().cbegin(), input_spec.logical_shape().cend());
     int dtype = static_cast<int>(input_spec.data_type());
     int buffer_type = static_cast<int>(input_spec.memory_config().buffer_type());
