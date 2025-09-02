@@ -202,7 +202,7 @@ int main(int argc, char** argv) {
 
     if (!ucast_only) {
         compile_args[0] = true;
-        KernelHandle mcast_kernel;
+        KernelHandle mcast_kernel = 0;
         if (mcast_from_eth_g) {
             mcast_kernel = tt_metal::CreateKernel(
                 program,

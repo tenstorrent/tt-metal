@@ -387,7 +387,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
 
     auto axis_index = static_cast<std::size_t>(options.edm_axis);
     auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
-    size_t arch_index;
+    size_t arch_index = 0;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         arch_index = 0;
     } else if (arch == tt::ARCH::BLACKHOLE) {
@@ -397,8 +397,8 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     }
 
     if (topology == Topology::Ring) {
-        size_t default_num_sender_buffer_slots;
-        size_t default_num_receiver_buffer_slots;
+        size_t default_num_sender_buffer_slots = 0;
+        size_t default_num_receiver_buffer_slots = 0;
         // get the default buffer slots
         get_optimal_num_slots(
             ring_buffer_slot_options[arch_index],
@@ -407,8 +407,8 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
             default_num_sender_buffer_slots,
             default_num_receiver_buffer_slots);
         // get the dateline buffer slots
-        size_t dateline_num_sender_buffer_slots;
-        size_t dateline_num_receiver_buffer_slots;
+        size_t dateline_num_sender_buffer_slots = 0;
+        size_t dateline_num_receiver_buffer_slots = 0;
         get_optimal_num_slots(
             ring_buffer_slot_options_dateline[arch_index][axis_index],
             this->num_used_sender_channels - 1,
@@ -417,8 +417,8 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
             dateline_num_receiver_buffer_slots,
             default_num_sender_buffer_slots);
         // get the dateline upstream buffer slots
-        size_t dateline_upstream_num_sender_buffer_slots;
-        size_t dateline_upstream_num_receiver_buffer_slots;
+        size_t dateline_upstream_num_sender_buffer_slots = 0;
+        size_t dateline_upstream_num_receiver_buffer_slots = 0;
         get_optimal_num_slots(
             ring_buffer_slot_options_dateline_upstream[arch_index][axis_index],
             this->num_used_sender_channels - 1,
@@ -427,8 +427,8 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
             dateline_upstream_num_receiver_buffer_slots,
             default_num_sender_buffer_slots);
         // get the dateline upstream adjacent device buffer slots
-        size_t dateline_upstream_adjcent_num_sender_buffer_slots;
-        size_t dateline_upstream_adjcent_num_receiver_buffer_slots;
+        size_t dateline_upstream_adjcent_num_sender_buffer_slots = 0;
+        size_t dateline_upstream_adjcent_num_receiver_buffer_slots = 0;
         get_optimal_num_slots(
             ring_buffer_slot_options_dateline_upstream_adjcent[arch_index][axis_index],
             this->num_used_sender_channels - 1,
@@ -522,8 +522,8 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         }
     } else if (topology == Topology::Torus) {
         // TODO: only handing default and dateline config for now, need to handle other edm types as well
-        size_t default_num_sender_buffer_slots;
-        size_t default_num_receiver_buffer_slots;
+        size_t default_num_sender_buffer_slots = 0;
+        size_t default_num_receiver_buffer_slots = 0;
         // get the default buffer slots
         get_optimal_num_slots(
             torus_buffer_slot_options[arch_index],
@@ -533,8 +533,8 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
             default_num_receiver_buffer_slots);
 
         // get the dateline buffer slots
-        size_t dateline_num_sender_buffer_slots;
-        size_t dateline_num_receiver_buffer_slots;
+        size_t dateline_num_sender_buffer_slots = 0;
+        size_t dateline_num_receiver_buffer_slots = 0;
         get_optimal_num_slots(
             torus_buffer_slot_options_dateline[arch_index][axis_index],
             this->num_used_sender_channels - 1,
@@ -572,8 +572,8 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
             }
         }
     } else {
-        size_t default_num_sender_buffer_slots;
-        size_t default_num_receiver_buffer_slots;
+        size_t default_num_sender_buffer_slots = 0;
+        size_t default_num_receiver_buffer_slots = 0;
         get_optimal_num_slots(
             get_num_buffer_slots(topology, arch_index),
             this->num_used_sender_channels,

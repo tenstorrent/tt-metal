@@ -140,7 +140,7 @@ void* SmallVectorBase<Size_T>::mallocForGrow(void* FirstEl, size_t MinSize, size
 template <class Size_T>
 void SmallVectorBase<Size_T>::grow_pod(void* FirstEl, size_t MinSize, size_t TSize) {
     size_t NewCapacity = getNewCapacity<Size_T>(MinSize, TSize, this->capacity());
-    void* NewElts;
+    void* NewElts = nullptr;
     if (BeginX == FirstEl) {
         NewElts = safe_malloc(NewCapacity * TSize);
         if (NewElts == FirstEl) {

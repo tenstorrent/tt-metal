@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <math.h>
+
 #include <iostream>
 
 #include <tt-logger/tt-logger.hpp>
@@ -33,7 +35,7 @@ public:
     float32(uint32_t new_uint32_data) { uint32_data = new_uint32_data; }
 
     float to_float() const {
-        float v;
+        float v = NAN;
         memcpy(&v, &uint32_data, sizeof(float));
         return v;
     }

@@ -149,7 +149,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
     // Setup mcast path
     chip_id_t mcast_start_phys_id = 0;                          // Physical ID for chip starting mcast
     FabricNodeId mcast_start_id(MeshId{0}, 0);                  // Mesh ID for chip starting mcast
-    chip_id_t sender_phys_id;
+    chip_id_t sender_phys_id = 0;
     FabricNodeId sender_id(MeshId{0}, 0);                       // Mesh/Chip ID of mcast sender
     std::unordered_map<RoutingDirection, uint32_t> mcast_hops;  // Specify mcast path from mcast src chip
     std::unordered_map<RoutingDirection, std::vector<FabricNodeId>>
@@ -363,19 +363,19 @@ void RunTestUnicastRaw(
 
     FabricNodeId src_fabric_node_id(MeshId{0}, 0);
     FabricNodeId dst_fabric_node_id(MeshId{0}, 0);
-    chip_id_t not_used_1;
-    chip_id_t not_used_2;
+    chip_id_t not_used_1 = 0;
+    chip_id_t not_used_2 = 0;
     // Find a device num_hops away in specified direction.
     std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
     std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
-    chip_id_t src_physical_device_id;
-    chip_id_t dst_physical_device_id;
+    chip_id_t src_physical_device_id = 0;
+    chip_id_t dst_physical_device_id = 0;
     std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
     fabric_hops[direction] = num_hops;
 
     tt::tt_metal::distributed::MeshShape mesh_shape;
     std::vector<chan_id_t> eth_chans;
-    chan_id_t edm_port;
+    chan_id_t edm_port = 0;
 
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
@@ -734,8 +734,8 @@ void RunTestUnicastConnAPI(BaseFabricFixture* fixture, uint32_t num_hops, Routin
 
     FabricNodeId src_fabric_node_id(MeshId{0}, 0);
     FabricNodeId dst_fabric_node_id(MeshId{0}, 0);
-    chip_id_t not_used_1;
-    chip_id_t not_used_2;
+    chip_id_t not_used_1 = 0;
+    chip_id_t not_used_2 = 0;
     // Find a device with a neighbour in the East direction
     bool connection_found = find_device_with_neighbor_in_direction(
         fixture, src_fabric_node_id, dst_fabric_node_id, not_used_1, not_used_2, direction);
@@ -837,7 +837,7 @@ void RunTestMCastConnAPI(
     FabricNodeId src_fabric_node_id(MeshId{0}, 0);
     std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
     std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
-    chip_id_t src_phys_chip_id;
+    chip_id_t src_phys_chip_id = 0;
     std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
     fabric_hops[fwd_dir] = fwd_hops;
     fabric_hops[bwd_dir] = bwd_hops;
@@ -944,8 +944,8 @@ void RunTestMCastConnAPI(
         *left_fabric_node_id.mesh_id};
 
     // append the EDM connection rt args for fwd connection
-    chip_id_t dst_chip_id;
-    uint32_t link_idx;
+    chip_id_t dst_chip_id = 0;
+    uint32_t link_idx = 0;
 
     if (is_2d_fabric) {
         dst_chip_id = left_recv_phys_chip_id;
@@ -1099,7 +1099,7 @@ void RunTest2DMCastConnAPI(
     std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
 
     std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
-    chip_id_t src_phys_chip_id;
+    chip_id_t src_phys_chip_id = 0;
     std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
 
     if (north_hops > 0) {
@@ -1336,7 +1336,7 @@ void RunTest2DMCastConnAPI(
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-    uint32_t mcast_mode;
+    uint32_t mcast_mode = 0;
     auto arbitrary_fabric_node_id = src_fabric_node_id;
     if (north_hops > 0 && south_hops > 0) {
         mcast_mode = 3;
@@ -1413,7 +1413,7 @@ void RunTest2DMCastConnAPI(
     };
 
     // append the EDM connection rt args for fwd connection
-    uint32_t link_idx;
+    uint32_t link_idx = 0;
     if (north_hops > 0) {
         if (north_branch_east_hops > 0) {
             link_idx = get_forwarding_link_indices(src_fabric_node_id, north_east_fabric_node_id)[0];
@@ -1647,7 +1647,7 @@ void RunTestChipMCast1D(
     FabricNodeId src_fabric_node_id(MeshId{0}, 0);
     std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
     std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
-    chip_id_t src_phys_chip_id;
+    chip_id_t src_phys_chip_id = 0;
     std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
     fabric_hops[dir] = start_distance + range - 1;
 
@@ -1882,8 +1882,8 @@ void RunEDMConnectionStressTest(
 
     std::pair<MeshId, chip_id_t> src_mesh_chip_id;
     std::pair<MeshId, chip_id_t> dst_mesh_chip_id;
-    chip_id_t not_used_1;
-    chip_id_t not_used_2;
+    chip_id_t not_used_1 = 0;
+    chip_id_t not_used_2 = 0;
     // use control plane to find a mesh with 3 devices
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
     std::optional<MeshId> mesh_id;
@@ -2113,7 +2113,7 @@ void FabricUnicastCommon(
     }
 
     std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
-    chip_id_t src_physical_device_id;
+    chip_id_t src_physical_device_id = 0;
     std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
     if (!find_device_with_neighbor_in_multi_direction(
             fixture,
@@ -2276,7 +2276,7 @@ void FabricMulticastCommon(
     }
 
     std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
-    chip_id_t src_physical_device_id;
+    chip_id_t src_physical_device_id = 0;
     std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
     if (!find_device_with_neighbor_in_multi_direction(
             fixture,

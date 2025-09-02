@@ -136,11 +136,11 @@ tt_xy_pair ddr_to_noc0(unsigned i) {
 void configure_static_tlbs(
     tt::ARCH arch, chip_id_t mmio_device_id, const metal_SocDescriptor& sdesc, tt::umd::Cluster& device_driver) {
     using get_static_tlb_index_ptr = std::int32_t (*)(tt_xy_pair);
-    get_static_tlb_index_ptr get_static_tlb_index;
+    get_static_tlb_index_ptr get_static_tlb_index = nullptr;
 
     const uint32_t dynamic_tlb_count = 16;
-    uint32_t dynamic_tlb_base_index, dynamic_tlb_16m_size, dram_channel_0_peer2peer_region_start, dram_channel_0_x,
-        dram_channel_0_y;
+    uint32_t dynamic_tlb_base_index = 0, dynamic_tlb_16m_size = 0, dram_channel_0_peer2peer_region_start = 0,
+             dram_channel_0_x = 0, dram_channel_0_y = 0;
 
     // Need to set these values based on arch because UMD does not expose architecture_implementation
     switch (arch) {

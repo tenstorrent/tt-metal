@@ -116,9 +116,9 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     // Note: num_blocks is just blocks along height
     uint32_t num_blocks = num_output_rows / TILE_HEIGHT;
     uint32_t num_blocks_per_batch = num_output_rows_per_batch / TILE_HEIGHT;
-    uint32_t num_cores, num_blocks_per_core_group_1, num_blocks_per_core_group_2, num_tiles_per_block;
+    uint32_t num_cores = 0, num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0, num_tiles_per_block = 0;
     CoreRangeSet all_cores, core_group_1, core_group_2;
-    bool row_major;
+    bool row_major = false;
     if (output_sharded) {
         const auto& shard_spec = output.shard_spec().value();
         all_cores = shard_spec.grid;
@@ -176,7 +176,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     constexpr uint32_t output_cb_index = CBIndex::c_2;
-    uint32_t output_cb_size;
+    uint32_t output_cb_size = 0;
     if (output_sharded) {
         output_cb_size = output.buffer()->aligned_size_per_bank();
     } else {
@@ -204,7 +204,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
                 .set_page_size(src2_cb_index, cache_page_size);
         tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
     }
-    uint32_t weight_block_size;
+    uint32_t weight_block_size = 0;
     if (output_sharded) {
         weight_block_size = output.shard_spec().value().shape[1] * weights_element_size_bytes;
     } else {
@@ -414,7 +414,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t num_cores, num_blocks_per_core_group_1, num_blocks_per_core_group_2;
+    uint32_t num_cores = 0, num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     bool row_major = false;
     if (output_sharded) {
@@ -444,7 +444,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
 
     constexpr uint32_t out_cb_index = CBIndex::c_0;
     uint32_t rounded_weight_page_size = round_up_to_mul32(weight_page_size);
-    uint32_t out_cb_size;
+    uint32_t out_cb_size = 0;
     if (output_sharded) {
         out_cb_size = output.buffer()->aligned_size_per_bank();
     } else {

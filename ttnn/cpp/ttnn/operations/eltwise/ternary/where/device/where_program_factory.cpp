@@ -64,7 +64,7 @@ void set_or_update_runtime_arguments(
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
 
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -394,9 +394,9 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
 
     // Create c_1 based on variant - this is the primary tensor CB
     uint32_t value_true_tensor_cb = 0;
-    tt::tt_metal::CBHandle value_true_tensor_cb_handle;
+    tt::tt_metal::CBHandle value_true_tensor_cb_handle = 0;
     uint32_t value_false_tensor_cb = 0;
-    tt::tt_metal::CBHandle value_false_tensor_cb_handle;
+    tt::tt_metal::CBHandle value_false_tensor_cb_handle = 0;
 
     if (variant == WhereVariant::TTS) {
         // TTS: c_1 = value_true tensor (value_false is scalar)

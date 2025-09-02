@@ -117,7 +117,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
 
     for (uint32_t i = 0, num_sticks_read = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_sticks_per_core;
+        uint32_t num_sticks_per_core = 0;
         if (core_group_1.contains(core)) {
             num_sticks_per_core = num_sticks_per_core_group_1;
         } else if (core_group_2.contains(core)) {

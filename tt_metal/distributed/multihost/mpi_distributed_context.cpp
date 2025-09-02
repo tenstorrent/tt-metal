@@ -197,7 +197,7 @@ void MPIContext::set_current_world(const ContextPtr& ctx) {
 }
 
 bool MPIContext::is_initialized() {
-    int is_mpi_initialized;
+    int is_mpi_initialized = 0;
     MPI_CHECK(MPI_Initialized(&is_mpi_initialized));
     return is_mpi_initialized != 0;
 }
@@ -447,7 +447,7 @@ ContextPtr MPIContext::duplicate() const {
 }
 
 ContextPtr MPIContext::split(Color color, Key key) const {
-    MPI_Comm split_comm;
+    MPI_Comm split_comm = nullptr;
     MPI_CHECK(MPI_Comm_split(comm_, *color, *key, &split_comm));
     return std::make_shared<MPIContext>(split_comm);
 }

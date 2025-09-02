@@ -415,8 +415,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
     uint32_t start_row_id = 0;
     uint32_t start_column_id = 0;
     uint32_t tile_start_id = 0;
-    uint32_t single_block_size_row_arg;
-    uint32_t single_block_size_col_arg;
+    uint32_t single_block_size_row_arg = 0;
+    uint32_t single_block_size_col_arg = 0;
 
     uint32_t total_row_cores = full_cores_per_row;
     if (has_cliff_row) {
@@ -753,7 +753,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
 
     /** reader
      */
-    KernelHandle unary_reader_kernel_id;
+    KernelHandle unary_reader_kernel_id = 0;
     std::vector<uint32_t> reader_ct_args = {
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src1_cb_index,
@@ -769,7 +769,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
 
     /** writer
      */
-    KernelHandle unary_writer_kernel_id;
+    KernelHandle unary_writer_kernel_id = 0;
     std::vector<uint32_t> writer_ct_args = {
         output_cb_index,
     };

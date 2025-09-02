@@ -56,7 +56,7 @@ void issue_record_event_commands(
     const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
 
     // Calculate the packed event payload size
-    uint32_t packed_event_payload_sizeB;
+    uint32_t packed_event_payload_sizeB = 0;
     {
         tt::tt_metal::DeviceCommandCalculator event_payload_calculator;
         event_payload_calculator.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(

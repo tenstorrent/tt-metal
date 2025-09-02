@@ -162,7 +162,7 @@ std::vector<Tensor> all_broadcast_async_impl(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "all_broadcast_async op is only supported for Fast Dispatch");
 
-    uint32_t num_devices;
+    uint32_t num_devices = 0;
     if (cluster_axis.has_value()) {
         auto mesh_device = input_tensor.device();
         TT_FATAL(mesh_device != nullptr, "Mesh device is required when cluster_axis is set");

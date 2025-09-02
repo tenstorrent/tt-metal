@@ -461,9 +461,9 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
     const uint32_t element_size = input_tensors[0].element_size();
     const uint32_t alignment = input_tensors[0].buffer()->alignment();
 
-    uint32_t page_size;
-    uint32_t elements_per_page_width;
-    uint32_t elements_per_page_height;
+    uint32_t page_size = 0;
+    uint32_t elements_per_page_width = 0;
+    uint32_t elements_per_page_height = 0;
     if (rm_layout) {
         std::vector<uint32_t> all_stick_sizes;
         all_stick_sizes.push_back(output.shard_spec().value().shape[1]);
@@ -621,7 +621,7 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
     uint32_t core_id = 0;
     for (auto core : cores) {
         auto input_shard_spec = input_tensors[0].shard_spec().value();
-        uint32_t curr_num_output_rows;
+        uint32_t curr_num_output_rows = 0;
         if (input_cores.contains(core)) {
             curr_num_output_rows = num_output_rows_per_core;
         } else {
@@ -660,8 +660,8 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
             uint32_t num_output_rows = output_tensors[0].padded_shape()[-1];
             uint32_t num_output_rows_per_core = div_up(num_output_rows, input_cores.num_cores());
             for (auto core : cores) {
-                uint32_t curr_num_input_tensors;
-                uint32_t curr_num_output_rows;
+                uint32_t curr_num_input_tensors = 0;
+                uint32_t curr_num_output_rows = 0;
                 if (input_cores.contains(core)) {
                     curr_num_input_tensors = num_input_tensors;
                     curr_num_output_rows = num_output_rows_per_core;
@@ -730,8 +730,8 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
 
     constexpr bool rm_orientation = false;
 
-    uint32_t num_output_pages;
-    uint32_t single_page_size;
+    uint32_t num_output_pages = 0;
+    uint32_t single_page_size = 0;
     uint32_t common_align_len = std::max(input_tensors[0].buffer()->alignment(), output.buffer()->alignment());
     if (rm_layout) {
         num_output_pages = output.physical_volume() / output.padded_shape()[-1];

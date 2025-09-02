@@ -139,7 +139,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     log_info(tt::LogTest, "Local scratch buffer addr: {:#x}", buffer_addr);
 
     // A copy kernel, we'll feed it incorrect inputs to test sanitization.
-    KernelHandle dram_copy_kernel;
+    KernelHandle dram_copy_kernel = 0;
     if (is_eth_core) {
         std::map<std::string, std::string> dram_copy_kernel_defines = {
             {"SIGNAL_COMPLETION_TO_DISPATCHER", "1"},

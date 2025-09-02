@@ -53,7 +53,7 @@ double copy_to_hugepage(
     uint64_t hugepage_addr = reinterpret_cast<uint64_t>(hugepage_base);
     uint64_t hugepage_end = hugepage_addr + hugepage_size;
     uint64_t src_addr = reinterpret_cast<uint64_t>(src_data.data());
-    size_t num_pages;
+    size_t num_pages = 0;
     if (!page_size) {
         num_pages = 1;
         page_size = total_size;

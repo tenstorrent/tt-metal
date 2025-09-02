@@ -90,7 +90,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     ttnn::MeshDevice* mesh_device = a.device();
     tt::tt_metal::Program program{};
     uint32_t output_page_size = 0;
-    uint32_t stats_page_size;
+    uint32_t stats_page_size = 0;
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.value().dtype());
@@ -273,7 +273,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     uint32_t stats_cb_size = post_all_gather_stats_block_tiles * single_tile_size;
     uint32_t stats_reduced_cb_size = single_tile_size;
     // output buffer size
-    uint32_t out_CB_size;
+    uint32_t out_CB_size = 0;
     out_CB_size = in0_block_tiles * out_single_tile_size;
     uint32_t out_reshard_CB_size = out_CB_size;
     if (!skip_write_back) {
@@ -307,7 +307,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     CoreRangeSet all_to_all_cores;
     CoreRangeSet all_to_all_workers_except_sender;
     CoreRangeSet not_all_to_all_workers;
-    uint32_t num_cores_x_mcast, num_cores_y_mcast;
+    uint32_t num_cores_x_mcast = 0, num_cores_y_mcast = 0;
     sender_cores = {start_core, start_core};
     CoreCoord all_core_grid_size;
     CoreCoord none_core_grid_size;
@@ -558,7 +558,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     tt::tt_metal::CreateCircularBuffer(program, all_cores, in4_cb_config);
 
     // x
-    uint32_t x_cb_index;
+    uint32_t x_cb_index = 0;
     x_cb_index = tt::CBIndex::c_15;
     tt::tt_metal::CircularBufferConfig x_cb_config =
         tt::tt_metal::CircularBufferConfig(x_CB_size, {{x_cb_index, cb_data_format}})
@@ -583,7 +583,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     tt::tt_metal::CreateCircularBuffer(program, sender_cores, cb_var_config);
 
     // cb_stats_reduced
-    uint32_t cb_stats_reduced_index;
+    uint32_t cb_stats_reduced_index = 0;
     cb_stats_reduced_index = tt::CBIndex::c_18;
     tt::tt_metal::CircularBufferConfig stats_reduced_cb_config =
         tt::tt_metal::CircularBufferConfig(stats_reduced_cb_size, {{cb_stats_reduced_index, cb_data_format}})
@@ -912,7 +912,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
         uint32_t width_index_two_stage = width_index % num_blocks_first_stage;
 
-        uint32_t all_to_all_worker_tile_offset_size_bytes;
+        uint32_t all_to_all_worker_tile_offset_size_bytes = 0;
         if (use_two_stage_reduce) {
             all_to_all_worker_tile_offset_size_bytes = (width_index_two_stage)*single_tile_size;
         } else {
@@ -930,7 +930,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             (use_two_stage_reduce and width_index_two_stage < 1)) {
             compute_args.push_back(1);
             compute_args.push_back((uint32_t)use_two_stage_reduce);
-            bool is_second_stage_reader;
+            bool is_second_stage_reader = false;
             if (use_two_stage_reduce) {
                 is_second_stage_reader = width_index < 1;
             } else {
@@ -971,7 +971,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             (use_two_stage_reduce and width_index_two_stage < 1)) {
             std::vector<uint32_t> mcast_receiver_args;
             mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);
-            bool is_second_stage_reader;
+            bool is_second_stage_reader = false;
             if (use_two_stage_reduce and width_index < 1) {
                 is_second_stage_reader = true;
                 mcast_receiver_args.push_back((uint32_t)is_second_stage_reader);

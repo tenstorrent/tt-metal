@@ -185,7 +185,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
 
-    uint32_t num_output_blocks_per_core;
+    uint32_t num_output_blocks_per_core = 0;
     for (uint32_t i = 0, num_blocks_written = 0; i < total_num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -299,7 +299,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
                  num_output_blocks_per_core_group_2] =
                     tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total);
 
-            uint32_t num_output_blocks_per_core;
+            uint32_t num_output_blocks_per_core = 0;
             for (uint32_t i = 0, num_blocks_written = 0; i < total_num_cores; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
 

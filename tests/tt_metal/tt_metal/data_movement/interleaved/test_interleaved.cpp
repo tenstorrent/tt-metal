@@ -208,7 +208,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageNumbers) {
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
-    uint32_t num_pages;
+    uint32_t num_pages = 0;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -281,7 +281,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageReadNumber
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
-    uint32_t num_pages;
+    uint32_t num_pages = 0;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -324,7 +324,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageWriteNumbe
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
-    uint32_t num_pages;
+    uint32_t num_pages = 0;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -397,7 +397,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageReadNocSwa
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
-    uint32_t num_pages;
+    uint32_t num_pages = 0;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -443,7 +443,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageWriteNocSw
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
-    uint32_t num_pages;
+    uint32_t num_pages = 0;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -489,7 +489,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageNumbers) {
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
-    uint32_t num_pages;
+    uint32_t num_pages = 0;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -563,7 +563,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageReadNumbers)
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
-    uint32_t num_pages;
+    uint32_t num_pages = 0;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -605,7 +605,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageWriteNumbers
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
-    uint32_t num_pages;
+    uint32_t num_pages = 0;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -679,7 +679,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageReadNocSwap)
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
-    uint32_t num_pages;
+    uint32_t num_pages = 0;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -724,7 +724,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageWriteNocSwap
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
-    uint32_t num_pages;
+    uint32_t num_pages = 0;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});

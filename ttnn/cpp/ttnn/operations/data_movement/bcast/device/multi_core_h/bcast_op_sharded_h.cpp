@@ -54,7 +54,7 @@ operation::ProgramWithCallbacks bcast_sharded_h(
     uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float)tt::constants::TILE_HEIGHT);
     uint32_t num_tile_per_core = ntiles_along_width * ntiles_along_height;
 
-    uint32_t Wt, Ht;
+    uint32_t Wt = 0, Ht = 0;
     if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
         ncores_x = all_cores.ranges().begin()->end_coord.y + 1;
         Wt = shard_spec.shape[1] / TILE_WIDTH;

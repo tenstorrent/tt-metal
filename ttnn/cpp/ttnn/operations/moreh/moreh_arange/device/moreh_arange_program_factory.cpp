@@ -60,7 +60,7 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
     uint32_t core_h = grid.y;
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
         } else if (core_group_2.contains(core)) {

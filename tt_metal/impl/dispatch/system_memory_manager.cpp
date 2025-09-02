@@ -362,7 +362,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         CommandQueueDeviceAddrType::PREFETCH_Q_RD);
 
     // Helper to wait for fetch queue space, if needed
-    uint32_t fence;
+    uint32_t fence = 0;
     auto wait_for_fetch_q_space = [&]() {
         if (this->prefetch_q_dev_ptrs[cq_id] != this->prefetch_q_dev_fences[cq_id]) {
             return;
@@ -391,9 +391,9 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
 uint32_t SystemMemoryManager::completion_queue_wait_front(
     const uint8_t cq_id, std::atomic<bool>& exit_condition) const {
-    uint32_t write_ptr_and_toggle;
-    uint32_t write_ptr;
-    uint32_t write_toggle;
+    uint32_t write_ptr_and_toggle = 0;
+    uint32_t write_ptr = 0;
+    uint32_t write_toggle = 0;
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
     do {

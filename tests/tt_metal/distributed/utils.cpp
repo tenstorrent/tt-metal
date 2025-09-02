@@ -159,11 +159,11 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
     uint32_t page_size = 1024;
     uint32_t max_eth_cores = 3;
 
-    uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;
-    uint32_t NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP;
-    uint32_t TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP;
-    uint32_t ERISC_OUTER_LOOP, ERISC_MIDDLE_LOOP, ERISC_INNER_LOOP;
-    bool USE_MAX_RT_ARGS;
+    uint32_t BRISC_OUTER_LOOP = 0, BRISC_MIDDLE_LOOP = 0, BRISC_INNER_LOOP = 0, NUM_CBS = 0, NUM_SEMS = 0;
+    uint32_t NCRISC_OUTER_LOOP = 0, NCRISC_MIDDLE_LOOP = 0, NCRISC_INNER_LOOP = 0;
+    uint32_t TRISC_OUTER_LOOP = 0, TRISC_MIDDLE_LOOP = 0, TRISC_INNER_LOOP = 0;
+    uint32_t ERISC_OUTER_LOOP = 0, ERISC_MIDDLE_LOOP = 0, ERISC_INNER_LOOP = 0;
+    bool USE_MAX_RT_ARGS = false;
 
     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     CoreRangeSet cr_set(cr);

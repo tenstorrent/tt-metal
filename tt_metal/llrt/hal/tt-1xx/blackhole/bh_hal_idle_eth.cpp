@@ -75,8 +75,8 @@ HalCoreInfoType create_idle_eth_mem_map() {
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses);
     std::vector<HalJitBuildConfig> processor_types(1);
     for (std::uint8_t processor_class_idx = 0; processor_class_idx < NumEthDispatchClasses; processor_class_idx++) {
-        DeviceAddr fw_base, local_init, fw_launch;
-        uint32_t fw_launch_value;
+        DeviceAddr fw_base = 0, local_init = 0, fw_launch = 0;
+        uint32_t fw_launch_value = 0;
         ll_api::memory::Loading memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP;
         switch (static_cast<EthProcessorTypes>(processor_class_idx)) {
             case EthProcessorTypes::DM0: {

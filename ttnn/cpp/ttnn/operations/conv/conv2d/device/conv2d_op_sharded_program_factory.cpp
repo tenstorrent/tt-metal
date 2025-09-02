@@ -96,8 +96,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     const bool slice_inner_dim = height_sharded || !full_inner_dim;
 
-    uint32_t conv_act_c_blocks;
-    uint32_t input_channels_padded;
+    uint32_t conv_act_c_blocks = 0;
+    uint32_t input_channels_padded = 0;
     if (block_sharded) {
         conv_act_c_blocks =
             a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR ? num_cores_x : num_cores_y;

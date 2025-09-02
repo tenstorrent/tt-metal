@@ -253,7 +253,7 @@ void WatcherServer::Impl::read_kernel_ids_from_file() {
     }
 
     char* line = nullptr;
-    size_t len;
+    size_t len = 0;
     while (getline(&line, &len, f) != -1) {
         std::string s(line);
         s = s.substr(0, s.length() - 1);            // Strip newline

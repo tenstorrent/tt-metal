@@ -672,7 +672,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
     // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
     uint32_t in2_CB_size = 1 * scale_tile_size;
     // attention mask
-    uint32_t in3_CB_size;
+    uint32_t in3_CB_size = 0;
     if (causal_mask) {
         if (mask.value().is_sharded()) {
             in3_CB_size = block_wt * block_ht * mask_tile_size;

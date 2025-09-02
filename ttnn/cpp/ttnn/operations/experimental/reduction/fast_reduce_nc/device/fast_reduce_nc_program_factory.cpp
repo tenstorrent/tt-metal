@@ -79,7 +79,7 @@ operation::ProgramWithCallbacks reduce_nc_factory(
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
     // Choose granularity as the largest factor of num_reduce_input_tile that is less than or equal to 8.
     // Helps with locality and increases work unit for better performance.
-    uint32_t input_granularity;
+    uint32_t input_granularity = 0;
     for (input_granularity = 8; input_granularity > 1; --input_granularity) {
         if (num_reduce_input_tile % input_granularity == 0) {
             break;
@@ -254,7 +254,7 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i % num_cores_x, i / num_cores_x};
 
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_cols_per_core_group_1;
         } else if (core_group_2.contains(core)) {

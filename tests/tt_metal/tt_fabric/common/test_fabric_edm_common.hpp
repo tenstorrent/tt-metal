@@ -2296,7 +2296,7 @@ void Run1DFullMeshFabricPacketSendTest(
     const size_t max_line_size = *std::max_element(params.line_size.begin(), params.line_size.end());
 
     per_axis_array_t<std::vector<std::vector<Fabric1DWorkerConfig>>> worker_configs_per_axis_per_fabric_per_device;
-    size_t sync_count;
+    size_t sync_count = 0;
     std::tie(sync_count, worker_configs_per_axis_per_fabric_per_device) =
         generate_1D_fabric_on_full_mesh_worker_configs(
             params, fabrics_under_test_devices_per_axis, topologies, fabric_modes);
@@ -2622,10 +2622,10 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
         const size_t sync_core_noc_x = device->worker_core_from_logical_core(sync_core_coord).x;
         const size_t sync_core_noc_y = device->worker_core_from_logical_core(sync_core_coord).y;
 
-        IDevice* backward_device;
-        IDevice* forward_device;
-        size_t mcast_fwd_hops;
-        size_t mcast_bwd_hops;
+        IDevice* backward_device = nullptr;
+        IDevice* forward_device = nullptr;
+        size_t mcast_fwd_hops = 0;
+        size_t mcast_bwd_hops = 0;
 
         backward_device = i == 0 ? devices.back() : devices[i - 1];
         forward_device = i == line_size - 1 ? devices.front() : devices[i + 1];

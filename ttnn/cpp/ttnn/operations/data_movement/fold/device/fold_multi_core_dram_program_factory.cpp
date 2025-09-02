@@ -354,7 +354,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     const uint32_t output_hw = output_height * output_width;
     uint32_t curr_patches = 0;
     std::vector<CoreCoord> cores_with_rtargs;
-    uint32_t src_idx, dst_idx, src_col_offset;
+    uint32_t src_idx = 0, dst_idx = 0, src_col_offset = 0;
     for (uint32_t i = 0; i < cores.size(); i++) {
         CoreCoord core = cores[i];
         std::vector<uint32_t> reader_runtime_args = {src0_buffer->address()};

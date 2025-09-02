@@ -69,7 +69,7 @@ Tensor tensor_reshape(
                         auto shard_spec = shard_spec_buffer.tensor_shard_spec;
                         auto shard_shape = shard_spec.shape;
 
-                        uint32_t mul_div;
+                        uint32_t mul_div = 0;
                         if (new_logical_shape[-1] == 0 || shard_shape[1] == 0) {
                             mul_div = 0;
                         } else {

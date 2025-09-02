@@ -353,7 +353,7 @@ std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(
                     std::vector<uint32_t> single_row;
                     // populate a single row
                     for (int j = 0; j < subtile_cols; ++j) {
-                        int data_index;
+                        int data_index = 0;
                         if (row_major_input) {
                             data_index =
                                 (tr * face_H + i) * tile_W + (tc * face_W + j) + (num_float_in_tile * tile_index);

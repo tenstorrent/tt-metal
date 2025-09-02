@@ -1121,7 +1121,7 @@ public:
                         uint32_t relayed_bytes =
                             tt::align(kg_transfer_info.lengths[kernel_idx], HostMemDeviceCommand::PROGRAM_PAGE_SIZE);
                         uint16_t length_adjust = uint16_t(relayed_bytes - kg_transfer_info.lengths[kernel_idx]);
-                        uint32_t base_address, page_offset;
+                        uint32_t base_address = 0, page_offset = 0;
                         if (kg_transfer_info.page_offsets[kernel_idx] > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
                             const uint32_t num_banks =
                                 device->allocator()->get_num_banks(kernels_buffer->buffer_type());
@@ -1169,7 +1169,7 @@ public:
                             kernel_bins_cmds.push_back({});
                         }
                         auto& kernel_bins_cmd = kernel_bins_cmds.back();
-                        uint32_t write_length, read_length;
+                        uint32_t write_length = 0, read_length = 0;
                         if (aligned_length <= max_length_per_sub_cmd) {
                             read_length = aligned_length;
                             write_length = read_length - padding;
@@ -1780,7 +1780,7 @@ void assemble_device_commands(
 void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start) {
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        uint32_t ringbuffer_size;
+        uint32_t ringbuffer_size = 0;
         if (hal.get_programmable_core_type(index) == tt::tt_metal::HalProgrammableCoreType::TENSIX) {
             ringbuffer_size =
                 worker_l1_unreserved_start -

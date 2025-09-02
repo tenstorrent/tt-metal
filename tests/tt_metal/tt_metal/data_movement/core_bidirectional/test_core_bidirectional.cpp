@@ -180,7 +180,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirecti
         device, test_config.master_core_coord, l1_base_read_address, bytes_per_transaction, packed_requestor_output);
 
     // Compare output with golden vector
-    bool pcc;
+    bool pcc = false;
     pcc = is_close_packed_vectors<bfloat16, uint32_t>(
         packed_sender_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
     pcc &= is_close_packed_vectors<bfloat16, uint32_t>(

@@ -780,8 +780,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     // Create circular buffers
     uint32_t in0_cb_index = tt::CBIndex::c_0;
     uint32_t output_cb_index = tt::CBIndex::c_16;
-    CBHandle cb_in0;
-    CBHandle cb_output;
+    CBHandle cb_in0 = 0;
+    CBHandle cb_output = 0;
     if (inplace) {
         std::map<uint8_t, tt::DataFormat> in0_out0_cb_data_format_spec{
             {in0_cb_index, in_data_format}, {output_cb_index, in_data_format}};
@@ -925,7 +925,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     auto cb_ex_global = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_global_cb_config);
 
     // ex2pe
-    uint32_t cb_ex2pe_index;
+    uint32_t cb_ex2pe_index = 0;
     cb_ex2pe_index = tt::CBIndex::c_17;
     tt::tt_metal::CircularBufferConfig ex2pe_cb_config =
         tt::tt_metal::CircularBufferConfig(ex2pe_CB_size, {{cb_ex2pe_index, cb_data_format}})
@@ -2270,7 +2270,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                                     .set_page_size(ex2_cb_index, single_tile_size);
     auto cb2_ex_global = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_global_cb_config);
     // ex2pe
-    uint32_t cb_ex2pe_index;
+    uint32_t cb_ex2pe_index = 0;
     cb_ex2pe_index = tt::CBIndex::c_27;
     tt::tt_metal::CircularBufferConfig ex2pe_cb_config =
         tt::tt_metal::CircularBufferConfig(ex2pe_CB_size, {{cb_ex2pe_index, cb_data_format}})
@@ -2320,7 +2320,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             CoreCoord core = group[j];
             CoreCoord virtual_core = virtual_group[j];
             CoreCoord core_physical = device->worker_core_from_logical_core(core);
-            uint32_t in0_start_id, out_tile_start_id;
+            uint32_t in0_start_id = 0, out_tile_start_id = 0;
             if (equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch)) {
                 in0_start_id = per_core_Mt_group_1 * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
                 out_tile_start_id = per_core_Mt_group_1 * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
@@ -2471,7 +2471,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     for (int i = 0; i < core_coords.size(); ++i) {
         auto core = core_coords[i];
         auto virtual_core = virtual_core_coords[i];
-        uint32_t out_tile_start_id;
+        uint32_t out_tile_start_id = 0;
         if (equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch)) {
             out_tile_start_id = per_core_Mt_group_1 * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
         } else {

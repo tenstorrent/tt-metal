@@ -74,8 +74,8 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    bool row_major;
-    uint32_t num_cores, num_blocks_per_core_group_1, num_blocks_per_core_group_2;
+    bool row_major = false;
+    uint32_t num_cores = 0, num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0;
 
     CoreRangeSet all_cores, core_group_1, core_group_2;
 
@@ -196,7 +196,7 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
             auto src_addr = input_tensors.at(1).buffer()->address();         // input_tensor
             auto page_table_addr = input_tensors.at(2).buffer()->address();  // page_table_tensor
 
-            uint32_t current_kernel_batch_arg;
+            uint32_t current_kernel_batch_arg = 0;
             const auto op_specific = static_cast<const PagedUpdateCacheDeviceOperation*>(operation);
 
             if (use_batch_idx_tensor) {

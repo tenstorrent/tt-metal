@@ -13,6 +13,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <bmm_op.hpp>
 #include <fmt/core.h>
+#include <math.h>
 #include <iostream>
 
 using namespace tt::constants;
@@ -36,8 +37,8 @@ void golden_matmul(
     std::uint32_t idx_a = 0;
     std::uint32_t idx_b = 0;
 
-    float c_f;
-    float float_tmp;
+    float c_f = NAN;
+    float float_tmp = NAN;
     std::vector<bfloat16> c_bf(M * N, 0);
 
     for (int i = 0; i < M; i++) {

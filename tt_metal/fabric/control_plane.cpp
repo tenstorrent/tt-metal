@@ -1485,7 +1485,7 @@ void write_to_worker_or_fabric_tensix_cores(
     for (const auto& tensix_core : all_tensix_cores) {
         CoreCoord core_coord(tensix_core.x, tensix_core.y);
         bool is_mux_core = mux_cores_translated.find(core_coord) != mux_cores_translated.end();
-        bool write_fabric_data;
+        bool write_fabric_data = false;
         if (tensix_config_enabled) {
             if (is_mux_core) {
                 write_fabric_data = true;

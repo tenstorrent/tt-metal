@@ -77,7 +77,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     uint32_t num_cores_y = grid.y;
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
         } else if (core_group_2.contains(core)) {

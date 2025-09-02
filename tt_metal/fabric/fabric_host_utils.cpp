@@ -407,7 +407,7 @@ std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
         topology_info.corners.size() == 4, "Expected 4 corners for 2D mesh, got {}.", topology_info.corners.size());
 
     // Determine the northwest corner
-    chip_id_t nw_corner;
+    chip_id_t nw_corner = 0;
     if (nw_corner_chip_id.has_value()) {
         // Use the provided northwest corner chip ID if it's valid
         nw_corner = nw_corner_chip_id.value();

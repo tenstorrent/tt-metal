@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <math.h>
+
 #include <vector>
 #include <array>
 #include <random>
@@ -82,7 +84,7 @@ Tensor<T> initialize_tensor(
         for (auto z = 0; z < shape[1]; z++) {
             for (auto y = 0; y < shape[2]; y++) {
                 for (auto x = 0; x < shape[3]; x++) {
-                    float val;
+                    float val = NAN;
                     switch (init_type) {
                         case Initialize::ZEROS: val = 0; break;
                         case Initialize::ONES: val = 1; break;

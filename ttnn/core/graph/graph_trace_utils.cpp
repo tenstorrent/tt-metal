@@ -29,7 +29,7 @@ ttnn::Shape parse_shape(std::string_view shape_string) {
     const char* end_str = str + shape_values.size();
 
     while (str < end_str) {
-        char* next;
+        char* next = nullptr;
         uint32_t value = std::strtoul(str, &next, 10);
         if (str == next) {
             break;  // no conversion happened

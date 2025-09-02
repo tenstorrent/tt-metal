@@ -375,7 +375,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 uint32_t chunks_per_sync_val = chunks_per_sync.value_or(
                     std::max((input_tile_id_end - input_tile_id_start) / num_tiles_to_write_per_packet, (uint32_t)1));
 
-                uint32_t self_write_done_semaphore;
+                uint32_t self_write_done_semaphore = 0;
                 if (fuse_op) {
                     self_write_done_semaphore = CreateSemaphore(program, {core}, 0);
                 }

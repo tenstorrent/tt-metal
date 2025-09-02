@@ -331,7 +331,7 @@ Tensor reduce_scatter_minimal_async_impl(
 
     // For reduce_scatter_minimal_async_impl, we need to calculate the ring size based on cluster_axis
     // Since we don't have a specific coordinate here, we use the maximum possible devices
-    uint32_t num_devices;
+    uint32_t num_devices = 0;
     if (cluster_axis.has_value()) {
         auto mesh_device = input_tensor.device();
         TT_FATAL(mesh_device != nullptr, "Mesh device is required when cluster_axis is set");

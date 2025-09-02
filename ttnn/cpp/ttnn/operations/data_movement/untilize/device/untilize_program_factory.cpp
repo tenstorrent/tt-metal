@@ -476,7 +476,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
             ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col);
 
     uint32_t total_tiles_per_row = full_cores_per_row * single_block_size + has_cliff_row * single_block_size_cliff_row;
-    uint32_t row_size_bytes;
+    uint32_t row_size_bytes = 0;
 
     uint32_t el_size = a.element_size();
     if (a.dtype() == DataType::BFLOAT8_B) {
@@ -640,8 +640,8 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     uint32_t start_row_id = 0;
     uint32_t start_column_id = 0;
     uint32_t tile_start_id = 0;
-    uint32_t single_block_size_row_arg;
-    uint32_t single_block_size_col_arg;
+    uint32_t single_block_size_row_arg = 0;
+    uint32_t single_block_size_col_arg = 0;
 
     uint32_t total_row_cores = full_cores_per_row;
     if (has_cliff_row) {
@@ -972,7 +972,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     }
 
     // Input CB
-    uint32_t input_cb_num_tiles;
+    uint32_t input_cb_num_tiles = 0;
     if (input_is_sharded) {
         // Have compute core untilize the entire shard at once
         input_cb_num_tiles = num_tiles_per_input_block * num_input_blocks_per_full_core;
@@ -995,7 +995,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         input_is_sharded ? src0_buffer : nullptr);
 
     // Output CB
-    uint32_t output_cb_num_tiles;
+    uint32_t output_cb_num_tiles = 0;
     if (num_input_blocks_per_full_core == 1) {
         // No need to double buffer if the core is only processing a single block
         output_cb_num_tiles = num_tiles_per_input_block;
@@ -1012,7 +1012,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         output_cb_data_format);
 
     // Reader compile-time args and kernel
-    KernelHandle unary_reader_kernel_id;
+    KernelHandle unary_reader_kernel_id = 0;
     if (input_is_sharded) {
         // Sharded input
         std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};

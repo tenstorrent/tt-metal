@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <math.h>
+
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -34,7 +36,7 @@ public:
     float to_float() const {
         // move lower 16 to upper 16 (of 32) and convert to float
         uint32_t uint32_data = (uint32_t)uint16_data << 16;
-        float f;
+        float f = NAN;
         std::memcpy(&f, &uint32_data, sizeof(f));
         return f;
     }

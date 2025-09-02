@@ -151,7 +151,7 @@ TEST(NOC, TensixVerifyNocNodeIDs) {
         for (size_t x = 0; x < logical_grid_size.x; x++) {
             auto worker_core = mesh_device->worker_core_from_logical_core(CoreCoord(x, y));
             // Read register from specific node
-            uint32_t node_id_regval;
+            uint32_t node_id_regval = 0;
             node_id_regval = unit_tests::basic::test_noc::read_reg(mesh_device, CoreCoord(x, y), MY_NOC_ENCODING_REG);
             ASSERT_NE(
                 node_id_regval, unit_tests::basic::test_noc::init_value);  // Need to make sure we read in valid reg

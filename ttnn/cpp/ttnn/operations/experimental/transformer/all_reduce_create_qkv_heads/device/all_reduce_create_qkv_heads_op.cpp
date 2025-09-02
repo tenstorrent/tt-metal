@@ -125,7 +125,7 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
         this->num_heads,
         this->num_kv_heads);
 
-    uint32_t num_cores;
+    uint32_t num_cores = 0;
     if (this->input_on_subcoregrids) {
         auto input_core_grid = input_tensor.shard_spec().value().grid;
         num_cores = input_core_grid.num_cores();

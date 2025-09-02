@@ -30,7 +30,7 @@ std::vector<Tensor> fold_with_transpose_(
     uint32_t pad_h,
     uint32_t pad_w) {
     using namespace tt::constants;
-    IDevice* device;
+    IDevice* device = nullptr;
 
     // Get the device
     if (input.storage_type() != StorageType::DEVICE) {
@@ -155,7 +155,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     const CoreRangeSet& grid_size,
     const std::optional<MemoryConfig>& override_memory_config) {
     using namespace tt::constants;
-    IDevice* device;
+    IDevice* device = nullptr;
 
     // Get the device
     if (input.storage_type() != StorageType::DEVICE) {

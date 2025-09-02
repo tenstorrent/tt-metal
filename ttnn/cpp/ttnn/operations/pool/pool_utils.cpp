@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_utils.hpp"
+
+#include <math.h>
 #include <limits>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/assert.hpp>
@@ -15,7 +17,7 @@ namespace ttnn::operations::pool {
 // time argument sent to kernels. If there are multiple scalars needed call get_bf16_avg_pool_config_scalars
 uint32_t get_bf16_pool_scalar(
     Pool2DType pool_type, uint32_t kernel_h, uint32_t kernel_w, std::optional<int32_t> divisor_override) {
-    float value;
+    float value = NAN;
 
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D: value = 1.; break;
@@ -33,7 +35,7 @@ uint32_t get_bf16_pool_scalar(
 
 // Return a single bf16 init value for the pool type in u32 (packed in the least 16 bits)
 uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
-    float value;
+    float value = NAN;
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D: value = -std::numeric_limits<float>::infinity(); break;
         case Pool2DType::AVG_POOL2D: value = 0.; break;

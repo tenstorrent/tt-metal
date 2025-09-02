@@ -55,7 +55,7 @@ struct DRAMConfig {
 };
 
 tt::tt_metal::KernelHandle CreateKernelFromVariant(tt::tt_metal::Program& program, DRAMConfig cfg) {
-    tt::tt_metal::KernelHandle kernel;
+    tt::tt_metal::KernelHandle kernel = 0;
     std::visit([&](auto&& cfg_variant) {
         if constexpr (std::is_same_v<std::decay_t<decltype(cfg_variant)>, tt::tt_metal::EthernetConfig>) {
             kernel = tt_metal::CreateKernel(program, cfg.kernel_file, cfg.core_range, cfg_variant);

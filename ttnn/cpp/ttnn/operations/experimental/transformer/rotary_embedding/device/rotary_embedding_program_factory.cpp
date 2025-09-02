@@ -60,8 +60,8 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    bool row_major;
-    uint32_t num_cores, num_rows_per_core_group_1, num_rows_per_core_group_2;
+    bool row_major = false;
+    uint32_t num_cores = 0, num_rows_per_core_group_1 = 0, num_rows_per_core_group_2 = 0;
 
     CoreRangeSet all_cores, core_group_1, core_group_2;
 
@@ -69,7 +69,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     bool out_sharded = output.shard_spec().has_value();
     std::optional<ShardSpec> shard_spec = in_sharded ? input.shard_spec() : output.shard_spec();
 
-    uint32_t num_input_tiles, num_output_tiles;
+    uint32_t num_input_tiles = 0, num_output_tiles = 0;
 
     if (shard_spec.has_value()) {
         row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;

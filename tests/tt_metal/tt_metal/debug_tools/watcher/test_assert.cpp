@@ -61,7 +61,7 @@ static void RunTest(
     log_info(LogTest, "Running test on device {} core {}...", device->id(), virtual_core.str());
 
     // Set up the kernel on the correct risc
-    KernelHandle assert_kernel;
+    KernelHandle assert_kernel = 0;
     std::string risc;
     switch(riscv_type) {
         case DebugBrisc:

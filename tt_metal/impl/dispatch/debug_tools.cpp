@@ -557,7 +557,7 @@ void dump_command_queue_raw_data(
         sysmem_manager.get_device_id());
 
     // The following variables depend on completion Q vs issue Q
-    uint32_t write_ptr, read_ptr, base_addr, bytes_to_read = 0;
+    uint32_t write_ptr = 0, read_ptr = 0, base_addr = 0, bytes_to_read = 0;
     std::string queue_type_name;
     if (queue_type == CQ_COMPLETION_QUEUE) {
         write_ptr = get_cq_completion_wr_ptr<true>(

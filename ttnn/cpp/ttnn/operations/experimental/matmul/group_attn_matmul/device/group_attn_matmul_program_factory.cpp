@@ -129,7 +129,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
 
     // CB for in0 (ie. q_heads)
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    CBHandle cb_src0;
+    CBHandle cb_src0 = 0;
     if (in0_is_sharded) {
         uint32_t cb0_num_input_tiles =
             a.shard_spec().value().numel() / TILE_HW;  // Should be full MtKt and C should be 1
@@ -191,7 +191,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
 
     // CB for output (if sharded, full num tiles per core)
     uint32_t output_cb_index = tt::CBIndex::c_5;
-    CBHandle cb_output;
+    CBHandle cb_output = 0;
     if (output_is_sharded) {
         uint32_t num_output_tiles =
             output.shard_spec().value().numel() / TILE_HW;  // Should be full MtNt and C should be 1
@@ -519,7 +519,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         std::vector<std::vector<uint32_t>> all_compute_runtime_args = {cores.size(), compute_runtime_args};
 
         // Set runtime args
-        uint32_t num_output_blocks_per_core;
+        uint32_t num_output_blocks_per_core = 0;
         for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
             const CoreCoord& core = cores.at(i);
 

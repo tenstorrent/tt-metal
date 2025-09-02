@@ -790,7 +790,7 @@ void MetalContext::generate_device_bank_to_noc_tables(chip_id_t device_id) {
         (hal_->get_virtualized_core_types().find(AddressableCoreType::DRAM) != hal_->get_virtualized_core_types().end());
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-            uint16_t noc_x, noc_y;
+            uint16_t noc_x = 0, noc_y = 0;
             CoreCoord dram_noc_coord =
                 soc_d.get_preferred_worker_core_for_dram_view(allocator.get_dram_channel_from_bank_id(bank_id), noc);
             if (dram_is_virtualized) {

@@ -65,7 +65,7 @@ string logfile_path = "generated/dprint/";
 
 inline float bfloat16_to_float(uint16_t bfloat_val) {
     uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
-    float f;
+    float f = NAN;
     std::memcpy(&f, &uint32_data, sizeof(f));
     return f;
 }
@@ -312,7 +312,7 @@ void PrintTensixRegisterData(ostringstream* stream, int setwidth, uint32_t datum
             *stream << setw(setwidth) << make_float(8, 10, datum) << " ";
             break;
         case static_cast<std::uint8_t>(tt::DataFormat::Float32): {
-            float value;
+            float value = NAN;
             memcpy(&value, &datum, sizeof(float));
             *stream << setw(setwidth) << value << " ";
         } break;
@@ -1055,55 +1055,55 @@ bool DPrintServer::Impl::peek_one_risc_non_blocking(
                     AssertSize(sz, 1);
                     break;
                 case DPrintUINT16: {
-                    uint16_t value;
+                    uint16_t value = 0;
                     memcpy(&value, ptr, sizeof(uint16_t));
                     *intermediate_stream << value;
                     AssertSize(sz, 2);
                 } break;
                 case DPrintUINT32: {
-                    uint32_t value;
+                    uint32_t value = 0;
                     memcpy(&value, ptr, sizeof(uint32_t));
                     *intermediate_stream << value;
                     AssertSize(sz, 4);
                 } break;
                 case DPrintUINT64: {
-                    uint64_t value;
+                    uint64_t value = 0;
                     memcpy(&value, ptr, sizeof(uint64_t));
                     *intermediate_stream << value;
                     AssertSize(sz, 8);
                 } break;
                 case DPrintINT8: {
-                    int8_t value;
+                    int8_t value = 0;
                     memcpy(&value, ptr, sizeof(int8_t));
                     *intermediate_stream << (int)value;  // Cast to int to ensure it prints as a number, not a char
                     AssertSize(sz, 1);
                 } break;
                 case DPrintINT16: {
-                    int16_t value;
+                    int16_t value = 0;
                     memcpy(&value, ptr, sizeof(int16_t));
                     *intermediate_stream << value;
                     AssertSize(sz, 2);
                 } break;
                 case DPrintINT32: {
-                    int32_t value;
+                    int32_t value = 0;
                     memcpy(&value, ptr, sizeof(int32_t));
                     *intermediate_stream << value;
                     AssertSize(sz, 4);
                 } break;
                 case DPrintINT64: {
-                    int64_t value;
+                    int64_t value = 0;
                     memcpy(&value, ptr, sizeof(int64_t));
                     *intermediate_stream << value;
                     AssertSize(sz, 8);
                 } break;
                 case DPrintFLOAT32: {
-                    float value;
+                    float value = NAN;
                     memcpy(&value, ptr, sizeof(float));
                     *intermediate_stream << value;
                     AssertSize(sz, 4);
                 } break;
                 case DPrintBFLOAT16: {
-                    uint16_t rawValue;
+                    uint16_t rawValue = 0;
                     memcpy(&rawValue, ptr, sizeof(uint16_t));
                     float value = bfloat16_to_float(rawValue);
                     *intermediate_stream << value;

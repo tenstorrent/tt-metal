@@ -261,7 +261,7 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
         alignment *= 2;
     }
 
-    CBHandle cb_src0;
+    CBHandle cb_src0 = 0;
     uint32_t num_output_sticks_per_core = output_shard_spec.shape[0];
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(
@@ -288,7 +288,7 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec));
 
-    tt::tt_metal::KernelHandle unary_writer_kernel_id;
+    tt::tt_metal::KernelHandle unary_writer_kernel_id = 0;
     if (pad_output_row) {
         writer_compile_time_args_vec.push_back((std::uint32_t)temp_pad_cb_index);
         writer_compile_time_args_vec.push_back(output.element_size());

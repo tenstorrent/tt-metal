@@ -117,7 +117,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
             .set_page_size(output_cb_index, dst_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
     tt::tt_metal::Buffer* src0_buffer = input.buffer();
-    tt::tt_metal::KernelHandle reader_kernel_id;
+    tt::tt_metal::KernelHandle reader_kernel_id = 0;
     bfloat16 bfloat_scaler_value(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt};
@@ -136,7 +136,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    tt::tt_metal::KernelHandle writer_kernel_id;
+    tt::tt_metal::KernelHandle writer_kernel_id = 0;
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);

@@ -431,7 +431,7 @@ void RunTimeOptions::ParseFeatureCoreRange(
     if (str != nullptr) {
         if (isdigit(str[0])) {
             // Assume this is a single core
-            uint32_t x, y;
+            uint32_t x = 0, y = 0;
             if (sscanf(str, "%d,%d", &x, &y) != 2) {
                 TT_THROW("Invalid {}", env_var);
             }
@@ -455,7 +455,7 @@ void RunTimeOptions::ParseFeatureCoreRange(
             } else {
                 // Assume this is a list of coordinates (maybe just one)
                 while (str != nullptr) {
-                    uint32_t x, y;
+                    uint32_t x = 0, y = 0;
                     if (sscanf(str, "(%d,%d)", &x, &y) != 2) {
                         TT_THROW("Invalid {}", env_var);
                     }
@@ -487,7 +487,7 @@ void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
             feature_targets[feature].all_chips = true;
             break;
         }
-        uint32_t chip;
+        uint32_t chip = 0;
         if (sscanf(env_var_str, "%d", &chip) != 1) {
             TT_THROW("Invalid {}", env_var_str);
         }

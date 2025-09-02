@@ -14,6 +14,7 @@
 #include <bmm_op.hpp>
 #include <tt-metalium/device.hpp>
 #include <fmt/core.h>
+#include <math.h>
 
 using namespace tt::constants;
 using namespace std;
@@ -38,8 +39,8 @@ void golden_matmul(
     std::uint32_t idx_a = 0;
     std::uint32_t idx_b = 0;
 
-    float c_f;
-    float float_tmp;
+    float c_f = NAN;
+    float float_tmp = NAN;
     std::vector<bfloat16> c_bf(M * N, 0);
 
     for (int i = 0; i < M; i++) {

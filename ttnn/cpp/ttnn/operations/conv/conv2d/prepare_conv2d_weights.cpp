@@ -336,7 +336,7 @@ Tensor to_weight_tile_layout_block_sharded(
     uint32_t weight_block_height = conv_input_shard_width * w_shape[2] * w_shape[3];
 
     // Change for case where we use full inner dim vs slicing by kernel height
-    uint32_t weight_block_height_padded;
+    uint32_t weight_block_height_padded = 0;
     if (full_inner_dim) {
         // Use full inner dimension - round up the entire block height
         weight_block_height_padded =
@@ -392,7 +392,7 @@ Tensor to_weight_tile_layout_block_sharded(
                                 for (uint32_t oc = out_start; oc < out_end; oc++) {
                                     for (uint32_t k_s = 0; k_s < conv_output_shard_width; k_s++) {
                                         // Calculate matrix row index based on full_inner_dim flag
-                                        uint32_t matrix_row;
+                                        uint32_t matrix_row = 0;
                                         if (full_inner_dim) {
                                             // When using full inner dim, layout is: [ic_shard][flattened_inner_dim]
                                             // where flattened_inner_dim = r*kernel_w*conv_input_shard_width +

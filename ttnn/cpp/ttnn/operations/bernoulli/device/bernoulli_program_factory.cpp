@@ -108,7 +108,7 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
     uint32_t tile_offset = 0;
     for (int i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
-        uint32_t units_per_core;
+        uint32_t units_per_core = 0;
         if (core_group_1.contains(core)) {
             units_per_core = units_per_core_group_1;
         } else if (core_group_2.contains(core)) {

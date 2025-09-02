@@ -37,11 +37,11 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Declare variables that will be set based on layout
-    uint32_t input_unit_size;
-    uint32_t output_unit_size;
-    uint32_t input_cb_required_pages;
-    uint32_t work_units_to_split;
-    uint32_t aligned_input_unit_size;  // Size used for CB creation
+    uint32_t input_unit_size = 0;
+    uint32_t output_unit_size = 0;
+    uint32_t input_cb_required_pages = 0;
+    uint32_t work_units_to_split = 0;
+    uint32_t aligned_input_unit_size = 0;  // Size used for CB creation
 
     if (is_tiled_layout) {
         // Tiled layout specific calculations
@@ -84,7 +84,7 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
 
     // Create circular buffers
     uint32_t next_cb_index = tt::CBIndex::c_0;
-    uint32_t num_pages_in_input_cb;
+    uint32_t num_pages_in_input_cb = 0;
 
     num_pages_in_input_cb = input_cb_required_pages;
     if (work_per_core_group_1 != 1) {

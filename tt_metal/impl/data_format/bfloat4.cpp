@@ -65,9 +65,9 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
     TT_ASSERT(size_bytes % single_bfp_tile_size == 0);
     uint32_t num_tiles = size_bytes / single_bfp_tile_size;
 
-    int data_index;
-    int subtile_r;
-    int subtile_c;
+    int data_index = 0;
+    int subtile_r = 0;
+    int subtile_c = 0;
     const std::vector<uint32_t> mask_vec0 = {0xf, 0xf0, 0xf00, 0xf000};
     const std::vector<uint32_t> mask_vec1 = {0xf0000, 0xf00000, 0xf000000, 0xf0000000};
     const std::vector<uint32_t> shift_vec0 = {0, 4, 8, 12};
@@ -81,7 +81,7 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
         rebias_offset =
             simde_mm256_set1_epi32(-112);  // This rebias offset must be added if we are working with BFP8 format.
     }
-    uint32_t exp_word, sub_word_index;
+    uint32_t exp_word = 0, sub_word_index = 0;
 
     uint32_t num_float_in_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows * subtile_cols;
     uint32_t fp32_element_index = 0;
@@ -229,7 +229,7 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                         // Zero out lanes where mask_denormal is true
                         man0 = simde_mm256_blendv_epi8(man0, simde_mm256_setzero_si256(), mask_denormal0);
                         man1 = simde_mm256_blendv_epi8(man1, simde_mm256_setzero_si256(), mask_denormal1);
-                        uint32_t float_data_index;
+                        uint32_t float_data_index = 0;
                         if (row_major_output) {
                             float_data_index = subtile_c + (tile_W * subtile_r) + (tile_index * num_float_in_tile);
                         } else {

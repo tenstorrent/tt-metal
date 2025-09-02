@@ -25,7 +25,7 @@ AlignedPacketDims compute_aligned_packet_dims(
 
     const uint32_t aligned_page_size_bytes = tt::round_up(page_size_bytes, alignment);
 
-    uint32_t num_page_segments, max_num_pages_per_packet, packet_size_bytes, total_packets;
+    uint32_t num_page_segments = 0, max_num_pages_per_packet = 0, packet_size_bytes = 0, total_packets = 0;
     if (aligned_page_size_bytes <= max_packet_size_bytes) {
         num_page_segments = 1;
         max_num_pages_per_packet = std::min(max_packet_size_bytes / aligned_page_size_bytes, num_pages);

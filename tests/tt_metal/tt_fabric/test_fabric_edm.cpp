@@ -369,7 +369,7 @@ static void run_daemon_mode() {
                     TestParams test_params = parse_pipe_separated_params(params_str, test_mode);
 
                     auto rc = baseline_validate_test_environment(test_params);
-                    int result;
+                    int result = 0;
                     if (rc != 0) {
                         log_warning(tt::LogTest, "Test environment validation failed");
                         result = 1;  // Return 1 for environment validation failure

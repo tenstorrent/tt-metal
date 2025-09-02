@@ -158,10 +158,10 @@ ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
 std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
     tt::ARCH arch, const DeviceComputeKernelConfig compute_kernel_config) {
     MathFidelity math_fidelity;
-    bool math_approx_mode;
-    bool fp32_dest_acc_en;
-    bool packer_l1_acc;
-    bool dst_full_sync_en;
+    bool math_approx_mode = false;
+    bool fp32_dest_acc_en = false;
+    bool packer_l1_acc = false;
+    bool dst_full_sync_en = false;
 
     std::visit(
         [&](auto&& compute_kernel_config) {
@@ -192,8 +192,8 @@ std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
 
 uint32_t get_dest_reg_count(
     const DeviceComputeKernelConfig& compute_kernel_config, std::optional<std::array<uint32_t, 2>> tile_shape) {
-    uint32_t tile_height;
-    uint32_t tile_width;
+    uint32_t tile_height = 0;
+    uint32_t tile_width = 0;
     if (tile_shape.has_value()) {
         std::array<uint32_t, 2>& shape = tile_shape.value();
         tile_height = shape[0];

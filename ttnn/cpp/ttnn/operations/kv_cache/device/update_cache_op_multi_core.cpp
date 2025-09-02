@@ -66,14 +66,14 @@ operation::ProgramWithCallbacks update_cache_multi_core(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    bool row_major;
-    uint32_t num_cores, num_batched_heads_per_core_group_1, num_batched_heads_per_core_group_2;
+    bool row_major = false;
+    uint32_t num_cores = 0, num_batched_heads_per_core_group_1 = 0, num_batched_heads_per_core_group_2 = 0;
 
     CoreRangeSet all_cores, core_group_1, core_group_2;
 
     const std::optional<ShardSpec>& shard_spec = input_tensor.shard_spec();
 
-    uint32_t num_input_tiles;
+    uint32_t num_input_tiles = 0;
     if (shard_spec.has_value()) {
         row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
         all_cores = shard_spec.value().grid;
@@ -224,7 +224,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
     cache_start_ids.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores.at(i);
-        uint32_t num_batched_heads_per_core;
+        uint32_t num_batched_heads_per_core = 0;
         if (i < g1_numcores) {
             num_batched_heads_per_core = num_batched_heads_per_core_group_1;
         } else {
@@ -339,14 +339,14 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    bool row_major;
-    uint32_t num_cores, num_blocks_per_core_group_1, num_blocks_per_core_group_2;
+    bool row_major = false;
+    uint32_t num_cores = 0, num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0;
 
     CoreRangeSet all_cores, core_group_1, core_group_2;
 
     const std::optional<ShardSpec>& shard_spec = input_tensor.shard_spec();
 
-    uint32_t num_input_tiles;
+    uint32_t num_input_tiles = 0;
     if (shard_spec.has_value()) {
         row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
         all_cores = shard_spec.value().grid;

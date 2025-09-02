@@ -271,7 +271,7 @@ int GraphProcessor::add_tensor(const Tensor& t) {
             return nullptr;
         },
         storage);
-    std::int64_t tensor_id;
+    std::int64_t tensor_id = 0;
     if (not t.tensor_id.has_value()) {
         log_warning(
             tt::LogAlways,

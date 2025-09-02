@@ -22,7 +22,7 @@ uint32_t get_absolute_cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_siz
 
 template <bool addr_16B>
 uint32_t get_cq_issue_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size) {
-    uint32_t recv;
+    uint32_t recv = 0;
     chip_id_t mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
     uint32_t channel_offset = (channel >> 2) * tt::tt_metal::DispatchSettings::MAX_DEV_CHANNEL_SIZE;
@@ -45,7 +45,7 @@ template uint32_t get_cq_issue_rd_ptr<false>(chip_id_t chip_id, uint8_t cq_id, u
 
 template <bool addr_16B>
 uint32_t get_cq_issue_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size) {
-    uint32_t recv;
+    uint32_t recv = 0;
     chip_id_t mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
     uint32_t issue_q_wr_ptr =
@@ -63,7 +63,7 @@ template uint32_t get_cq_issue_wr_ptr<false>(chip_id_t chip_id, uint8_t cq_id, u
 
 template <bool addr_16B>
 uint32_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size) {
-    uint32_t recv;
+    uint32_t recv = 0;
     chip_id_t mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
     uint32_t channel_offset = (channel >> 2) * tt::tt_metal::DispatchSettings::MAX_DEV_CHANNEL_SIZE;
@@ -86,7 +86,7 @@ template uint32_t get_cq_completion_wr_ptr<false>(chip_id_t chip_id, uint8_t cq_
 
 template <bool addr_16B>
 inline uint32_t get_cq_completion_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size) {
-    uint32_t recv;
+    uint32_t recv = 0;
     chip_id_t mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
     uint32_t completion_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(

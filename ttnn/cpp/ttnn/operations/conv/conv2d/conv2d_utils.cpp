@@ -1195,9 +1195,11 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         const uint32_t output_slice_dim_end = std::min(output_sliced_dim, output_slice_dim_start + output_slice_size);
         const uint32_t this_output_slice_dim = output_slice_dim_end - output_slice_dim_start;
 
-        uint32_t output_slice_height_start, output_slice_height_end, input_slice_height_start, input_slice_height_end;
-        uint32_t output_slice_width_start, output_slice_width_end, input_slice_width_start, input_slice_width_end;
-        int pad_top, pad_bottom, pad_left, pad_right;
+        uint32_t output_slice_height_start = 0, output_slice_height_end = 0, input_slice_height_start = 0,
+                 input_slice_height_end = 0;
+        uint32_t output_slice_width_start = 0, output_slice_width_end = 0, input_slice_width_start = 0,
+                 input_slice_width_end = 0;
+        int pad_top = 0, pad_bottom = 0, pad_left = 0, pad_right = 0;
         if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT) {
             output_slice_height_start = output_slice_dim_start;
             output_slice_height_end = output_slice_dim_end;

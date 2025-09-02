@@ -980,7 +980,7 @@ void copy_completion_queue_data_into_user_space(
         uint32_t completion_q_read_ptr = sysmem_manager.get_completion_queue_read_ptr(cq_id);
         uint32_t completion_q_read_toggle = sysmem_manager.get_completion_queue_read_toggle(cq_id);
 
-        uint32_t bytes_avail_in_completion_queue;
+        uint32_t bytes_avail_in_completion_queue = 0;
         if (completion_q_write_ptr > completion_q_read_ptr and completion_q_write_toggle == completion_q_read_toggle) {
             bytes_avail_in_completion_queue = completion_q_write_ptr - completion_q_read_ptr;
         } else {

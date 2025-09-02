@@ -98,7 +98,7 @@ void dump_memory_config(const std::string& file_name, const MemoryConfig& memory
 }
 
 MemoryConfig load_memory_config(FILE* input_file) {
-    std::uint8_t version_id;
+    std::uint8_t version_id = 0;
     safe_fread(&version_id, sizeof(version_id), 1, input_file);
     validate_version(version_id);
 

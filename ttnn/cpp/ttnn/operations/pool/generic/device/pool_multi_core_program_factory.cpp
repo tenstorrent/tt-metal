@@ -370,7 +370,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     /**
      * Reader Kernel: input rows -> input cb
      */
-    tt::tt_metal::CBHandle config_cb;
+    tt::tt_metal::CBHandle config_cb = 0;
     tt::tt_metal::DeviceStorage scalar_config_storage;
     uint32_t config_cb_id = 32;
     Tensor config_tensor;

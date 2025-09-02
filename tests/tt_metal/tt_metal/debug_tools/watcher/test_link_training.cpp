@@ -61,7 +61,7 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
     // read out link status from L1
     auto link_up_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::LINK_UP);
-    uint32_t link_status_rd;
+    uint32_t link_status_rd = 0;
     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         &link_status_rd, sizeof(uint32_t), tt_cxy_pair(device->id(), virtual_core.x, virtual_core.y), link_up_addr);
 

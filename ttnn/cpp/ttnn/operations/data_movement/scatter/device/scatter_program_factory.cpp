@@ -141,7 +141,7 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core{i / num_cores_y, i % num_cores_y};
 
-        uint32_t sticks_per_core;
+        uint32_t sticks_per_core = 0;
         if (core_group_1.contains(core)) {
             sticks_per_core = num_sticks_per_core_group_1;
         } else if (core_group_2.contains(core)) {

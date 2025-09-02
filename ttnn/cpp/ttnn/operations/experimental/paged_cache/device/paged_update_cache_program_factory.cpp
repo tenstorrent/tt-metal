@@ -258,8 +258,8 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
         // Offset to write into untilized cache
         uint32_t tile_update_offset_B = update_idx % TILE_HEIGHT * Wbytes;
 
-        bool wait_to_start, send_signal;
-        uint32_t send_core_x, send_core_y;
+        bool wait_to_start = false, send_signal = false;
+        uint32_t send_core_x = 0, send_core_y = 0;
         if (share_cache) {
             // Share cache
             wait_to_start = i != 0;

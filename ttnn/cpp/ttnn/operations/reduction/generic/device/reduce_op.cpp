@@ -171,7 +171,7 @@ Tensor reduce(
         /*default_fp32_acc=*/true));
 
     if (is_multicore_hw) {
-        distributed::MeshDevice* device;
+        distributed::MeshDevice* device = nullptr;
         // Get the device
         if (input_tensor.storage_type() != StorageType::DEVICE) {
             device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();

@@ -93,7 +93,7 @@ DataMovementConfigStatus CheckDataMovementConfig(
 
     auto set_global_and_local_noc_usage = [&](KernelHandle kernel_id, bool& local_noc0_usage, bool& local_noc1_usage) {
         const auto kernel = detail::GetKernel(program, kernel_id);
-        int noc_value;
+        int noc_value = 0;
         switch (programmable_core) {
             case HalProgrammableCoreType::TENSIX:
                 noc_value = enchantum::to_underlying(std::get<DataMovementConfig>(kernel->config()).noc);

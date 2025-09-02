@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sliding_window.hpp"
+
+#include <math.h>
 #include <cstdint>
 #include <vector>
 #include <tt-metalium/assert.hpp>
@@ -75,10 +77,10 @@ ttnn::Shape SlidingWindowConfig::get_output_shape() const {
         return ttnn::Shape({batch_size, output_h, output_w, 0});
     }
 
-    uint32_t output_h;
-    uint32_t output_w;
-    float output_h_float;
-    float output_w_float;
+    uint32_t output_h = 0;
+    uint32_t output_w = 0;
+    float output_h_float = NAN;
+    float output_w_float = NAN;
 
     // Note Pytorch doesn't support dilation for average pool, but TTNN may in the future
     // thus output size calculation is the same for average and max pool

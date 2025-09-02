@@ -162,7 +162,7 @@ MassagedConcat build_prepost_transpose_concat(
             const auto& first_shape = tensors.front().logical_shape();
             auto norm_dim1 = first_shape.get_normalized_index(dim1);
             auto norm_dim2 = first_shape.get_normalized_index(dim2);
-            int swapped_dim;
+            int swapped_dim = 0;
             if (dim == norm_dim1) {
                 swapped_dim = norm_dim2;
             } else if (dim == norm_dim2) {

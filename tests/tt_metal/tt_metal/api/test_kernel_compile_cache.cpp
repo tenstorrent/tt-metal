@@ -40,7 +40,7 @@ TEST_F(MeshDeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
         detail::EnablePersistentKernelCache();
 
         Program program;
-        KernelHandle kernel_handle;
+        KernelHandle kernel_handle = 0;
         const DataMovementConfig config = {.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
 
         program = CreateProgram();

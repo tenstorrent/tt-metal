@@ -690,8 +690,8 @@ int run_test_case(const TestConfig& config, N300TestDevice& test_fixture) {
         const auto& device_1 = test_fixture.devices_.at(device_id);
 
         log_info(tt::LogAlways, "Building programs...");
-        tt_metal::KernelHandle local_kernel;
-        tt_metal::KernelHandle remote_kernel;
+        tt_metal::KernelHandle local_kernel = 0;
+        tt_metal::KernelHandle remote_kernel = 0;
 
         std::vector<tt_metal::KernelHandle> local_sender_worker_kernels;
         std::vector<tt_metal::KernelHandle> remote_sender_worker_kernels;

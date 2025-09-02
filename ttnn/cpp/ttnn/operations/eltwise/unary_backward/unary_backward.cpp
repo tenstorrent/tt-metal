@@ -18,6 +18,8 @@
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
+
+#include <math.h>
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
@@ -1277,7 +1279,7 @@ std::vector<Tensor> ExecuteUnaryBackwardCosh::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardLogiteps::invoke(
     const Tensor& grad, const Tensor& input, float eps, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    float low, high;
+    float low = NAN, high = NAN;
     low = eps;
     high = 1.0 - low;
     Tensor grad_result = ttnn::multiply(

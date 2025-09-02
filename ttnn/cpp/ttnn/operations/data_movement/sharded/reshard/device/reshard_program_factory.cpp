@@ -100,7 +100,7 @@ std::unordered_map<CoreCoord, std::vector<detail::PageStride>> create_map_for_re
                     // the jump in data is end of curr - end last stride
                     // if stride range is in diff core
                     // jump in data is curr - beginning of last stride
-                    uint32_t data_stride;
+                    uint32_t data_stride = 0;
                     if ((stride_it != end) and (stride_it != it) and stride_it->has_value()) {
                         // data stride within core
                         if (stride_it->has_value() and stride_it->value().first == last_it_stride->value().first and
@@ -566,10 +566,10 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges(
     uint32_t num_output_pages = 0;
     for (uint32_t range_id = starting_range; range_id < ending_range; range_id++) {
         PageStride ps = page_stride_vector[range_id];
-        uint32_t num_strides;
-        uint32_t start_core_x;
-        uint32_t start_core_y;
-        uint32_t start_data;
+        uint32_t num_strides = 0;
+        uint32_t start_core_x = 0;
+        uint32_t start_core_y = 0;
+        uint32_t start_data = 0;
         if (reshard_strides_in_range == ReshardStridesInRange::ALL_STRIDES) {
             num_strides = ps.num_strides;
             start_core_x = ps.start_core.x;
@@ -625,7 +625,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     auto remote_cores = corerange_to_cores(
         remote_shard_spec.grid, std::nullopt, remote_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
-    uint32_t unit_size, local_units_per_shard, remote_units_per_shard;
+    uint32_t unit_size = 0, local_units_per_shard = 0, remote_units_per_shard = 0;
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.dtype());
 
     uint32_t num_units = local_tensor.buffer()->num_pages();
@@ -778,7 +778,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     auto cores =
         corerange_to_cores(all_cores, std::nullopt, output_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
-    uint32_t total_size, page_size, unit_size;
+    uint32_t total_size = 0, page_size = 0, unit_size = 0;
     auto output_shard_shape = output_shard_spec.shape;
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 

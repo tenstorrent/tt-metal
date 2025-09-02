@@ -241,7 +241,7 @@ void set_or_update_runtime_arguments(
 
     uint32_t num_tiles_per_core_group_1{}, num_tiles_per_core_group_2{};
     CoreRangeSet all_cores, core_group_1, core_group_2;
-    uint32_t num_cores;
+    uint32_t num_cores = 0;
     std::vector<CoreCoord> cores;
 
     const uint32_t tile_height = c.tensor_spec().tile().get_height();
