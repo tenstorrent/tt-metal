@@ -375,10 +375,10 @@ def run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, debu
     print(f"\n--- Comparing at stage: {debug_stage} ---")
 
     # Run PyTorch model for this stage
-    torch_out = torch_model.layers(torch_features, debug_stage=debug_stage)
+    torch_out = torch_model.layers(torch_features)
 
     # Run TTNN model for this stage
-    ttnn_out_tt = ttnn_model.layers(ttnn_features, debug_stage=debug_stage)
+    ttnn_out_tt = ttnn_model.layers(ttnn_features)
 
     # Convert and compare
     ttnn_out_torch = ttnn.to_torch(ttnn_out_tt).permute(0, 3, 1, 2)  # NHWC -> NCHW
@@ -393,7 +393,7 @@ def run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, debu
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 # Add this to your test file and run it
-def test_ttnn_debug(device):
+def test_ttnn_wholeSemSeg(device):
     compute_grid = device.compute_with_storage_grid_size()
 
     print(f"compute_grid: {compute_grid.x}x{compute_grid.y}")
@@ -408,19 +408,34 @@ def test_ttnn_debug(device):
     final_output_size = (512, 1024)
     common_stride = 4
 
+    target_project_channels = [32, 64]
+
+    target_decoder_channels = [256, 256, 256]
+    target_head_channels = 256
+
     # 2. Create ALL shared torch.Tensor weights for both models
     # --- Weights for the base decoder part (ASPP, fuse, project) ---
     w_aspp_k1 = torch.randn(256, 2048, 1, 1, dtype=torch.bfloat16)
     w_aspp_k3 = torch.randn(256, 2048, 3, 3, dtype=torch.bfloat16)
+    # ASPP concat before final proj is 4*256(atrous) + 256(pool) = 1280 channels -> 256 out
     w_aspp_k1_out5 = torch.randn(256, 1280, 1, 1, dtype=torch.bfloat16)
-    w_shared_fuse0 = torch.randn(256, 320, 3, 3, dtype=torch.bfloat16)
-    w_shared_fuse1 = torch.randn(256, 256, 3, 3, dtype=torch.bfloat16)
+
     w_res3_proj = torch.randn(64, 512, 1, 1, dtype=torch.bfloat16)
-    w_res2_proj = torch.randn(64, 256, 1, 1, dtype=torch.bfloat16)
-    # --- Weights for the Panoptic-specific head and predictor ---
+    w_res3_fuse0 = torch.randn(256, 320, 3, 3, dtype=torch.bfloat16)
+    w_res3_fuse1 = torch.randn(256, 256, 3, 3, dtype=torch.bfloat16)
+
+    w_res2_proj = torch.randn(32, 256, 1, 1, dtype=torch.bfloat16)
+    w_res2_fuse0 = torch.randn(256, 288, 3, 3, dtype=torch.bfloat16)
+    w_res2_fuse1 = torch.randn(256, 256, 3, 3, dtype=torch.bfloat16)
+
+    project_conv_weights = {"res2": w_res2_proj, "res3": w_res3_proj}
+    fuse_conv_0_weights = {"res2": w_res2_fuse0, "res3": w_res3_fuse0}
+    fuse_conv_1_weights = {"res2": w_res2_fuse1, "res3": w_res3_fuse1}
+
     w_panoptic_head_0 = torch.randn(256, 256, 3, 3, dtype=torch.bfloat16)
-    w_panoptic_head_1 = torch.randn(128, 256, 3, 3, dtype=torch.bfloat16)
-    w_panoptic_predictor = torch.randn(19, 128, 1, 1, dtype=torch.bfloat16)
+    w_panoptic_head_1 = torch.randn(target_head_channels, 256, 3, 3, dtype=torch.bfloat16)
+
+    w_panoptic_predictor = torch.randn(num_classes, target_head_channels, 1, 1, dtype=torch.bfloat16)
 
     # 3. Prepare PyTorch Model and Inputs
     # --- Create PyTorch inputs and ShapeSpec ---
@@ -429,7 +444,6 @@ def test_ttnn_debug(device):
         "res3": torch.randn(1, 512, 64, 128, dtype=torch.bfloat16),
         "res5": torch.randn(1, 2048, 32, 64, dtype=torch.bfloat16),
     }
-
     res2_shape = ShapeSpec()
     res2_shape.channels = 256
     res2_shape.stride = 4
@@ -448,14 +462,14 @@ def test_ttnn_debug(device):
     # --- Instantiate and run PyTorch model ---
     torch_model = PanopticDeepLabSemSegHead(
         input_shape=input_shape_pytorch,
-        project_channels=[64, 64],
+        project_channels=target_project_channels,
         aspp_dilations=[6, 12, 18],
-        aspp_dropout=0.0,  # Disable dropout for comparison
-        decoder_channels=[256, 256, 256],
+        aspp_dropout=0.0,
+        decoder_channels=target_decoder_channels,
         common_stride=common_stride,
         train_size=final_output_size,
         norm="LN",
-        head_channels=128,
+        head_channels=target_head_channels,
         loss_weight=1.0,
         loss_type="cross_entropy",
         loss_top_k=0.2,
@@ -465,18 +479,19 @@ def test_ttnn_debug(device):
         shared_weight_tensor_kernel1=w_aspp_k1,
         shared_weight_tensor_kernel3=w_aspp_k3,
         shared_weight_tensor_kernel1_output5=w_aspp_k1_out5,
-        shared_fuse_conv_0_weight=w_shared_fuse0,
-        shared_fuse_conv_1_weight=w_shared_fuse1,
-        res3_project_conv_weight=w_res3_proj,
-        res2_project_conv_weight=w_res2_proj,
+        project_conv_weights=project_conv_weights,
+        fuse_conv_0_weights=fuse_conv_0_weights,
+        fuse_conv_1_weights=fuse_conv_1_weights,
         panoptic_head_0_weight=w_panoptic_head_0,
         panoptic_head_1_weight=w_panoptic_head_1,
         panoptic_predictor_weight=w_panoptic_predictor,
     )
 
     torch_model = torch_model.to(dtype=torch.bfloat16)
-
     torch_model.eval()
+
+    # torch_output, _ = torch_model(torch_features)
+
     # 4. Prepare TTNN Model and Inputs
     # --- Create TTNN inputs and ShapeSpec ---
     ttnn_features: Dict[str, ttnn.Tensor] = {}
@@ -492,35 +507,37 @@ def test_ttnn_debug(device):
     ttnn_model = TtPanopticDeepLabSemSegHead(
         input_shape=input_shape_ttnn,
         device=device,
-        project_channels=[64, 64],
+        project_channels=target_project_channels,
         aspp_dilations=[6, 12, 18],
         aspp_dropout=0.0,
-        decoder_channels=[256, 256, 256],
+        decoder_channels=target_decoder_channels,
         common_stride=common_stride,
         train_size=final_output_size,
         norm="LN",
-        head_channels=128,
+        head_channels=target_head_channels,
         num_classes=num_classes,
-        # Pass all the same shared weights
         shared_weight_tensor_kernel1=w_aspp_k1,
         shared_weight_tensor_kernel3=w_aspp_k3,
         shared_weight_tensor_kernel1_output5=w_aspp_k1_out5,
-        shared_fuse_conv_0_weight=w_shared_fuse0,
-        shared_fuse_conv_1_weight=w_shared_fuse1,
-        res3_project_conv_weight=w_res3_proj,
-        res2_project_conv_weight=w_res2_proj,
+        project_conv_weights=project_conv_weights,
+        fuse_conv_0_weights=fuse_conv_0_weights,
+        fuse_conv_1_weights=fuse_conv_1_weights,
         panoptic_head_0_weight=w_panoptic_head_0,
         panoptic_head_1_weight=w_panoptic_head_1,
         panoptic_predictor_weight=w_panoptic_predictor,
     )
 
-    # 2. Run comparisons stage by stage
-    # The test will crash at the first point of failure
-    # In the test function
-    # run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, "aspp_out") 0.9986pcc
-    # run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, "proj_x_out") 0.9987pcc
-    # run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, "upsample_out") 0.999pcc
-    # run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, "concat_out") #0.9963pcc
-    # run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, "fuse_1_out") #0.9978pcc
-    # run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, "decoder_out") #0.997pcc
-    run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, "predictor_out")  # 0.9976pcc
+    # Run PyTorch model for this stage
+    torch_out, _ = torch_model(torch_features)
+
+    # Run TTNN model for this stage
+    ttnn_out_tt, _ = ttnn_model(ttnn_features)
+
+    # Convert and compare
+    ttnn_out_torch = ttnn.to_torch(ttnn_out_tt).permute(0, 3, 1, 2)  # NHWC -> NCHW
+
+    passed, msg = assert_with_pcc(torch_out, ttnn_out_torch, pcc=0.98)
+    print(f"PCC Result: {msg}")
+
+    assert passed, f"Comparison FAILED : {msg}"
+    print(f"✅ TEST PASSED")

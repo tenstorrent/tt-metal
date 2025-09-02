@@ -47,10 +47,9 @@ class DeepLabV3PlusHead(nn.Module):
         shared_weight_tensor_kernel3: torch.Tensor,
         shared_weight_tensor_kernel1_output5: torch.Tensor,
         # --- Refined list of Decoder and Predictor Weights ---
-        shared_fuse_conv_0_weight: torch.Tensor,
-        shared_fuse_conv_1_weight: torch.Tensor,
-        res3_project_conv_weight: torch.Tensor,
-        res2_project_conv_weight: torch.Tensor,
+        project_conv_weights: Dict[str, torch.Tensor],
+        fuse_conv_0_weights: Dict[str, torch.Tensor],
+        fuse_conv_1_weights: Dict[str, torch.Tensor],
         predictor_weight: Optional[torch.Tensor] = None,
     ):
         """
@@ -149,29 +148,8 @@ class DeepLabV3PlusHead(nn.Module):
                     norm=get_norm(norm, project_channels[idx]),
                     activation=F.relu,
                 )
-                # weight_init.c2_xavier_fill(project_conv)
-                # if use_depthwise_separable_conv:
-                #     # We use a single 5x5 DepthwiseSeparableConv2d to replace
-                #     # 2 3x3 Conv2d since they have the same receptive field,
-                #     # proposed in :paper:`Panoptic-DeepLab`.
-                #     fuse_conv = DepthwiseSeparableConv2d(
-                #         project_channels[idx] + decoder_channels[idx + 1],
-                #         decoder_channels[idx],
-                #         kernel_size=5,
-                #         padding=2,
-                #         norm1=norm,
-                #         activation1=F.relu,
-                #         norm2=norm,
-                #         activation2=F.relu,
-                #     )
 
-                if feature_name == "res3":
-                    project_conv.weight.data = res3_project_conv_weight
-                elif feature_name == "res2":
-                    project_conv.weight.data = res2_project_conv_weight
-                else:
-                    # Handle cases where other features might be used, or raise an error
-                    raise KeyError(f"No specific project_conv weight provided for feature '{feature_name}'")
+                project_conv.weight.data = project_conv_weights[feature_name]
 
                 conv1 = Conv2d(
                     project_channels[idx] + decoder_channels[idx + 1],
@@ -182,7 +160,7 @@ class DeepLabV3PlusHead(nn.Module):
                     norm=get_norm(norm, decoder_channels[idx]),
                     activation=F.relu,
                 )
-                conv1.weight.data = shared_fuse_conv_0_weight
+                conv1.weight.data = fuse_conv_0_weights[feature_name]
                 conv2 = Conv2d(
                     decoder_channels[idx],
                     decoder_channels[idx],
@@ -192,37 +170,17 @@ class DeepLabV3PlusHead(nn.Module):
                     norm=get_norm(norm, decoder_channels[idx]),
                     activation=F.relu,
                 )
-                conv2.weight.data = shared_fuse_conv_1_weight
+                conv2.weight.data = fuse_conv_1_weights[feature_name]
 
                 fuse_conv = nn.Sequential(
                     conv1,
                     conv2,
                 )
 
-                # weight_init.c2_xavier_fill(fuse_conv[0])
-                # weight_init.c2_xavier_fill(fuse_conv[1])
-
             decoder_stage["project_conv"] = project_conv
             decoder_stage["fuse_conv"] = fuse_conv
 
             self.decoder[self.in_features[idx]] = decoder_stage
-
-        # if not self.decoder_only:
-        #     self.predictor = Conv2d(
-        #         decoder_channels[0], num_classes, kernel_size=1, stride=1, padding=0
-        #     )
-        #     nn.init.normal_(self.predictor.weight, 0, 0.001)
-        #     nn.init.constant_(self.predictor.bias, 0)
-
-        #     if self.loss_type == "cross_entropy":
-        #         self.loss = nn.CrossEntropyLoss(reduction="mean", ignore_index=self.ignore_value)
-        #     # elif self.loss_type == "hard_pixel_mining":
-        #     #     self.loss = DeepLabCE(ignore_label=self.ignore_value, top_k_percent_pixels=0.2)
-        #     # Ask if this is needed
-        #     else:
-        #         raise ValueError("Unexpected loss type: %s" % self.loss_type)
-        #
-        #   We do not use this since decoder_only = True
 
     @classmethod
     def from_config(cls, cfg, input_shape):
@@ -258,33 +216,9 @@ class DeepLabV3PlusHead(nn.Module):
             In inference, returns (CxHxW logits, {})
         """
         y = self.layers(features)
-        if self.decoder_only:
-            # Output from self.layers() only contains decoder feature.
-            return y
-        if self.training:
-            return None, self.losses(y, targets)
-        else:
-            y = F.interpolate(y, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
-            return y, {}
+        return y
 
-    # def layers(self, features):
-    #     # Reverse feature maps into top-down order (from low to high resolution)
-    #     for f in self.in_features[::-1]:
-    #         x = features[f]
-    #         proj_x = self.decoder[f]["project_conv"](x)
-    #         if self.decoder[f]["fuse_conv"] is None:
-    #             # This is aspp module
-    #             y = proj_x
-    #         else:
-    #             # Upsample y
-    #             y = F.interpolate(y, size=proj_x.size()[2:], mode="bilinear", align_corners=False)
-    #             y = torch.cat([proj_x, y], dim=1)
-    #             y = self.decoder[f]["fuse_conv"](y)
-    #     if not self.decoder_only:
-    #         y = self.predictor(y)
-    #     return y
-    # This is the main layers method, but going to write one that I will use for debugging and after I will return to this one
-    def layers(self, features, debug_stage=None):
+    def layers(self, features):
         y = None
         # Reverse feature maps
         feature_keys = self.in_features[::-1]
@@ -292,29 +226,13 @@ class DeepLabV3PlusHead(nn.Module):
         # --- ASPP Stage ---
         x = features[feature_keys[0]]
         y = self.decoder[feature_keys[0]]["project_conv"](x)
-        if debug_stage == "aspp_out":
-            return y
 
         # --- First Fusion Stage (e.g., res3) ---
         x = features[feature_keys[1]]
         proj_x = self.decoder[feature_keys[1]]["project_conv"](x)
-
-        if debug_stage == "proj_x_out":
-            return proj_x
-
         y_upsampled = F.interpolate(y, size=proj_x.size()[2:], mode="bilinear", align_corners=False)
-
-        if debug_stage == "upsample_out":
-            return y_upsampled
-
         y = torch.cat([proj_x, y_upsampled], dim=1)
-
-        if debug_stage == "concat_out":
-            return y
-
         y = self.decoder[feature_keys[1]]["fuse_conv"](y)
-        if debug_stage == "fuse_1_out":
-            return y
 
         # --- Second Fusion Stage (e.g., res2) ---
         x = features[feature_keys[2]]
@@ -322,8 +240,6 @@ class DeepLabV3PlusHead(nn.Module):
         y_upsampled = F.interpolate(y, size=proj_x.size()[2:], mode="bilinear", align_corners=False)
         y = torch.cat([proj_x, y_upsampled], dim=1)
         y = self.decoder[feature_keys[2]]["fuse_conv"](y)
-        if debug_stage == "decoder_out":
-            return y  # Final decoder output
         return y
 
     def losses(self, predictions, targets):
@@ -349,7 +265,6 @@ class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
         loss_top_k: float,
         ignore_value: int,
         num_classes: int,
-        # --- Parameters that will be passed down to the base class ---
         project_channels: List[int],
         aspp_dilations: List[int],
         aspp_dropout: float,
@@ -358,14 +273,12 @@ class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
         norm: Union[str, Callable],
         train_size: Optional[Tuple],
         use_depthwise_separable_conv: bool,
-        # --- ALL weights for base class & this class ---
         shared_weight_tensor_kernel1: torch.Tensor,
         shared_weight_tensor_kernel3: torch.Tensor,
         shared_weight_tensor_kernel1_output5: torch.Tensor,
-        shared_fuse_conv_0_weight: torch.Tensor,
-        shared_fuse_conv_1_weight: torch.Tensor,
-        res3_project_conv_weight: torch.Tensor,
-        res2_project_conv_weight: torch.Tensor,
+        project_conv_weights: Dict[str, torch.Tensor],
+        fuse_conv_0_weights: Dict[str, torch.Tensor],
+        fuse_conv_1_weights: Dict[str, torch.Tensor],
         panoptic_head_0_weight: torch.Tensor,
         panoptic_head_1_weight: torch.Tensor,
         panoptic_predictor_weight: torch.Tensor,
@@ -397,36 +310,19 @@ class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
             train_size=train_size,
             use_depthwise_separable_conv=use_depthwise_separable_conv,
             ignore_value=ignore_value,
-            # --- Key overrides for decoder_only behavior ---
             num_classes=None,
             predictor_weight=None,
-            # Pass down all the necessary shared weights for the base decoder
             shared_weight_tensor_kernel1=shared_weight_tensor_kernel1,
             shared_weight_tensor_kernel3=shared_weight_tensor_kernel3,
             shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
-            shared_fuse_conv_0_weight=shared_fuse_conv_0_weight,
-            shared_fuse_conv_1_weight=shared_fuse_conv_1_weight,
-            res3_project_conv_weight=res3_project_conv_weight,
-            res2_project_conv_weight=res2_project_conv_weight,
+            project_conv_weights=project_conv_weights,
+            fuse_conv_0_weights=fuse_conv_0_weights,
+            fuse_conv_1_weights=fuse_conv_1_weights,
         )
         assert self.decoder_only
 
         self.loss_weight = loss_weight
         use_bias = norm == ""
-        # `head` is additional transform before predictor
-        # if self.use_depthwise_separable_conv:
-        #     # We use a single 5x5 DepthwiseSeparableConv2d to replace
-        #     # 2 3x3 Conv2d since they have the same receptive field.
-        #     self.head = DepthwiseSeparableConv2d(
-        #         decoder_channels[0],
-        #         head_channels,
-        #         kernel_size=5,
-        #         padding=2,
-        #         norm1=norm,
-        #         activation1=F.relu,
-        #         norm2=norm,
-        #         activation2=F.relu,
-        #     )
         conv1 = Conv2d(
             decoder_channels[0],
             decoder_channels[0],
@@ -452,8 +348,7 @@ class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
             conv1,
             conv2,
         )
-        # weight_init.c2_xavier_fill(self.head[0])
-        # weight_init.c2_xavier_fill(self.head[1])
+
         self.predictor = Conv2d(head_channels, num_classes, kernel_size=1)
         self.predictor.weight.data = panoptic_predictor_weight
         nn.init.normal_(self.predictor.weight, 0, 0.001)
@@ -461,9 +356,6 @@ class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
 
         if loss_type == "cross_entropy":
             self.loss = nn.CrossEntropyLoss(reduction="mean", ignore_index=ignore_value)
-        # elif loss_type == "hard_pixel_mining":
-        #     self.loss = DeepLabCE(ignore_label=ignore_value, top_k_percent_pixels=loss_top_k)
-        # Ask if this is needed
         else:
             raise ValueError("Unexpected loss type: %s" % loss_type)
 
@@ -481,36 +373,13 @@ class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
             In inference, returns (CxHxW logits, {})
         """
         y = self.layers(features)
-        if self.training:
-            return None, self.losses(y, targets, weights)
-        else:
-            y = F.interpolate(y, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
-            return y, {}
+        y = F.interpolate(y, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
+        return y, {}
 
-    # def layers(self, features):
-    #     assert self.decoder_only
-    #     y = super().layers(features)
-    #     y = self.head(y)
-    #     y = self.predictor(y)
-    #     return y
-    # This is the main layers method, but going to write one that I will use for debugging and after I will return to this one
-    def layers(self, features, debug_stage=None):
-        y = super().layers(features, debug_stage=debug_stage)
-        if (
-            debug_stage == "decoder_out"
-            or debug_stage == "aspp_out"
-            or debug_stage == "fuse_1_out"
-            or debug_stage == "proj_x_out"
-            or debug_stage == "upsample_out"
-            or debug_stage == "concat_out"
-        ):
-            return y
+    def layers(self, features):
+        y = super().layers(features)
         y = self.head(y)
-        if debug_stage == "panoptic_head_out":
-            return y
         y = self.predictor(y)
-        if debug_stage == "predictor_out":
-            return y
         return y
 
     def losses(self, predictions, targets, weights=None):

@@ -3,10 +3,8 @@ from typing import Dict, List, Union, Optional, Tuple
 from torch import nn
 import ttnn
 
-# We will reuse the TtASPP and helper functions you provided
 from .tt_aspp import TtASPP, get_ttnn_norm, get_ttnn_activation
 
-# We will also reuse the TtConv2d wrapper
 from .tt_conv2dWrapper import TtConv2d, TtConv2dParameters
 from .tt_pytorch_semSeg import ShapeSpec
 
@@ -32,15 +30,13 @@ class TtDeepLabV3PlusHead(nn.Module):
         shared_weight_tensor_kernel1: torch.Tensor,
         shared_weight_tensor_kernel3: torch.Tensor,
         shared_weight_tensor_kernel1_output5: torch.Tensor,
-        shared_fuse_conv_0_weight: torch.Tensor,
-        shared_fuse_conv_1_weight: torch.Tensor,
-        res3_project_conv_weight: torch.Tensor,
-        res2_project_conv_weight: torch.Tensor,
+        project_conv_weights: Dict[str, torch.Tensor],
+        fuse_conv_0_weights: Dict[str, torch.Tensor],
+        fuse_conv_1_weights: Dict[str, torch.Tensor],
         predictor_weight: Optional[torch.Tensor] = None,
         num_classes: Optional[int] = None,
     ):
         super().__init__()
-        # Sort features by stride to ensure correct processing order
         sorted_input_shape = sorted(input_shape.items(), key=lambda x: x[1].stride)
         self.in_features = [k for k, v in sorted_input_shape]
         in_channels = [v.channels for k, v in sorted_input_shape]
@@ -52,7 +48,6 @@ class TtDeepLabV3PlusHead(nn.Module):
         self.device = device
         self.activation = get_ttnn_activation("relu")
 
-        # A helper function to create TtConv2d modules, inspired by your TtASPP
         def _create_tt_conv2d(
             weight: torch.Tensor,
             in_ch: int,
@@ -67,12 +62,10 @@ class TtDeepLabV3PlusHead(nn.Module):
             param_dict = {"weight": weight}
             param_dict["channel_slice_num"] = slice_num
             if use_bias:
-                # We assume the bias will be fused or handled separately in TTNN.
-                # Here, we can create a dummy bias if the wrapper requires it.
                 param_dict["bias"] = torch.zeros(1, 1, 1, out_ch)
 
             parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
-            return TtConv2d(parameters, stride=(stride, stride), padding=(padding, padding), use_slice=toSlice)
+            return TtConv2d(parameters, stride=(stride, stride), padding=(padding, padding), toSlice=toSlice)
 
         self.decoder = {}
         use_bias = norm == ""
@@ -104,11 +97,11 @@ class TtDeepLabV3PlusHead(nn.Module):
                     shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
                 )
                 decoder_stage["project_conv"] = project_conv
-                decoder_stage["fuse_conv_0"] = None  # Placeholder
+                decoder_stage["fuse_conv_0"] = None
             else:  # Low-level feature stages
                 proj_out_ch = project_channels[idx]
                 project_conv = _create_tt_conv2d(
-                    weight=res2_project_conv_weight if feature_name == "res2" else res3_project_conv_weight,
+                    weight=project_conv_weights[feature_name],
                     in_ch=in_channel,
                     out_ch=proj_out_ch,
                     kernel_size=1,
@@ -120,22 +113,24 @@ class TtDeepLabV3PlusHead(nn.Module):
                 fuse_in_ch = proj_out_ch + decoder_channels[idx + 1]
                 fuse_out_ch = decoder_channels[idx]
                 fuse_conv_0 = _create_tt_conv2d(
-                    weight=shared_fuse_conv_0_weight,
+                    weight=fuse_conv_0_weights[feature_name],
                     in_ch=fuse_in_ch,
                     out_ch=fuse_out_ch,
                     kernel_size=3,
                     stride=1,
                     padding=1,
                     use_bias=use_bias,
+                    slice_num=3,
                 )
                 fuse_conv_1 = _create_tt_conv2d(
-                    weight=shared_fuse_conv_1_weight,
+                    weight=fuse_conv_1_weights[feature_name],
                     in_ch=fuse_out_ch,
                     out_ch=fuse_out_ch,
                     kernel_size=3,
                     stride=1,
                     padding=1,
                     use_bias=use_bias,
+                    slice_num=3,
                 )
 
                 decoder_stage["project_conv"] = project_conv
@@ -147,71 +142,15 @@ class TtDeepLabV3PlusHead(nn.Module):
 
             self.decoder[feature_name] = decoder_stage
 
-        # if not self.decoder_only:
-        #     self.predictor = _create_tt_conv2d(
-        #         weight=predictor_weight,
-        #         in_ch=decoder_channels[0], out_ch=num_classes, kernel_size=1,
-        #         stride=1, padding=0, use_bias=True
-        #     )
-
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Union[ttnn.Tensor, Tuple[ttnn.Tensor, Dict]]:
         y = self.layers(features)
-        if self.decoder_only:
-            return y
+        return y
 
-        # In inference mode, upsample to the final output size
-        # Assuming y is NHWC layout
-        y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
-        y = ttnn.upsample(y, scale_factor=self.common_stride)
-        y = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
-        return y, {}
-
-    # def layers(self, features: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:
-    #     y = None
-    #     # Reverse feature maps for top-down processing
-    #     for f in self.in_features[::-1]:
-    #         x = features[f]
-    #         stage = self.decoder[f]
-    #         proj_x = stage["project_conv"](x)
-
-    #         if stage["fuse_conv_0"] is None: # This is the ASPP module
-    #             y = proj_x
-    #         else:
-    #             # Apply norm and activation for the projected features
-    #             proj_x = stage["project_norm"](proj_x)
-    #             proj_x = self.activation(proj_x)
-
-    #             # Upsample y from the previous, coarser stage
-    #             # Assuming NHWC layout, shapes are (N, H, W, C)
-    #             # target H, W are from proj_x
-    #             scale_h = proj_x.shape[1] // y.shape[1]
-    #             scale_w = proj_x.shape[2] // y.shape[2]
-    #             y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
-    #             y = ttnn.upsample(y, scale_factor=(scale_h, scale_w), mode="bilinear")
-    #             y = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
-
-    #             # Fuse by concatenation
-    #             y = ttnn.concat([proj_x, y], dim=3) # Concat on channel dim (NHWC)
-
-    #             # Apply the two fuse convolutions with norm and activation
-    #             y = stage["fuse_conv_0"](y)
-    #             y = stage["fuse_norm_0"](y)
-    #             y = self.activation(y)
-    #             y = stage["fuse_conv_1"](y)
-    #             y = stage["fuse_norm_1"](y)
-    #             y = self.activation(y)
-
-    #     if not self.decoder_only:
-    #         y = self.predictor(y)
-    #     return y
-    # This is the main layers method but I am going to write one for debugging
-    def layers(self, features: Dict[str, ttnn.Tensor], debug_stage: Optional[str] = None) -> ttnn.Tensor:
+    def layers(self, features: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:
         """
         Executes the decoder pipeline, mirroring the PyTorch version's logic.
-        Accepts a debug_stage to return intermediate tensors for comparison.
         """
         y = None
-        # Reverse feature maps for top-down processing (e.g., ['res5', 'res3', 'res2'])
         feature_keys = self.in_features[::-1]
 
         # --- Stage 1: ASPP (on the coarsest feature map, e.g., 'res5') ---
@@ -221,33 +160,24 @@ class TtDeepLabV3PlusHead(nn.Module):
         stage = self.decoder[aspp_feature_key]
         # The 'project_conv' for this stage is the entire TtASPP module.
         y = stage["project_conv"](x)
-        if debug_stage == "aspp_out":
-            return y
         y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
+
         # --- Subsequent Fusion Stages (e.g., 'res3', then 'res2') ---
         # We loop through the remaining, higher-resolution features.
-
         for i, f_key in enumerate(feature_keys[1:]):  # Start from the second feature
             previous_y = y
             x = features[f_key]
             stage = self.decoder[f_key]
-
             # 1. Project the low-level features with a 1x1 Conv, followed by Norm and Activation.
             proj_x = stage["project_conv"](x)
             proj_x = stage["project_norm"](proj_x)
             proj_x = self.activation(proj_x)
             proj_x = ttnn.to_memory_config(proj_x, ttnn.DRAM_MEMORY_CONFIG)
-            if debug_stage == "proj_x_out":
-                return proj_x
 
-            # 2. Upsample the output 'y' from the previous, coarser stage.
-            # We calculate the scale factor needed to match proj_x's spatial dimensions.
-            # TTNN tensors are NHWC, so H is shape[1] and W is shape[2].
             scale_h = proj_x.shape[1] // y.shape[1]
             scale_w = proj_x.shape[2] // y.shape[2]
-
-            # ttnn.upsample requires ROW_MAJOR_LAYOUT.
             y_upsampled = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
+
             # Get original dimensions before flattening
             orig_batch, orig_height, orig_width, orig_channels = y_upsampled.shape
 
@@ -260,10 +190,8 @@ class TtDeepLabV3PlusHead(nn.Module):
                 # All other iterations - always slice by 2
                 split_factor = 2
                 channels_per_slice = orig_channels // split_factor
-
                 print(f"Using channel slicing for upsample: {orig_channels} channels split into {split_factor} slices")
                 sliced_results = []
-
                 for slice_idx in range(split_factor):
                     start_ch = slice_idx * channels_per_slice
                     end_ch = (slice_idx + 1) * channels_per_slice
@@ -278,177 +206,55 @@ class TtDeepLabV3PlusHead(nn.Module):
                     y_slice_upsampled = ttnn.to_memory_config(y_slice_upsampled, ttnn.DRAM_MEMORY_CONFIG)
 
                     sliced_results.append(y_slice_upsampled)
-
-                    # Clean up intermediate tensors
                     ttnn.deallocate(y_slice)
-                # Concatenate all upsampled slices along channel dimension
                 y_upsampled = ttnn.concat(sliced_results, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-                # Clean up slice result tensors
                 for slice_result in sliced_results:
                     ttnn.deallocate(slice_result)
 
             y_upsampled = ttnn.to_memory_config(y_upsampled, ttnn.DRAM_MEMORY_CONFIG)
             y_upsampled = ttnn.to_layout(y_upsampled, ttnn.TILE_LAYOUT)
 
-            if debug_stage == "upsample_out":
-                return y_upsampled
-
             # 3. Fuse the features by concatenating along the channel dimension (dim=3 for NHWC).
             y = ttnn.concat([proj_x, y_upsampled], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            if debug_stage == "concat_out":
-                return y
 
             ttnn.deallocate(previous_y)
             ttnn.deallocate(proj_x)
             ttnn.deallocate(y_upsampled)
-            print(y)
-            # #y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG) Maybe not needed if Im going to shard
-            # original_height = y.shape[1]
 
-            # current_channels = y.shape[-1]
-            # # Pad to next multiple of 32 that also works well with your core grid
-            # cores_count = self.device.core_grid.y * self.device.core_grid.x
-            # padded_channels = ((current_channels + 31) // 32) * 32
-            # # Ensure the padded channels work well with width sharding across cores
-            # while (padded_channels // cores_count) % 32 != 0:
-            #     padded_channels += 32
-
-            # current_channels = y.shape[-1]
-            # padded_channels = (current_channels + 31) // 32 * 32
-            # padded_y = y
-
-            # if current_channels != padded_channels:
-            #     padding = [[0, 0] for _ in range(len(y.shape))]
-            #     padding[-1] = [0, padded_channels - current_channels]
-            #     padded_y = ttnn.pad(y, padding=padding, value=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            #     y.deallocate()
-
-            # num_cores_in_grid = self.device.core_grid.y * self.device.core_grid.x
-            # padded_height = (original_height + num_cores_in_grid - 1) // num_cores_in_grid * num_cores_in_grid
-
-            # padding = [[0, 0], [0, padded_height - original_height], [0, 0], [0, 0]] # Pad only Height dim
-            # y_padded = ttnn.pad(padded_y, padding=padding, value=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            # padded_y.deallocate()
-
-            core_grid = self.device.core_grid
-            num_cores = core_grid.x * core_grid.y
-
-            physical_height = y.shape[1] * y.shape[2]  # H * W flattened
-            physical_width = y.shape[3]  # Channels
-
-            target_shard_height = (physical_height + num_cores - 1) // num_cores
-            # Round up to nearest multiple of 32 for tile alignment
-            target_shard_height = ((target_shard_height + 31) // 32) * 32
-            print("This is the target shard height:", target_shard_height)
-
-            # Calculate required total physical height
-            required_physical_height = target_shard_height * num_cores
-
-            # Calculate required logical height (reverse the flattening)
-            required_logical_height = required_physical_height // y.shape[2]
-
-            print("Required logical height:", required_logical_height)
-
-            if y.shape[1] < required_logical_height:
-                height_padding = required_logical_height - y.shape[1]
-                padding = [[0, 0], [0, height_padding], [0, 0], [0, 0]]
-                # y = ttnn.pad(y, padding=padding, value=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-            sharded_memory_config = ttnn.create_sharded_memory_config(
-                shape=(target_shard_height, physical_width),
-                core_grid=core_grid,
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-
-            # y_sharded = ttnn.to_memory_config(y, sharded_memory_config)
-            # print("Y after sharding:")
-            # print(y_sharded)
-            # print()
-            # print(y_sharded.memory_config())
-            # 3. Apply the first fuse convolution. NO deallocation or activation fusion.
-            # pad y to add 1 more channel to it
-
-            print("Y right before sharding:")
-            print(y)
-            print()
-
-            y_conv0 = stage["fuse_conv_0"](y)
-
-            ttnn.deallocate(y)  # Manually deallocate the input now
-            # 4. Apply norm and activation
+            if i == 0:
+                y_conv0 = stage["fuse_conv_0"](y)
+            else:
+                y_conv0 = stage["fuse_conv_0"](
+                    y,
+                    slice_config=ttnn.Conv2dSliceConfig(
+                        slice_type=ttnn.Conv2dSliceHeight,
+                        num_slices=4,
+                    ),
+                )
+            ttnn.deallocate(y)
             y_norm0 = stage["fuse_norm_0"](y_conv0)
             ttnn.deallocate(y_conv0)
 
             y_act0 = self.activation(y_norm0)
             ttnn.deallocate(y_norm0)
 
-            # 5. Re-shard the intermediate result before the next conv
-            # intermediate_sharded_config = ttnn.create_sharded_memory_config(
-            #     y_act0.shape, core_grid=core_grid, strategy=ttnn.ShardStrategy.HEIGHT,
-            #     orientation=ttnn.ShardOrientation.ROW_MAJOR
-            # )
-            # y_sharded_intermediate = ttnn.to_memory_config(y_act0, intermediate_sharded_config)
-            # ttnn.deallocate(y_act0)
+            ttnn.to_memory_config(y_act0, ttnn.DRAM_MEMORY_CONFIG)
+            if i == 0:
+                y_conv1 = stage["fuse_conv_1"](y_act0)
+            else:
+                y_conv1 = stage["fuse_conv_1"](
+                    y_act0,
+                    slice_config=ttnn.Conv2dSliceConfig(
+                        slice_type=ttnn.Conv2dSliceHeight,
+                        num_slices=2,
+                    ),
+                )
 
-            # 6. Apply the second fuse convolution
-            print("Y before second fuse conv:")
-            print(y_act0)
-            print()
-
-            y_conv1 = stage["fuse_conv_1"](y_act0)
-
-            # ttnn.deallocate(y_sharded_intermediate)
-
-            # 7. Apply norm and activation
             y_norm1 = stage["fuse_norm_1"](y_conv1)
             ttnn.deallocate(y_conv1)
 
-            y = self.activation(y_norm1)  # `y` is now the final result of the block
+            y = self.activation(y_norm1)
             ttnn.deallocate(y_norm1)
-
-            # 8. Convert back to DRAM for the next loop
-            # y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
-
-            # output_tensor_end = [y.shape[0]-1, original_height-1, y.shape[2]-1, y.shape[3]-1]
-            # y = ttnn.unpad(y, output_tensor_start=[0,0,0,0], output_tensor_end=output_tensor_end)
-
-            # ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
-            # COMMENTED TO TRY SHARDING
-            # # 6. Create a Conv2dConfig for the fuse convolutions
-            # fuse_conv_config = ttnn.Conv2dConfig(
-            #     deallocate_activation=True, # Automatically deallocate input `y`
-            #     activation="relu",          # Fuse the activation
-            # )
-
-            # # 4. Apply the two 3x3 fuse convolutions, each followed by Norm and Activation.
-            # # After each normalization and activation
-            # y = stage["fuse_conv_0"](y, conv_config = fuse_conv_config)  # Input `y` is now gone
-            # y = stage["fuse_norm_0"](y)
-            # y = self.activation(y)
-
-            # y = stage["fuse_conv_1"](y)  # Input `y` is now gone
-            # y = stage["fuse_norm_1"](y)
-            # y = self.activation(y)
-
-            # # 7. Convert the final result of the block back to DRAM for the next stage.
-            # y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
-            # COMMENTED TO TRY SHARDING
-
-            # 5. Check for debug hooks after each full fusion stage.
-            # i=0 is the first fusion stage (e.g., 'res3')
-            if i == 0 and debug_stage == "fuse_1_out":
-                return y
-            # i=1 is the second fusion stage (e.g., 'res2'), which is the final decoder output.
-            if i == 1 and debug_stage == "decoder_out":
-                return y
-
-        # This part of the logic from the PyTorch 'layers' method is for the standalone mode.
-        # It's called after the loop finishes.
-        if not self.decoder_only:
-            y = self.predictor(y)
 
         return y
 
@@ -478,10 +284,9 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         shared_weight_tensor_kernel1: torch.Tensor,
         shared_weight_tensor_kernel3: torch.Tensor,
         shared_weight_tensor_kernel1_output5: torch.Tensor,
-        shared_fuse_conv_0_weight: torch.Tensor,
-        shared_fuse_conv_1_weight: torch.Tensor,
-        res3_project_conv_weight: torch.Tensor,
-        res2_project_conv_weight: torch.Tensor,
+        project_conv_weights: Dict[str, torch.Tensor],
+        fuse_conv_0_weights: Dict[str, torch.Tensor],
+        fuse_conv_1_weights: Dict[str, torch.Tensor],
         panoptic_head_0_weight: torch.Tensor,
         panoptic_head_1_weight: torch.Tensor,
         panoptic_predictor_weight: torch.Tensor,
@@ -502,10 +307,9 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             shared_weight_tensor_kernel1=shared_weight_tensor_kernel1,
             shared_weight_tensor_kernel3=shared_weight_tensor_kernel3,
             shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
-            shared_fuse_conv_0_weight=shared_fuse_conv_0_weight,
-            shared_fuse_conv_1_weight=shared_fuse_conv_1_weight,
-            res3_project_conv_weight=res3_project_conv_weight,
-            res2_project_conv_weight=res2_project_conv_weight,
+            project_conv_weights=project_conv_weights,
+            fuse_conv_0_weights=fuse_conv_0_weights,
+            fuse_conv_1_weights=fuse_conv_1_weights,
         )
         assert self.decoder_only
 
@@ -541,50 +345,37 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         # 2. Perform the final upsampling to match the target output size
         # This mirrors the behavior of the PyTorch version's forward pass
         y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
-        y = ttnn.upsample(y, scale_factor=self.common_stride)
+        y = ttnn.upsample(y, scale_factor=self.common_stride)  # mode="bilinear" has OOM for 32MB on 16 banks
         y = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
 
         # 3. Return the results in the (tensor, dict) format expected by the test
         return y, {}
 
-    # def layers(self, features: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:
-    #     # 1. Get the refined feature map from the base class decoder
-    #     y = super().layers(features)
+    def layers(self, features: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:
+        # 1. Get the refined feature map from the base class decoder
+        y = super().layers(features)
 
-    #     # 2. Apply the specific head layers of this class
-    #     y = self.head_0(y)
-    #     y = self.head_norm_0(y)
-    #     y = self.activation(y)
-
-    #     y = self.head_1(y)
-    #     y = self.head_norm_1(y)
-    #     y = self.activation(y)
-
-    #     # 3. Apply the final predictor
-    #     y = self.predictor(y)
-    #     return y
-    # This is the main layers method but I am going to write one for debugging
-    def layers(self, features, debug_stage=None):
-        # Pass debug_stage down to the base class
-        y = super().layers(features, debug_stage=debug_stage)
-
-        # If the debug stage was handled by the parent, y will be the intermediate
-        # result, so we should return it immediately.
-        if debug_stage in ["aspp_out", "fuse_1_out", "decoder_out", "proj_x_out", "upsample_out", "concat_out"]:
-            return y
-
-        # --- Panoptic Head stages ---
-        y = self.head_0(y)
+        # 2. Apply the specific head layers of this class
+        y = self.head_0(
+            y,
+            slice_config=ttnn.Conv2dSliceConfig(
+                slice_type=ttnn.Conv2dSliceHeight,
+                num_slices=2,
+            ),
+        )
         y = self.head_norm_0(y)
         y = self.activation(y)
-        y = self.head_1(y)
+
+        y = self.head_1(
+            y,
+            slice_config=ttnn.Conv2dSliceConfig(
+                slice_type=ttnn.Conv2dSliceHeight,
+                num_slices=2,
+            ),
+        )
         y = self.head_norm_1(y)
         y = self.activation(y)
-        if debug_stage == "panoptic_head_out":
-            return y
 
+        # 3. Apply the final predictor
         y = self.predictor(y)
-        if debug_stage == "predictor_out":
-            return y
-
         return y
