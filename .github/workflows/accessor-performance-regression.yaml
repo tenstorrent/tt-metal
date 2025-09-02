@@ -104,6 +104,7 @@ jobs:
         if: always()
 
   build-artifact:
+    needs: generate-baseline-performance
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -117,7 +118,7 @@ jobs:
 
   accessor-perf-regression-tests:
     name: "📊 Accessor Performance Regression Tests"
-    needs: [build-artifact, generate-baseline-performance]
+    needs: build-artifact
     runs-on: >-
       ${{
         (github.event.pull_request.head.repo.fork == true) && 'tt-ubuntu-2204-N150-stable'
@@ -158,7 +159,7 @@ jobs:
       - name: ⬇️ Download Baseline Performance Data
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.generate-baseline-performance.outputs.baseline-artifact-name }}
+          name: baseline-performance-data-${{ github.run_id }}
           path: ./baseline-performance-data
 
       - name: 📊 Run Accessor Performance Regression Tests
