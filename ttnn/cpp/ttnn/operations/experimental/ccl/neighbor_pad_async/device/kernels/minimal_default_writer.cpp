@@ -35,9 +35,10 @@ void kernel_main() {
     const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     const uint32_t stick_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t stick_start_id = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t stick_offset = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t outer_dim_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_sticks_to_read = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_sticks_per_outer_dim = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
@@ -67,13 +68,13 @@ void kernel_main() {
     if (is_first_chip) {
         // Replicate a slice of 1 from input to output
         uint32_t dst_stick_id = stick_start_id;
-        for (uint32_t iter = 0; iter < stick_offset; ++iter) {
+        for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
             cb_wait_front(cb_output_id, 1);
             uint32_t l1_read_addr = get_read_ptr(cb_output_id);
 
             uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor);
             noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
-            dst_noc_addr = get_noc_addr(dst_stick_id + stick_offset, dst_accessor);
+            dst_noc_addr = get_noc_addr(dst_stick_id + num_sticks_per_outer_dim, dst_accessor);
             noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
 
             dst_stick_id++;
@@ -85,33 +86,35 @@ void kernel_main() {
 
     if (!is_last_chip) {
         // Read the "end" of each slice into the CB to write to the neighbor
-        uint32_t dst_stick_id = stick_start_id;
-        for (uint32_t iter = 0; iter < stick_offset * padding; ++iter) {
-            cb_wait_front(cb_output_id, 1);
-            uint32_t l1_read_addr = get_read_ptr(cb_output_id);
+        for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
+            uint32_t dst_stick_id = pad_id * num_sticks_per_outer_dim + stick_start_id;
+            for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
+                cb_wait_front(cb_output_id, 1);
+                uint32_t l1_read_addr = get_read_ptr(cb_output_id);
 
-            uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor, 0, 0);
+                uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor, 0, 0);
 
-            pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, stick_size);
-            if (direction) {
-                fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-                fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
-                    l1_read_addr, stick_size);
-                fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
-                    (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
-            } else {
-                fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
-                    l1_read_addr, stick_size);
-                fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
-                    (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+                pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, stick_size);
+                if (direction) {
+                    fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+                    fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
+                        l1_read_addr, stick_size);
+                    fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
+                        (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+                } else {
+                    fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+                    fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
+                        l1_read_addr, stick_size);
+                    fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
+                        (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+                }
+                noc_async_writes_flushed();
+
+                dst_stick_id++;
+
+                noc_async_write_barrier();
+                cb_pop_front(cb_output_id, 1);
             }
-            noc_async_writes_flushed();
-
-            dst_stick_id++;
-
-            noc_async_write_barrier();
-            cb_pop_front(cb_output_id, 1);
         }
 
         // unicast output ready semaphore
@@ -137,18 +140,20 @@ void kernel_main() {
     }
 
     // Copy the entire input
-    uint32_t dst_stick_id = stick_start_id + (stick_offset * padding);
-    for (uint32_t iter = 0; iter < num_sticks_per_core_read; ++iter) {
-        cb_wait_front(cb_output_id, 1);
-        uint32_t l1_read_addr = get_read_ptr(cb_output_id);
+    for (uint32_t t = 0; t < outer_dim_size; t++) {
+        uint32_t dst_stick_id = (t + padding) * num_sticks_per_outer_dim + stick_start_id;
+        for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
+            cb_wait_front(cb_output_id, 1);
+            uint32_t l1_read_addr = get_read_ptr(cb_output_id);
 
-        uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor);
-        noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
+            uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor);
+            noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
 
-        dst_stick_id++;
+            dst_stick_id++;
 
-        noc_async_write_barrier();
-        cb_pop_front(cb_output_id, 1);
+            noc_async_write_barrier();
+            cb_pop_front(cb_output_id, 1);
+        }
     }
 
     fabric_connection.close();
