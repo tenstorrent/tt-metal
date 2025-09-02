@@ -27,7 +27,7 @@ std::vector<std::string> EthernetEndpoint::telemetry_path() const {
 }
 
 // Static because CoreCoord is defined outside of tt-telemetry and this should be included there
-static std::ostream &operator<<(std::ostream &os, const CoreCoord &core) {
+static std::ostream &operator<<(std::ostream &os, const tt::umd::CoreCoord &core) {
     os << core.str();
     return os;
 }
@@ -64,29 +64,6 @@ size_t hash_value(const EthernetEndpoint &ep) {
  Functions to retrieve Ethernet endpoints and return them in a convenient, sorted form.
 **************************************************************************************************/
 
-std::map<ChipIdentifier, std::vector<EthernetEndpoint>> get_ethernet_endpoints_by_chip(const tt::Cluster &cluster) {
-    std::map<ChipIdentifier, std::vector<EthernetEndpoint>> ethernet_endpoints_by_chip;
-
-    for (const auto &[chip_id, remote_chip_and_channel_by_channel]: cluster.get_ethernet_connections()) {
-        std::unordered_map<tt::umd::ethernet_channel_t, CoreCoord> ethernet_channel_to_core_coord = map_ethernet_channel_to_core_coord(cluster, chip_id);
-
-        ChipIdentifier chip = get_chip_identifier_from_umd_chip_id(cluster, chip_id);
-        std::vector<EthernetEndpoint> &endpoints_this_chip = ethernet_endpoints_by_chip[chip];
-
-        for (const auto &[channel, remote_chip_and_channel]: remote_chip_and_channel_by_channel) {
-            // Construct EthernetEndpoint from its components
-            TT_ASSERT(ethernet_channel_to_core_coord.count(channel) != 0, "Channel {} missing in ethernet_channel_to_core_coord map for {}", channel, chip);
-            CoreCoord ethernet_core = ethernet_channel_to_core_coord[channel];
-            EthernetEndpoint endpoint{ .chip = chip, .ethernet_core = ethernet_core, .channel = channel };
-
-            // Add to list of endpoints for current chip
-            endpoints_this_chip.push_back(endpoint);
-        }
-    }
-
-    return ethernet_endpoints_by_chip;
-}
-
 std::map<ChipIdentifier, std::vector<EthernetEndpoint>> get_ethernet_endpoints_by_chip(
     const std::unique_ptr<tt::umd::Cluster>& cluster) {
     std::map<ChipIdentifier, std::vector<EthernetEndpoint>> ethernet_endpoints_by_chip;
@@ -103,7 +80,7 @@ std::map<ChipIdentifier, std::vector<EthernetEndpoint>> get_ethernet_endpoints_b
 
         for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
             // Construct EthernetEndpoint from its components
-            CoreCoord ethernet_core = soc_desc.get_eth_core_for_channel(channel, tt::umd::CoordSystem::LOGICAL);
+            tt::umd::CoreCoord ethernet_core = soc_desc.get_eth_core_for_channel(channel, tt::umd::CoordSystem::LOGICAL);
             EthernetEndpoint endpoint{.chip = chip, .ethernet_core = ethernet_core, .channel = channel};
 
             // Add to list of endpoints for current chip

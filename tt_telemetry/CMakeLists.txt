@@ -18,7 +18,7 @@ target_link_libraries(
         fmt::fmt-header-only
         Boost::algorithm
         Taskflow::Taskflow
-        TT::Metalium
+    # We use some TT::Metalium headers but do not need to link the library in
     # httplib will be linked directly to the executable
 )
 
@@ -35,9 +35,7 @@ target_sources(
         server/web_server.cpp
         telemetry/ethernet/chip_identifier.cpp
         telemetry/ethernet/ethernet_endpoint.cpp
-        telemetry/ethernet/ethernet_link.cpp
         telemetry/ethernet/ethernet_helpers.cpp
-        telemetry/ethernet/print_helpers.cpp
         telemetry/ethernet/ethernet_metrics.cpp
         telemetry/arc/arc_telemetry_reader.cpp
         telemetry/arc/arc_metrics.cpp

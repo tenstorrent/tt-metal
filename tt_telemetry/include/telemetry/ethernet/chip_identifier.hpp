@@ -8,10 +8,10 @@
  */
 
 #include <ostream>
+#include <fmt/format.h>
 
 #include <third_party/umd/device/api/umd/device/cluster.h>
 #include <third_party/umd/device/api/umd/device/types/cluster_descriptor_types.h>
-#include <llrt/tt_cluster.hpp>
 
 struct GalaxyUbbIdentifier {
     uint32_t tray_id;
@@ -52,5 +52,24 @@ namespace std {
     };
 }
 
-ChipIdentifier get_chip_identifier_from_umd_chip_id(const tt::Cluster& cluster, chip_id_t chip_id);
 ChipIdentifier get_chip_identifier_from_umd_chip_id(tt::umd::TTDevice* device, tt::umd::chip_id_t chip_id);
+
+// fmt formatter for ChipIdentifier
+template <>
+struct fmt::formatter<ChipIdentifier> {
+    constexpr auto parse(format_parse_context& ctx) -> decltype(ctx.begin()) {
+        return ctx.end();
+    }
+
+    template <typename FormatContext>
+    auto format(const ChipIdentifier& chip, FormatContext& ctx) const -> decltype(ctx.out()) {
+        if (chip.galaxy_ubb.has_value()) {
+            return fmt::format_to(ctx.out(), "Tray {}, N{} (Chip {})", 
+                                chip.galaxy_ubb.value().tray_id, 
+                                chip.galaxy_ubb.value().chip_number, 
+                                chip.id);
+        } else {
+            return fmt::format_to(ctx.out(), "Chip {}", chip.id);
+        }
+    }
+};

@@ -11,89 +11,18 @@
 #include <cxxopts.hpp>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/assert.hpp>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/mesh_graph.hpp>
-#include "impl/context/metal_context.hpp"
 
 #include <telemetry/ethernet/chip_identifier.hpp>
 #include <telemetry/ethernet/ethernet_endpoint.hpp>
-#include <telemetry/ethernet/ethernet_link.hpp>
 #include <telemetry/ethernet/ethernet_helpers.hpp>
-#include <telemetry/ethernet/print_helpers.hpp>
 #include <telemetry/mock_telemetry_provider.hpp>
 #include <telemetry/telemetry_provider.hpp>
 #include <server/web_server.hpp>
 
-// Function prototype for sysfs metrics discovery
-void print_sysfs_metrics();
-void test_umd();
 
 /**************************************************************************************************
  Main
 **************************************************************************************************/
-
-// Note: this is apparently a cached link status and not live!
-static bool is_ethernet_endpoint_up(
-    const tt::Cluster& cluster, tt::umd::chip_id_t chip_id, tt::umd::ethernet_channel_t ethernet_channel) {
-    for (const auto& [core, channel] : cluster.get_soc_desc(chip_id).logical_eth_core_to_chan_map) {
-        if (ethernet_channel == channel) {
-            // Found the channel on the chip we are interested in, we now have the core coordinates
-            return cluster.is_ethernet_link_up(chip_id, core);
-        }
-    }
-
-    // Invalid chip ID or channel -> not connected
-    return false;
-}
-
-static void old_test_print_link_health() {
-    const tt::tt_metal::MetalContext& instance = tt::tt_metal::MetalContext::instance();
-    const tt::Cluster& cluster = instance.get_cluster();
-    const std::map<
-        tt::umd::chip_id_t,
-        std::map<tt::umd::ethernet_channel_t, std::tuple<tt::umd::chip_id_t, tt::umd::ethernet_channel_t>>>
-        ethernet_connections = get_ordered_ethernet_connections(cluster);
-    tt::tt_metal::ClusterType cluster_type = cluster.get_cluster_type();
-
-    std::cout << "Cluster Type: " << cluster_type << std::endl;
-
-    for (const auto& [chip_id, remote_chip_and_channel_by_channel] : ethernet_connections) {
-        std::cout << get_chip_identifier_from_umd_chip_id(cluster, chip_id) << std::endl;
-        for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
-            tt::umd::chip_id_t remote_chip_id;
-            tt::umd::ethernet_channel_t remote_channel;
-            std::tie(remote_chip_id, remote_channel) = remote_chip_and_channel;
-            std::cout << "  Channel " << channel << " -> ["
-                      << get_chip_identifier_from_umd_chip_id(cluster, remote_chip_id) << "], Channel "
-                      << remote_channel
-                      << " (Link Status: " << (is_ethernet_endpoint_up(cluster, chip_id, channel) ? "UP" : "DOWN")
-                      << '/' << (is_ethernet_endpoint_up(cluster, remote_chip_id, remote_channel) ? "UP" : "DOWN")
-                      << ')' << std::endl;
-        }
-    }
-
-    std::cout << std::endl;
-    std::cout << "Links:" << std::endl;
-
-    std::vector<EthernetLink> links = get_ethernet_links(cluster);
-
-    for (const auto& link : links) {
-        std::cout << link.first << " <--> " << link.second << std::endl;
-    }
-
-    std::cout << std::endl;
-    std::cout << "Endpoints:" << std::endl;
-
-    for (const auto& [chip_id, endpoints] : get_ethernet_endpoints_by_chip(cluster)) {
-        std::cout << chip_id << std::endl;
-        for (const auto& endpoint : endpoints) {
-            std::cout << "  " << endpoint << ": " << (is_ethernet_endpoint_up(cluster, endpoint) ? "UP" : "DOWN")
-                      << std::endl;
-        }
-    }
-}
 
 static void test_print_link_health() {
     std::cout << "Num PCIE devices: " << PCIDevice::enumerate_devices_info().size() << std::endl;
@@ -124,11 +53,11 @@ static void test_print_link_health() {
             ChipIdentifier remote_chip = get_chip_identifier_from_umd_chip_id(remote_device, remote_chip_id);
 
             // Local EthernetEndpoint
-            CoreCoord ethernet_core = soc_desc.get_eth_core_for_channel(channel, tt::umd::CoordSystem::LOGICAL);
+            tt::umd::CoreCoord ethernet_core = soc_desc.get_eth_core_for_channel(channel, tt::umd::CoordSystem::LOGICAL);
             EthernetEndpoint endpoint{.chip = chip, .ethernet_core = ethernet_core, .channel = channel};
 
             // Remote EthernetEndpoint
-            CoreCoord remote_ethernet_core =
+            tt::umd::CoreCoord remote_ethernet_core =
                 remote_soc_desc.get_eth_core_for_channel(remote_channel, tt::umd::CoordSystem::LOGICAL);
             EthernetEndpoint remote_endpoint{
                 .chip = remote_chip, .ethernet_core = remote_ethernet_core, .channel = remote_channel};
@@ -142,24 +71,6 @@ static void test_print_link_health() {
 }
 
 int main(int argc, char* argv[]) {
-    // std::cout << "crc_err_addr = " << std::hex
-    //           << tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-    //                  tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CRC_ERR)
-    //           << std::endl;
-    // std::cout << "retrain_count_addr = "
-    //           << tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-    //                  tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT)
-    //           << std::endl;
-    // std::cout << "corr_cw_addr = "
-    //           << tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-    //                  tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CORR_CW)
-    //           << std::endl;
-    // std::cout << "uncorr_cw_addr = "
-    //           << tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-    //                  tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW)
-    //           << std::endl;
-    // return 0;
-
     // Parse command line arguments
     cxxopts::Options options("tt_telemetry_server", "TT-Metal Telemetry Server");
 

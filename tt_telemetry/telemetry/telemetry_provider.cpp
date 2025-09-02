@@ -2,8 +2,6 @@
 #include <queue>
 #include <unistd.h>
 
-#include "impl/context/metal_context.hpp"
-
 #include <telemetry/telemetry_provider.hpp>
 #include <telemetry/ethernet/ethernet_metrics.hpp>
 #include <telemetry/arc/arc_metrics.hpp>

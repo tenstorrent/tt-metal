@@ -1,8 +1,9 @@
-#include <telemetry/arc/arc_telemetry_reader.hpp>
-
-#include <tt-metalium/assert.hpp>
-#include <telemetry/ethernet/ethernet_endpoint.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/assert.hpp>
+
+#include <telemetry/arc/arc_telemetry_reader.hpp>
+#include <telemetry/ethernet/ethernet_endpoint.hpp>
+
 #include <memory>
 #include <vector>
 #include <map>

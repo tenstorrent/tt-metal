@@ -11,8 +11,8 @@
  *   current buffer. It should continue to update the same delta snapshot until it can push it.
  */
 
- #include <atomic>
- #include <chrono>
+#include <atomic>
+#include <chrono>
 #include <future>
 #include <initializer_list>
 #include <mutex>

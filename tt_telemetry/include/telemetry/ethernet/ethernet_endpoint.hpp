@@ -11,12 +11,10 @@
  #include <vector>
 
  #include <telemetry/ethernet/chip_identifier.hpp>
- #include <tt-metalium/core_coord.hpp>
- #include <tt-metalium/cluster.hpp>
 
  struct EthernetEndpoint {
     ChipIdentifier chip;
-    CoreCoord ethernet_core;  // TODO: use tt::umd::CoreCoord?
+    tt::umd::CoreCoord ethernet_core;
     tt::umd::ethernet_channel_t channel;
 
     bool operator<(const EthernetEndpoint &other) const;
@@ -44,6 +42,5 @@ namespace std {
     };
 }
 
-std::map<ChipIdentifier, std::vector<EthernetEndpoint>> get_ethernet_endpoints_by_chip(const tt::Cluster& cluster);
 std::map<ChipIdentifier, std::vector<EthernetEndpoint>> get_ethernet_endpoints_by_chip(
     const std::unique_ptr<tt::umd::Cluster>& cluster);

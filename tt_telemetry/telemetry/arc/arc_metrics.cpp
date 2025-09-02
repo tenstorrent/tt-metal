@@ -3,10 +3,10 @@
  * https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/ARCTile/Telemetry.md
  */
 
-#include <telemetry/arc/arc_metrics.hpp>
+#include <tt-metalium/assert.hpp>
+ #include <telemetry/arc/arc_metrics.hpp>
 
 #include <chrono>
-#include <tt-metalium/assert.hpp>
 
 /**************************************************************************************************
 | ARCTelemetryAvailableMetric Class

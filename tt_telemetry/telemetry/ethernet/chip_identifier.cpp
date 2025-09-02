@@ -59,27 +59,6 @@ size_t hash_value(const ChipIdentifier &c) {
     return seed;
 }
 
-ChipIdentifier get_chip_identifier_from_umd_chip_id(const tt::Cluster &cluster, chip_id_t chip_id) {
-    if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::GALAXY) {
-        const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
-            {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
-            {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
-        };
-        const auto& tray_bus_ids = ubb_bus_ids.at(cluster.arch());
-        const auto bus_id = cluster.get_bus_id(chip_id);
-        auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
-        if (tray_bus_id_it != tray_bus_ids.end()) {
-            auto ubb_chip_number = bus_id & 0x0F;
-            return { .id = chip_id, .galaxy_ubb = GalaxyUbbIdentifier{tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_chip_number} };
-        }
-
-        // Invalid UBB, drop through
-    }
-
-    // Not a known cluster type, just use chip ID directly
-    return { .id = chip_id, .galaxy_ubb = {} }; // invalid UBB ID if not found
-}
-
 static uint16_t get_bus_id(tt::umd::TTDevice* device) { return device->get_pci_device()->get_device_info().pci_bus; }
 
 ChipIdentifier get_chip_identifier_from_umd_chip_id(tt::umd::TTDevice* device, tt::umd::chip_id_t chip_id) {
