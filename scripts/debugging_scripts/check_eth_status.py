@@ -59,16 +59,16 @@ class EthCore(ABC):
         """Convert port status value to a readable string."""
         pass
 
-    def check_for_heartbeat(self) -> tuple[bool, str]:
+    def check_for_heartbeat(self):
         """Check for heartbeat at the heartbeat address."""
         previous_data = 0
         # Check for a changing value at the heartbeat address. Read up to 100 times
         for i in range(100):
             read_data = read_word_from_device(self.location, self.eth_core_definitions.heartbeat, context=self.context)
             if read_data != previous_data:
-                return True, ""
+                return
             previous_data = read_data
-        return False, f"No heartbeat detected for {self.location.to_user_str()}"
+        log_check(False, f"No heartbeat detected for {self.location.to_user_str()}")
 
     def get_results(self):
         """Get and log all ethernet core status results."""
