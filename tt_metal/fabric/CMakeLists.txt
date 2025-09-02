@@ -36,6 +36,7 @@ target_sources(
         mesh_graph.cpp
         erisc_datamover_builder.cpp
         fabric.cpp
+        fabric_init.cpp
         fabric_host_utils.cpp
         fabric_context.cpp
         fabric_mux_config.cpp
