@@ -49,6 +49,11 @@ void SliceWriteDeviceOperation::validate_with_output_tensors(
             this->slice_start[i],
             this->slice_end[i]);
     }
+    // If the input tensor is sharded, then rank should be 4
+    TT_FATAL(
+        !input_tensor_a.is_sharded() || input_tensor_a.padded_shape().rank() == 4,
+        "Sharded input tensor should be of rank 4. Got {}",
+        input_tensor_a.padded_shape().rank());
 }
 
 std::vector<ttnn::Tensor> SliceWriteDeviceOperation::create_output_tensors(
