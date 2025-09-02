@@ -1,5 +1,3 @@
-# 5 WH Galaxy Y Torus Superpod using V3 schema
-
 graph_templates {
   key: "5_wh_galaxy_y_torus_superpod"
   value {
