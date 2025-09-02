@@ -4,6 +4,7 @@
 
 import argparse
 from pathlib import Path
+
 from models.perf.perf_utils import check_perf_results, merge_perf_files, today
 
 expected_cols = [
@@ -23,6 +24,7 @@ expected_cols = [
 
 check_cols = ["Inference Time (sec)"]
 
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Merges device performance CSV reports")
     parser.add_argument(
@@ -33,6 +35,7 @@ def parse_args() -> argparse.Namespace:
         help="REPORT or CHECK",
     )
     return parser.parse_args()
+
 
 if __name__ == "__main__":
     args = parse_args()
