@@ -30,6 +30,79 @@ permissions:
 run-name: Accessor Performance Regression Tests${{ github.event_name == 'workflow_dispatch' && format(' - {0}', inputs.branch || 'main') || format(' - {0}', github.ref_name) }}
 
 jobs:
+  # TODO: Change base branch from philei/tensor-accessor-perf-regression-tests to main
+  build-baseline-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: Release
+      tracy: true
+      build-wheel: true
+      version: ${{ inputs.version || '22.04' }}
+      ref: philei/tensor-accessor-perf-regression-tests
+
+  generate-baseline-performance:
+    name: "📊 Generate Baseline Performance Data"
+    needs: build-baseline-artifact
+    runs-on: >-
+      ${{
+        (github.event.pull_request.head.repo.fork == true) && 'tt-ubuntu-2204-N150-stable'
+        || fromJSON('["N150", "in-service", "cloud-virtual-machine"]')
+      }}
+    container:
+      image: ${{ needs.build-baseline-artifact.outputs.dev-docker-image }}
+      env:
+        ARCH_NAME: wormhole_b0
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+        TT_METAL_HOME: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job-baseline:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    timeout-minutes: 60
+    outputs:
+      baseline-artifact-name: ${{ steps.upload-baseline.outputs.artifact-name }}
+
+    steps:
+      - name: ⬇️ Checkout baseline branch
+        uses: actions/checkout@v4
+        with:
+          ref: philei/tensor-accessor-perf-regression-tests
+          submodules: recursive
+          path: docker-job-baseline
+
+      - name: ⬇️ Setup Baseline Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-baseline-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-baseline-artifact.outputs.wheel-artifact-name }}
+
+      - name: 📊 Generate Baseline Performance Data
+        timeout-minutes: 15
+        run: |
+          echo "🚀 Generating baseline performance data..."
+          mkdir -p ./baseline-results
+          python3 tests/ttnn/benchmark/python/accessor_benchmarks.py --export-results-to ./baseline-results
+
+      - name: 📤 Upload Baseline Results
+        id: upload-baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-performance-data-${{ github.run_id }}
+          path: ./baseline-results
+          retention-days: 1
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -44,7 +117,7 @@ jobs:
 
   accessor-perf-regression-tests:
     name: "📊 Accessor Performance Regression Tests"
-    needs: build-artifact
+    needs: [build-artifact, generate-baseline-performance]
     runs-on: >-
       ${{
         (github.event.pull_request.head.repo.fork == true) && 'tt-ubuntu-2204-N150-stable'
@@ -82,11 +155,17 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
+      - name: ⬇️ Download Baseline Performance Data
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.generate-baseline-performance.outputs.baseline-artifact-name }}
+          path: ./baseline-performance-data
+
       - name: 📊 Run Accessor Performance Regression Tests
-        timeout-minutes: 45
+        timeout-minutes: 15
         run: |
           echo "🚀 Starting accessor performance regression tests..."
-          python -m pytest tests/ttnn/benchmark/python/perf_regression/test_accessor_perf_regression.py -v --tb=short
+          python -m pytest tests/ttnn/benchmark/python/perf_regression/test_accessor_perf_regression.py -v --tb=short --perf-baseline-path ./baseline-performance-data
 
       - name: 📊 Generate Performance Report
         if: always()
