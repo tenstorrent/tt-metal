@@ -401,6 +401,7 @@ if [ "$enable_fake_kernels_target" = "ON" ]; then
     cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=ON")
 else
     cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=OFF")
+fi
 if [ "$build_ttnn_op_runtime_predictor" = "ON" ]; then
     cmake_args+=("-DBUILD_TTNN_OP_RUNTIME_PREDICTOR=ON")
 else
