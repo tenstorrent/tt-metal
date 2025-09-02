@@ -95,6 +95,6 @@ void apply_core_placement_optimizations(
 
 }
 
-
+void form_fabric_routing_planes();
 
 } // namespace tt::tt_fabric::core_placement

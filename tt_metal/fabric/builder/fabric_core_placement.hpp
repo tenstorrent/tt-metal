@@ -22,4 +22,6 @@ void apply_core_placement_optimizations(
     FabricEriscDatamoverBuilder& edm_bwd,
     size_t link_index);
 
+void form_fabric_routing_planes();
+
 }  // namespace tt::tt_fabric::core_placement
