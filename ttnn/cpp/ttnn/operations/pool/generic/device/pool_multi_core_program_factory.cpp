@@ -468,6 +468,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         params.split_reader ? CreateKernel(program, reader_kernel_fname, all_cores, reader1_config) : 0;
 
     /**
+     * CB Print Kernel (Dataflow): for debugging pool 2d dataflow inputs
+     */
+    std::string cb_print_kernel_fname = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/cb_print.cpp";
+
+    // Use same compile args as compute kernel for cb_print
+    /**
      * Compute Kernel: input cb -> tilize_block -> input tiles -> reduce_h max -> output tiles -> untilize_block ->
      * output cb
      */
@@ -485,6 +491,17 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id_1,              // 10
         out_cb_id,                      // 11
         one_scalar_per_core};           // 12
+
+    // Create cb_print dataflow kernel with same args as compute kernel
+    // auto cb_print_config = tt::tt_metal::DataMovementConfig{
+    //     .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+    //     .noc = tt::tt_metal::NOC::RISCV_1_default,
+    //     .compile_args = compute_ct_args,
+    //     .defines = get_defines(pool_type)};
+
+    // auto cb_print_kernel = CreateKernel(program, cb_print_kernel_fname, all_cores, cb_print_config);
+
+    // Comment out original compute kernel
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
