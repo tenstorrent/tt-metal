@@ -13,7 +13,13 @@
 namespace ttnn {
 
 void NeighborPadAsync::validate_with_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {}
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    TT_FATAL(this->dim == 0, "Error, neighbor pad currently only supports padding dim 0, provided {}", this->dim);
+    TT_FATAL(
+        this->direction == 0,
+        "Error, neighbor pad currently only supports shifting left, but direction provided was {}",
+        this->direction);
+}
 
 std::vector<ttnn::TensorSpec> NeighborPadAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
