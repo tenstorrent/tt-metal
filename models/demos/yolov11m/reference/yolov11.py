@@ -97,10 +97,9 @@ class Bottleneck(nn.Module):
 
     def forward(self, x):
         input = x
-        x = self.cv1(x)  # 64 → 32 (bottleneck)
-        x = self.cv2(x)  # 32 → ??? (should be 32 → 64, but checkpoint shows 64 → 32)
-        # Traditional: return input + x if input.shape == x.shape else x
-        return input + x  # This will fail if dimensions don't match
+        x = self.cv1(x)
+        x = self.cv2(x)
+        return input + x
 
 
 class SPPF(nn.Module):
