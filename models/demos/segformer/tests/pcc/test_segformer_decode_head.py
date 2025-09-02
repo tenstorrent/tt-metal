@@ -14,8 +14,9 @@ from models.demos.segformer.reference.segformer_decode_head import SegformerDeco
 from models.demos.segformer.tests.pcc.test_segformer_mlp import (
     create_custom_mesh_preprocessor as create_custom_preprocessor_mlp,
 )
-from models.demos.segformer.tt.common import fold_batch_norm2d_into_conv2d, get_mesh_mappers
+from models.demos.segformer.tt.common import fold_batch_norm2d_into_conv2d
 from models.demos.segformer.tt.ttnn_segformer_decode_head import TtSegformerDecodeHead
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 

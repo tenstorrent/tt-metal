@@ -1,7 +1,7 @@
 # Yolov6l
 
 ### Platforms:
-    Wormhole (n150, n300)
+Wormhole (n150, n300)
 
 ### Introduction:
 YOLOv6-L is a large variant of the YOLOv6 family—an advanced real-time object detection model developed by Meituan. YOLOv6 is designed to offer high performance in both accuracy and speed, making it suitable for industrial applications like autonomous driving, surveillance, and robotics. Resource link - [source](https://github.com/meituan/YOLOv6)
@@ -75,6 +75,18 @@ pytest --disable-warnings models/demos/yolov6l/tests/pcc/test_ttnn_yolov6l.py
   ```
   pytest --disable-warnings models/demos/yolov6l/demo/demo.py::test_demo_dataset_dp
   ```
+
+
+### Performant evaluation with Trace+2CQ
+
+- Use the following command to run the performant evaluation with Trace+2CQs:
+
+  ```
+  pytest models/demos/yolo_eval/evaluate.py::test_yolov6l[res0-device_params0-tt_model]
+  ```
+
+Note: The model is evaluated with 500 samples.
+
 
 ### Details
 - The entry point to yolov6l model is TtYolov6l in `models/demos/yolov6l/tt/ttnn_yolov6l.py`.

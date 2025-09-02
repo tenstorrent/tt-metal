@@ -32,7 +32,6 @@ pytest --disable-warnings models/demos/yolov11/tests/perf/test_e2e_performant.py
   ```
 
 ### Demo with Trace+2CQ
-Note: Output images will be saved in the `models/demos/yolov11/demo/runs` folder.
 
 #### Single Device (BS=1)
 ##### Custom Images:
@@ -62,11 +61,14 @@ Note: Output images will be saved in the `models/demos/yolov11/demo/runs` folder
   pytest --disable-warnings models/demos/yolov11/demo/demo.py::test_demo_dataset_dp
   ```
 
+Note: Output images will be saved in the `models/demos/yolov11/demo/runs` folder.
+
 ## Testing
 ### Performant evaluation with Trace+2CQ
+
 Use the following command to run the performant evaluation with Trace+2CQs:
 ```
-pytest models/experimental/yolo_eval/evaluate.py::test_yolov11n[res0-device_params0-tt_model]
+pytest models/demos/yolo_eval/evaluate.py::test_yolov11n[res0-device_params0-tt_model]
 ```
 Note: The model is evaluated with 500 samples.
 
