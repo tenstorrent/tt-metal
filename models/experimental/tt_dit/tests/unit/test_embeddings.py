@@ -10,6 +10,7 @@ import math
 
 from ...utils.tensor import bf16_tensor
 from ...utils.check import assert_quality
+from ...utils.substate import substate
 from ...layers.embeddings import (
     TimestepEmbedding,
     PixartAlphaTextProjection,
@@ -551,7 +552,7 @@ def test_wan_patch_embed(
         mesh_device=mesh_device,
         init=False,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_state_dict(substate(torch_model.state_dict(), "proj"))
 
     # Create input tensors
     torch.manual_seed(0)
@@ -591,5 +592,5 @@ def test_wan_patch_embed(
     tt_output_batch = tt_output_torch[0]
 
     assert_quality(
-        torch_output, tt_output_batch, pcc=0.999_994, relative_rmse=0.05
+        torch_output, tt_output_batch, pcc=0.999_991, relative_rmse=0.006
     )  # Lower PCC due to conv3d approximation
