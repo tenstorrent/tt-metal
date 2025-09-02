@@ -115,6 +115,14 @@
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                         \
         ckernel::sfpu::FN<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE, PARAM0)
 
+#define SFPU_UNARY_ONE_PARAM_KERNEL_FN_FLOAT(FN, MODE, APPROXIMATE, DST_IDX, PARAM0) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                               \
+        ckernel::sfpu::_##FN##_<sfpi::vFloat, APPROXIMATE, 8, uint32_t>, DST_IDX, (int)VectorMode::MODE, PARAM0)
+
+#define SFPU_UNARY_ONE_PARAM_KERNEL_FN_INT(FN, MODE, APPROXIMATE, DST_IDX, PARAM0) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                             \
+        ckernel::sfpu::_##FN##_<sfpi::vInt, APPROXIMATE, 8, uint32_t>, DST_IDX, (int)VectorMode::MODE, PARAM0)
+
 // For kernels whose functor takes one template parameter (e.g., <APPROXIMATE>)
 #define SFPU_ONE_PARAM_KERNEL(FN, APPROXIMATE, DST_IDX, VECTOR_MODE) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(ckernel::sfpu::FN<APPROXIMATE>, DST_IDX, VECTOR_MODE)

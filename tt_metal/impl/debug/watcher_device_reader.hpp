@@ -48,6 +48,7 @@ private:
     void DumpAssertStatus(CoreDescriptor& core, const std::string& core_str, const mailboxes_t* mbox_data);
     void DumpAssertTrippedDetails(CoreDescriptor& core, const std::string& error_msg, const mailboxes_t* mbox_data);
     void DumpPauseStatus(CoreDescriptor& core, const std::string& core_str, const mailboxes_t* mbox_data);
+    void DumpEthLinkStatus(CoreDescriptor& core, const std::string& core_str, const mailboxes_t* mbox_data);
     void DumpRingBuffer(CoreDescriptor& core, const mailboxes_t* mbox_data, bool to_stdout);
     void DumpRunState(CoreDescriptor& core, const launch_msg_t* launch_msg, uint32_t state);
     void DumpLaunchMessage(CoreDescriptor& core, const mailboxes_t* mbox_data);
@@ -62,6 +63,7 @@ private:
 
     FILE* f;
     chip_id_t device_id;
+    uint32_t num_erisc_cores{0};
     const std::vector<std::string>& kernel_names;
 
     // Information that needs to be kept around on a per-dump basis

@@ -548,7 +548,7 @@ void process_write_paged(uint32_t& block_noc_writes_to_clear, uint32_t block_nex
     uint32_t pages = cmd->write_paged.pages;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
     uint32_t write_length = pages * page_size;
-    InterleavedAddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
+    auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec<is_dram>(), base_addr, page_size);
     uint64_t dst_addr_offset = 0;  // Offset into page.
 
     // DPRINT << "process_write_paged - pages: " << pages << " page_size: " << page_size
@@ -1362,7 +1362,6 @@ void kernel_main() {
             fabric_mux_y,
             worker_credits_stream_id,
             fabric_mux_channel_base_address,
-            fabric_mux_flow_control_address,
             fabric_mux_connection_handshake_address,
             fabric_mux_connection_info_address,
             fabric_mux_buffer_index_address,

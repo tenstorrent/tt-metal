@@ -58,7 +58,7 @@ class RotaryEmbedding(nn.Module):
         emb = torch.cat((freqs, freqs), dim=-1)
         cos = emb.cos()
         sin = emb.sin()
-        self.register_buffer("freqs_cis", torch.complex(cos.to(dtype), sin.to(dtype)), persistent=False)
+        self.register_buffer("freqs_cis", torch.complex(cos.float(), sin.float()), persistent=False)
 
         cos, sin = self.permute_to_meta_format(cos, sin)
         self.register_buffer("cos_cached", cos.to(dtype), persistent=False)
@@ -101,7 +101,7 @@ class ScaledRotaryEmbedding(RotaryEmbedding, ABC):
         freqs = torch.outer(t, freqs).float()
         cos = torch.cos(freqs)
         sin = torch.sin(freqs)
-        self.register_buffer("freqs_cis", torch.complex(cos.to(dtype), sin.to(dtype)), persistent=False)
+        self.register_buffer("freqs_cis", torch.complex(cos.float(), sin.float()), persistent=False)
 
         cos, sin = gather_cos_sin(torch.arange(seq_len), cos, sin)
         self.register_buffer("cos_cached", cos.to(dtype), persistent=False)
@@ -254,7 +254,7 @@ def rotary_embedding_factory(
     base: float,
     rope_scaling: Optional[RopeScaling] = None,
     device: Optional[Any] = None,
-) -> Union[RotaryEmbedding, YarnRotaryEmbedding, LlamaRotaryEmbedding, LinearScaledRotaryEmbedding]:
+) -> Union[RotaryEmbedding, ScaledRotaryEmbedding]:
     if rope_scaling is None:
         return RotaryEmbedding(dim, max_position_embeddings, base, device)
     else:

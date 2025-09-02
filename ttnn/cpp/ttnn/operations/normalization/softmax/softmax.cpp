@@ -30,7 +30,7 @@ ttnn::Tensor ExecuteSoftmax::invoke(
     // For 0D or 0V tensors
     if ((rank == 0) || (input_tensor.logical_volume() == 0)) {
         return ttnn::full(
-            input_shape, 1.0f, input_tensor.dtype(), input_tensor.layout(), *input_tensor.mesh_device(), memory_config);
+            input_shape, 1.0f, input_tensor.dtype(), input_tensor.layout(), *input_tensor.device(), memory_config);
     }
 
     if (rank > 4) {
@@ -82,7 +82,7 @@ ttnn::Tensor ExecuteScaleMaskSoftmax::invoke(
             scale.value_or(1.0f),
             input_tensor.dtype(),
             input_tensor.layout(),
-            *input_tensor.mesh_device(),
+            *input_tensor.device(),
             memory_config);
     }
 

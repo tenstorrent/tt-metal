@@ -57,6 +57,7 @@ const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
         case DebugBrisc: return " brisc";
         case DebugNCrisc: return "ncrisc";
         case DebugErisc: return "erisc";
+        case DebugSubordinateErisc: return "subordinate_erisc";
         case DebugIErisc: return "ierisc";
         case DebugSubordinateIErisc: return "subordinate_ierisc";
         case DebugTrisc0: return "trisc0";
@@ -196,6 +197,9 @@ WatcherDeviceReader::WatcherDeviceReader(FILE* f, chip_id_t device_id, const std
             logical_core_to_eth_link_retraining_count[eth_core] = read_data[0];
         }
     }
+
+    num_erisc_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 }
 
 WatcherDeviceReader::~WatcherDeviceReader() {
@@ -464,6 +468,10 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
         }
         if (!rtoptions.watcher_pause_disabled()) {
             DumpPauseStatus(virtual_core, core_str, mbox_data);
+        }
+
+        if (is_eth_core && !rtoptions.watcher_eth_link_status_disabled()) {
+            DumpEthLinkStatus(virtual_core, core_str, mbox_data);
         }
     }
 
@@ -741,6 +749,26 @@ void WatcherDeviceReader::DumpPauseStatus(CoreDescriptor& core, const string& co
             TT_THROW("{}", error_reason);
         }
     }
+}
+
+void WatcherDeviceReader::DumpEthLinkStatus(
+    CoreDescriptor& core, const string& core_str, const mailboxes_t* mbox_data) {
+    const debug_eth_link_t* eth_link_status = &mbox_data->watcher.eth_status;
+    if (eth_link_status->link_down == 0) {
+        return;
+    }
+    auto noc0_core = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).translate_coord_to(
+        core.coord, CoordSystem::TRANSLATED, CoordSystem::NOC0);
+    string error_msg = fmt::format(
+        "Watcher detected that active eth link on virtual core {} (noc0 core: {}) went down after training.\n",
+        core.coord.str(),
+        noc0_core.str());
+    log_warning(tt::LogMetal, "{}", error_msg);
+    DumpWaypoints(core, mbox_data, true);
+    DumpRingBuffer(core, mbox_data, true);
+    LogRunningKernels(core, get_valid_launch_message(mbox_data));
+    MetalContext::instance().watcher_server()->set_exception_message(fmt::format("{}: {}", core_str, error_msg));
+    TT_THROW("{}: {}", core_str, error_msg);
 }
 
 void WatcherDeviceReader::DumpRingBuffer(CoreDescriptor& /*core*/, const mailboxes_t* mbox_data, bool to_stdout) {
@@ -1058,6 +1086,12 @@ void WatcherDeviceReader::LogRunningKernels(CoreDescriptor& core, const launch_m
             tt::LogMetal,
             " erisc : {}",
             kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]]);
+        if (num_erisc_cores > 1) {
+            log_info(
+                tt::LogMetal,
+                " erisc1 : {}",
+                kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]]);
+        }
     } else {
         log_info(
             tt::LogMetal,
@@ -1079,6 +1113,7 @@ string WatcherDeviceReader::GetKernelName(CoreDescriptor& core, const launch_msg
         case DebugBrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]];
         case DebugErisc:
         case DebugIErisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]];
+        case DebugSubordinateErisc:
         case DebugSubordinateIErisc:
             return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]];
         case DebugNCrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]];
