@@ -137,8 +137,22 @@ def timer(description="Operation"):
         "real-world-6",
     ],
 )
-def test_windowed_sdpa_basic(mesh_device, batch_size, num_heads, seq_len, head_dim, qk_chunk_size, cu_window_seqlens):
+def test_windowed_sdpa_basic(
+    mesh_device,
+    batch_size,
+    num_heads,
+    seq_len,
+    head_dim,
+    qk_chunk_size,
+    cu_window_seqlens,
+    is_ci_env,
+    request,
+):
     """Test windowed scaled dot product attention against standard SDPA with equivalent mask."""
+    test_id = request.node.callspec.id
+    if is_ci_env and "real-world" in test_id:
+        pytest.skip("CI skips real-world tests to save CI test time.")
+
     # Get windows from the provided function
     # cu_window_seqlens = get_cu_window_seqlens()
     if callable(cu_window_seqlens):
