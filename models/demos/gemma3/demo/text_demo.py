@@ -645,6 +645,7 @@ def prepare_generator_args(
     ],
     indirect=True,
 )
+@pytest.mark.skip(reason="Skipping due to missing model weights in CI")
 def test_demo_text(
     input_prompts,
     instruct,
