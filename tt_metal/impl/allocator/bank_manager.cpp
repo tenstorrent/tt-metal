@@ -359,6 +359,8 @@ uint64_t BankManager::allocate_buffer(
     std::optional<uint32_t> num_shards,
     BankManager::StateDependencies::StateId state) {
     this->assert_valid_state(state);
+    TT_ASSERT(bool(allocators_[state.value]), "Allocator not initialized!");
+
     uint32_t num_banks = this->num_banks();
     bool is_sharded = false;
     if (num_shards.has_value()) {
@@ -377,46 +379,91 @@ uint64_t BankManager::allocate_buffer(
         address_limit = interleaved_address_limit_;
         TT_FATAL(address_limit > 0, "Address limit {} needs to be larger than zero.", address_limit);
     }
-    TT_ASSERT(bool(allocators_[state.value]), "Allocator not initialized!");
 
-    for (auto r : allocators_[state.value]->available_addresses(size_per_bank)) {
-        std::cout << "Available address: " << r.first << " - " << r.second << std::endl;
-    }
-
-    /*
-    auto address = allocators_[state.value]->allocate(size_per_bank, bottom_up, address_limit);
-    if (not address.has_value()) {
-        TT_THROW(
-            "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
-            "store {} B",
-            size,
-            enchantum::to_string(buffer_type_),
-            num_banks,
-            size_per_bank);
-    }
-    allocated_buffers_[state.value].insert(address.value());
-
-    return address.value();
-    */
-
-    // /*
-    // Compute candidate ranges from allocator and subtract overlay
-    std::vector<std::pair<DeviceAddr, DeviceAddr>> free_abs;
-    for (auto r : allocators_[state.value]->available_addresses(size_per_bank)) {
-        if (address_limit > 0 && r.first < address_limit) {
-            r.first = address_limit;
+    // If there are no dependent states, fall back to allocator's native strategy
+    const auto& neighbors = state_dependencies_.dependencies[state.value];
+    if (neighbors.empty()) {
+        auto address = allocators_[state.value]->allocate(size_per_bank, bottom_up, address_limit);
+        if (not address.has_value()) {
+            TT_THROW(
+                "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
+                "store {} B",
+                size,
+                enchantum::to_string(buffer_type_),
+                num_banks,
+                size_per_bank);
         }
-        if (r.second > r.first) {
-            free_abs.emplace_back(r.first, r.second);
+        allocated_buffers_[state.value].insert(address.value());
+        return address.value();
+    }
+
+    // Build free ranges for current state and all dependent states and find common free address
+    auto clamp_ranges = [address_limit](std::vector<std::pair<DeviceAddr, DeviceAddr>> ranges) {
+        if (address_limit == 0) {
+            return ranges;
+        }
+        std::vector<std::pair<DeviceAddr, DeviceAddr>> out;
+        out.reserve(ranges.size());
+        for (auto r : ranges) {
+            if (r.first < address_limit) {
+                r.first = address_limit;
+            }
+            if (r.second > r.first) {
+                out.emplace_back(r.first, r.second);
+            }
+        }
+        return out;
+    };
+
+    std::vector<std::vector<std::pair<DeviceAddr, DeviceAddr>>> all_free;
+    all_free.reserve(1 + neighbors.size());
+
+    // Current state ranges
+    all_free.push_back(clamp_ranges(allocators_[state.value]->available_addresses(size_per_bank)));
+
+    // Neighbor state ranges
+    for (const auto dep_state : neighbors) {
+        all_free.push_back(clamp_ranges(allocators_[dep_state.value]->available_addresses(size_per_bank)));
+    }
+
+    // Sort each free range list by start address to prepare for intersection
+    for (auto& ranges : all_free) {
+        std::sort(ranges.begin(), ranges.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    }
+
+    // Helper to intersect two sorted, disjoint range lists
+    auto intersect_two = [](const std::vector<std::pair<DeviceAddr, DeviceAddr>>& a,
+                            const std::vector<std::pair<DeviceAddr, DeviceAddr>>& b) {
+        std::vector<std::pair<DeviceAddr, DeviceAddr>> res;
+        size_t i = 0, j = 0;
+        while (i < a.size() && j < b.size()) {
+            DeviceAddr s = std::max(a[i].first, b[j].first);
+            DeviceAddr e = std::min(a[i].second, b[j].second);
+            if (s < e) {
+                res.emplace_back(s, e);
+            }
+            if (a[i].second < b[j].second) {
+                i++;
+            } else {
+                j++;
+            }
+        }
+        return res;
+    };
+
+    // Compute intersection across all lists
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> allowed = all_free.front();
+    for (size_t k = 1; k < all_free.size(); ++k) {
+        allowed = intersect_two(allowed, all_free[k]);
+        if (allowed.empty()) {
+            break;
         }
     }
-    auto occ = union_all_sources(reservations_by_source_[state.value]);
-    auto allowed = subtract_ranges(free_abs, occ);
 
-    // Choose a start according to bottom_up
+    // Choose an address from the allowed ranges respecting alignment and direction
     std::optional<DeviceAddr> chosen;
     if (bottom_up) {
-        for (auto r : allowed) {
+        for (const auto& r : allowed) {
             DeviceAddr s = align_up(r.first, alignment_bytes_);
             if (s + size_per_bank <= r.second) {
                 chosen = s;
@@ -424,8 +471,8 @@ uint64_t BankManager::allocate_buffer(
             }
         }
     } else {
-        for (ssize_t i = (ssize_t)allowed.size() - 1; i >= 0; --i) {
-            auto r = allowed[(size_t)i];
+        for (ssize_t i = static_cast<ssize_t>(allowed.size()) - 1; i >= 0; --i) {
+            const auto& r = allowed[static_cast<size_t>(i)];
             DeviceAddr s = r.second - size_per_bank;
             s = (s / alignment_bytes_) * alignment_bytes_;  // round down to alignment
             if (s >= r.first) {
@@ -449,12 +496,8 @@ uint64_t BankManager::allocate_buffer(
     if (!address.has_value()) {
         TT_THROW("Allocator failed to place at chosen address {}", chosen.value());
     }
-
-    // Track allocation (overlay logic removed with undirected graph simplification)
     allocated_buffers_[state.value].insert(address.value());
-
     return address.value();
-    // */
 }
 
 void BankManager::deallocate_buffer(DeviceAddr address, BankManager::StateDependencies::StateId state) {
