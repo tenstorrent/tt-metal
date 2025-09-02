@@ -69,6 +69,8 @@
 
 #define MEM_BOOT_CODE_BASE 0
 #define MEM_NOC_ATOMIC_RET_VAL_ADDR 4
+// An address that can be written to with no consequences.
+#define MEM_DISPATCH_NOOP 8
 #define MEM_L1_BARRIER 12
 
 // Used by ARC FW and LLKs to store power throttling state
