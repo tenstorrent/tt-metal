@@ -9,19 +9,22 @@ Usage:
   -g GOOD_SHA    : known good commit
   -b BAD_SHA     : known bad commit
   -t TIMEOUT     : per-iteration timeout (default 30m)
+  -p PROFILING   : enable Tracy profiling
 END
 
 timeout_duration_iteration="30m"
 test=""
 good_commit=""
 bad_commit=""
+tracy_enabled=0
 
-while getopts ":f:g:b:t:" opt; do
+while getopts ":f:g:b:t:p" opt; do
   case "$opt" in
     f) test="$OPTARG" ;;
     g) good_commit="$OPTARG" ;;
     b) bad_commit="$OPTARG" ;;
     t) timeout_duration_iteration="$OPTARG" ;;
+    p) tracy_enabled=1 ;;
     \?) die "Invalid option: -$OPTARG" ;;
     :)  die "Option -$OPTARG requires an argument." ;;
   esac
@@ -31,10 +34,14 @@ done
 [ -n "$good_commit" ] || die "Please specify -g GOOD_SHA."
 [ -n "$bad_commit" ] || die "Please specify -b BAD_SHA."
 
+
 echo "TT_METAL_HOME: $TT_METAL_HOME"
 echo "PYTHONPATH: $PYTHONPATH"
 echo "ARCH_NAME: ${ARCH_NAME:-}"
 echo "pwd: $(pwd)"
+if [ "$tracy_enabled" -eq 1 ]; then
+  echo "Tracy profiling enabled for builds."
+fi
 
 # Creating virtual environment where we can install ttnn
 ./create_venv.sh
@@ -86,9 +93,16 @@ while [[ "$found" == "false" ]]; do
   fresh_clean
 
   build_rc=0
-  ./build_metal.sh \
-    --build-all \
-    --enable-ccache || build_rc=$?
+  if [ "$tracy_enabled" -eq 1 ]; then
+    ./build_metal.sh \
+      --build-all \
+      --enable-ccache \
+      --enable-profiler || build_rc=$?
+  else
+    ./build_metal.sh \
+      --build-all \
+      --enable-ccache || build_rc=$?
+  fi
 
   echo "::endgroup::"
 
