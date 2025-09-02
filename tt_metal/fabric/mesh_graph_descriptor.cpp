@@ -159,7 +159,7 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshG
 void MeshGraphDescriptor::populate() {
 
     populate_descriptors();
-    top_level_id_ = populate_instances(proto_->top_level_instance());
+    top_level_id_ = populate_instance(proto_->top_level_instance());
 }
 
 
@@ -521,7 +521,7 @@ MeshGraphDescriptor::NodeId MeshGraphDescriptor::populate_instance(const proto::
 
         // Warn if there is a sub reference that it will not be used
         if (sub_ref) {
-            log_warn(tt::LogFabric, "Sub reference will not be used in this graph instance");
+            log_warning(tt::LogFabric, "Sub reference will not be used in this graph instance");
         }
 
 
@@ -560,7 +560,7 @@ MeshGraphDescriptor::NodeId MeshGraphDescriptor::populate_graph_instance(const p
     TT_FATAL(it != graph_desc_by_name_.end(), "Graph descriptor {} not found in instance", std::string(descriptor_name));
     const auto* graph_desc = it->second;
 
-    std::unordered_map<uint32_t, NodeId> subs;
+    std::unordered_set<NodeId> subs;
     subs.reserve(graph_desc->instances_size());
 
     std::string_view type;
@@ -586,6 +586,8 @@ MeshGraphDescriptor::NodeId MeshGraphDescriptor::populate_graph_instance(const p
                 TT_FATAL(type == graph(child).type, "Graph instance type {} does not match graph descriptor type {}", type, graph(child).type);
             }
         }
+
+        subs.insert(child);
     }
 
     uint32_t graph_idx = static_cast<uint32_t>(graphs_.size());
@@ -662,8 +664,7 @@ void MeshGraphDescriptor::print_node(NodeId id, int indent_level) {
         }
         if (!gv.sub_instances.empty()) {
             ss << indent << "Sub-instances:" << std::endl;
-            for (const auto& [id, child] : gv.sub_instances) {
-                ss << indent << "ID: " << id << std::endl;
+            for (const auto& child : gv.sub_instances) {
                 print_node(child, indent_level + 1);
             }
         }

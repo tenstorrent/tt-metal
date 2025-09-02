@@ -9,7 +9,7 @@
 #include <filesystem>
 #include <memory>
 #include <vector>
-#include <unordered_map>
+#include <unordered_set>
 
 // Forward declaration
 namespace tt::tt_fabric {
@@ -34,22 +34,23 @@ public:
 
     struct NodeIndex {
         NodeKind kind;
-        uint32_t idx; // index into meshes_ or graphs_
+        NodeId idx; // index into meshes_ or graphs_
     };
 
+    // TODO: Contenplate making graph instance data the same as mesh Instance data and merging into one struct
     struct MeshInstanceData {
-        const uint32_t local_id;             // instance id from proto
+        const NodeId local_id;             // instance id from proto
         const std::string_view name;         // points into proto_ storage
         const proto::Architecture arch;
         const proto::MeshDescriptor* desc; // non-owning pointer into proto_
     };
 
     struct GraphInstanceData {
-        const uint32_t local_id;             // instance id from proto
+        const NodeId local_id;             // instance id from proto
         const std::string_view name;         // points into proto_ storage
         const std::string_view type;         // points into proto_ storage
         const proto::GraphDescriptor* desc; // non-owning pointer into proto_
-        const std::unordered_map<uint32_t, NodeId> sub_instances; // direct list of child NodeIds
+        const std::unordered_set<NodeId> sub_instances; // direct list of child NodeIds // GLOBAL IDS
     };
 
     explicit MeshGraphDescriptor(const std::string& text_proto);

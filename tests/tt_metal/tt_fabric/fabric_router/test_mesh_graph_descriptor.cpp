@@ -371,6 +371,19 @@ namespace {
                 << "Should have " << type << " instance '" << expected_name << "'";
         }
     }
+    void check_sub_instances(const MeshGraphDescriptor& desc, const std::string& name, size_t expected_count, const std::unordered_set<std::string_view>& expected_names) {
+        auto ids = desc.graph(desc.by_name(name)[0]).sub_instances;
+        EXPECT_EQ(ids.size(), expected_count) << "Should have exactly " << expected_count << " sub instances with name '" << name << "'";
+        for (const auto & id : ids) {
+            if (desc.is_graph(id)) {
+                EXPECT_TRUE(expected_names.contains(desc.graph(id).name))
+                    << "Should have sub instance '" << desc.graph(id).name << "'";
+            } else {
+                EXPECT_TRUE(expected_names.contains(desc.mesh(id).name))
+                    << "Should have sub instance '" << desc.mesh(id).name << "'";
+            }
+        }
+    }
 }
 
 TEST(MeshGraphDescriptorTests, TestInstanceCreation) {
@@ -406,10 +419,146 @@ TEST(MeshGraphDescriptorTests, TestInstanceCreation) {
     check_instance_exists_by_name(desc, "G0");
     check_instance_exists_by_name(desc, "G1");
     check_instance_exists_by_name(desc, "G2");
+
+    // Check sub instance counts
+    check_sub_instances(desc, "G0", 2, {"M0", "M1"});
+    check_sub_instances(desc, "G1", 3, {"M3", "M2", "M4"});
+    check_sub_instances(desc, "G2", 2, {"G1", "G0"});
     
     // Verify total instance count
     size_t total = desc.all_graphs().size() + desc.all_meshes().size();
     EXPECT_EQ(total, 8) << "Should have exactly 8 total instances (1 CLUSTER + 2 POD + 5 mesh)";
+}
+
+TEST(MeshGraphDescriptorTests, GraphInstancesWithDifferentGraphTypesError) {
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 1 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        # Two graph descriptors with different types
+        graph_descriptors: {
+          name: "G_POD_A"
+          type: "POD"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 1 } }
+        }
+
+        graph_descriptors: {
+          name: "G_POD_B"
+          type: "PODX"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 2 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 3 } }
+          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 1 } }
+        }
+
+        # Cluster graph that mixes two POD graphs of different types
+        graph_descriptors: {
+          name: "G_CLUSTER"
+          type: "CLUSTER"
+          instances: { graph: { graph_descriptor: "G_POD_A" graph_id: 0 } }
+          instances: { graph: { graph_descriptor: "G_POD_B" graph_id: 1 } }
+          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 1 } }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G_CLUSTER" graph_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Graph instance type"),
+                ::testing::HasSubstr("does not match graph descriptor type"),
+                ::testing::HasSubstr("POD"),
+                ::testing::HasSubstr("PODX")
+            )));
+}
+
+TEST(MeshGraphDescriptorTests, DuplicateInstanceIdsInGraphError) {
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 1 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G_POD"
+          type: "POD"
+          # Duplicate mesh_id (0) for two instances
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 1 } }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G_POD" graph_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Graph instance id"),
+                ::testing::HasSubstr("already exists in this graph"),
+                ::testing::HasSubstr("0")
+            )));
+}
+
+TEST(MeshGraphDescriptorTests, MissingDescriptorReferencesInInstancesError) {
+    // Case 1: Missing graph descriptor in top-level instance
+    std::string text_proto_missing_graph = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 1 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G_MISSING" graph_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto_missing_graph); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Graph descriptor G_MISSING not found in instance")
+            )));
+
+    // Case 2: Missing mesh descriptor referenced inside a graph descriptor instance
+    std::string text_proto_missing_mesh = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 1 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G_POD"
+          type: "POD"
+          instances: { mesh: { mesh_descriptor: "M_MISSING" mesh_id: 0 } }
+          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 1 } }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G_POD" graph_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto_missing_mesh); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Mesh descriptor M_MISSING not found in instance")
+            )));
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
