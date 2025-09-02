@@ -147,7 +147,7 @@ void MAIN {
                 }
                 cb_pop_front(curr_in_cb_id, 1);
             }
-            // dprint_tensix_dest_reg(0);
+            dprint_tensix_dest_reg(0);
             tile_regs_commit();
             tile_regs_wait();
 
@@ -155,9 +155,11 @@ void MAIN {
                 // TILED output: accumulate sticks and perform tilization when needed
                 // DPRINT << "before " << tmp_cb_id << ENDL();
                 // PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
+
+                // pack_untilize_dest_init<1>(tmp_cb_id, num_out_sticks, num_faces_in_output_tile);
                 pack_untilize_dest<1>(tmp_cb_id, 1, temp_cb_row_offset, num_out_sticks, num_faces_in_output_tile);
-                // DPRINT << "tmp_cb state after packing: " << tmp_cb_id << ENDL();
-                // PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
+                DPRINT << "tmp_cb state after packing: " << n << ENDL();
+                PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
                 temp_cb_row_offset += last_c_block ? partial_iter_output_tiles : max_tiles_per_iter;
                 if (last_c_block) {
                     tilize_stick_counter++;
@@ -166,21 +168,26 @@ void MAIN {
 
                 if (tilize_stick_counter == TILE_HEIGHT) {
                     PACK((pack_untilize_uninit(tmp_cb_id)));
+                    DPRINT << "tmp_cb state before tilization" << ENDL();
+                    PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
 
                     // Workaround until 27504 is not closed
-                    // tensix_sync();
-                    // unary_op_init_common(tmp_cb_id, out_cb_id);
-                    // tensix_sync();
+                    tensix_sync();
+                    unary_op_init_common(tmp_cb_id, out_cb_id);
+                    tensix_sync();
 
                     tilize_init(tmp_cb_id, in_ntiles_c, out_cb_id);
                     tilize_block(tmp_cb_id, in_ntiles_c, out_cb_id);
 
+                    DPRINT << "out_cb state after tilization" << ENDL();
+                    PACK(tt::compute::common::print_full_tile(out_cb_id, 0, true));
+
                     cb_push_back(out_cb_id, in_ntiles_c);
                     tilize_uninit(tmp_cb_id, out_cb_id);
 
-                    // tensix_sync();
-                    // unary_op_init_common(in_cb_id_0, tmp_cb_id);
-                    // tensix_sync();
+                    tensix_sync();
+                    unary_op_init_common(in_cb_id_0, tmp_cb_id);
+                    tensix_sync();
 
                     UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));

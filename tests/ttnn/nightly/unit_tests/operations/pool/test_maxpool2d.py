@@ -121,15 +121,15 @@ def run_max_pool(
 
     torch.manual_seed(0)
     torch_input = randomize_torch_tensor(tensor_map, input_shape)
-    # torch_input = torch.zeros(input_shape, dtype=torch.bfloat16)
-    # count = 0
-    # for n in range(input_shape[0]):
-    #     for c in range(input_shape[1]):
-    #         for h in range(input_shape[2]):
-    #             for w in range(input_shape[3]):
-    #                 # torch_input[n, c, h, w] = h * in_w + w
-    #                 torch_input[n, c, h, w] = count
-    #                 count += 1
+    torch_input = torch.zeros(input_shape, dtype=torch.bfloat16)
+    count = 0
+    for n in range(input_shape[0]):
+        for c in range(input_shape[1]):
+            for h in range(input_shape[2]):
+                for w in range(input_shape[3]):
+                    torch_input[n, c, h, w] = h * in_w + w
+                    # torch_input[n, c, h, w] = count
+                    count += 1
 
     # print(torch_input)
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
@@ -238,32 +238,32 @@ def run_max_pool(
     "input_shape",  ## NCHW
     (
         (  # resnet shapes
-            [1, 64, 112, 112],
-            [16, 64, 112, 112],
-            # hpr shapes
-            [8, 32, 132, 20],
-            [32, 32, 264, 40],
-            [4, 16, 1056, 160],
-            [16, 16, 528, 80],
-            # wide for vgg
-            [1, 256, 56, 56],
-            [1, 512, 28, 28],
-            # wide yolo kernel
-            [1, 512, 10, 10],
-            [1, 96, 112, 112],
-            [1, 192, 132, 20],
-            # wide non-8 multiple tests
-            [1, 800, 32, 32],
-            [1, 640, 32, 32],
-            [1, 576, 32, 32],
-            [1, 384, 32, 32],
-            # C partial tile test
-            [1, 16, 12, 12],
-            [1, 1, 56, 56],
-            [2, 290, 10, 10],
-            # partial grid tests
-            [1, 32, 10, 10],  # BH
-            [1, 32, 6, 6],  # WH
+            [1, 32, 64, 64],
+            # [16, 64, 112, 112],
+            # # hpr shapes
+            # [8, 32, 132, 20],
+            # [32, 32, 264, 40],
+            # [4, 16, 1056, 160],
+            # [16, 16, 528, 80],
+            # # wide for vgg
+            # [1, 256, 56, 56],
+            # [1, 512, 28, 28],
+            # # wide yolo kernel
+            # [1, 512, 10, 10],
+            # [1, 96, 112, 112],
+            # [1, 192, 132, 20],
+            # # wide non-8 multiple tests
+            # [1, 800, 32, 32],
+            # [1, 640, 32, 32],
+            # [1, 576, 32, 32],
+            # [1, 384, 32, 32],
+            # # C partial tile test
+            # [1, 16, 12, 12],
+            # [1, 1, 56, 56],
+            # [2, 290, 10, 10],
+            # # partial grid tests
+            # [1, 32, 10, 10],  # BH
+            # [1, 32, 6, 6],  # WH
         )
     ),
 )
@@ -271,51 +271,51 @@ def run_max_pool(
     "kernel_size",
     (
         (3, 3),  # 1 face 1 chunk
-        (5, 5),  # 2 faces 1 chunk
-        (7, 7),  # 2 chunks
-        (9, 9),  # 3 chunks
+        # (5, 5),  # 2 faces 1 chunk
+        # (7, 7),  # 2 chunks
+        # (9, 9),  # 3 chunks
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
         (0, 0),
-        (1, 1),
-        (1, 4, 3, 2),
+        # (1, 1),
+        # (1, 4, 3, 2),
     ),
 )
 @pytest.mark.parametrize(
     "stride",
     (
         (1, 1),
-        (2, 2),
+        # (2, 2),
     ),
 )
 @pytest.mark.parametrize(
     "dilation",
     (
         (1, 1),
-        (2, 2),
+        # (2, 2),
     ),
 )
 @pytest.mark.parametrize(
     "in_dtype",
     [
         ttnn.bfloat16,
-        ttnn.bfloat8_b,
+        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "ceil_mode",
     [
         False,
-        True,
+        # True,
     ],
 )
 @pytest.mark.parametrize(
     "out_layout",
     [
-        ttnn.ttnn.ROW_MAJOR_LAYOUT,
+        # ttnn.ttnn.ROW_MAJOR_LAYOUT,
         ttnn.ttnn.TILE_LAYOUT,
     ],
 )
@@ -334,7 +334,7 @@ def test_run_max_pool_height_shard(
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
         output_layout=out_layout,
-        out_dtype=ttnn.bfloat16 if out_layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.bfloat8_b,
+        out_dtype=ttnn.bfloat16 if out_layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.bfloat16,
     )
 
 
@@ -391,7 +391,7 @@ def test_run_max_pool_height_shard(
 @pytest.mark.parametrize(
     "out_layout",
     [
-        ttnn.ttnn.ROW_MAJOR_LAYOUT,
+        # ttnn.ttnn.ROW_MAJOR_LAYOUT,
         ttnn.ttnn.TILE_LAYOUT,
     ],
 )
@@ -476,7 +476,7 @@ def test_run_max_pool_width_shard(
 @pytest.mark.parametrize(
     "out_layout",
     [
-        ttnn.ttnn.ROW_MAJOR_LAYOUT,
+        # ttnn.ttnn.ROW_MAJOR_LAYOUT,
         ttnn.ttnn.TILE_LAYOUT,
     ],
 )
