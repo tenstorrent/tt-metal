@@ -77,58 +77,58 @@ void BankManager::IntervalSet::remove(DeviceAddr start, DeviceAddr end) {
     v.swap(out);
 }
 
-static std::vector<std::pair<DeviceAddr, DeviceAddr>> merge_two(
-    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& a, const std::vector<std::pair<DeviceAddr, DeviceAddr>>& b) {
-    std::vector<std::pair<DeviceAddr, DeviceAddr>> res;
-    res.reserve(a.size() + b.size());
-    size_t i = 0, j = 0;
-    auto emit = [&](DeviceAddr s, DeviceAddr e) {
-        if (s < e) {
-            res.emplace_back(s, e);
+// Compute union of all source reservations (file-local helper)
+static std::vector<std::pair<DeviceAddr, DeviceAddr>> union_all_sources(
+    const std::unordered_map<uint32_t, BankManager::IntervalSet>& by_source) {
+    auto merge_two = [](const std::vector<std::pair<DeviceAddr, DeviceAddr>>& a,
+                        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& b) {
+        std::vector<std::pair<DeviceAddr, DeviceAddr>> res;
+        res.reserve(a.size() + b.size());
+        size_t i = 0, j = 0;
+        auto emit = [&](DeviceAddr s, DeviceAddr e) {
+            if (s < e) {
+                res.emplace_back(s, e);
+            }
+        };
+        DeviceAddr s = 0, e = 0;
+        bool has = false;
+        auto push = [&](std::pair<DeviceAddr, DeviceAddr> r) {
+            if (!has) {
+                s = r.first;
+                e = r.second;
+                has = true;
+                return;
+            }
+            if (r.first <= e) {
+                e = std::max(e, r.second);
+            } else {
+                emit(s, e);
+                s = r.first;
+                e = r.second;
+            }
+        };
+        while (i < a.size() || j < b.size()) {
+            if (j == b.size() || (i < a.size() && a[i].first <= b[j].first)) {
+                push(a[i++]);
+            } else {
+                push(b[j++]);
+            }
         }
-    };
-    DeviceAddr s = 0, e = 0;
-    bool has = false;
-    auto push = [&](std::pair<DeviceAddr, DeviceAddr> r) {
-        if (!has) {
-            s = r.first;
-            e = r.second;
-            has = true;
-            return;
-        }
-        if (r.first <= e) {
-            e = std::max(e, r.second);
-        } else {
+        if (has) {
             emit(s, e);
-            s = r.first;
-            e = r.second;
         }
+        return res;
     };
-    while (i < a.size() || j < b.size()) {
-        if (j == b.size() || (i < a.size() && a[i].first <= b[j].first)) {
-            push(a[i++]);
-        } else {
-            push(b[j++]);
-        }
-    }
-    if (has) {
-        emit(s, e);
-    }
-    return res;
-}
 
-BankManager::IntervalSet BankManager::IntervalSet::union_all_sources(
-    const std::unordered_map<uint32_t, IntervalSet>& by_source) {
     std::vector<std::pair<DeviceAddr, DeviceAddr>> acc;
     for (const auto& kv : by_source) {
         acc = merge_two(acc, kv.second.ranges);
     }
-    BankManager::IntervalSet out;
-    out.ranges = std::move(acc);
-    return out;
+    return acc;
 }
 
-std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::subtract_ranges(
+// File-local subtract_ranges helper
+static std::vector<std::pair<DeviceAddr, DeviceAddr>> subtract_ranges(
     const std::vector<std::pair<DeviceAddr, DeviceAddr>>& free_ranges,
     const std::vector<std::pair<DeviceAddr, DeviceAddr>>& occupied) {
     std::vector<std::pair<DeviceAddr, DeviceAddr>> out;
@@ -360,8 +360,8 @@ uint64_t BankManager::allocate_buffer(
             free_abs.emplace_back(r.first, r.second);
         }
     }
-    auto occ = IntervalSet::union_all_sources(reservations_by_source_[state.value]);
-    auto allowed = subtract_ranges(free_abs, occ.ranges);
+    auto occ = union_all_sources(reservations_by_source_[state.value]);
+    auto allowed = subtract_ranges(free_abs, occ);
 
     // Choose a start according to bottom_up
     std::optional<DeviceAddr> chosen;

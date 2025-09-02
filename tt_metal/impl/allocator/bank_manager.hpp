@@ -56,7 +56,6 @@ public:
         std::vector<std::pair<DeviceAddr, DeviceAddr>> ranges;
         void add(DeviceAddr start, DeviceAddr end);
         void remove(DeviceAddr start, DeviceAddr end);
-        static IntervalSet union_all_sources(const std::unordered_map<uint32_t, IntervalSet>& by_source);
     };
 
     BankManager(
@@ -141,9 +140,6 @@ private:
     void assert_valid_state(StateDependencies::StateId state) const;
 
     // Helpers to compute union of all source reservations for a state and subtract from free ranges
-    static std::vector<std::pair<DeviceAddr, DeviceAddr>> subtract_ranges(
-        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& free_ranges,
-        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& occupied);
 
     static DeviceAddr align_up(DeviceAddr addr, DeviceAddr alignment) {
         if (alignment == 0) {
