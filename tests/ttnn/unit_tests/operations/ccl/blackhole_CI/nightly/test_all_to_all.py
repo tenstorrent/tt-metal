@@ -350,3 +350,74 @@ def test_all_to_all(
         trace_mode=enable_trace,
         reuse_inputs=reuse_inputs,
     )
+
+
+@pytest.mark.parametrize(
+    "num_devices, num_links, logical_shape, in_dim, out_dim, layout",
+    [
+        (4, 1, [1, 1, 44544 + 32, 3072 * 3], 2, 3, ttnn.TILE_LAYOUT),  # Pre-attn all-to-all
+        (4, 1, [1, 1, 44544, (3072 + 32) * 3], 2, 3, ttnn.TILE_LAYOUT),  # Pre-attn all-to-all
+        (4, 1, [1, 1, 44544, 3072 + 32], 3, 2, ttnn.TILE_LAYOUT),  # Post-attn all-to-all
+        (4, 1, [1, 1, 44544, 3072 + 4], 3, 2, ttnn.TILE_LAYOUT),  # Post-attn all-to-all
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+    ],
+)
+@pytest.mark.parametrize(
+    "num_iters, do_check, reuse_inputs",
+    [(2, True, False), (6, False, True), (20, False, True)],
+    ids=["check", "perf", "stress"],
+)
+@pytest.mark.parametrize(
+    "enable_trace",
+    [False],
+    ids=["no_trace"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True
+)
+def test_all_to_all_unaligned(
+    bh_1d_mesh_device,
+    num_devices,
+    logical_shape,
+    in_dim,
+    out_dim,
+    num_links,
+    input_dtype,
+    layout,
+    mem_config,
+    num_iters,
+    function_level_defaults,
+    do_check,
+    reuse_inputs,
+    enable_trace,
+    is_ci_env,
+):
+    topology = ttnn.Topology.Ring
+    validate_test(num_devices, topology, bh_1d_mesh_device.shape, 0)
+    run_all_to_all_impl(
+        bh_1d_mesh_device,
+        num_devices,
+        logical_shape,
+        in_dim,
+        out_dim,
+        num_links,
+        input_dtype,
+        layout,
+        topology=topology,
+        num_iters=num_iters,
+        mem_config=mem_config,
+        do_check=do_check,
+        trace_mode=enable_trace,
+        reuse_inputs=reuse_inputs,
+    )
