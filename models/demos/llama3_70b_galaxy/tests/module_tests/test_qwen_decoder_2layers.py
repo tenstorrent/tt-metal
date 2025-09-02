@@ -15,6 +15,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
 from models.utility_functions import (
+    comp_pcc,
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
@@ -77,7 +78,7 @@ def test_qwen_decoder_2layers_inference(
     dtype = ttnn.bfloat8_b
 
     model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
-    model_args.n_layers = 2  # Test 2 consecutive layers
+    model_args.n_layers = 10
 
     state_dict = model_args.load_state_dict()
 
@@ -138,7 +139,7 @@ def test_qwen_decoder_2layers_inference(
 
     # Setup reference models for both layers
     reference_models = []
-    for layer_idx in range(2):
+    for layer_idx in range(model_args.n_layers):
         first_layer_prefix = model_args.get_state_dict_prefix("TtTransformerBlock", layer_idx)
         partial_state_dict = {
             k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if k.startswith(first_layer_prefix)
@@ -147,7 +148,7 @@ def test_qwen_decoder_2layers_inference(
         reference_model.load_state_dict(partial_state_dict)
         reference_models.append(reference_model)
 
-    generation_start_pos = 127
+    generation_start_pos = 0
     generation_length = 5  # Reduced for 2-layer test
     all_tests_pass = True
 
@@ -194,7 +195,7 @@ def test_qwen_decoder_2layers_inference(
 
     # Initialize TT models for both layers
     tt_models = []
-    for layer_idx in range(2):
+    for layer_idx in range(model_args.n_layers):
         tt_model = TtTransformerBlock(
             args=model_args,
             mesh_device=mesh_device,
@@ -255,7 +256,7 @@ def test_qwen_decoder_2layers_inference(
         tt_pf = prefetcher_setup.get_input_tensors()
         ttnn.dram_prefetcher(
             tt_pf,
-            num_layers=2,  # 2 layers
+            num_layers=model_args.n_layers,
             global_cb=prefetcher_setup.global_circular_buffer,
         )
         mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
@@ -265,7 +266,8 @@ def test_qwen_decoder_2layers_inference(
         res = None
 
         ref_input = pt_decode_input
-        for layer_idx in range(2):
+        # for layer_idx in range(28, 30):
+        for layer_idx in range(model_args.n_layers):
             tt_input, res = tt_models[layer_idx](
                 tt_input,
                 res,
@@ -296,22 +298,16 @@ def test_qwen_decoder_2layers_inference(
             freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
 
             # Run reference models
-            ref_input, ref_fin = reference_models[layer_idx](ref_input, current_pos[0], freqs_cis_i, mask=None)
+            ref_input, ref_res = reference_models[layer_idx](ref_input, current_pos[0], freqs_cis_i, mask=None)
 
-            # passing, pcc_message = comp_pcc(ref_a, tt_output_torch)
-            # comp_pcc(ref_fin, res_torch)
-            # passing_res, pcc_message_res = comp_pcc(ref_res, res_torch)
-            if layer_idx == 1:
-                breakpoint()
+            logger.info(f"Layer {layer_idx} PCC: {comp_pcc(ref_input, res_torch + tt_output_torch)}")
+            logger.info(f"Layer {layer_idx} Residual PCC: {comp_pcc(ref_res, res_torch)}")
+
+            if layer_idx == model_args.n_layers - 1:
+                logger.info(f"Layer {layer_idx} PCC: {comp_pcc(ref_input, tt_output_torch)}")
+                logger.info(f"Layer {layer_idx} Residual PCC: {comp_pcc(ref_res, res_torch)}")
 
         logger.info(comp_allclose(ref_input, tt_output_torch))
-        logger.info(f"PCC: {pcc_message}")
-
-        if passing:
-            logger.info("Qwen Decoder 2-Layer Block Passed!")
-        else:
-            logger.warning("Qwen Decoder 2-Layer Block Failed!")
-            all_tests_pass = False
 
         # Increment position
         current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch_size)])

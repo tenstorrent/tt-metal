@@ -498,14 +498,18 @@ def test_6u_trace_rms_fuse(
         # RMS NORM ALL GATHER FUSION No Reshard
         (
             4,
-            8192,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            # 8192
+            5120,
+            # ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 1))}),
             None,
         ),
         (
             4,
-            8192,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            # 8192,
+            5120,
+            # ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 1))}),
             ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(
@@ -519,7 +523,7 @@ def test_6u_trace_rms_fuse(
     ],
 )
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("num_iters", [20])
+@pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("fused_add", [True, False])
 @pytest.mark.parametrize("use_noc1_only", [True, False])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)

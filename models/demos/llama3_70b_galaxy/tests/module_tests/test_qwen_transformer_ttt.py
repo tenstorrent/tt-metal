@@ -73,9 +73,11 @@ def test_qwen_transformer_ttt_inference(
 ):
     dtype = ttnn.bfloat8_b
 
+    num_layers = 10
+
     # Load tt_transformers reference model args for reference transformer
     model_args_ref = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
-    model_args_ref.n_layers = 2  # For the unit test, just run a single layer
+    model_args_ref.n_layers = num_layers
 
     state_dict_ref = model_args_ref.load_state_dict()
     state_dict_prefix_ref = model_args_ref.get_state_dict_prefix("", None)
@@ -100,7 +102,7 @@ def test_qwen_transformer_ttt_inference(
 
     # Load Qwen3 model using TtQwenModelArgs
     model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
-    model_args.n_layers = 2
+    model_args.n_layers = num_layers
 
     state_dict = model_args.load_state_dict()
     logger.info(f"Qwen3 Transformer Model Loaded")
@@ -149,9 +151,9 @@ def test_qwen_transformer_ttt_inference(
         mode="decode",
     )
 
-    # Embedding on host for reference model
-    embd_ref = model_args_ref.reference_embedding(reference_model)
-    embd_ref.load_state_dict({"emb.weight": state_dict_ref[f"{state_dict_prefix_ref}tok_embeddings.weight"]})
+    # # Embedding on host for reference model
+    # embd_ref = model_args_ref.reference_embedding(reference_model)
+    # embd_ref.load_state_dict({"emb.weight": state_dict_ref[f"{state_dict_prefix_ref}tok_embeddings.weight"]})
 
     seqlen = 1
 
@@ -206,7 +208,6 @@ def test_qwen_transformer_ttt_inference(
         outs = torch.concat(outs, dim=-1)
         tt_output_torch = outs.permute(2, 1, 0, 3).squeeze(2)[: model_args.max_batch_size, 0:1, : model_args.vocab_size]
 
-        # Reference model - use input tensor directly (skip embedding for consistency)
         ref_output = reference_model(pt_decode_input.to(torch.bfloat16), current_pos[0])
 
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)

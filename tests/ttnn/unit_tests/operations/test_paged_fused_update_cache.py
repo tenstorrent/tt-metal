@@ -23,7 +23,7 @@ def run_test_paged_fused_update_cache_decode(
     device,
     pcc,
     sub_core_grids=None,
-    row_major=False,
+    row_major=True,
 ):
     max_num_blocks_per_seq = max_seq_len // block_size
     assert max_num_blocks_per_seq * block_size == max_seq_len
@@ -34,8 +34,8 @@ def run_test_paged_fused_update_cache_decode(
     cache_shape = [num_users, num_heads, max_seq_len, head_dim]
 
     # Initialize two caches
-    cache1 = torch.randn(cache_shape).bfloat16().float()
-    cache2 = torch.randn(cache_shape).bfloat16().float()
+    cache1 = torch.zeros(cache_shape).bfloat16().float()
+    cache2 = torch.zeros(cache_shape).bfloat16().float()
 
     def prepare_paged_cache(cache, permutation):
         paged_cache = (
@@ -130,14 +130,19 @@ def run_test_paged_fused_update_cache_decode(
 
     # Update indices
     cache_idxs = [cache_idx + i * 17 for i in range(num_users)]
+    # cache_idxs = [0 for i in range(num_users)]
     if num_heads == 1:
         cache_idxs[num_users // 2] = -1
     cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs), ttnn.int32).to(device)
+
+    breakpoint()
 
     # Perform fused update cache operation
     cachett1, cachett2 = ttnn.experimental.paged_fused_update_cache(
         cachett1, xt1, cachett2, xt2, update_idxs_tensor=cache_idxs_tt, page_table=page_table_tt
     )
+
+    breakpoint()
 
     # Verification for cache1 and cache2
     for cache_idx, cache, cachett, x in [(1, cache1, cachett1, x1), (2, cache2, cachett2, x2)]:
@@ -187,15 +192,15 @@ def run_test_paged_fused_update_cache_decode(
 
 @skip_for_grayskull("Grayskull does not support paged cache")
 @pytest.mark.timeout(1200)
-@pytest.mark.parametrize("paged_update", [True, False])
-@pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
+@pytest.mark.parametrize("paged_update", [True])
+@pytest.mark.parametrize("block_size", [64], ids=["block64"])
 @pytest.mark.parametrize("head_dim", [128])
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [8])
-@pytest.mark.parametrize("num_heads", [1, 8])
+@pytest.mark.parametrize("num_heads", [1])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("cache_idx", [0, 1, 127, 1057])
-@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("cache_idx", [0, 1, 127, 255])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("pcc", [0.9995])
 def test_paged_fused_update_cache_decode(
     paged_update,

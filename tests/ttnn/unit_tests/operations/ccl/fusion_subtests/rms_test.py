@@ -356,7 +356,8 @@ def run_rms_fuse_impl(
         use_height_and_width_as_shard_shape=True,
     )
     layer_norm_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=(8, 2),
+        compute_with_storage_grid_size=(10, 2),
+        # compute_with_storage_grid_size=(8, 2),
         subblock_w=1,
         block_h=1,
         block_w=(size_per_device // num_cores) // 32,
@@ -366,14 +367,16 @@ def run_rms_fuse_impl(
     ag_memory_config = ttnn.create_sharded_memory_config(
         shape=(
             32,
-            128,
+            # 128,
+            64,
         ),
         core_grid=input_shard_grid,
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    ag_shape = [1, 1, 32, 128]
+    # ag_shape = [1, 1, 32, 128]
+    ag_shape = [1, 1, 32, 64]
     stats_tensor = torch.ones(ag_shape, dtype=torch.bfloat16)
     tt_stats = ttnn.from_torch(
         stats_tensor,
