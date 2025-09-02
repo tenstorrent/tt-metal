@@ -315,6 +315,11 @@ inline auto is_binary_ng_only(const Tensor& a, const auto& b, BinaryOpType binar
             return true;
         }
 
+        // for float32 to use SFPU, go with binary_ng
+        if (a.dtype() == DataType::FLOAT32 and b.dtype() == DataType::FLOAT32) {
+            return true;
+        }
+
         if (a.logical_shape().rank() > 4 or b.logical_shape().rank() > 4) {
             return true;
         }
