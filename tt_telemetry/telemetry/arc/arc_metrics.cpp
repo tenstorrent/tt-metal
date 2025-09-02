@@ -63,10 +63,6 @@ ARCUintMetric::ARCUintMetric(
     value_ = 0;
 }
 
-
-
-
-
 const std::vector<std::string> ARCUintMetric::telemetry_path() const {
     // Start with the chip identifier path
     std::vector<std::string> path = reader_->id.telemetry_path();
@@ -110,14 +106,18 @@ ARCDoubleMetric::ARCDoubleMetric(
     const std::string& metric_name,
     uint32_t mask,
     double scale_factor,
-    MetricUnit units) :
+    MetricUnit units,
+    Signedness signedness) :
     DoubleMetric(chip_id, units),
     reader_(reader),
     tag_(tag),
     metric_name_(metric_name),
     mask_(mask),
-    scale_factor_(scale_factor) {
+    scale_factor_(scale_factor),
+    signedness_(signedness) {
     TT_ASSERT(reader_ != nullptr, "ARCTelemetryReader cannot be null");
+    TT_FATAL(signedness == Signedness::UNSIGNED || signedness == Signedness::SIGNED, 
+             "Signedness must be either UNSIGNED or SIGNED");
     value_ = 0.0;
 }
 
@@ -145,7 +145,15 @@ void ARCDoubleMetric::update(
     uint32_t masked_value = raw_value & mask_;
 
     // Convert to double and apply scale factor
-    double new_value = static_cast<double>(masked_value) * scale_factor_;
+    double new_value;
+    if (signedness_ == Signedness::SIGNED) {
+        // For signed values, cast to int32_t first to handle sign extension
+        int32_t signed_value = static_cast<int32_t>(masked_value);
+        new_value = static_cast<double>(signed_value) * scale_factor_;
+    } else {
+        // For unsigned values, cast directly to double
+        new_value = static_cast<double>(masked_value) * scale_factor_;
+    }
 
     // Update the metric value and timestamp
     double old_value = value_;

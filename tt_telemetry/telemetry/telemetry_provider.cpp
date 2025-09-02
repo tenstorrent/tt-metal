@@ -214,17 +214,27 @@ static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> s
         bool_metrics.push_back(std::make_unique<ARCTelemetryAvailableMetric>(id++, reader));
 
         // Create UInt metrics with appropriate masks and units
-        // uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::AICLK, "AIClock", 0xffff, MetricUnit::MEGAHERTZ));
-        // uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::AXICLK, "AXIClock", 0xffffffff, MetricUnit::MEGAHERTZ));
-        // uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::ARCCLK, "ARCClock", 0xffffffff, MetricUnit::MEGAHERTZ));
-        // uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::FAN_SPEED, "FanSpeed", 0xffffffff, MetricUnit::REVOLUTIONS_PER_MINUTE));
-        // uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::TDP, "TDP", 0xffff, MetricUnit::WATTS));
-        // uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::TDC, "TDC", 0xffff, MetricUnit::AMPERES));
-        // uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::VCORE, "VCore", 0xffffffff, MetricUnit::MILLIVOLTS));
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::AICLK, "AIClock", 0xffff, MetricUnit::MEGAHERTZ));
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::AXICLK, "AXIClock", 0xffffffff, MetricUnit::MEGAHERTZ));
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::ARCCLK, "ARCClock", 0xffffffff, MetricUnit::MEGAHERTZ));
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::FAN_SPEED, "FanSpeed", 0xffffffff, MetricUnit::REVOLUTIONS_PER_MINUTE));
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::TDP, "TDP", 0xffff, MetricUnit::WATTS));
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::TDC, "TDC", 0xffff, MetricUnit::AMPERES));
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::VCORE, "VCore", 0xffffffff, MetricUnit::MILLIVOLTS));
 
-        // // Create Double metrics with appropriate masks, scale factors, and units
-        // double_metrics.push_back(std::make_unique<ARCDoubleMetric>(id++, reader, tt::umd::TelemetryTag::ASIC_TEMPERATURE, "ASICTemperature", 0xffffffff, 1.0/65536.0, MetricUnit::CELSIUS));
-        // double_metrics.push_back(std::make_unique<ARCDoubleMetric>(id++, reader, tt::umd::TelemetryTag::BOARD_TEMPERATURE, "BoardTemperature", 0xffffffff, 1.0/65536.0, MetricUnit::CELSIUS));
+        // Create Double metrics with appropriate masks, scale factors, and units
+        // For ASIC temperature, check architecture to determine mask and scale factor
+        uint32_t asic_temp_mask;
+        double asic_temp_scale;
+        if (reader->get_arch() == tt::ARCH::BLACKHOLE) {
+            asic_temp_mask = 0xffffffff;
+            asic_temp_scale = 1.0/65536.0;
+        } else {
+            asic_temp_mask = 0xffff;
+            asic_temp_scale = 1.0/16.0;
+        }
+        double_metrics.push_back(std::make_unique<ARCDoubleMetric>(id++, reader, tt::umd::TelemetryTag::ASIC_TEMPERATURE, "ASICTemperature", asic_temp_mask, asic_temp_scale, MetricUnit::CELSIUS, ARCDoubleMetric::Signedness::SIGNED));
+        double_metrics.push_back(std::make_unique<ARCDoubleMetric>(id++, reader, tt::umd::TelemetryTag::BOARD_TEMPERATURE, "BoardTemperature", 0xffffffff, 1.0/65536.0, MetricUnit::CELSIUS, ARCDoubleMetric::Signedness::SIGNED));
     }
 
     // Continuously monitor on a loop
