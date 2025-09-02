@@ -95,9 +95,14 @@ void send_msg_to_eth_mailbox(
     chip_id_t device_id,
     const CoreCoord& virtual_core,
     tt_metal::FWMailboxMsg msg_type,
+    int mailbox_index,
     std::vector<uint32_t> args,
     bool wait_for_ack = true,
-    int timeout_ms = 30000);
+    int timeout_ms = 10000);
+
+// Wait for a heartbeat from the active ethernet core, if supported
+// Used to check if the base firmware is running and ready to service the eth mailbox
+void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms = 10000);
 
 }  // namespace internal_
 
