@@ -44,6 +44,19 @@ std::unique_ptr<inspector::Data> Inspector::initialize() {
     }
 }
 
+void Inspector::serialize_rpc() {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        data->serialize_rpc();
+    }
+    catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to serialize RPC: {}", e.what());
+    }
+}
+
 void Inspector::program_created(
     const detail::ProgramImpl* program) noexcept {
     if (!is_enabled()) {

@@ -43,7 +43,7 @@ RpcServer& Data::get_rpc_server() {
     return rpc_server_controller.get_rpc_server();
 }
 
-void Data::serialize() {
+void Data::serialize_rpc() {
     rpc_server_controller.get_rpc_server().serialize(logger.get_logging_path());
 }
 
