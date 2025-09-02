@@ -1112,3 +1112,21 @@ def get_debug_tensor(num_pages_width, num_pages_height, dtype, page_width=32, pa
             torch_tensor = torch.cat((torch_tensor, tile_row), 2)
 
     return torch_tensor
+
+
+def get_tensors_from_input_spec(input_specs):
+    tensors = []
+    for shape, dtype_str, min_max in input_specs:
+        dtype = getattr(torch, dtype_str.split(".")[1])
+        if torch.is_floating_point(torch.empty((), dtype=dtype)):
+            # torch.randn does not support min/max, so use uniform_ after creation
+            t = torch.randn(*shape, dtype=dtype)
+            t = t * (min_max[1] - min_max[0]) + min_max[0]
+        else:
+            # torch.randint's high is exclusive, so add 1 if min==max
+            low, high = min_max
+            if high == low:
+                high = low + 1
+            t = torch.randint(low, high, shape, dtype=dtype)
+        tensors.append(t)
+    return tensors
