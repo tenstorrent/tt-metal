@@ -8,6 +8,7 @@
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/kernel_types.hpp"
+#include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
@@ -292,18 +293,17 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const bool is_conv_1d_depthwise_conv =
         is_1d_deptwise_conv(groups, ashape[3], output_channels, filter_w, ashape[2], has_bias);
 
-    const bool enable_split_reader = is_split_reader_supported(
-        a.memory_config().memory_layout(),
-        is_conv_1d_depthwise_conv,
-        act_block_h_ntiles,
-        shard_shape[1],
-        p_config.per_core_out_matrix_width_ntile * tt::constants::TILE_WIDTH,
-        filter_w,
-        device->arch() == tt::ARCH::BLACKHOLE,
-        a.dtype(),
-        b.dtype(),
-        per_core_out_matrix_height_ntiles / block_config.act_block_h_ntiles > 1);
-    log_debug(tt::LogOp, "enable_split_reader: {}", enable_split_reader);
+    const bool enable_split_reader =
+        is_split_reader_supported(a.memory_config().memory_layout(), is_conv_1d_depthwise_conv, act_block_h_ntiles) &&
+        is_split_reader_viable(
+            act_block_h_ntiles,
+            input_channels_padded,
+            filter_w,
+            tt::tt_metal::hal::get_arch(),
+            a.dtype(),
+            p_config.per_core_out_matrix_width_ntile * block_config.act_block_w_ntiles,
+            tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(b.dtype())));
+    log_info(tt::LogOp, "enable_split_reader: {}", enable_split_reader);
 
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
     // check is for 16-byte alignment
@@ -642,7 +642,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         output_image_width,
         has_bias,
         is_conv_1d_depthwise_conv,
-        skip_activation_mcast);
+        skip_activation_mcast,
+        input_channels_padded);
 
     if (config_tensors_in_dram) {
         // The actual CB reader size is difficult to calculate in calculate_L1_size. So instead keep the CB size as the

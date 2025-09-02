@@ -947,7 +947,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             output_datatype,
             output_width,
             enable_bias,
-            conv_is_1d_deptwise);
+            conv_is_1d_deptwise,
+            in_channels_padded);
 
         auto halo_input_memory_config = std::get<1>(determine_input_memory_config(
             conv_config.shard_layout.value(),
@@ -1200,6 +1201,11 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         SlidingWindowConfig sliding_window_config{
             .input_hw = {params.input_height, params.input_width},
             .window_hw = {params.kernel_size[0], params.kernel_size[1]}};
+        const uint32_t input_channels_alignment = get_input_channels_alignment(
+            conv_config.shard_layout.value(), conv_config.output_layout, params.mm_conv, std::nullopt);
+        const uint32_t in_channels_padded = tt::round_up(
+            params.in_channels,
+            get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
         conv_op_l1_usage l1_usage = calculate_L1_usage(
             params.compute_kernel_config,
             opt_conv_op_block_config,
@@ -1210,8 +1216,9 @@ uint32_t calculate_conv_dram_slice_L1_usage(
             params.input_datatype,
             params.output_datatype,
             output_slice_width,
-        params.enable_bias,
-            false);
+            params.enable_bias,
+            false,
+            in_channels_padded);
 
         auto shard_shape = sliced_input_tensor_memory_config.shard_spec().value().shape;
 
@@ -1371,6 +1378,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     const uint32_t output_image_width,
     const bool enable_bias,
     bool is_1d_depthwise_conv,
+    uint32_t input_channels_padded,
     bool skip_act_cb_create) {
     // Input shard doesn't affect L1 usage calculation.
     std::array<uint32_t, 2> dummy_input_shard_shape = {0, 0};
@@ -1388,7 +1396,8 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         output_image_width,
         enable_bias,
         is_1d_depthwise_conv,
-        skip_act_cb_create);
+        skip_act_cb_create,
+        input_channels_padded);
     uint32_t total_CB_size = 0;
     uint32_t output_size = 0;
     for (const CBInfo& cb : cb_info) {

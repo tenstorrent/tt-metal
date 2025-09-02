@@ -74,7 +74,8 @@ std::vector<CBInfo> get_cb_info(
     uint32_t output_image_width,
     bool enable_bias,
     bool is_1d_depthwise_conv,
-    bool skip_act_cb_create);
+    bool skip_act_cb_create,
+    uint32_t input_channels_padded);
 
 // Allocates circular buffers for the Conv2d operation.
 // This function will populate index and handle fields of each CBInfo in the cb_info vector,
@@ -91,16 +92,15 @@ const CBInfo& get_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb c
 CBInfo& access_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_name);
 
 bool is_split_reader_supported(
-    TensorMemoryLayout memory_layout,
-    bool is_1d_depthwise_conv,
-    uint32_t act_block_h_ntiles,
-    uint32_t input_channels,
-    uint32_t output_channels,
-    uint32_t kernel_width,
-    bool is_blackhole,
-    DataType input_datatype,
-    DataType weights_datatype,
-    bool fully_buffered);
+    TensorMemoryLayout memory_layout, bool is_1d_depthwise_conv, uint32_t act_block_h_ntiles);
 
+bool is_split_reader_viable(
+    uint32_t act_block_h_ntiles,
+    uint32_t input_channels_padded,
+    uint32_t kernel_width,
+    tt::ARCH arch,
+    DataType input_datatype,
+    uint32_t weights_block_ntiles,
+    uint32_t weights_tile_size);
 }  // namespace conv2d
 }  // namespace ttnn::operations::conv

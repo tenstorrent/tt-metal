@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "conv2d_op_program_factory_common.hpp"
-#include <cmath>
+#include <umd/device/types/arch.h>
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -56,7 +57,8 @@ std::vector<CBInfo> get_cb_info(
     uint32_t output_image_width,
     bool enable_bias,
     bool is_1d_depthwise_conv,
-    bool skip_act_cb_create) {
+    bool skip_act_cb_create,
+    uint32_t input_channels_padded) {
     const uint32_t num_cbs = static_cast<uint32_t>(Conv2dCb::COUNT);
     std::vector<CBInfo> cb_info;
     cb_info.reserve(num_cbs);
@@ -193,17 +195,15 @@ std::vector<CBInfo> get_cb_info(
         // ACT and ACT_SECOND_READER CB
         uint32_t act_cb_num_tiles = act_block_num_tiles;
         uint32_t act_block_split_num_tiles = 0;
-        if (is_split_reader_supported(
-                sharding_scheme,
-                is_1d_depthwise_conv,
+        if (is_split_reader_supported(sharding_scheme, is_1d_depthwise_conv, block_config.act_block_h_ntiles) &&
+            is_split_reader_viable(
                 block_config.act_block_h_ntiles,
-                conv_input_shard_shape[1],
-                per_core_out_matrix_width_ntiles * tt::constants::TILE_WIDTH,
+                input_channels_padded,
                 kernel_size[1],
-                tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE,
+                tt::tt_metal::hal::get_arch(),
                 input_datatype,
-                conv_config.weights_dtype.value(),
-                num_blocks_act_h > 1)) {
+                per_core_out_matrix_width_ntiles * block_config.act_block_w_ntiles,
+                weights_tile_size)) {
             uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles;
             uint32_t act_block_h_nsubblocks_split_last = act_block_h_nsubblocks / 2;
             uint32_t act_block_h_nsubblocks_split = act_block_h_nsubblocks - act_block_h_nsubblocks_split_last;
@@ -372,99 +372,109 @@ CBInfo& access_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_n
     return const_cast<CBInfo&>(get_cb_info_by_name(cb_info, cb_name));
 }
 
-// Helper function to calculate NOC transfer rate using clamped linear approximation
-float_t get_noc_transfer_rate(uint32_t transfer_size, bool is_blackhole) {
-    // Clamped linear approximation based on empirical data
-    // Wormhole: Linear growth from 16B to 1024B, then clamped at peak
-    // Blackhole: Linear growth from 16B to 2048B, then clamped at peak
+/**
+ * Calculates NOC transfer rate for L1 local transfers using empirical data.
+ *
+ * The transfer rate follows a clamped linear approximation:
+ * - Minimum rate for small transfers (16B)
+ * - Linear growth until reaching peak performance
+ * - Constant peak rate for larger transfers
+ */
+float get_noc_transfer_rate(uint32_t transfer_size_bytes, tt::ARCH arch) {
+    // Minimum NOC transfer size that was benchmarked
+    constexpr uint32_t min_transfer_size_bytes = 16;
 
-    const uint32_t min_transfer_size = 16;
+    // Architecture-specific performance characteristics
+    struct NocPerformanceParams {
+        uint32_t linear_growth_threshold_bytes;
+        float min_rate_gbps;   // Transfer rate at minimum size
+        float peak_rate_gbps;  // Maximum achievable transfer rate
+    };
 
-    // Default to Wormhole: Linear growth from 16B to 1024B, then clamped at peak
-    uint32_t linear_max_transfer_size = 1024;
-    float_t min_rate = 0.868f;  // GB/s at 16B
-    float_t peak_rate = 27.7f;  // GB/s peak (>=1024B)
+    const NocPerformanceParams params = (arch == tt::ARCH::BLACKHOLE) ? NocPerformanceParams{2048, 0.671f, 48.5f}
+                                                                      : NocPerformanceParams{1024, 0.868f, 27.7f};
 
-    if (is_blackhole) {
-        // Blackhole: Linear growth from 16B to 2048B, then clamped at peak
-        linear_max_transfer_size = 2048;
-        min_rate = 0.671f;  // GB/s at 16B
-        peak_rate = 48.5f;  // GB/s peak (>=2048B)
-    }
+    // Clamp transfer size to the linear growth region
+    const uint32_t effective_transfer_size =
+        std::clamp(transfer_size_bytes, min_transfer_size_bytes, params.linear_growth_threshold_bytes);
 
-    uint32_t clamped_transfer_size = std::max(min_transfer_size, std::min(transfer_size, linear_max_transfer_size));
-    float_t slope = (peak_rate - min_rate) / static_cast<float_t>(linear_max_transfer_size - min_transfer_size);
+    // Calculate transfer rate using linear interpolation
+    const float rate_increase_per_byte =
+        (params.peak_rate_gbps - params.min_rate_gbps) /
+        static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
 
-    return min_rate + slope * (clamped_transfer_size - min_transfer_size);
+    return params.min_rate_gbps + rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes);
 }
 
+/**
+ * Determines if split reader optimization is supported for the given configuration.
+ *
+ * Split reader requires all of the following conditions:
+ * 1. Height-sharded memory layout (enables parallel reading across height dimension)
+ * 2. Not a 1D depthwise convolution (incompatible memory access patterns)
+ * 3. Multiple activation block height tiles (must have data to split between readers)
+ */
+bool is_split_reader_supported(
+    TensorMemoryLayout memory_layout, bool is_1d_depthwise_conv, uint32_t act_block_h_ntiles) {
+    return memory_layout == TensorMemoryLayout::HEIGHT_SHARDED && !is_1d_depthwise_conv && act_block_h_ntiles > 1;
+}
+
+/*
+    Split reader viability is calculated by comparing activation and weight transfer costs.
+    - Activation cost is calculated by using benchmarked NOC transfer rate for L1 local transfer.
+    Activations are transfered in chunks of input_bytes_per_element * input_channels_padded * kernel_width bytes because
+    that is sequential data in the L1.
+    Activation cost is calculated by dividing the activation block size by the NOC transfer rate.
+    Activations are in ROW_MAJOR layout so dtype is used to calculate the total activation block size.
+    - Weight cost is calculated by using non benchmarked NOC link bandwidth for the time
+    it takes to transfer the weights from DRAM to L1.
+    Weight cost is calculated by dividing the weight block size by the NOC link bandwidth.
+    Weights are in TILE_LAYOUT so tile size is used to calculate the total weight block size.
+    - A threshold factor of 2.0 is used to compare the
+    activation and weight costs because activating split reader will delay weights reading and multicasting.
+
+*/
 bool is_split_reader_viable(
     uint32_t act_block_h_ntiles,
-    uint32_t input_channels,
-    uint32_t output_channels,
+    uint32_t input_channels_padded,
     uint32_t kernel_width,
-    bool is_blackhole,
+    tt::ARCH arch,
     DataType input_datatype,
-    DataType weights_datatype,
-    bool fully_buffered) {
-    // Determine bytes per element based on input data type, halo outputs either float32 or bfloat16
-    uint32_t bytes_per_element = (input_datatype == DataType::FLOAT32) ? 4 : 2;
-    const float_t noc_transfer_unit = bytes_per_element * input_channels * kernel_width;
+    uint32_t weights_block_ntiles,
+    uint32_t weights_tile_size) {
+    TT_ASSERT(
+        arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::WORMHOLE_B0,
+        "Invalid architecture for split reader heuristic");
 
-    // Get architecture-specific NOC transfer rate based on empirical data
-    const float_t noc_transfer_rate = get_noc_transfer_rate(static_cast<uint32_t>(noc_transfer_unit), is_blackhole);
-    const float_t noc_transfer_time = noc_transfer_unit / noc_transfer_rate;
+    // Calculate activation transfer cost
+    const uint32_t input_bytes_per_element = (input_datatype == DataType::FLOAT32) ? 4 : 2;
+    const uint32_t noc_transfer_unit_bytes = input_bytes_per_element * input_channels_padded * kernel_width;
+    const float noc_transfer_rate_gbps = get_noc_transfer_rate(noc_transfer_unit_bytes, arch);
+    const float activation_cost =
+        static_cast<float>(act_block_h_ntiles * tt::constants::TILE_HEIGHT * noc_transfer_unit_bytes) /
+        noc_transfer_rate_gbps;
 
-    const uint32_t dram_transfer_speed = is_blackhole ? 16 : 8;
-    // Additional heuristic factors from stash insights
-    // Determine bytes per element based on weights data type
-    uint32_t weights_bytes_per_element = (weights_datatype == DataType::FLOAT32)     ? 4
-                                         : (weights_datatype == DataType::BFLOAT8_B) ? 1
-                                                                                     : 2;
+    // NOC link bandwidth per architecture (GB/s)
+    const uint32_t noc_link_bw = (arch == tt::ARCH::BLACKHOLE) ? 64 : 32;
+    // Weights need to be downloaded and then mcasted, the time for downloading and mcasting is approximately the same,
+    // so we divide the link bandwidth by 2 to get the effective bandwidth for weights
+    constexpr float weight_mcast_factor = 2.0f;
+    const float effective_noc_link_bw = noc_link_bw / weight_mcast_factor;
 
-    // Weight size per core estimation based on actual data type
-    const float_t weights_cost =
-        static_cast<float_t>(weights_bytes_per_element * input_channels * output_channels * kernel_width) /
-        dram_transfer_speed;
+    const float weight_transfer_bytes = weights_tile_size * weights_block_ntiles;
+    const float weight_cost = weight_transfer_bytes / effective_noc_link_bw;
 
-    const float_t act_cost = act_block_h_ntiles * tt::constants::TILE_HEIGHT * noc_transfer_time;
+    // Split reader is viable when activation cost significantly exceeds weight cost
+    const bool is_viable = activation_cost > 2.0f * weight_cost;
 
-    float_t comparison_factor = 1.0;
-    if (fully_buffered) {
-        comparison_factor = 2;
-    }
     log_debug(
         tt::LogOp,
-        "is_split_reader_viable: act_cost={}, weights_cost={}, comparison_factor={}, act_cost > comparison_factor * "
-        "weights_cost={}",
-        act_cost,
-        weights_cost,
-        comparison_factor,
-        act_cost > comparison_factor * weights_cost);
-    return act_cost > comparison_factor * weights_cost;
-}
+        "Split reader viability: activation_cost={:.3f}, weight_cost={:.3f}, threshold_factor=2.0, viable={}",
+        activation_cost,
+        weight_cost,
+        is_viable);
 
-bool is_split_reader_supported(
-    TensorMemoryLayout memory_layout,
-    bool is_1d_depthwise_conv,
-    uint32_t act_block_h_ntiles,
-    uint32_t input_channels,
-    uint32_t output_channels,
-    uint32_t kernel_width,
-    bool is_blackhole,
-    DataType input_datatype,
-    DataType weights_datatype,
-    bool fully_buffered) {
-    return memory_layout == TensorMemoryLayout::HEIGHT_SHARDED && !is_1d_depthwise_conv && act_block_h_ntiles > 1 &&
-           is_split_reader_viable(
-               act_block_h_ntiles,
-               input_channels,
-               output_channels,
-               kernel_width,
-               is_blackhole,
-               input_datatype,
-               weights_datatype,
-               fully_buffered);
+    return is_viable;
 }
 
 }  // namespace conv2d

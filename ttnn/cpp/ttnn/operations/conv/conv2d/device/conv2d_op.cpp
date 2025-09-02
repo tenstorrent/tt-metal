@@ -14,6 +14,7 @@
 #include <tt-metalium/constants.hpp>
 
 #include <tt-metalium/work_split.hpp>
+#include "tt-metalium/shape.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -269,6 +270,9 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
 
     const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, memory_config.memory_layout());
     const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
+
+    const std::array<uint32_t, 2> shard_shape = input_tensor_a.shard_spec().value().shape;
+    const uint32_t input_channels_padded = shard_shape[1];
     conv_op_l1_usage l1_usage = calculate_L1_usage(
         compute_kernel_config,
         block_config,
