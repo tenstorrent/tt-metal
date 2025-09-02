@@ -201,7 +201,7 @@ void validate_adaptive_pool_feasibility(uint32_t input_h, uint32_t input_w, uint
         error_msg += "Input shape: (" + std::to_string(input_h) + "," + std::to_string(input_w) + "), Output shape: (" +
                      std::to_string(output_h) + "," + std::to_string(output_w) + ").";
 
-        TT_FATAL(false, "{}", error_msg);
+        TT_THROW("{}", error_msg);
     }
 }
 

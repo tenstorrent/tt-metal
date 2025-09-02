@@ -11,9 +11,14 @@ namespace ttnn {
 namespace operations::experimental::adaptive_pool {
 
 struct AdaptiveRegion {
-    uint32_t output_h, output_w;
-    uint32_t start_h, end_h, start_w, end_w;  // Input region boundaries
-    uint32_t kernel_h, kernel_w;
+    uint32_t output_h;
+    uint32_t output_w;
+    uint32_t start_h;
+    uint32_t end_h;
+    uint32_t start_w;
+    uint32_t end_w;
+    uint32_t kernel_h;
+    uint32_t kernel_w;
 };
 struct AdaptivePoolingParams {
     std::array<uint32_t, 2> kernel_size;

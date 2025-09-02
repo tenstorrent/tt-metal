@@ -4,22 +4,9 @@
 
 #include "adaptive_pools.hpp"
 #include "adaptive_pool_utils.hpp"
-
-#include "tt-metalium/constants.hpp"
-#include <tt-metalium/buffer_types.hpp>
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/pool/generic/generic_pools.hpp"
-#include "ttnn/operations/sliding_window/halo/halo.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/operations/data_movement/move/move.hpp"
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/math.hpp>
 namespace ttnn {
 namespace operations::experimental::adaptive_pool {
-
-using namespace ttnn::operations::pool;
 
 // Reusing the generic pool2d functionality from the regular pool operations
 Tensor AdaptiveAvgPool2DOp::invoke(
