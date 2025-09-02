@@ -25,6 +25,8 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     env:
+      CC: gcc-12
+      CXX: g++-12
       TT_METAL_HOME: /usr/libexec/tt-metalium
       TT_METAL_SIMULATOR: /work/sim
       TT_METAL_SLOW_DISPATCH_MODE: 1
@@ -42,6 +44,11 @@ jobs:
           set -euo pipefail
           apt update
           apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb
+
+      - name: Install System Packages
+        run: |
+          apt update
+          apt install -y git
 
       - name: Checkout ttsim
         uses: actions/checkout@v4
