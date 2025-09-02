@@ -161,6 +161,9 @@ void MetalContext::initialize(
         // state by reading a corrupted launch message. Routing firmware will never run in this case, causing UMD issued
         // transactions to hang.
         clear_launch_messages_on_eth_cores(device_id);
+
+        // Initialize profiler thread pool
+        profiler_thread_pool_ = tt::tt_metal::create_device_bound_thread_pool(64);
     }
 
     // Populate FD topology across all devices

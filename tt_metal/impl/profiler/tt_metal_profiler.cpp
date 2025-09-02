@@ -38,6 +38,7 @@
 #include "hostdevcommon/profiler_common.h"
 #include "impl/context/metal_context.hpp"
 #include "kernel_types.hpp"
+#include <thread_pool.hpp>
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -678,6 +679,9 @@ void InitDeviceProfiler(IDevice* device) {
         profiler.profile_buffer_bank_size_bytes = bank_size_bytes;
         profiler.profile_buffer.resize(profiler.profile_buffer_bank_size_bytes * num_dram_banks / sizeof(uint32_t));
 
+        // profiler.thread_pool = profiler_thread_pool;
+        // profiler.profiler_thread_pool_mutex = &profiler_thread_pool_mutex;
+
         std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] =
             MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER);
@@ -989,13 +993,13 @@ void ReadMeshDeviceProfilerResults(
         }
 
         for (IDevice* device : mesh_device.get_devices()) {
-            mesh_device.enqueue_to_thread_pool([device, state, &metadata]() {
+            tt::tt_metal::MetalContext::instance().profiler_thread_pool_->enqueue([device, state, &metadata]() {
                 const std::vector<CoreCoord> virtual_cores = detail::getVirtualCoresForProfiling(device, state);
                 detail::ProcessDeviceProfilerResults(device, virtual_cores, state, metadata);
             });
         }
 
-        mesh_device.wait_for_thread_pool();
+        tt::tt_metal::MetalContext::instance().profiler_thread_pool_->wait();
     }
 #endif
 }
