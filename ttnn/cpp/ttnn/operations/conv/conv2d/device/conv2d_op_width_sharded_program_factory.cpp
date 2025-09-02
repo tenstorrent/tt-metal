@@ -382,7 +382,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         a.memory_config().shard_spec().value().shape,
         has_bias,
         false,
-        skip_activation_mcast);
+        skip_activation_mcast,
+        input_channels_padded);
 
     std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
         ttnn::operations::sliding_window::generate_sliding_window_op_config(
