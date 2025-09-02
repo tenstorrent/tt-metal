@@ -64,10 +64,7 @@ struct L1Config {
     }
 
     L1Config() = delete;
-    L1Config(T& testObj) :
-        size_bytes(
-            1 * num_cores_height * num_tiles_per_core_height * tt::constants::TILE_HEIGHT * num_cores_width *
-            num_tiles_per_core_width * tt::constants::TILE_WIDTH * element_size) {
+    L1Config(T& testObj) {
         // if the test is running on a simulator, we need to make sure that the core grid is not larger than the
         // simulator's core grid. On HW this is unlikely to be so, but technically still a necessary bounds check
         std::pair<unsigned, unsigned> min_dims = testObj.worker_grid_minimum_dims();
@@ -75,6 +72,8 @@ struct L1Config {
         num_cores_height = std::min(min_dims.second, num_cores_height);
 
         // if core grid changes, we must recalculate the values that depend on it
+        size_bytes = 1 * num_cores_height * num_tiles_per_core_height * tt::constants::TILE_HEIGHT * num_cores_width *
+                     num_tiles_per_core_width * tt::constants::TILE_WIDTH * element_size;
     }
 };
 
