@@ -16,7 +16,7 @@ def load_config(config_name="configs/segformer_semantic_config.json"):
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found at: {config_path}")
 
-    config = AutoConfig.from_pretrained(config_path)
+    config = AutoConfig.from_pretrained(config_path, local_files_only=os.getenv("CI") == "true")
     return config
 
 
