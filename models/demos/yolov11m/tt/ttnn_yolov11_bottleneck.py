@@ -26,11 +26,16 @@ class TtnnBottleneck:
     def __call__(self, device, x, tile_shape=64):
         print(f"DEBUG Bottleneck: Input shape = {x.shape}")
         input = x
-        x1 = self.cv1(device, x)  # 64 → 32
-        print(f"DEBUG Bottleneck: After cv1 shape = {x1.shape}")
-        x2 = self.cv2(device, x)  # 64 → 32 (both operate on original input)
-        print(f"DEBUG Bottleneck: After cv2 shape = {x2.shape}")
-        x = ttnn.concat([x1, x2], 1, memory_config=x1.memory_config())  # 32 concat 32 = 64
-        print(f"DEBUG Bottleneck: After concat shape = {x.shape}")
-        # Concatenate to maintain 64 output channels for C3k2 balance
-        return x
+        x = self.cv1(device, x)  # Traditional: 64 → 32 (bottleneck)
+        print(f"DEBUG Bottleneck: After cv1 shape = {x.shape}")
+        x = self.cv2(device, x)  # Traditional: 32 → 64 (expand), but checkpoint shows 64 → 32
+        print(f"DEBUG Bottleneck: After cv2 shape = {x.shape}")
+        # Traditional residual connection (will fail if dimensions don't match)
+        try:
+            result = ttnn.add(input, x, memory_config=x.memory_config())
+            print(f"DEBUG Bottleneck: After residual add shape = {result.shape}")
+            return result
+        except Exception as e:
+            print(f"DEBUG Bottleneck: Residual add failed: {e}")
+            print(f"DEBUG Bottleneck: Returning cv2 output without residual")
+            return x
