@@ -1,0 +1,95 @@
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "bert_block.hpp"
+
+#include "modules/dropout_module.hpp"
+#include "modules/layer_norm_module.hpp"
+#include "modules/linear_module.hpp"
+#include "modules/multi_head_attention.hpp"
+#include "ops/binary_ops.hpp"
+#include "ops/unary_ops.hpp"
+
+namespace ttml::modules {
+
+BertMLP::BertMLP(uint32_t embedding_dim, uint32_t intermediate_size, float dropout_prob) {
+    m_dense = std::make_shared<LinearLayer>(embedding_dim, intermediate_size);
+    m_output = std::make_shared<LinearLayer>(intermediate_size, embedding_dim);
+    m_dropout = std::make_shared<DropoutLayer>(dropout_prob);
+
+    create_name("bert_mlp");
+    register_module(m_dense, "dense");
+    register_module(m_output, "output");
+    register_module(m_dropout, "dropout");
+}
+
+autograd::TensorPtr BertMLP::operator()(const autograd::TensorPtr& input) {
+    auto x = (*m_dense)(input);
+    x = ops::gelu(x);  // BERT uses GELU activation
+    x = (*m_output)(x);
+    x = (*m_dropout)(x);
+    return x;
+}
+
+BertAttention::BertAttention(uint32_t embedding_dim, uint32_t num_heads, float dropout_prob) {
+    m_self_attention = std::make_shared<MultiHeadAttention>(embedding_dim, num_heads, dropout_prob);
+    m_output_dense = std::make_shared<LinearLayer>(embedding_dim, embedding_dim);
+    m_output_dropout = std::make_shared<DropoutLayer>(dropout_prob);
+
+    create_name("bert_attention");
+    register_module(m_self_attention, "self_attention");
+    register_module(m_output_dense, "output_dense");
+    register_module(m_output_dropout, "output_dropout");
+}
+
+autograd::TensorPtr BertAttention::operator()(
+    const autograd::TensorPtr& input, const autograd::TensorPtr& attention_mask) {
+    // Self-attention (bidirectional - no causal masking)
+    auto attention_output = (*m_self_attention)(input, attention_mask);
+
+    // Output projection
+    attention_output = (*m_output_dense)(attention_output);
+    attention_output = (*m_output_dropout)(attention_output);
+
+    return attention_output;
+}
+
+BertBlock::BertBlock(const BertBlockConfig& config) {
+    m_attention = std::make_shared<BertAttention>(config.embedding_dim, config.num_heads, config.dropout_prob);
+
+    m_attention_norm = std::make_shared<LayerNormLayer>(
+        config.embedding_dim,
+        false  // use_composite_op = false
+    );
+
+    m_mlp = std::make_shared<BertMLP>(config.embedding_dim, config.intermediate_size, config.dropout_prob);
+
+    m_mlp_norm = std::make_shared<LayerNormLayer>(
+        config.embedding_dim,
+        false  // use_composite_op = false
+    );
+
+    create_name("bert_block");
+    register_module(m_attention, "attention");
+    register_module(m_attention_norm, "attention_norm");
+    register_module(m_mlp, "mlp");
+    register_module(m_mlp_norm, "mlp_norm");
+}
+
+autograd::TensorPtr BertBlock::operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& attention_mask) {
+    // Self-attention with residual connection and layer norm
+    // BERT uses post-norm: LayerNorm(x + Attention(x))
+    auto attention_output = (*m_attention)(input, attention_mask);
+    auto attention_residual = ops::add(attention_output, input);
+    attention_residual = (*m_attention_norm)(attention_residual);
+
+    // Feed-forward with residual connection and layer norm
+    auto mlp_output = (*m_mlp)(attention_residual);
+    auto mlp_residual = ops::add(mlp_output, attention_residual);
+    mlp_residual = (*m_mlp_norm)(mlp_residual);
+
+    return mlp_residual;
+}
+
+}  // namespace ttml::modules
