@@ -163,7 +163,18 @@ void PhysicalSystemDescriptor::run_discovery(bool run_global_discovery) {
     }
 }
 
+void PhysicalSystemDescriptor::clear() {
+    // Erase all contents in all data structures
+    system_graph_.asic_connectivity_graph.clear();
+    system_graph_.host_connectivity_graph.clear();
+    asic_descriptors_.clear();
+    host_to_mobo_name_.clear();
+    host_to_rank_.clear();
+    exit_node_connection_table_.clear();
+}
+
 void PhysicalSystemDescriptor::run_local_discovery() {
+    this->clear();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
