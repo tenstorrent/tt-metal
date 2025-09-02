@@ -45,9 +45,11 @@ class TtBertBatchDram:
         qa_bias_path = None
         if tt_cache_path is not None:
             qa_weight_path = str(
-                f"{tt_cache_path}/qa_outputs.weight_{self.model_config['QA_LINEAR_WEIGHTS_DTYPE'].name}.bin"
+                f"{tt_cache_path}/qa_outputs.weight_{self.model_config['QA_LINEAR_WEIGHTS_DTYPE'].name}.tensorbin"
             )
-            qa_bias_path = str(f"{tt_cache_path}/qa_outputs.bias_{self.model_config['QA_LINEAR_BIAS_DTYPE'].name}.bin")
+            qa_bias_path = str(
+                f"{tt_cache_path}/qa_outputs.bias_{self.model_config['QA_LINEAR_BIAS_DTYPE'].name}.tensorbin"
+            )
 
         def compute_qa_weight():
             weight_torch = pad_weight(torch.transpose(state_dict["qa_outputs.weight"], -2, -1))
