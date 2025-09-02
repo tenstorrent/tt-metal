@@ -271,7 +271,6 @@ jobs:
       matrix:
         card: [N150, N300]
         test-config: ${{ fromJSON(needs.create-test-matrix.outputs.stable_ci_v2_matrix) }}
-        model: [yolov8s, vadv2]
     name: Nightly CIv2-compatible ${{ matrix.card }} ${{ matrix.test-config.model }}
     runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', matrix.card) }}
     container:
