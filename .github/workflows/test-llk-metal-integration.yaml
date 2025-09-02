@@ -278,7 +278,6 @@ jobs:
               if [ $retries -lt $MAX_RETRIES ]; then
                 echo "🔄 Retrying $workflow_name (attempt $((retries + 1))/$MAX_RETRIES)"
                 if gh run rerun "$run_id" --failed --repo "${{ env.METAL_REPO }}"; then
-                  echo "🔄 Retry triggered for $workflow_name"
                   sleep 30
                   elapsed=0 # Reset timer for retry
                 else
