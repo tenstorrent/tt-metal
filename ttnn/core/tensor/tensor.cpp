@@ -138,8 +138,7 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
     return *this;
 }
 
-Tensor::Tensor(const Tensor& other) :
-    tensor_id(other.tensor_id), tensor_attributes(other.tensor_attributes), mesh_device_(other.mesh_device_) {}
+Tensor::Tensor(const Tensor& other) = default;
 
 Tensor::~Tensor() {
     ZoneScoped;
