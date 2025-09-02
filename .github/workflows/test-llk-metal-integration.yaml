@@ -266,7 +266,6 @@ jobs:
                 echo "$output_var=timeout:$run_url" >> $GITHUB_OUTPUT
                 return 1
               fi
-
               # Retry logic
               retries=$((retries + 1))
               if [ $retries -lt $MAX_RETRIES ]; then
@@ -274,7 +273,7 @@ jobs:
                 if gh run rerun "$run_id" --failed --repo "${{ env.METAL_REPO }}"; then
                   echo "🔄 Retry triggered for $workflow_name"
                   sleep 30
-                  elapsed=0
+                  elapsed=0 # Reset timer for retry
                 else
                   echo "🛑 Failed to trigger retry for $workflow_name"
                   echo "$output_var=failure:$run_url" >> $GITHUB_OUTPUT
@@ -282,7 +281,6 @@ jobs:
                 fi
               fi
             done
-
             echo "$output_var=failure:$run_url" >> $GITHUB_OUTPUT
             return 1
           }
@@ -291,7 +289,6 @@ jobs:
           declare -A workflow_configs
           workflow_configs["all-post-commit-workflows.yaml"]="${{ inputs.run_all_post_commit }}:$ALL_POST_COMMIT_RUN_ID:all-post-commit-result"
           workflow_configs["blackhole-post-commit.yaml"]="${{ inputs.run_blackhole_post_commit }}:$BLACKHOLE_RUN_ID:blackhole-result"
-
           exit_code=0
           for workflow_file in "${!workflow_configs[@]}"; do
             IFS=':' read -r enabled run_id output_var <<< "${workflow_configs[$workflow_file]}"
@@ -302,7 +299,6 @@ jobs:
               fi
             fi
           done
-
           exit $exit_code
       - name: Terminate spawned workflows on cancellation
         if: cancelled()
