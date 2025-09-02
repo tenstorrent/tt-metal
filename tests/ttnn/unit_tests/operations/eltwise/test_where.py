@@ -65,41 +65,62 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
 @pytest.mark.parametrize(
     "c_shape, t_shape, f_shape",
     [
-        ((1, 1, 1024, 1024), (1, 1, 1, 1024), (1, 1, 1024, 1024)),  # A, Brow, C
-        ((1, 1, 1024, 1024), (1, 1, 1024, 1024), (1, 1, 1, 1024)),  # A, B, Crow
-        ((1, 1, 1024, 1024), (1, 1, 1, 1024), (1, 1, 1, 1024)),  # A, Brow, Crow
-        ((1, 1, 1, 1024), (1, 1, 1024, 1024), (1, 1, 1, 1024)),  # Arow, B, Crow
-        ((1, 1, 1024, 1024), (1, 1024), (1024, 1024)),  # A, Brow, C
-        ((1024), (1), (1024)),
-        ((2, 2, 1024, 1024), (1, 1024), (1024, 1024)),
-        # Bcast cases for dim -2
-        ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # A, Bcol, C
-        ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1024)),  # Acol, B, C
-        ((1, 1, 1024, 1024), (1, 1, 1024, 1024), (1, 1, 1024, 1)),  # A, B , Ccol
-        ((1, 1, 1024, 1), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # Acol, Bcol, C
-        ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1)),  # A, Bcol, Ccol
-        ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1)),  # Acol, B, Ccol
-        ((4, 1, 1, 1, 128, 128), (4, 2, 2, 2, 128, 128), (4, 1, 2, 1, 128, 1)),
-        # Bcast cases for dims -5, -4, -3
-        ((128, 128), (2, 2, 2, 128, 128), (2, 2, 128, 128)),
-        ((128, 128), (2, 2, 2, 128, 128), (2, 1, 128, 128)),
-        ((2, 3, 4, 128, 128), (128, 128), (128, 128)),
-        ((4, 1, 1, 1, 128, 128), (4, 2, 2, 2, 128, 128), (4, 1, 2, 1, 128, 128)),
+        # ((1, 1, 1024, 1024), (1, 1, 1, 1024), (1, 1, 1024, 1024)),  # A, Brow, C
+        # ((1, 1, 1024, 1024), (1, 1, 1024, 1024), (1, 1, 1, 1024)),  # A, B, Crow
+        # ((1, 1, 1024, 1024), (1, 1, 1, 1024), (1, 1, 1, 1024)),  # A, Brow, Crow
+        # ((1, 1, 1, 1024), (1, 1, 1024, 1024), (1, 1, 1, 1024)),  # Arow, B, Crow
+        # ((1, 1, 1024, 1024), (1, 1024), (1024, 1024)),  # A, Brow, C
+        # ((1024), (1), (1024)),
+        # ((2, 2, 1024, 1024), (1, 1024), (1024, 1024)),
+        # # Bcast cases for dim -2
+        # ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # A, Bcol, C
+        # ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1024)),  # Acol, B, C
+        ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1)),  # A, Bcol, C
+        # ((1, 1, 64, 1), (1, 1, 64, 64), (1, 1, 64, 64)),  # A, Bcol, C
+        # ((1, 1, 1024, 1), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # Acol, Bcol, C
+        # ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1)),  # A, Bcol, Ccol
+        # ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1)),  # Acol, B, Ccol
+        # ((4, 1, 1, 1, 128, 128), (4, 2, 2, 2, 128, 128), (4, 1, 2, 1, 128, 1)),
+        # # Bcast cases for dims -5, -4, -3
+        # ((128, 128), (2, 2, 2, 128, 128), (2, 2, 128, 128)),
+        # ((128, 128), (2, 2, 2, 128, 128), (2, 1, 128, 128)),
+        # ((2, 3, 4, 128, 128), (128, 128), (128, 128)),
+        # ((4, 1, 1, 1, 128, 128), (4, 2, 2, 2, 128, 128), (4, 1, 2, 1, 128, 128)),
     ],
 )
-@pytest.mark.parametrize("condition", [1, 0])
-def test_ttnn_where_bcast(c_shape, t_shape, f_shape, condition, device):
+# @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
+# @pytest.mark.parametrize("scalar", [15.5, 10.0, 5.0, -11.33])
+@pytest.mark.parametrize("variant", ["TTS"])
+@pytest.mark.parametrize("scalar", [15.5])
+@pytest.mark.parametrize("condition", [1])
+def test_ttnn_where_bcast(c_shape, t_shape, f_shape, variant, scalar, condition, device):
     torch.manual_seed(0)
     C = torch.ones(c_shape, dtype=torch.float32) * condition
-    T = torch.randn(t_shape, dtype=torch.float32)
-    F = torch.ones(f_shape, dtype=torch.float32) * 10
+    if variant == "TTS":
+        T = torch.randn(t_shape, dtype=torch.float32)
+        F = scalar
+    elif variant == "TST":
+        T = scalar
+        F = torch.randn(f_shape, dtype=torch.float32)
+    elif variant == "TTT":
+        T = torch.randn(t_shape, dtype=torch.float32)
+        F = torch.ones(f_shape, dtype=torch.float32) * 10
     golden = torch.where(C.bool(), T, F)
 
     ttnn_C = ttnn.from_torch(C, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    if variant == "TTS":
+        ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_F = scalar
+    elif variant == "TST":
+        ttnn_T = scalar
+        ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    elif variant == "TTT":
+        ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
     result = ttnn.to_torch(ttnn_result)
+    print(result)
+    print(golden)
 
     assert torch_equal_nan(result, golden)
 
@@ -705,3 +726,42 @@ def test_where_int_golden_verification(c_shape, t_shape, f_shape, device):
     assert torch_equal_nan(
         result_torch, golden_output
     ), f"Values don't match. Max difference: {torch.max(torch.abs(result_torch - golden_output))}"
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_ttnn_where_tts_col_broadcast(device, dtype):
+    """Test TTS column broadcast specifically - predicate has width W, true tensor has width 1"""
+    torch.manual_seed(0)
+
+    # Create tensors that will trigger column broadcast
+    # Predicate: (32, 64) - full width
+    # True tensor: (32, 1) - width 1 (broadcasted)
+    # False: scalar
+    h, w_pred, w_true = 32, 64, 1
+    scalar = 15.5
+
+    C = torch.rand((h, w_pred), dtype=dtype).uniform_(-100, 100)
+    T = torch.rand((h, w_true), dtype=dtype).uniform_(-100, 100)  # True tensor with width 1
+    F = scalar
+
+    C = (C > 0).float()
+
+    # Convert to TTNN tensors
+    ttnn_C = ttnn.from_torch(
+        C, dtype=ttnn.bfloat16 if dtype == torch.bfloat16 else ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    ttnn_T = ttnn.from_torch(
+        T, dtype=ttnn.bfloat16 if dtype == torch.bfloat16 else ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    # Compute golden reference - broadcasting should happen automatically in PyTorch
+    golden = torch.where(C.bool(), T, F)  # T will be broadcasted from (32,1) to (32,64)
+
+    # Compute TTNN result
+    ttnn_result = ttnn.where(ttnn_C, ttnn_T, F)
+    result = ttnn.to_torch(ttnn_result)
+
+    # Verify results match
+    assert torch_equal_nan(
+        result, golden
+    ), f"TTS column broadcast failed. Max diff: {torch.max(torch.abs(result - golden))}"

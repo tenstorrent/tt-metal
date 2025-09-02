@@ -83,14 +83,25 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
         }
         // If broadcast_type is not NONE, then shapes are broadcast-compatible, validation passes
     } else if (args.where_variant == WhereVariant::TTS) {
-        TT_FATAL(
-            predicate_tensor.logical_shape() == value_true_tensor.value().logical_shape(),
-            "Where TTS operation requires predicate and value_true to have same shape. Predicate: {}, Value true: {}",
-            predicate_tensor.logical_shape(),
-            value_true_tensor.value().logical_shape());
-        TT_FATAL(
-            args.value_false_scalar.has_value(),
-            "Where TTS operation requires value_false_scalar to be set in operation attributes");
+        // For TTS, validate broadcast compatibility instead of requiring exact shape match
+        auto broadcast_type = args.broadcast_type;
+        if (broadcast_type == WhereBroadcastType::NONE || broadcast_type == WhereBroadcastType::OUTER_BCAST) {
+            // For exact match or outer broadcast, shapes should be compatible
+            // The broadcast detection should have already validated this
+        } else if (broadcast_type == WhereBroadcastType::COL_BCAST) {
+            // For column broadcast, validate height compatibility
+            const bool same_height =
+                (predicate_tensor.logical_shape()[-2] == value_true_tensor.value().logical_shape()[-2]);
+            TT_FATAL(
+                same_height,
+                "Where TTS column broadcast requires predicate and value_true to have same height. "
+                "Predicate: {}, Value true: {}",
+                predicate_tensor.logical_shape(),
+                value_true_tensor.value().logical_shape());
+            TT_FATAL(
+                args.value_false_scalar.has_value(),
+                "Where TTS operation requires value_false_scalar to be set in operation attributes");
+        }
     } else if (args.where_variant == WhereVariant::TST) {
         TT_FATAL(
             predicate_tensor.logical_shape() == value_false_tensor.value().logical_shape(),
@@ -153,7 +164,7 @@ TensorSpec WhereDeviceOperation::compute_output_specs(
 
     auto output_shape = tensor_args.predicate.logical_shape();
 
-    // TST & TTS support only equal shapes
+    // TST & TTS support broadcast for compatible shapes
     if (broadcast_type == WhereBroadcastType::NONE && where_variant != WhereVariant::TTT) {
         return TensorSpec(
             output_shape, tt::tt_metal::TensorLayout(args.dtype.value(), output_layout, args.memory_config));
@@ -225,8 +236,61 @@ TensorSpec WhereDeviceOperation::compute_output_specs(
         return ttnn::Shape(output_shape);
     };
 
+    const auto compute_broadcasted_output_tts = [&]() {
+        auto pred_shape = tensor_args.predicate.logical_shape();
+        auto true_shape = tensor_args.value_true.value().logical_shape();
+
+        const int rank_a = pred_shape.rank();
+        const int rank_b = true_shape.rank();
+        const int largest_rank = std::max(rank_a, rank_b);
+
+        SmallVector<uint32_t> output_shape(largest_rank, 1);
+
+        for (int i = -1; i >= -largest_rank; --i) {
+            auto dim_a = (i >= -rank_a) ? pred_shape[i] : 1;
+            auto dim_b = (i >= -rank_b) ? true_shape[i] : 1;
+
+            // Find the maximum dimension size (ignoring 1s which can be broadcast)
+            uint32_t max_dim = 1;
+            if (dim_a != 1) {
+                max_dim = std::max(max_dim, dim_a);
+            }
+            if (dim_b != 1) {
+                max_dim = std::max(max_dim, dim_b);
+            }
+
+            // Validate broadcasting compatibility for TTS (only predicate and true tensor)
+            bool compatible = true;
+            if (dim_a != 1 && dim_a != max_dim) {
+                compatible = false;
+            }
+            if (dim_b != 1 && dim_b != max_dim) {
+                compatible = false;
+            }
+
+            TT_FATAL(
+                compatible, "Broadcasting rule violation for TTS rank {}, dim pred: {}, dim true: {}", i, dim_a, dim_b);
+
+            // For ranks >= 6, ensure exact match (following existing pattern)
+            if (i <= -6) {
+                TT_FATAL(
+                    dim_a == dim_b,
+                    "Broadcasting rule violation for TTS rank >= 6 : dim {}, Broadcast is supported up to rank 5, "
+                    "dim pred: {}, dim true: {}",
+                    i,
+                    dim_a,
+                    dim_b);
+            }
+
+            output_shape[i + largest_rank] = max_dim;
+        }
+        return ttnn::Shape(output_shape);
+    };
+
     if (args.where_variant == WhereVariant::TTT) {
         output_shape = compute_broadcasted_output_ternary();
+    } else if (args.where_variant == WhereVariant::TTS) {
+        output_shape = compute_broadcasted_output_tts();
     }
     return TensorSpec(output_shape, tt::tt_metal::TensorLayout(args.dtype.value(), output_layout, args.memory_config));
 }
@@ -337,9 +401,12 @@ WhereDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    // Detect broadcast type for TTS variant
+    WhereBroadcastType broadcast_type = get_broadcast_type(predicate.logical_shape(), value_true.logical_shape());
+
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TTS,
-        .broadcast_type = WhereBroadcastType::NONE,  // should use get_broadcast_type when support is added
+        .broadcast_type = broadcast_type,
         .memory_config = memory_config.value_or(value_true.memory_config()),
         .input_dtype = predicate.dtype(),
         .dtype = output_dtype.value_or(value_true.dtype()),
