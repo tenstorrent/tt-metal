@@ -18,7 +18,7 @@ namespace py = pybind11;
 
 void bind_grid_sample(py::module& module) {
     const auto doc = R"doc(
-        grid_sample(input_tensor: ttnn.Tensor, grid: ttnn.Tensor, *, mode: str = "bilinear", padding_mode: str = "zeros", use_precomputed_grid: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        grid_sample(input_tensor: ttnn.Tensor, grid: ttnn.Tensor, *, mode: str = "bilinear", padding_mode: str = "zeros", use_precomputed_grid: bool = False, extend_channels: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
 
         Performs grid sampling on the input tensor using the provided sampling grid.
 
@@ -34,7 +34,7 @@ void bind_grid_sample(py::module& module) {
                                  - Contains K sets of normalized coordinates in range [-1, 1]
                                  - Each coordinate pair (x, y): x=-1 (leftmost), x=+1 (rightmost), y=-1 (topmost), y=+1 (bottommost)
                                  - When K=1: standard single coordinate per location (maps 1:1 to PyTorch F.grid_sample behavior)
-                                 - When K>1: multiple coordinate sets batched per grid location for channel extension
+                                 - When K>1: multiple coordinate sets batched per grid location
                                * Precomputed mode (use_precomputed_grid=True):
                                  - Shape (N, H_out, W_out, 6*K) containing K sets of precomputed data
                                  - Each set has 6 elements: pixel coordinates and bilinear interpolation weights
@@ -46,39 +46,51 @@ void bind_grid_sample(py::module& module) {
             use_precomputed_grid (bool): Whether to use precomputed grid coordinates.
                                    When False (default): grid should be normalized coordinates in [-1, 1]
                                    When True: grid should be preprocessed using ttnn.prepare_grid_sample_grid()
+            extend_channels (bool): Controls how grid batching factor K affects output dimensions:
+                                   When True: extend channels (legacy behavior) - output shape (N, H_out, W_out, C*K)
+                                   When False (default): extend W dimension - output shape (N, H_out, W_out*K, C)
+                                   This flag decouples channel extension from grid batching behavior.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation.
 
         Returns:
-            ttnn.Tensor: Output tensor of shape (N, H_out, W_out, C*K) where K is the grid batching factor
-                        The channels are extended by the batching factor since each coordinate set produces
-                        a full set of sampled channels. When K=1, output shape matches PyTorch F.grid_sample.
+            ttnn.Tensor: Output tensor shape depends on extend_channels flag:
+                        - When extend_channels=False (default): (N, H_out, W_out*K, C) - W dimension extended
+                        - When extend_channels=True: (N, H_out, W_out, C*K) - channels extended (legacy behavior)
+                        Where K is the grid batching factor. When K=1, both behaviors produce the same output shape.
 
         Example:
             >>> # Create input tensor (N=1, H=4, W=4, C=32) - channel last format
             >>> input_tensor = ttnn.from_torch(torch.randn(1, 4, 4, 32), device=device)
 
-            >>> # Create identity grid (should return input unchanged)
+            >>> # Example 1: Standard single grid (K=1) - both extend_channels values produce same result
             >>> theta = torch.tensor([[[1., 0., 0.], [0., 1., 0.]]], dtype=torch.float)
             >>> grid = torch.nn.functional.affine_grid(theta, (1, 32, 4, 4), align_corners=False)
             >>> grid_tensor = ttnn.from_torch(grid.to(torch.bfloat16), device=device)
+            >>> output_default = ttnn.grid_sample(input_tensor, grid_tensor)  # extend_channels=False (default)
+            >>> output_channels = ttnn.grid_sample(input_tensor, grid_tensor, extend_channels=True)
+            >>> print(output_default.shape)  # [1, 4, 4, 32] - same for both when K=1
+            >>> print(output_channels.shape) # [1, 4, 4, 32] - same for both when K=1
 
-            >>> # Method 1: Standard grid sampling
-            >>> output = ttnn.grid_sample(input_tensor, grid_tensor)
-            >>> print(output.shape)  # [1, 4, 4, 32]
+            >>> # Example 2: Batched grid (K=4) - demonstrates different behaviors
+            >>> # Create grid with 4 coordinate sets per location: shape (1, 4, 4, 8) where K=4
+            >>> batched_grid = torch.randn(1, 4, 4, 8) * 0.5  # K=4 coordinate sets
+            >>> batched_grid_tensor = ttnn.from_torch(batched_grid.to(torch.bfloat16), device=device)
+            >>>
+            >>> # extend_channels=False (default): W dimension extended
+            >>> output_w_extend = ttnn.grid_sample(input_tensor, batched_grid_tensor)
+            >>> print(output_w_extend.shape)  # [1, 4, 16, 32] - W extended from 4 to 16 (4*K)
+            >>>
+            >>> # extend_channels=True: channels extended (legacy behavior)
+            >>> output_c_extend = ttnn.grid_sample(input_tensor, batched_grid_tensor, extend_channels=True)
+            >>> print(output_c_extend.shape)  # [1, 4, 4, 128] - channels extended from 32 to 128 (32*K)
 
-            >>> # Method 2: Using precomputed grid for better performance
-            >>> # First, create float32 grid on host for preprocessing
+            >>> # Example 3: Using precomputed grid for better performance
             >>> grid_float32 = ttnn.from_torch(grid, dtype=ttnn.float32)
             >>> input_shape = [1, 4, 4, 32]  # [N, H, W, C] format
-            >>>
-            >>> # Precompute grid coordinates and bilinear weights
             >>> prepared_grid = ttnn.prepare_grid_sample_grid(
             ...     grid_float32, input_shape, padding_mode="zeros", output_dtype=ttnn.bfloat16
             ... )
-            >>> # Move prepared grid to device
             >>> prepared_grid = ttnn.to_device(prepared_grid, device)
-            >>>
-            >>> # Apply grid sample with precomputed grid
             >>> output_precomputed = ttnn.grid_sample(input_tensor, prepared_grid, use_precomputed_grid=True)
             >>> print(output_precomputed.shape)  # [1, 4, 4, 32]
         )doc";
@@ -94,6 +106,7 @@ void bind_grid_sample(py::module& module) {
             py::arg("mode") = "bilinear",
             py::arg("padding_mode") = "zeros",
             py::arg("use_precomputed_grid") = false,
+            py::arg("extend_channels") = false,
             py::arg("memory_config") = std::nullopt});
 }
 

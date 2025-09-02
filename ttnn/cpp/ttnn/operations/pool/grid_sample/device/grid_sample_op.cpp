@@ -21,7 +21,7 @@ void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(grid_tensor.buffer() != nullptr, "Grid tensor must be allocated in buffer on device!");
 
     // Shape validation
-    TT_FATAL(input_tensor.logical_shape().rank() == 4, "Input tensor must be 4D (N, C, H, W)");
+    TT_FATAL(input_tensor.logical_shape().rank() == 4, "Input tensor must be 4D (N, H, W, C)");
     TT_FATAL(grid_tensor.logical_shape().rank() == 4, "Grid tensor must be 4D (N, H_out, W_out, multiple_of_2_or_6)");
 
     uint32_t grid_last_dim = grid_tensor.logical_shape()[-1];
@@ -86,20 +86,24 @@ std::vector<TensorSpec> GridSample::compute_output_specs(const std::vector<Tenso
     uint32_t W_out = grid_shape[2];
     uint32_t grid_last_dim = grid_shape[-1];
 
-    // Calculate number of grids and output channels
-
-    // Calculate the number of batched grid points per grid row
-
+    // Calculate the grid batching factor
     const uint32_t num_of_elements_per_grid_point =
         use_precomputed_grid_ ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT : STANDARD_GRID_ELEMENTS_PER_POINT;
     uint32_t grid_batching_factor = grid_last_dim / num_of_elements_per_grid_point;
 
-    // The channels get extended by grid_batching_factor
-    uint32_t channel_extend_factor = grid_batching_factor;
-    uint32_t C_out = C * channel_extend_factor;
-
-    // Define output shape: (N, H_out, W_out, C_out) where C_out = C * num_grids
-    const ttnn::Shape output_shape({N, H_out, W_out, C_out});
+    // Define output shape based on extend_channels flag
+    ttnn::Shape output_shape;
+    if (extend_channels_) {
+        // extend_channels=True: extend channels (legacy behavior)
+        // Output shape: (N, H_out, W_out, C * grid_batching_factor)
+        uint32_t C_out = C * grid_batching_factor;
+        output_shape = ttnn::Shape({N, H_out, W_out, C_out});
+    } else {
+        // extend_channels=False: extend W dimension (new default behavior)
+        // Output shape: (N, H_out, W_out * grid_batching_factor, C)
+        uint32_t W_out_extended = W_out * grid_batching_factor;
+        output_shape = ttnn::Shape({N, H_out, W_out_extended, C});
+    }
 
     // Output has same data type as input
     const DataType output_data_type = input_tensor.dtype();
@@ -118,7 +122,7 @@ operation::ProgramWithCallbacks GridSample::create_program(
     Tensor& output_tensor = output_tensors.at(0);
 
     return grid_sample_program_factory(
-        input_tensor, grid_tensor, output_tensor, mode_, padding_mode_, use_precomputed_grid_);
+        input_tensor, grid_tensor, output_tensor, mode_, padding_mode_, use_precomputed_grid_, extend_channels_);
 }
 
 }  // namespace ttnn::operations::grid_sample

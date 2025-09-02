@@ -26,7 +26,8 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const Tensor& output_tensor,
     const std::string& mode,
     const std::string& padding_mode,
-    bool use_precomputed_grid) {
+    bool use_precomputed_grid,
+    bool extend_channels) {
     tt::tt_metal::Program program{};
 
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -66,8 +67,22 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const uint32_t output_stick_nbytes = output_shape[-1] * output_tensor.element_size();
     const uint32_t aligned_output_stick_nbytes = tt::round_up(output_stick_nbytes, dst_buffer_alignment);
 
-    // Calculate number of output sticks (total rows to process)
-    uint32_t output_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
+    // Calculate the number of data points batched into a single grid row
+    uint32_t grid_last_dim = grid_tensor.logical_shape()[-1];
+    const uint32_t num_of_elements_per_grid_point =
+        use_precomputed_grid ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT : STANDARD_GRID_ELEMENTS_PER_POINT;
+    const uint32_t grid_batching_factor = grid_last_dim / num_of_elements_per_grid_point;
+
+    // Calculate grid sticks and output sticks separately based on extend_channels
+    uint32_t grid_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
+    uint32_t output_nsticks =
+        extend_channels ? grid_nsticks :          // extend_channels=true: 1 output stick per grid stick
+            grid_nsticks * grid_batching_factor;  // extend_channels=false: K output sticks per grid stick
+
+    // Work distribution explanation:
+    // - extend_channels=true: 1 grid stick → 1 output stick (C*K channels)
+    // - extend_channels=false: 1 grid stick → K output sticks (C channels each)
+    // Reader processes grid_nsticks, Writer processes output_nsticks
 
     // Get device grid for multicore
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -75,9 +90,9 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t total_cores = num_cores_x * num_cores_y;
 
-    // Work distribution - distribute output and grid sticks across cores
+    // Work distribution - distribute grid sticks across cores (fundamental work units)
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, output_nsticks);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, grid_nsticks);
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
 
@@ -107,11 +122,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
     const uint32_t output_cb_page_size = tt::constants::FACE_WIDTH * output_tensor.element_size();
     const uint32_t output_cb_num_pages = out_ntiles_c * buffering_factor;
-    // Calculate the number of data points batched into a single grid row
-    uint32_t grid_last_dim = grid_tensor.logical_shape()[-1];
-    const uint32_t num_of_elements_per_grid_point =
-        use_precomputed_grid ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT : STANDARD_GRID_ELEMENTS_PER_POINT;
-    const uint32_t grid_batching_factor = grid_last_dim / num_of_elements_per_grid_point;
 
     const auto [output_cb_index, output_cb_handle] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, output_cb_page_size, output_cb_num_pages, output_cb_data_format);
@@ -252,31 +262,37 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
         0   // set in loop, start_stick_id
     };
 
-    for (uint32_t i = 0, sticks_processed = 0; i < num_cores; i++) {
+    for (uint32_t i = 0, grid_sticks_processed = 0, output_sticks_processed = 0; i < num_cores; i++) {
         const CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t sticks_per_core = 0;
+        uint32_t grid_sticks_per_core = 0;
         tt::tt_metal::KernelHandle compute_kernel_for_core = 0;
 
         if (core_group_1.contains(core)) {
-            sticks_per_core = num_sticks_per_core_group_1;
+            grid_sticks_per_core = num_sticks_per_core_group_1;
         } else if (core_group_2.contains(core)) {
-            sticks_per_core = num_sticks_per_core_group_2;
+            grid_sticks_per_core = num_sticks_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        reader_rt_arguments[2] = sticks_per_core;   // num sticks for this core
-        reader_rt_arguments[3] = sticks_processed;  // start stick id
+        // Calculate output sticks this core will produce
+        uint32_t output_sticks_per_core =
+            extend_channels ? grid_sticks_per_core :          // extend_channels=true: 1:1 ratio
+                grid_sticks_per_core * grid_batching_factor;  // extend_channels=false: 1:K ratio
+
+        reader_rt_arguments[2] = grid_sticks_per_core;   // Reader: grid sticks
+        reader_rt_arguments[3] = grid_sticks_processed;  // Reader: grid stick start id
 
         // Compute runtime arguments - pool kernel expects no runtime args (all compile-time)
 
-        writer_rt_arguments[1] = sticks_per_core;   // num sticks for this core
-        writer_rt_arguments[2] = sticks_processed;  // start stick id
+        writer_rt_arguments[1] = output_sticks_per_core;   // Writer: output sticks
+        writer_rt_arguments[2] = output_sticks_processed;  // Writer: output stick start id
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_arguments);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_arguments);
 
-        sticks_processed += sticks_per_core;
+        grid_sticks_processed += grid_sticks_per_core;
+        output_sticks_processed += output_sticks_per_core;
     }
 
     // Runtime arguments callback following upsample pattern
