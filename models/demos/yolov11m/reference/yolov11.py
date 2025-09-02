@@ -233,13 +233,13 @@ class C3k2(nn.Module):
             self.m = nn.ModuleList(
                 [
                     Bottleneck(
-                        in_channel[2:4],
-                        out_channel[2:4],
-                        kernel[2:4],
-                        stride=stride[2:4],
-                        padding=padding[2:4],
-                        dilation=dilation[2:4],
-                        groups=groups[2:4],
+                        [in_channel[2], in_channel[5]],
+                        [out_channel[2], out_channel[4]],
+                        [kernel[2], kernel[3]],
+                        stride=[stride[2], stride[3]],
+                        padding=[padding[2], padding[3]],
+                        dilation=[dilation[2], dilation[3]],
+                        groups=[groups[2], groups[3]],
                     ),
                 ]
             )
@@ -741,8 +741,8 @@ class YoloV11(nn.Module):
             Conv(3, 64, kernel=3, stride=2, padding=1),  # 0
             Conv(64, 128, kernel=3, stride=2, padding=1),  # 1
             C3k2(  # 2
-                [128, 192, 64, 32, 64, 32, 32, 32, 32],
-                [128, 256, 32, 64, 64, 32, 32, 32, 32],
+                [128, 192, 64, 64, 64, 32, 32, 32, 32],
+                [128, 256, 32, 32, 64, 32, 32, 32, 32],
                 [1, 1, 1, 1, 1, 3, 3, 3, 3],
                 [1, 1, 1, 1, 1, 1, 1, 1, 1],
                 [0, 0, 0, 0, 0, 1, 1, 1, 1],
