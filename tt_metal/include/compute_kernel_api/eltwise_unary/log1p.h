@@ -22,7 +22,7 @@ namespace ckernel {
 
 template <bool fast_and_approx = true>
 ALWI void log1p_tile_init() {
-    MATH(SFPU_INIT_KERNEL_CALL_FAST_APPROX(log1p, sfpu::log1p_init, APPROX, fast_and_approx ));
+    MATH(SFPU_INIT_KERNEL_CALL_FAST_APPROX(log1p, sfpu::log1p_init, APPROX, fast_and_approx));
 }
 
 // clang-format off
@@ -41,7 +41,7 @@ ALWI void log1p_tile_init() {
 // clang-format on
 template <bool fast_and_approx = true>
 ALWI void log1p_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_NO_PARAM_KERNEL_LOG1P(log1p, RC, APPROX, fast_and_approx , idst));
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_LOG1P(log1p, RC, APPROX, fast_and_approx, idst));
 }
 
 }  // namespace ckernel
