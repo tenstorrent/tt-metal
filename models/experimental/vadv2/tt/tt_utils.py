@@ -53,6 +53,7 @@ def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations,
     )
 
     output = output * attention_weights
+    ttnn.reallocate(output)
     output = ttnn.sum(output, 3)
     output = ttnn.reshape(output, [bs, num_heads * embed_dims, num_queries])
     output = ttnn.permute(output, (0, 2, 1))
