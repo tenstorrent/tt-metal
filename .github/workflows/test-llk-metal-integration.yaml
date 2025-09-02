@@ -43,6 +43,13 @@ on:
         required: false
         type: number
         default: 480
+    outputs:
+      all-post-commit-result:
+        description: 'Result of all post-commit tests (status:url format)'
+        value: ${{ jobs.setup-and-test.outputs.all-post-commit-result }}
+      blackhole-result:
+        description: 'Result of blackhole tests (status:url format)'
+        value: ${{ jobs.setup-and-test.outputs.blackhole-result }}
 
 concurrency:
   group: llk-integration-${{ inputs.mirrored_branch }}
