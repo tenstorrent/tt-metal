@@ -34,19 +34,18 @@ constexpr std::pair<std::string_view, uint32_t> named_args_map[] = {KERNEL_COMPI
 }
 #endif
 
-constexpr uint32_t get_named_ct_arg(std::string_view name) {
 #ifdef KERNEL_COMPILE_TIME_ARG_MAP
+constexpr uint32_t get_named_ct_arg(std::string_view name) {
     for (const auto& [arg_name, arg_value] : named_args_map) {
         if (name == arg_name) {
             return arg_value;
         }
     }
-#endif
     // This should never be reached if the named argument is defined in KERNEL_COMPILE_TIME_ARG_MAP.
     // Upon reaching this point, compilation should fail, but it currently does not.
-    ASSERT(false);
-    return 0;
+    __builtin_unreachable();
 }
+#endif
 
 // clang-format off
 /**
@@ -74,6 +73,8 @@ constexpr uint32_t get_named_ct_arg(std::string_view name) {
  * | arg_name              | The name of the argument           | string literal        | defined names | True   |
  */
 // clang-format on
+#ifdef KERNEL_COMPILE_TIME_ARG_MAP
 constexpr uint32_t get_named_compile_time_arg_val(std::string_view name) { return get_named_ct_arg(name); }
+#endif
 
 #endif  // TT_METAL_COMPILE_TIME_ARGS_H

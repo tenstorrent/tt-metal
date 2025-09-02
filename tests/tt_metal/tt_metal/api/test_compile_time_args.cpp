@@ -39,7 +39,7 @@ TEST_F(MeshDeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
         CoreCoord core = {0, 0};
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
-        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord);
         distributed::MeshWorkload workload;
         Program program;
         distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
