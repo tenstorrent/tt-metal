@@ -162,7 +162,6 @@ class ResBlock:
         bias: bool = True,
         mesh_device=None,
         mesh_axis=None,
-        input_shape=None,
         parallel_config=None,
         ccl_manager=None,
         torch_ref=None,
@@ -203,7 +202,6 @@ class ResBlock:
             padding_mode=padding_mode,
             bias=bias,
             causal=causal,
-            input_shape=input_shape,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             torch_ref=torch_ref.stack[2] if torch_ref is not None else None,
@@ -215,7 +213,6 @@ class ResBlock:
             padding_mode=padding_mode,
             bias=bias,
             causal=causal,
-            input_shape=input_shape,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             torch_ref=torch_ref.stack[5] if torch_ref is not None else None,
@@ -245,7 +242,6 @@ class ResBlock:
         ttnn.deallocate(x_NTHWC)
 
         HW = x_tiled_NTHWC.shape[2]
-        T = x_tiled_NTHWC.shape[0]
         num_out_blocks = self.num_out_blocks_map[HW] if HW in self.num_out_blocks_map else math.ceil(HW / 2000)
         x_norm_tiled_NTHWC = self.norm1(x_tiled_NTHWC, num_out_blocks)
 
@@ -260,7 +256,6 @@ class ResBlock:
         ttnn.deallocate(x_conv1_NTHWC)
 
         HW = x_conv1_tiled_NTHWC.shape[2]
-        T = x_conv1_tiled_NTHWC.shape[0]
         num_out_blocks = self.num_out_blocks_map[HW] if HW in self.num_out_blocks_map else math.ceil(HW / 2000)
         x_tiled_NTHWC = self.norm2(x_conv1_tiled_NTHWC, num_out_blocks)
         ttnn.deallocate(x_conv1_tiled_NTHWC)
@@ -289,7 +284,6 @@ class CausalUpsampleBlock:
         mesh_device: ttnn.MeshDevice,
         in_channels: int,
         out_channels: int,
-        input_shape=None,
         torch_ref=None,
         parallel_config=None,
         ccl_manager=None,
@@ -304,6 +298,12 @@ class CausalUpsampleBlock:
         padding_mode: str = "replicate",
         bias: bool = True,
     ):
+        self.reshard_time_map = {
+            120 * 212: 82,
+            240 * 424: 163,
+            480 * 848: 163,
+        }
+
         assert causal
         assert not prune_bottleneck
         assert not has_attention
@@ -316,7 +316,6 @@ class CausalUpsampleBlock:
                     causal=causal,
                     padding_mode=padding_mode,
                     bias=bias,
-                    input_shape=input_shape,
                     torch_ref=torch_ref.blocks[i],
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
@@ -381,13 +380,39 @@ class CausalUpsampleBlock:
 
             return x_NTHWC
 
+    def reshard_output(self, x_NTHWC):
+        if self.mesh_device.get_num_devices() > 1 and self.temporal_expansion > 1:
+            x_NTHWC_host = ttnn.to_torch(
+                x_NTHWC,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[0, 1]
+                ),
+            )
+            HW = x_NTHWC.shape[2] * x_NTHWC.shape[3]
+            num_devices = self.mesh_device.get_num_devices()
+            padded_T = ((self.reshard_time_map[HW] + num_devices - 1) // num_devices) * num_devices
+            x_NTHWC_host = x_NTHWC_host[
+                :, self.temporal_expansion - 1 : padded_T + (self.temporal_expansion - 1), :, :, :
+            ]
+            x_NTHWC = ttnn.from_torch(
+                x_NTHWC_host,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[None, 1]
+                ),
+            )
+        return x_NTHWC
+
     def __call__(self, x_NTHWC):
         for block in self.blocks:
             x_NTHWC = block(x_NTHWC)
-
         x_NTHWO = self.proj(x_NTHWC)
         x_NTHWC = self.depth_to_spacetime(x_NTHWO)
         ttnn.deallocate(x_NTHWO)
+        x_NTHWC = self.reshard_output(x_NTHWC)
         return x_NTHWC
 
 
@@ -395,7 +420,6 @@ class Decoder:
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
-        input_shape=None,
         torch_ref=None,
         out_channels=3,
         base_channels=128,
@@ -448,7 +472,6 @@ class Decoder:
                     mesh_device=mesh_device,
                     causal=causal,
                     padding_mode="replicate",
-                    input_shape=input_shape,
                     torch_ref=first_block_torch_ref[i + 1],
                 )
             )
@@ -468,7 +491,6 @@ class Decoder:
                     spatial_expansion=spatial_expansions[-i - 1],
                     causal=causal,
                     padding_mode="replicate",
-                    input_shape=input_shape,
                     torch_ref=upsample_block_torch_ref,
                 )
             )
@@ -482,7 +504,6 @@ class Decoder:
                     mesh_device=mesh_device,
                     causal=causal,
                     padding_mode="replicate",
-                    input_shape=input_shape,
                     torch_ref=last_block_torch_ref[i],
                 )
             )

@@ -179,17 +179,15 @@ resblock_args = {
 }
 
 
-def create_random_resblock_models(mesh_device, mesh_axis, input_shape, parallel_config, ccl_manager, **model_args):
+def create_random_resblock_models(mesh_device, mesh_axis, parallel_config, ccl_manager, **model_args):
     """Initialize both reference and TT models."""
     # Create reference model
     reference_model = RefResBlock(**model_args)
 
     # Create TT model
-    input_shape[2] = div_up(input_shape[2], mesh_device.get_num_devices())
     tt_model = TtResBlock(
         mesh_device=mesh_device,
         mesh_axis=mesh_axis,
-        input_shape=input_shape,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
         torch_ref=reference_model,
@@ -223,7 +221,6 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, divide_T):
     reference_model, tt_model = create_random_resblock_models(
         mesh_device,
         mesh_axis=None,
-        input_shape=[N, C, T, H, W],
         parallel_config=vae_parallel_config,
         ccl_manager=ccl_manager,
         **block_args,
@@ -275,7 +272,7 @@ upsample_base_args = {
 
 
 def create_random_causalupsampleblock_models(
-    mesh_device, in_channels, out_channels, use_real_weights, input_shape, parallel_config, ccl_manager, **model_args
+    mesh_device, in_channels, out_channels, use_real_weights, parallel_config, ccl_manager, **model_args
 ):
     """Initialize both reference and TT models with optional real weights."""
     # Create reference model
@@ -321,12 +318,10 @@ def create_random_causalupsampleblock_models(
                 logger.warning(f"No matching upsample block for {in_channels}->{out_channels}")
 
     # Create TT model with same weights
-    input_shape[2] = div_up(input_shape[2], mesh_device.get_num_devices())
     tt_model = TtCausalUpsampleBlock(
         mesh_device=mesh_device,
         in_channels=in_channels,
         out_channels=out_channels,
-        input_shape=input_shape,
         torch_ref=reference_model,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
@@ -416,7 +411,6 @@ def test_tt_upsample_forward(mesh_device, config, divide_T, reset_seeds, use_rea
         in_channels=in_channels,
         out_channels=out_channels,
         use_real_weights=use_real_weights,
-        input_shape=input_shape,
         parallel_config=vae_parallel_config,
         ccl_manager=ccl_manager,
         **block_args,
@@ -446,10 +440,9 @@ def test_tt_upsample_forward(mesh_device, config, divide_T, reset_seeds, use_rea
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[0, 1]),
     )
-    breakpoint()
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
     if mesh_device.get_num_devices() > 1:
-        tt_output_torch = tt_output_torch[:, :, temporal_expansion - 1 : T * temporal_expansion, :, :]
+        tt_output_torch = tt_output_torch[:, :, 0 : T * temporal_expansion - (temporal_expansion - 1), :, :]
 
     # Get reference output
     logger.info("Run RefResBlock forward")
@@ -460,7 +453,7 @@ def test_tt_upsample_forward(mesh_device, config, divide_T, reset_seeds, use_rea
     assert_quality(ref_output, tt_output_torch, pcc=0.989)
 
 
-def create_decoder_models(mesh_device, use_real_weights, input_shape, **model_args):
+def create_decoder_models(mesh_device, use_real_weights, **model_args):
     """Initialize both reference and TT decoder models with optional real weights."""
     # Create reference model
     reference_model = RefDecoder(**model_args)
@@ -480,7 +473,6 @@ def create_decoder_models(mesh_device, use_real_weights, input_shape, **model_ar
     tt_model = TtDecoder(
         mesh_device=mesh_device,
         torch_ref=reference_model,
-        input_shape=input_shape,
         **model_args,
     )
 
@@ -491,17 +483,17 @@ def create_decoder_models(mesh_device, use_real_weights, input_shape, **model_ar
 decoder_test_configs = [
     {
         "name": "small_latent",
-        "input_shape": (1, 12, 28, 30, 53),
+        "input_shape": [1, 12, 28, 30, 53],
         # Expected output will be approximately: (1, 3, 163, 240, 424)
     },
     {
         "name": "medium_latent",
-        "input_shape": (1, 12, 28, 40, 76),
+        "input_shape": [1, 12, 28, 40, 76],
         # Expected output will be approximately: (1, 3, 163, 480, 848)
     },
     {
         "name": "large_latent",
-        "input_shape": (1, 12, 28, 60, 106),
+        "input_shape": [1, 12, 28, 60, 106],
         # Expected output will be approximately: (1, 3, 163, 480, 848)
     },
 ]
@@ -520,7 +512,6 @@ def test_tt_decoder_forward(mesh_device, config, divide_T, reset_seeds, use_real
     input_shape = config["input_shape"]
     N, C, T, H, W = input_shape
     T = T // divide_T
-    input_shape = (N, C, T, H, W)
 
     # Initialize model arguments
     model_args = decoder_base_args.copy()
@@ -541,16 +532,16 @@ def test_tt_decoder_forward(mesh_device, config, divide_T, reset_seeds, use_real
 
     # Create models
     logger.info("Creating VAE decoder models")
-    reference_model, tt_model = create_decoder_models(
-        mesh_device, use_real_weights=use_real_weights, input_shape=input_shape, **model_args
-    )
+    reference_model, tt_model = create_decoder_models(mesh_device, use_real_weights=use_real_weights, **model_args)
 
     # Create input tensor (latent representation)
-    N, C, T, H, W = input_shape
     torch_input = torch.randn(N, C, T, H, W)
 
     # Convert to TTNN format [N, T, H, W, C]
     tt_input = torch_input.permute(0, 2, 3, 4, 1)
+    tt_input = torch.nn.functional.pad(
+        tt_input, pad=(0, 0, 0, 0, 0, 0, 0, div_up(T, mesh_device.get_num_devices()) - T)
+    )
     tt_input = ttnn.from_torch(
         tt_input,
         device=mesh_device,
