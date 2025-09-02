@@ -31,7 +31,7 @@ class ResetUtil:
                 self.args = ["-r"]
 
                 # TODO this is broken on multi-chip machines
-                # self.reset()
+                self.reset()
                 return
 
         if self.command is None:

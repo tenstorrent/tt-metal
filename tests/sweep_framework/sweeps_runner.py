@@ -12,7 +12,8 @@ import importlib
 import datetime as dt
 from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
-import ttnn
+
+# import ttnn
 from multiprocessing import Process
 from faster_fifo import Queue
 from queue import Empty
@@ -358,7 +359,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
         original_vector_data = test_vector.copy()
 
         result["start_time_ts"] = dt.datetime.now()
-        validity =  deserialize(test_vector["validity"]).split(".")[-1]
+        validity = deserialize(test_vector["validity"]).split(".")[-1]
 
         if validity == VectorValidity.INVALID:
             result["status"] = TestStatus.NOT_RUN
