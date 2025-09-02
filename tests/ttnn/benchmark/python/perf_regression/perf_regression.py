@@ -97,13 +97,6 @@ class PerformanceData:
         samples = self.get_samples(section, subsection)
         return float(np.median(samples)) if samples else 0.0
 
-    def mad(self, section: str, subsection: str) -> float:
-        samples = self.get_samples(section, subsection)
-        if not samples:
-            return 0.0
-        median_val = np.median(samples)
-        return float(np.median(np.abs(np.array(samples) - median_val)))
-
     def mean(self, section: str, subsection: str) -> float:
         samples = self.get_samples(section, subsection)
         return float(np.mean(samples)) if samples else 0.0
@@ -148,9 +141,8 @@ def mann_whitney_u(samples1: List[Union[int, float]], samples2: List[Union[int, 
 def check_regression(
     baseline: PerformanceData,
     current: PerformanceData,
-    noise_threshold_pct: float = 1.0,
-    significance_level: float = 0.05,
-    mad_multiplier: float = 3.0,
+    alpha: float = 0.05,
+    min_effect_size_pct: float = 1.0,
 ) -> Dict[str, Dict[str, Dict[str, Union[bool, float, str]]]]:
     """
     Check for performance regression by comparing baseline against current performance data.
@@ -158,9 +150,8 @@ def check_regression(
     Args:
         baseline: Baseline (ground truth) performance data
         current: Current performance data to compare against baseline
-        noise_threshold_pct: Minimum percentage change to consider significant (default: 1.0%)
-        significance_level: Statistical significance threshold (default: 0.05)
-        mad_multiplier: Multiplier for MAD-based (Median Absolute Deviation) noise band calculation (default: 3.0)
+        alpha: Statistical significance threshold (default: 0.05)
+        min_effect_size_pct: Minimum percentage change to consider practically significant (default: 1.0%)
 
     Returns:
         Dictionary with regression analysis results for each section/subsection:
@@ -168,12 +159,11 @@ def check_regression(
             "section": {
                 "subsection": {
                     "is_regression": bool,
-                    "delta_median_pct": float,
+                    "delta_mean_pct": float,
                     "p_value": float,
-                    "noise_band_pct": float,
                     "message": str,
-                    "current_median": float,
-                    "baseline_median": float
+                    "current_mean": float,
+                    "baseline_mean": float
                 }
             }
         }
@@ -211,51 +201,52 @@ def check_regression(
                 )
 
             # Calculate statistics
-            baseline_median = baseline.median(section, subsection)
-            current_median = current.median(section, subsection)
-            baseline_mad = baseline.mad(section, subsection)
+            baseline_mean = baseline.mean(section, subsection)
+            current_mean = current.mean(section, subsection)
 
-            if baseline_median == 0:
+            if baseline_mean == 0:
                 results[section][subsection] = {
                     "is_regression": False,
-                    "delta_median_pct": 0.0,
+                    "delta_mean_pct": 0.0,
                     "p_value": 1.0,
-                    "noise_band_pct": 0.0,
-                    "message": f"Baseline median is zero for {section}.{subsection}",
-                    "current_median": current_median,
-                    "baseline_median": baseline_median,
+                    "message": f"Baseline mean is zero for {section}.{subsection}",
+                    "current_mean": current_mean,
+                    "baseline_mean": baseline_mean,
                 }
                 continue
-
-            # Calculate percentage change in median
-            delta_median_pct = (current_median - baseline_median) / baseline_median * 100
 
             # Calculate p-value using Mann-Whitney U test
             p_value = mann_whitney_u(current_samples, baseline_samples)
 
-            # Calculate noise band (minimum threshold or MAD-based)
-            mad_noise_band = mad_multiplier * baseline_mad / baseline_median * 100
-            noise_band_pct = max(noise_threshold_pct, mad_noise_band)
+            # Calculate percentage change in mean
+            delta_mean_pct = ((current_mean / baseline_mean) - 1.0) * 100.0
 
-            # Determine if this is a regression
-            is_regression = abs(delta_median_pct) > noise_band_pct and p_value < significance_level
+            # Determine if this is statistically significant
+            is_significant = p_value < alpha
+
+            # Determine if this is practically significant (effect size large enough)
+            is_practically_significant = abs(delta_mean_pct) >= min_effect_size_pct
+
+            # Determine if this is a regression (statistically AND practically significant AND performance got worse)
+            is_regression = is_significant and is_practically_significant and delta_mean_pct > 0
 
             # Create message
-            if is_regression and delta_median_pct > 0:
-                message = f"Performance regression: +{delta_median_pct:.3f}% (p={p_value:.3f}, threshold={noise_band_pct:.1f}%)"
-            elif is_regression and delta_median_pct < 0:
-                message = f"Performance improvement: {delta_median_pct:.3f}% (p={p_value:.3f})"
+            if is_regression:
+                message = f"Regression detected: {delta_mean_pct:+.3f}% (p={p_value:.3f}), \nbaseline: {baseline.get_samples(section, subsection)}, \ncurrent: {current.get_samples(section, subsection)}"
+            elif is_significant and is_practically_significant and delta_mean_pct < 0:
+                message = f"Improvement detected: {delta_mean_pct:+.3f}% (p={p_value:.3f})"
+            elif is_significant and not is_practically_significant:
+                message = f"Statistically significant but trivial change: {delta_mean_pct:+.3f}% (p={p_value:.3f}, below {min_effect_size_pct}% threshold)"
             else:
-                message = f"No significant change: {delta_median_pct:.3f}% (p={p_value:.3f})"
+                message = f"No significant change: {delta_mean_pct:+.3f}% (p={p_value:.3f})"
 
             results[section][subsection] = {
-                "is_regression": is_regression and delta_median_pct > 0,  # Only flag positive changes as regression
-                "delta_median_pct": delta_median_pct,
+                "is_regression": is_regression,
+                "delta_mean_pct": delta_mean_pct,
                 "p_value": p_value,
-                "noise_band_pct": noise_band_pct,
                 "message": message,
-                "current_median": current_median,
-                "baseline_median": baseline_median,
+                "current_mean": current_mean,
+                "baseline_mean": baseline_mean,
             }
 
     return results
@@ -289,7 +280,7 @@ def summarize_regression_results(
             if result["is_regression"]:
                 summary["regressions"] += 1
                 summary["regression_messages"].append(f"{section}.{subsection}: {result['message']}")
-            elif result["delta_median_pct"] < -result["noise_band_pct"] and result["p_value"] < 0.05:
+            elif result["p_value"] < 0.05 and result["delta_mean_pct"] < 0:
                 summary["improvements"] += 1
                 summary["improvement_messages"].append(f"{section}.{subsection}: {result['message']}")
             else:

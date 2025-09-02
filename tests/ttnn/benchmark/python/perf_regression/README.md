@@ -44,7 +44,7 @@ perf_data.to_json_file("path/to/output.json")
 
 # Access data
 samples = perf_data.get_samples("section1", "subsection1")
-median_val = perf_data.median("section1", "subsection1")
+mean_val = perf_data.mean("section1", "subsection1")
 ```
 
 ### Regression Detection
@@ -59,19 +59,18 @@ baseline = PerformanceData.from_json_file("gt/my_benchmark.json")
 current = PerformanceData.from_dict(my_benchmark_results)
 
 # Check for regressions
-results = check_regression(baseline, current)
+results = check_regression(baseline, current, alpha=0.05, min_effect_size_pct=1.0)
 
 # Results structure:
 # {
 #     "section": {
 #         "subsection": {
 #             "is_regression": bool,
-#             "delta_median_pct": float,
+#             "delta_mean_pct": float,
 #             "p_value": float,
-#             "noise_band_pct": float,
 #             "message": str,
-#             "current_median": float,
-#             "baseline_median": float
+#             "current_mean": float,
+#             "baseline_mean": float
 #         }
 #     }
 # }
@@ -101,24 +100,30 @@ Where:
 
 ## Regression Detection Logic
 
-The tooling uses non-parametric A/B regression test: Mann–Whitney U + median effect + MAD guard band to detect regressions:
+The tooling uses a simplified regression detection approach combining statistical and practical significance:
 
-1. **Statistical Significance**: Uses Mann-Whitney U test (p < 0.05 by default)
-2. **Noise Band**: Calculates dynamic noise threshold using Median Absolute Deviation (MAD), and threshold of 1%
+1. **Statistical Significance**: Uses Mann-Whitney U test (p < alpha, default 0.05)
+2. **Practical Significance**: Requires minimum effect size (default 1.0% change)
 3. **Decision Logic**:
 
 ```python
-delta_median_pct = (current_median - baseline_median) / baseline_median * 100
+delta_mean_pct = ((current_mean / baseline_mean) - 1.0) * 100.0
 p_value = mann_whitney_u(current_samples, baseline_samples)
-noise_band_pct = max(1.0, 3 * baseline_mad / baseline_median * 100)
 
-if delta_median_pct > noise_band_pct and p_value < 0.05:
+is_statistically_significant = p_value < alpha
+is_practically_significant = abs(delta_mean_pct) >= min_effect_size_pct
+
+if is_statistically_significant and is_practically_significant and delta_mean_pct > 0:
     # Performance regression detected
-elif delta_median_pct < -noise_band_pct and p_value < 0.05:
+elif is_statistically_significant and is_practically_significant and delta_mean_pct < 0:
     # Performance improvement detected
+elif is_statistically_significant and not is_practically_significant:
+    # Statistically significant but trivial change
 else:
     # No significant change
 ```
+
+This approach prevents false alarms from tiny but statistically detectable differences (like 0.001% changes) while still catching real performance regressions.
 
 ## Creating New Regression Tests
 
