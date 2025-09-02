@@ -248,6 +248,7 @@ def run_conv(
         math_fidelity=math_fidelity,
         fp32_dest_acc_en=fp32_accum,
         packer_l1_acc=packer_l1_acc,
+        throttle_level=ttnn.ThrottleLevel.LEVEL_3 if slice_config else ttnn.ThrottleLevel.NO_THROTTLE,
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
