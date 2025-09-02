@@ -105,7 +105,12 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     float param0 = params[0];
     switch (op_type) {
         case UnaryOpType::FILL:
-            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {
+                    "fill_tile_init();",
+                    fmt::format(
+                        "fill_tile_int({}, {}u);", idst, std::bit_cast<uint32_t>(static_cast<int32_t>(param0)))};
+            } else if (input_dtype == DataType::UINT32) {
                 op_init_and_name = {"fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)params[0])};
             } else {
                 // Note: bit casted to int float is used to properly pass nan/+-inf
@@ -266,9 +271,18 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("sub_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             break;
         case UnaryOpType::ADD_UNARY_SFPU:
-            op_init_and_name = {
-                "binop_with_scalar_tile_init();",
-                fmt::format("add_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {
+                    "binop_with_scalar_tile_init();",
+                    fmt::format(
+                        "add_unary_tile_int32({}, {}u);", idst, std::bit_cast<uint32_t>(static_cast<int32_t>(param0)))};
+            } else {
+                op_init_and_name = {
+                    "binop_with_scalar_tile_init();",
+                    fmt::format("add_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            }
             break;
         case UnaryOpType::MUL_UNARY_SFPU:
             op_init_and_name = {

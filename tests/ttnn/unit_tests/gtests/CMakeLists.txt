@@ -51,6 +51,7 @@ target_sources(
     unit_tests_ttnn_basic
     PRIVATE
         test_add.cpp
+        test_add_int.cpp
         test_broadcast_to.cpp
         test_generic_op.cpp
         test_graph_add.cpp
