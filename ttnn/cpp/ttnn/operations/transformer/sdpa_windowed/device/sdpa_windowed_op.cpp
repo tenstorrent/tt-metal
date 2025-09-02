@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sdpa_windowed_op.hpp"
-#include <sys/types.h>
 #include <enchantum/enchantum.hpp>
 
 #include "sdpa_windowed_program_factory.hpp"
