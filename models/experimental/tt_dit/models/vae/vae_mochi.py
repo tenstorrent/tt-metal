@@ -261,7 +261,6 @@ class ResBlock:
         HW = x_tiled_NTHWC.shape[2]
         C = x_tiled_NTHWC.shape[3]
         num_out_blocks = self.num_out_blocks_map[C][HW]
-        breakpoint()
         x_norm_tiled_NTHWC = self.norm1(x_tiled_NTHWC, num_out_blocks)
 
         # TODO: Investigate packing more data into a tile
@@ -319,18 +318,22 @@ class CausalUpsampleBlock:
         bias: bool = True,
     ):
         self.reshard_time_map = {
-            # small latent
-            512 * 60 * 106: 82,
-            256 * 120 * 212: 163,
-            128 * 240 * 424: 163,
-            # medium latent
-            512 * 80 * 152: 82,
-            256 * 160 * 304: 163,
-            128 * 320 * 608: 163,
-            # large latent
-            512 * 120 * 212: 82,
-            256 * 240 * 424: 163,
-            128 * 480 * 848: 163,
+            # small latent, medium latent, large,latent
+            512: {
+                60 * 106: 82,
+                80 * 152: 82,
+                120 * 212: 82,
+            },
+            256: {
+                120 * 212: 163,
+                160 * 304: 163,
+                240 * 424: 163,
+            },
+            128: {
+                240 * 424: 163,
+                320 * 608: 163,
+                480 * 848: 163,
+            },
         }
 
         assert causal
@@ -417,9 +420,10 @@ class CausalUpsampleBlock:
                     self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[0, 1]
                 ),
             )
-            HWC = x_NTHWC.shape[2] * x_NTHWC.shape[3] * x_NTHWC.shape[4]
+            HW = x_NTHWC.shape[2] * x_NTHWC.shape[3]
+            C = x_NTHWC.shape[4]
             num_devices = self.mesh_device.get_num_devices()
-            padded_T = ((self.reshard_time_map[HWC] + num_devices - 1) // num_devices) * num_devices
+            padded_T = ((self.reshard_time_map[C][HW] + num_devices - 1) // num_devices) * num_devices
             x_NTHWC_host = x_NTHWC_host[
                 :, self.temporal_expansion - 1 : padded_T + (self.temporal_expansion - 1), :, :, :
             ]
