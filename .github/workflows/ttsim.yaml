@@ -48,7 +48,7 @@ jobs:
         with:
           repository: tenstorrent/ttsim
           ref: ad55f44869ee1c30cae78ea0ff67eea502ee0350
-          path: /work/ttsim
+          path: ttsim
 
       - name: Build ttsim
         run: |
