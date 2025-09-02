@@ -14,16 +14,16 @@ core_grid = ttnn.CoreGrid(y=8, x=12)
 # https://github.com/huggingface/transformers/blob/v4.37.2/src/transformers/models/vit/modeling_vit.py
 
 
-def vit_patch_embeddings(
+def vit_patch_embeddings_weight_vars(
     config,
     pixel_values,
-    *,
-    parameters,
+    proj_weight,
+    proj_bias,
+    patch_size=16,
 ):
     # batch_size, img_c, img_h, img_w = pixel_values.shape # NCHW
     batch_size, img_h, img_w, img_c = pixel_values.shape  # permuted input NHWC
-    patch_size = 16
-    patch_count = img_h // patch_size  # 14
+    patch_count = img_h // patch_size
     patch_size_sq_trpl = int(patch_size * patch_size * 3)  # 768
     patch_count_all = int(patch_count * patch_count)  # 196
     stride_h = patch_size
@@ -36,11 +36,10 @@ def vit_patch_embeddings(
     ## Needed only when running the standalone module pytest test_vit_patch_embeddings
     ## Please comment out when running the pytest on parent module like test_vit_embeddings or test_vit
     # parameters = parameters.vit.embeddings.patch_embeddings
-
     patch_embedding_output = ttnn.linear(
         pixel_values,
-        parameters.projection.weight,
-        bias=parameters.projection.bias,
+        proj_weight,
+        bias=proj_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
         core_grid=ttnn.CoreGrid(y=8, x=12),
@@ -48,9 +47,23 @@ def vit_patch_embeddings(
     ttnn.deallocate(pixel_values)
 
     patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.ROW_MAJOR_LAYOUT)
-    patch_embedding_output = ttnn.reshape(patch_embedding_output, (batch_size, patch_count_all, patch_size_sq_trpl))
+    patch_embedding_output = ttnn.reshape(patch_embedding_output, (batch_size, patch_count_all, -1))
 
     return patch_embedding_output
+
+
+def vit_patch_embeddings(
+    config,
+    pixel_values,
+    *,
+    parameters,
+):
+    return vit_patch_embeddings_weight_vars(
+        config,
+        pixel_values,
+        parameters.projection.weight,
+        parameters.projection.bias,
+    )
 
 
 def siglip_patch_embeddings(
