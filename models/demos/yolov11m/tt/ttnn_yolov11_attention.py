@@ -23,8 +23,8 @@ class TtnnAttention:
         qkv = ttnn.reshape(qkv, (batch_size, self.num_heads, self.key_dim * 2 + self.head_dim, qkv.shape[-1]))
         q, k, v = (
             qkv[:, :, : self.key_dim, :],
-            qkv[:, :, self.key_dim : self.key_dim * 2, :],
-            qkv[:, :, self.key_dim * 2 :, :],
+            qkv[:, :, self.key_dim : self.head_dim, :],
+            qkv[:, :, self.head_dim :, :],
         )
         q_permuted = ttnn.permute(q, (0, 1, 3, 2))
         attn = ttnn.matmul(q_permuted, k, memory_config=ttnn.L1_MEMORY_CONFIG)
