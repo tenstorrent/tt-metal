@@ -1,0 +1,4 @@
+InheritParentConfig: true
+Checks: >
+  -bugprone-reserved-identifier,
+  -readability-duplicate-include
