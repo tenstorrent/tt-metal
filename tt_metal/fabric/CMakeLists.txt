@@ -35,6 +35,7 @@ target_sources(
         routing_table_generator.cpp
         mesh_graph.cpp
         erisc_datamover_builder.cpp
+        builder/fabric_core_placement.cpp
         fabric.cpp
         fabric_host_utils.cpp
         fabric_context.cpp
