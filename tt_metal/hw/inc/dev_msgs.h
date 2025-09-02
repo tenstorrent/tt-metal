@@ -23,6 +23,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
@@ -298,7 +299,8 @@ enum riscv_id_t {
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
 
 struct debug_pause_msg_t {
-    volatile uint8_t flags[DebugDebugMaxRiscvId];
+    volatile uint8_t flags[NUM_PROCESSORS_PER_CORE_TYPE];
+    uint8_t pad[3];  // CODEGEN:skip
 };
 
 constexpr static int DEBUG_RING_BUFFER_ELEMENTS = 32;
@@ -316,7 +318,8 @@ struct debug_stack_usage_per_cpu_t {
 };
 
 struct debug_stack_usage_t {
-    debug_stack_usage_per_cpu_t cpu[DebugDebugMaxRiscvId];
+    debug_stack_usage_per_cpu_t cpu[NUM_PROCESSORS_PER_CORE_TYPE];
+    uint8_t pad[12];  // CODEGEN:skip
 };
 
 struct debug_eth_link_t {
@@ -357,7 +360,7 @@ struct dprint_buf_msg_t {
 // NOC aligment max from BH
 static constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 
-static constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 6;
+static constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 4;
 
 enum class AddressableCoreType : uint8_t {
     TENSIX = 0,

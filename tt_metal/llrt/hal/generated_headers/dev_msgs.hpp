@@ -15,6 +15,7 @@
 #include <cstdint>
 #include "llrt/struct_view_driver.hpp"
 #include <atomic>
+#include <cstdint>
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
 namespace tt::tt_metal::dev_msgs {

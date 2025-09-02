@@ -81,10 +81,14 @@ def test_model_inference(
     request,
 ):
     model_name_env = os.getenv("HF_MODEL")
-    if model_name_env and "Mistral-7B" in model_name_env and weights == "instruct":
-        pytest.skip(
-            "Skipping Mistral-7B full model test for now. See issue https://github.com/tenstorrent/tt-metal/issues/19806"
-        )
+    if model_name_env:
+        if "Mistral-7B" in model_name_env and weights == "instruct":
+            pytest.skip(
+                "Skipping Mistral-7B full model test for now. See issue https://github.com/tenstorrent/tt-metal/issues/19806"
+            )
+
+        if "Phi-3-mini" in model_name_env and weights == "random":
+            pytest.skip("Skipping Phi-3-mini-128k-instruct for single layer dummy weights test.")
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     dtype = ttnn.bfloat8_b

@@ -148,7 +148,7 @@ static const uintptr_t debug_pause_msg_t[] = {
     // 1 fields
     sizeof(::debug_pause_msg_t),
     // 1 array sizes
-    DebugDebugMaxRiscvId,
+    NUM_PROCESSORS_PER_CORE_TYPE,
     // 0 referenced structs
 };
 // Total = 1 + 1 + 0 = 2
@@ -180,7 +180,7 @@ static const uintptr_t debug_stack_usage_t[] = {
     // 1 fields
     sizeof(::debug_stack_usage_t),
     // 1 array sizes
-    DebugDebugMaxRiscvId,
+    NUM_PROCESSORS_PER_CORE_TYPE,
     // 1 referenced structs
     reinterpret_cast<uintptr_t>(offsets::debug_stack_usage_per_cpu_t),
 };
