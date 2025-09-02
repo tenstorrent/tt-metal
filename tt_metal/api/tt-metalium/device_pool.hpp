@@ -73,7 +73,7 @@ private:
     size_t trace_region_size{};
     size_t worker_l1_size{};
     std::vector<uint32_t> l1_bank_remap;
-    bool using_fast_dispatch{};
+    bool using_fast_dispatch_ = false;
     bool init_profiler_ = true;
     bool initialize_fabric_and_dispatch_fw_ = false;
     // This variable tracks the state of dispatch firmware on device.
