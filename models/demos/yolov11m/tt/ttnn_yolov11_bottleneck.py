@@ -8,21 +8,10 @@ from models.demos.yolov11m.tt.common import TtnnConv
 
 class TtnnBottleneck:
     def __init__(self, device, parameter, conv_pt):
-        print(f"DEBUG TtnnBottleneck: parameter object = {type(parameter)}")
-        print(f"DEBUG TtnnBottleneck: parameter.cv1 = {type(parameter.cv1) if hasattr(parameter, 'cv1') else 'NO cv1'}")
-        print(f"DEBUG TtnnBottleneck: parameter.cv2 = {type(parameter.cv2) if hasattr(parameter, 'cv2') else 'NO cv2'}")
-        print(f"DEBUG TtnnBottleneck: conv_pt object = {type(conv_pt)}")
-        print(f"DEBUG TtnnBottleneck: conv_pt attributes = {dir(conv_pt)}")
-        print(f"DEBUG TtnnBottleneck: conv_pt.cv1 = {type(conv_pt.cv1)}")
-        print(f"DEBUG TtnnBottleneck: conv_pt.cv1 attributes = {dir(conv_pt.cv1)}")
-        if hasattr(conv_pt.cv1, 'conv'):
-            print(f"DEBUG TtnnBottleneck: conv_pt.cv1.conv = {type(conv_pt.cv1.conv)}")
-            print(f"DEBUG TtnnBottleneck: conv_pt.cv1.conv attributes = {dir(conv_pt.cv1.conv)}")
         if hasattr(conv_pt.cv1, 'conv') and hasattr(conv_pt.cv1.conv, 'weight'):
             print(f"DEBUG TtnnBottleneck: conv_pt.cv1.conv.weight shape = {conv_pt.cv1.conv.weight.shape}")
         if hasattr(conv_pt.cv2, 'conv') and hasattr(conv_pt.cv2.conv, 'weight'):
             print(f"DEBUG TtnnBottleneck: conv_pt.cv2.conv.weight shape = {conv_pt.cv2.conv.weight.shape}")
-        
         # Check weight shapes (both should be identical as both operate on original input)
         if (hasattr(conv_pt.cv1, 'conv') and hasattr(conv_pt.cv2, 'conv') and 
             hasattr(conv_pt.cv1.conv, 'weight') and hasattr(conv_pt.cv2.conv, 'weight')):
@@ -30,7 +19,6 @@ class TtnnBottleneck:
             cv2_shape = conv_pt.cv2.conv.weight.shape
             print(f"DEBUG TtnnBottleneck: cv1 weight: {cv1_shape[1]} → {cv1_shape[0]}")
             print(f"DEBUG TtnnBottleneck: cv2 weight: {cv2_shape[1]} → {cv2_shape[0]}")
-            print(f"DEBUG TtnnBottleneck: Both operate on original input, outputs are added together")
 
         self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1)
         self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2)
