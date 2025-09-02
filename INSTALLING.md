@@ -30,6 +30,16 @@ chmod +x install.sh
 > |----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
 > | Galaxy (Wormhole 4U) | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.10.1.0                          | v2.2.3 or lower       | v1.1.3, `mesh` config          |
 
+- If required, add the following flags for specifying dependencies versions:
+```
+./install.sh \
+  --smi-version=v3.0.17 \
+  --fw-version=18.3.0 \
+  --kmd-version=1.34 \
+  --no-install-podman \
+  --no-install-metalium-container
+```
+
 - For more information visit Tenstorrent's [TT-Installer GitHub repository](https://github.com/tenstorrent/tt-installer).
 
 #### Option 2: Manual Installation
