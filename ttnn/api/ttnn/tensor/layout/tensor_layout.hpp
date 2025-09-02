@@ -43,7 +43,6 @@ public:
     Tile get_tile() const { return page_config_.get_tile(); }
     PageConfig get_page_config() const { return page_config_; }
     DataType get_data_type() const { return dtype_; }
-    void set_data_type(DataType dtype) { dtype_ = dtype; }
     const MemoryConfig& get_memory_config() const { return memory_config_; }
     const Alignment& get_alignment() const { return alignment_; }
 

@@ -147,9 +147,13 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto output_spec_data = compute_output_specs(op_attr, tensors);
     if (op_attr.sliding_window_config_.return_indices) {
-        auto output_spec_ind = output_spec_data;
-        auto& tensor_layout = const_cast<tt::tt_metal::TensorLayout&>(output_spec_ind.tensor_layout());
-        tensor_layout.set_data_type(DataType::UINT16);  // change the data type for the index output tensor
+        // the index output spec is the same as the input spec just with a different data type
+        tt::tt_metal::TensorLayout output_layout_ind(
+            DataType::UINT16,
+            output_spec_data.page_config(),
+            output_spec_data.memory_config(),
+            output_spec_data.tensor_layout().get_alignment());
+        auto output_spec_ind = TensorSpec(output_spec_data.logical_shape(), output_layout_ind);
         return {
             create_device_tensor(output_spec_data, tensors.input_tensors_[0].device()),
             create_device_tensor(output_spec_ind, tensors.input_tensors_[0].device())};
