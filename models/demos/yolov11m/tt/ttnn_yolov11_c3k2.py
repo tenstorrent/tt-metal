@@ -27,8 +27,8 @@ class TtnnC3k2:
         x = self.cv1(device, x)
         x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-        y1 = x[:, :, :, : x.shape[-1] // 2]
-        y2 = x[:, :, :, x.shape[-1] // 2 : x.shape[-1]]
+        y1 = x[:, : x.shape[1] // 2, :, :]
+        y2 = x[:, x.shape[1] // 2 : x.shape[1], :, :]
         if self.is_bk_enabled:
             y3 = self.k(device, y2)
         else:
@@ -39,11 +39,11 @@ class TtnnC3k2:
         if y3.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
             y3 = ttnn.to_layout(y3, ttnn.ROW_MAJOR_LAYOUT)
         if use_shard_concat:
-            to_interleaved = True if (y1.shape[3] < tile_shape) else False
-            x = sharded_concat([y1, y2, y3], to_interleaved=to_interleaved)
+            to_interleaved = True if (y1.shape[1] < tile_shape) else False
+            x = sharded_concat([y1, y2, y3], dim=1, to_interleaved=to_interleaved)
         else:
             y3 = ttnn.sharded_to_interleaved(y3, ttnn.L1_MEMORY_CONFIG)
-            x = ttnn.concat((y1, y2, y3), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
+            x = ttnn.concat((y1, y2, y3), 1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         x = self.cv2(device, x)
 

@@ -20,8 +20,6 @@ class TtnnAttention:
         qkv = self.qkv(device, x)
         qkv = ttnn.sharded_to_interleaved(qkv, memory_config=ttnn.L1_MEMORY_CONFIG)
         qkv = ttnn.permute(qkv, (0, 3, 1, 2))
-        print(f"DEBUG: qkv.shape before reshape = {qkv.shape}")
-        print(f"DEBUG: expected channels = {self.key_dim * 2 + self.head_dim} (Q:{self.key_dim}*{self.num_heads}={self.key_dim*self.num_heads}, K:{self.key_dim}*{self.num_heads}={self.key_dim*self.num_heads}, V:{self.head_dim}*{self.num_heads}={self.head_dim*self.num_heads})")
         qkv = ttnn.reshape(qkv, (batch_size, self.num_heads, self.key_dim * 2 + self.head_dim, qkv.shape[-1]))
         q, k, v = (
             qkv[:, :, : self.key_dim, :],
