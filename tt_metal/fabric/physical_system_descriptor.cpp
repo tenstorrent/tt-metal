@@ -33,13 +33,15 @@ std::string get_mobo_name() {
     return motherboard;
 }
 
+bool using_mock_cluster_desc() { return std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") != nullptr; }
+
 TrayID get_tray_id_for_chip(chip_id_t chip_id, const std::string& mobo_name) {
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
         {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
     };
 
-    if (mobo_to_bus_ids.find(mobo_name) == mobo_to_bus_ids.end()) {
+    if (using_mock_cluster_desc() || mobo_to_bus_ids.find(mobo_name) == mobo_to_bus_ids.end()) {
         return TrayID{0};
     }
     const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
@@ -56,7 +58,8 @@ std::pair<TrayID, ASICLocation> get_asic_position(chip_id_t chip_id) {
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
 
-        TT_FATAL(get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
+        TT_FATAL(
+            using_mock_cluster_desc() || get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
         auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     } else {
@@ -255,7 +258,6 @@ void PhysicalSystemDescriptor::run_global_discovery() {
         this->validate_graphs();
     }
     this->exchange_metadata(false);
-    distributed_context.barrier();
 }
 
 void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
@@ -299,7 +301,9 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t controller_rank = 0;
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-
+    if (*distributed_context.size() == 1) {
+        return;
+    }
     auto my_rank = *(distributed_context.rank());
     std::set<uint32_t> sender_ranks;
     std::set<uint32_t> receiver_ranks;

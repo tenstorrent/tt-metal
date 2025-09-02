@@ -1,0 +1,18 @@
+namespace tt.tt_fabric.flatbuffer;
+
+table ConnectionEndpoint {
+  id: uint32;
+  port_direction: uint32;  // RoutingDirection enum value
+  port_channel: uint32;    // Channel number
+}
+
+table ConnectionPair {
+  first: ConnectionEndpoint;
+  second: ConnectionEndpoint;
+}
+
+table ConnectionsTable {
+  connections: [ConnectionPair];
+}
+
+root_type ConnectionsTable;

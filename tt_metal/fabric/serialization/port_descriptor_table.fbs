@@ -1,0 +1,32 @@
+namespace tt.tt_fabric.flatbuffer;
+
+table MeshId {
+  value: uint32;
+}
+
+table PortDescriptor {
+  port_direction: uint32;  // RoutingDirection enum value
+  port_channel: uint32;    // Channel number
+  connection_hash: uint64;
+}
+
+table MeshIdPair {
+  source_mesh_id: MeshId;
+  dest_mesh_id: MeshId;
+}
+
+table PortDescriptorEntry {
+  mesh_pair: MeshIdPair;
+  port_descriptors: [PortDescriptor];  // Changed to vector of PortDescriptors
+}
+
+table MeshPortDescriptorMap {
+  source_mesh_id: MeshId;
+  entries: [PortDescriptorEntry];
+}
+
+table PortDescriptorTable {
+  mesh_maps: [MeshPortDescriptorMap];
+}
+
+root_type PortDescriptorTable;

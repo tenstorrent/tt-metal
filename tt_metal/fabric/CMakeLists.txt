@@ -45,9 +45,10 @@ target_sources(
         fabric_tensix_builder.cpp
         compressed_routing_table.cpp
         compressed_routing_path.cpp
-        serialization/intermesh_link_table.cpp
         serialization/router_port_directions.cpp
         serialization/physical_system_descriptor_serialization.cpp
+        serialization/intermesh_connections_serialization.cpp
+        serialization/port_descriptor_serialization.cpp
         erisc_datamover_builder_helper.cpp
         ccl/ccl_common.cpp
         physical_system_descriptor.cpp
@@ -55,7 +56,11 @@ target_sources(
 
 # Include helper functions and generate headers from flatbuffer schemas
 include(flatbuffers)
-set(FLATBUFFER_SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/serialization/intermesh_link_table.fbs)
+
+set(FLATBUFFER_SCHEMAS
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/intermesh_connection_table.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/port_descriptor_table.fbs
+)
 
 # Collect all generated headers
 set(GENERATED_FBS_HEADERS)
