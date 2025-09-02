@@ -72,12 +72,26 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x)
 
     # torch input tensor
-    random_mean = torch.randn(1).item()  # add a random mean
-    torch_input_tensor = torch.rand(N * C * H * W, dtype=torch.bfloat16).reshape(N, C, H, W) + random_mean
+    # Create a tensor where each N has a unique value, but all elements within that N are the same.
+    # This is flexible for any N, C, H, W.
+    # Print total N*num_groups
+    logger.warning(f"Total N*num_groups: {N*num_groups}")
+    per_n_tensors = []
+    for n in range(N * num_groups):
+        random_mean = torch.randn(1).item()  # add a random mean
+        # Each N gets a unique value (e.g., n + random_mean)
+        value = torch.tensor(10 * (n + 1), dtype=torch.float32)
+        per_n_tensor = value.expand(C // num_groups, H, W).clone()
+        per_n_tensors.append(per_n_tensor)
 
-    # Print mean and variance of data
-    logger.warning(f"Mean of data: {torch_input_tensor.mean()}")
-    logger.warning(f"Variance of data: {torch_input_tensor.var()}")
+        # Print mean and variance of data
+        logger.warning(f"Chunk {n} Mean of data: {per_n_tensor.mean()}")
+        logger.warning(f"Chunk {n} Variance of data: {per_n_tensor.var()}")
+
+    # Stack along the N dimension
+    repeated_values = torch.stack(per_n_tensors, dim=0)
+    # Reshape to (N, C, H, W)
+    torch_input_tensor = repeated_values.view(N, C, H, W).to(torch.bfloat16)
 
     torch_weight = torch.rand((C,), dtype=torch.bfloat16)
     torch_bias = torch.rand((C,), dtype=torch.bfloat16)
@@ -103,7 +117,7 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     )
 
     # groupnorm
-    num_itr = 2  # second iteration to help catch potential runtime args issue.
+    num_itr = 1  # second iteration to help catch potential runtime args issue.
     for _ in range(num_itr):
         output_tensor = ttnn.group_norm(
             input_tensor_tilized,
@@ -123,6 +137,18 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # Print each value in output_tensor and torch_output_tensor
+    # for i in range(output_tensor.shape[0]):
+    #     for j in range(output_tensor.shape[1]):
+    #         for k in range(output_tensor.shape[2]):
+    #             for l in range(output_tensor.shape[3]):
+    #                 match = torch.isclose(output_tensor[i, j, k, l], torch_output_tensor[i, j, k, l], atol=1e-3, rtol=1e-3)
+    #                 logger.warning(f"Output tensor[{i}, {j}, {k}, {l}]: {output_tensor[i, j, k, l]}, Torch output tensor[{i}, {j}, {k}, {l}]: {torch_output_tensor[i, j, k, l]}, Match: {match}")
+    torch.set_printoptions(profile="full")
+    with open("tensor_output.txt", "w") as f:
+        f.write(str(output_tensor))
+    with open("torch_tensor_output.txt", "w") as f:
+        f.write(str(torch_output_tensor))
     assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
 
 

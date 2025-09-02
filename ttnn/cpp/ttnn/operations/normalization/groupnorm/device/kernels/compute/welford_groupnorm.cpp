@@ -296,7 +296,7 @@ void MAIN {
                             // Check if this is the first tile in the row and set tile_offset accordingly
                             auto welford_tile_offset = (index_subblock_w_offset + j + i) ? 0 : tile_offset;
                             welford(0, 1, 2, curr_xy_coord, curr_xy_limit, false, welford_tile_offset);
-                            curr_xy_coord += 32;
+                            curr_xy_coord += 32 - welford_tile_offset;
                         }
 
                         index_subblock_w_offset += subblock_w;
