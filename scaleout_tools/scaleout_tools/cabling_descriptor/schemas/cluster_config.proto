@@ -2,25 +2,25 @@ syntax = "proto3";
 
 import "pod_config.proto";
 
-package tt.fsd.proto;
+package tt.scaleout_tools.cabling_generator.proto;
 
-// TODO: Allow/move pod descriptors here
 message ClusterDescriptor {
+    // Pod descriptors - can be defined inline instead of separate files
+    map<string, PodDescriptor> pod_descriptors = 1;
+
     // Graph templates - reusable definitions (can be nested arbitrarily)
-    repeated GraphTemplate graph_templates = 1;
+    map<string, GraphTemplate> graph_templates = 2;
 
     // Root graph instance
-    GraphInstance root_instance = 2;
+    GraphInstance root_instance = 3;
 }
 
 message GraphTemplate {
-    string name = 1;
-
     // Child instances within this template
-    repeated ChildInstance children = 2;
+    repeated ChildInstance children = 1;
 
     // Internal connections within this graph template
-    map<string, PortConnections> internal_connections = 3;
+    map<string, PortConnections> internal_connections = 2;
 }
 
 message ChildInstance {
@@ -50,7 +50,7 @@ message GraphInstance {
 
 message ChildMapping {
     oneof mapping {
-        int32 host_id = 1;                // For pod instances (leaf nodes)
+        uint32 host_id = 1;                // For pod instances (leaf nodes)
         GraphInstance sub_instance = 2;  // For nested graph instances (recursive)
     }
 }
@@ -58,8 +58,8 @@ message ChildMapping {
 // Path-based addressing - supports arbitrary depth
 message Port {
     repeated string path = 1;   // Path down the hierarchy: ["superpod1", "memory_group", "pod2"]
-    int32 tray_id = 2;
-    int32 port_id = 3;
+    uint32 tray_id = 2;
+    uint32 port_id = 3;
 }
 
 message Connection {

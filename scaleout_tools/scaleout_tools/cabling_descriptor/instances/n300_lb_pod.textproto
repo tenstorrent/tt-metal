@@ -1,4 +1,3 @@
-name: "n300_lb_pod"
 boards {
   board {
     tray_id: 1
