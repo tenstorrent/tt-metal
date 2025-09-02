@@ -35,6 +35,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         output_path: Path,
         mesh_device: ttnn.MeshDevice,
     ) -> WeightConfig:
+        print(f"DecoderBlockBase.convert_weights output_path = {output_path}")
         return {
             "mla_norm": DistributedRMSNorm.convert_weights(
                 hf_config, sub_state_dicts(state_dicts, "input_layernorm."), output_path / "mla_norm", mesh_device

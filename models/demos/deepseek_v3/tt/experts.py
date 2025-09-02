@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import final
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -42,6 +43,7 @@ class Experts(AbstractModule):
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
+        logger.info("Converting weights for Experts")
         num_experts_per_device = cls._get_num_experts_per_device(hf_config, mesh_device)
 
         # Mapping from weight keys to expert names
@@ -108,12 +110,10 @@ class Experts(AbstractModule):
             The converted TTNN tensor.
         """
         multi_dev_host_weights = ttnn.from_host_shards(
-            [
-                ttnn.from_torch(e.unsqueeze(0), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)
-                for e in wx_per_device_state_dict_group
-            ],
+            [ttnn.from_torch(e.unsqueeze(0), layout=ttnn.ROW_MAJOR_LAYOUT) for e in wx_per_device_state_dict_group],
             mesh_device.shape,
         )
+        multi_dev_host_weights = ttnn.to_dtype(multi_dev_host_weights, ttnn.bfloat4_b)
 
         multi_dev_weights = ttnn.to_device(
             multi_dev_host_weights,

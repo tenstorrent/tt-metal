@@ -98,6 +98,7 @@ def create_run_config(model_config, weight_config, *model_states):
 
 
 def _merge_model_config_state_items(model_config_item: Any, state_item: Any, mb_mesh_device: ttnn.Device | None) -> Any:
+    # print(f"model_config_item: {model_config_item}, state_item: {state_item}")
     if state_item is None and isinstance(model_config_item, FromWeightConfig):
         return FromWeightConfig(
             mesh_device=_merge_model_config_state_items(model_config_item.mesh_device, state_item, mb_mesh_device)
@@ -118,6 +119,7 @@ def _merge_model_config_state_items(model_config_item: Any, state_item: Any, mb_
     if model_config_item is None:
         return state_item
 
+    breakpoint()
     raise ValueError(f"Unsupported model_weight and state config items to merge: {model_config_item} and {state_item}")
 
 
@@ -134,6 +136,7 @@ def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: 
         ), "MeshDeviceStub should have been replaced by a real MeshDevice from the model state"
         return model_state_config_item
 
+    breakpoint()
     raise ValueError(
         f"Unsupported model and weight config items to merge: {model_state_config_item} and {weight_config_item}"
     )

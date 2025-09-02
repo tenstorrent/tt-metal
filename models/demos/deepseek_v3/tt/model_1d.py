@@ -4,6 +4,7 @@
 import math
 from pathlib import Path
 from typing import Any
+from venv import logger
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
@@ -32,8 +33,29 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 class Model1D(SharedStateAddOn, AbstractModule):
     NUM_MLP_META_LAYERS = 1
     NUM_MLP_ROWS = 3
-    NUM_MOE_META_LAYERS = 1
-    NUM_MOE_ROWS = 1
+    NUM_MOE_META_LAYERS = 2
+    NUM_MOE_ROWS = 4
+    # MOE_PAD_LIST = [False, False, False, False]  # Pad MoE layers to 4 rows
+    # MOE_PAD_LIST_LAST = [False, False, True, True]  # Pad MoE layers to 4 rows
+
+    @classmethod
+    def get_moe_pad_list(cls, hf_config, mesh_shape, layer_idx: int):
+        # if layer_idx == cls.NUM_MOE_META_LAYERS - 1:
+        #     print(f"returning {cls.MOE_PAD_LIST_LAST} for layer {layer_idx}")
+        #     return cls.MOE_PAD_LIST_LAST
+        # print(f"returning {cls.MOE_PAD_LIST} for layer {layer_idx}")
+        # return cls.MOE_PAD_LIST
+
+        # TODO: save this, rather than creating every time
+        moe_meta_layer_mapping = cls.create_meta_layer_mapping(
+            hf_config.first_k_dense_replace,
+            hf_config.num_hidden_layers - hf_config.first_k_dense_replace,
+            mesh_shape[0],
+        )
+        moe_pad_list = [[item is None for item in row] for row in moe_meta_layer_mapping]
+        r_val = moe_pad_list[layer_idx]
+        print(f"get_moe_pad_list r_val = {r_val} for layer_idx = {layer_idx}")
+        return r_val
 
     @classmethod
     def convert_weights(
@@ -66,8 +88,11 @@ class Model1D(SharedStateAddOn, AbstractModule):
             hf_config.num_hidden_layers - hf_config.first_k_dense_replace,
             mesh_shape[0],
         )  # [num_meta_layers, num_rows]
+        logger.info(f"len(moe_meta_layer_mapping) = {len(moe_meta_layer_mapping) }")
+        print(f"moe_meta_layer_mapping = {moe_meta_layer_mapping}")
         assert len(moe_meta_layer_mapping) == cls.NUM_MOE_META_LAYERS, "Unexpected number of meta layers for MoE."
 
+        breakpoint()
         moe_decoder_block_state_dicts = [
             [
                 sub_state_dict(state_dict, f"layers.{layer_idx}.") if layer_idx is not None else None
@@ -75,6 +100,18 @@ class Model1D(SharedStateAddOn, AbstractModule):
             ]
             for mapping in moe_meta_layer_mapping
         ]
+
+        moe_decoder_block_list = []
+        for ml in range(cls.NUM_MOE_META_LAYERS):
+            print(f"Processing MoE meta layer {ml}")
+            temp = MoEDecoderBlock.convert_weights(
+                hf_config, moe_decoder_block_state_dicts[ml], output_path / f"moe_decoder_block_{ml}", mesh_device
+            )
+
+            moe_decoder_block_list.append(temp)
+
+        moe_pad_list = [[item is None for item in row] for row in moe_meta_layer_mapping]
+        print(f"moe_pad_list = {moe_pad_list}")
 
         return {
             "embedding": Embedding1D.convert_weights(
@@ -86,15 +123,11 @@ class Model1D(SharedStateAddOn, AbstractModule):
                 )
                 for ml in range(cls.NUM_MLP_META_LAYERS)
             ],
-            "moe_decoder_block": [
-                MoEDecoderBlock.convert_weights(
-                    hf_config, moe_decoder_block_state_dicts[ml], output_path / f"moe_decoder_block_{ml}", mesh_device
-                )
-                for ml in range(cls.NUM_MOE_META_LAYERS)
-            ],
+            "moe_decoder_block": moe_decoder_block_list,
             "norm": DistributedRMSNorm.convert_weights(
                 hf_config, [sub_state_dict(state_dict, "norm.")] * mesh_shape[0], output_path / "norm", mesh_device
             ),
+            "moe_pad_list": moe_pad_list,
         }
 
     @classmethod
@@ -169,7 +202,10 @@ class Model1D(SharedStateAddOn, AbstractModule):
         mesh_shape = list(mesh_device.shape)
 
         norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
+        # breakpoint()
+        # moe_decoder_block_list =
 
+        # breakpoint()
         return {
             "hf_config": hf_config,
             "mesh_shape": mesh_shape,
@@ -186,9 +222,9 @@ class Model1D(SharedStateAddOn, AbstractModule):
                 MoEDecoderBlock.decode_model_config(
                     hf_config,
                     mesh_device,
-                    is_padding_layer=[False, True, True, True],
+                    is_padding_layer=cls.get_moe_pad_list(hf_config, list(mesh_device.shape), ml),
                 )
-                for _ in range(cls.NUM_MOE_META_LAYERS)
+                for ml in range(cls.NUM_MOE_META_LAYERS)
             ],
             "transfer_row": PointToPointConfig(
                 topology=ttnn.Topology.Linear,
@@ -209,8 +245,12 @@ class Model1D(SharedStateAddOn, AbstractModule):
                 for _ in range(cls.NUM_MLP_META_LAYERS)
             ],
             "moe_decoder_block": [
-                MoEDecoderBlock.create_shared_state(hf_config, mesh_device, is_padding_layer=[False, True, True, True])
-                for _ in range(cls.NUM_MOE_META_LAYERS)
+                MoEDecoderBlock.create_shared_state(
+                    hf_config,
+                    mesh_device,
+                    is_padding_layer=cls.get_moe_pad_list(hf_config, list(mesh_device.shape), ml),
+                )
+                for ml in range(cls.NUM_MOE_META_LAYERS)
             ],
         }
 
@@ -232,9 +272,13 @@ class Model1D(SharedStateAddOn, AbstractModule):
             ],
             "moe_decoder_block": [
                 MoEDecoderBlock.create_state(
-                    hf_config, mesh_device, paged_config, is_padding_layer=[False, True, True, True], ccl=ccl
+                    hf_config,
+                    mesh_device,
+                    paged_config,
+                    is_padding_layer=cls.get_moe_pad_list(hf_config, list(mesh_device.shape), ml),
+                    ccl=ccl,
                 )
-                for _ in range(cls.NUM_MOE_META_LAYERS)
+                for ml in range(cls.NUM_MOE_META_LAYERS)
             ],
             "transfer_row": {
                 "semaphore": ccl.get_point_to_point_sem(0),
@@ -289,6 +333,8 @@ class Model1D(SharedStateAddOn, AbstractModule):
     ) -> ttnn.Tensor:
         """Forward pass for decode mode."""
 
+        moe_pad_list = cfg["moe_pad_list"]
+        print(f"forward_decode moe_pad_list = {moe_pad_list}")
         x = Embedding1D.forward_decode(x, cfg["embedding"])
 
         # Stage 1: MLP Decoder Block
@@ -307,18 +353,23 @@ class Model1D(SharedStateAddOn, AbstractModule):
             x = cls.transfer_row(x, row_idx, (row_idx + 1) % cls.NUM_MLP_ROWS, cfg)
 
         # Stage 2: MoE Decoder Block
+        breakpoint()
         for row_idx in range(cls.NUM_MOE_ROWS):
+            print(f"MoE Row {row_idx}")
             for meta_layer_idx in range(cls.NUM_MOE_META_LAYERS):
-                x = MoEDecoderBlock.forward_decode(
-                    x,
-                    row_idx,
-                    position_idxs,
-                    rope_tensors,
-                    page_table,
-                    cfg["moe_decoder_block"][meta_layer_idx],
-                )
+                print(f"MoE meta_layer_idx {meta_layer_idx}")
+                if cfg["moe_decoder_block"][meta_layer_idx]:
+                    x = MoEDecoderBlock.forward_decode(
+                        x,
+                        row_idx,
+                        position_idxs,
+                        rope_tensors,
+                        page_table,
+                        cfg["moe_decoder_block"][meta_layer_idx],
+                    )
 
             # Transfer rows
+            print(f"Transferring MoE row {row_idx} to {(row_idx + 1) % cls.NUM_MOE_ROWS}")
             x = cls.transfer_row(x, row_idx, (row_idx + 1) % cls.NUM_MOE_ROWS, cfg)
 
         x = ttnn.to_memory_config(x, **cfg["norm_reshard"])

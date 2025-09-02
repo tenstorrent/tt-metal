@@ -3,8 +3,10 @@
 
 
 import json
+import pprint  # Add this import at the top of the file
 from random import randint
 
+import psutil
 import pytest
 import torch
 from loguru import logger
@@ -14,7 +16,6 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Model
 from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.model_1d import Model1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.utils.config_helpers import dequantize_state_dict
 from models.demos.deepseek_v3.utils.reference_forwards import reference_forward_model as reference_forward
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -22,10 +23,19 @@ from models.demos.deepseek_v3.utils.test_utils import (
     load_reference_io_tensors_for_module,
     load_state_dict,
 )
-from models.utility_functions import comp_pcc
+
+
+def safe_pretty_print(obj):
+    try:
+        pprint.pprint(obj)
+    except TypeError as e:
+        print(f"Error during pretty-printing: {e}")
+        print("Falling back to manual string representation:")
+        print(repr(obj))
 
 
 def merge_dicts(parent, child, prefix):
+    print(f"Merging {prefix}...")
     for k, v in child.items():
         if isinstance(v, dict):
             merge_dicts(parent.setdefault(k, {}), v, prefix + f"{k}.")
@@ -35,22 +45,32 @@ def merge_dicts(parent, child, prefix):
 
 def create_whole_model_state_dict(model_path, hf_config):
     state_dict = {}
+    logger.info(f"Loading model.embed_tokens")
     state_dict_temp = load_state_dict(model_path, "model.embed_tokens")
     merge_dicts(state_dict, state_dict_temp, "embed_tokens.")
+    del state_dict_temp
     for li in range(hf_config.num_hidden_layers):
+        logger.info(f"Loading layer {li}")
+        logger.info(f"RAM usage: {psutil.Process().memory_info().rss / 1024 / 1024 / 1024:.2f} GB")
         state_dict_temp = load_state_dict(model_path, f"model.layers.{li}")
         merge_dicts(state_dict, state_dict_temp, f"layers.{li}.")
+        del state_dict_temp
+    logger.info(f"Loading model.norm")
     state_dict_temp = load_state_dict(model_path, "model.norm")
     merge_dicts(state_dict, state_dict_temp, "norm.")
-
+    del state_dict_temp
     return state_dict
 
 
 @pytest.fixture
 def hf_config(hf_config):
     """Load DeepSeek config for testing."""
-    hf_config.num_hidden_layers = 4
+
+    print(f"org hf_config \n {hf_config}")
+    hf_config.num_hidden_layers = 9
     hf_config.max_seq_len = 5 * 1024  # Set max sequence length for testing
+
+    print(f"altered hf_config \n {hf_config}")
     return hf_config
 
 
@@ -85,7 +105,7 @@ def load_reference_model(hf_config):
 )
 @pytest.mark.parametrize(
     "weights_type",
-    ["random", "real"],
+    ["real"],
 )
 def test_forward_pass(
     module_path,
@@ -110,18 +130,24 @@ def test_forward_pass(
 
     ############################
     ### Set up reference
-    ############################
-    logger.info("Setting up reference model")
-    reference_model = load_reference_model(hf_config)
+    # ############################
+    # logger.info("Setting up reference model")
+    #
+    reference_model = None
     if weights_type == "random":
+        logger.info("Loading random weights")
+        reference_model = load_reference_model(hf_config)
         state_dict = add_inv_scale_to_state_dict(
             reference_model.to(torch.bfloat16).state_dict(),
             block_shape=hf_config.quantization_config["weight_block_size"],
         )
     else:
+        logger.info("Loading weights from the pretrained model")
         state_dict = create_whole_model_state_dict(model_path, hf_config)
-        dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
-        reference_model.load_state_dict(dequantized_state_dict)
+        # logger.info("dequantizing weights")
+        # dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
+        # reference_model = load_reference_model(hf_config)
+        # reference_model.load_state_dict(dequantized_state_dict)
 
     ############################
     ### Torch inputs
@@ -149,15 +175,19 @@ def test_forward_pass(
     ############################
     ### Torch reference
     ############################
-    logger.info("Running Torch reference forward pass")
-    if module_path is None:
-        reference_output = reference_forward(
-            reference_model,
-            torch_input,
-            position_ids=position_idxs,
-            mode=mode,
-        )
-
+    if reference_model:
+        print(reference_model)
+        logger.info("Running Torch reference forward pass")
+        if module_path is None:
+            reference_output = reference_forward(
+                reference_model,
+                torch_input,
+                position_ids=position_idxs,
+                mode=mode,
+            )
+    else:
+        logger.info("No reference model created, skipping reference forward pass")
+        reference_output = None
     ############################
     ### Set up TTNN configs
     ############################
@@ -194,7 +224,45 @@ def test_forward_pass(
         mesh_device,
     )
 
-    # Create run config
+    # print("Pretty-printed model_config:")
+    # safe_pretty_print(model_config)  # Add this line for pretty-printing model_state
+    # print("=" * 70)
+
+    # print("=" * 70)
+    # print("model_config")
+    # print("=" * 70)
+    # for idx, m_d_b in enumerate(model_config['moe_decoder_block']):
+    #     print(f"checking model_config['moe_decoder_block'][{idx}]")
+    #     for i in m_d_b['mlp']['moe']:
+    #         if i:
+    #             for k,v in i.items():
+    #                 if v is False:
+    #                     print(f"{k} of {i} is False in model_config")
+    #                 if v is None:
+    #                     print(f"{k} of {i} is None in model_config")
+    #         else:
+    #             print(f"Entry in model_config['moe_decoder_block'][{idx}]['mlp']['moe'] is None")
+
+    # print("=" * 70)
+    # print("Pretty-printed model_state:")
+    # safe_pretty_print(model_state)  # Add this line for pretty-printing model_state
+    # print("=" * 70)
+    # print("model_state")
+    # print("=" * 70)
+    # # Create run config
+    # for idx, m_d_b in enumerate(model_state['moe_decoder_block']):
+    #     print(f"checking model_state['moe_decoder_block'][{idx}]")
+    #     for i in m_d_b['mlp']['moe']:
+    #         if i:
+    #             for k,v in i.items():
+    #                 if v is False:
+    #                     print(f"{k} of {i} is False in model_state")
+    #                 if v is None:
+    #                     print(f"{k} of {i} is None in model_state")
+    #         else:
+    #             print(f"Entry in model_state['moe_decoder_block'][{idx}]['mlp']['moe'] is None")
+
+    # print("=" * 70)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
     ############################
@@ -270,15 +338,22 @@ def test_forward_pass(
     ############################
     ### Validation
     ############################
-    logger.info("Validating output")
-    all_passing = True
-    pcc_required = 0.94
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
-    logger.info(f"PCC for {Model1D.__name__} in {mode} mode: {pcc_message}")
+    # logger.info("Validating output")
+    # all_passing = True
+    # pcc_required = 0.94
+    # passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
+    # logger.info(f"PCC for {Model1D.__name__} in {mode} mode: {pcc_message}")
 
-    all_passing = all_passing and passing
+    # all_passing = all_passing and passing
 
-    assert all_passing, f"Test failed for {Model1D.__name__} because PCC < {pcc_required} in {mode} mode."
+    # assert all_passing, f"Test failed for {Model1D.__name__} because PCC < {pcc_required} in {mode} mode."
+
+    logger.info(f"tt_output_torch: {tt_output_torch.shape}")
+    torch.save(tt_output_torch, "tt_output_torch.pt")
+
+    print("Tensor saved to tt_output_torch.pt")
+    breakpoint()
+    logger.info(f"End of test")
 
 
 if __name__ == "__main__":

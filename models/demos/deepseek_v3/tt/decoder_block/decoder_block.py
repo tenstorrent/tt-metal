@@ -4,6 +4,7 @@
 from pathlib import Path
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -29,6 +30,7 @@ class DecoderBlock(DecoderBlockBase):
         output_path: Path,
         mesh_device: ttnn.MeshDevice,
     ) -> WeightConfig:
+        logger.info("Converting weights for NonExpert MLP")
         return NonExpert.convert_weights(hf_config, state_dicts, output_path, mesh_device)
 
     @classmethod

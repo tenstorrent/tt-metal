@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import cast
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -50,6 +51,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         ), f"MoE expects exactly one non-padding state dict, got {len(state_dicts)}"
         (state_dict,) = cast(tuple[dict[str, torch.Tensor]], state_dicts)
 
+        logger.info("Converting weights for MoE")
         return {
             "moe_gate": MoEGate.convert_weights(hf_config, state_dict, output_path / "moe_gate", mesh_device, "gate."),
             "moe_experts": MoEExperts.convert_weights(hf_config, state_dict, output_path / "moe_experts", mesh_device),

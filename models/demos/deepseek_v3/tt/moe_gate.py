@@ -51,6 +51,7 @@ class MoEGate(AbstractModule):
         mesh_device: ttnn.Device,
         prefix: str = "",
     ) -> WeightConfig:
+        logger.info("Converting weights for MoEGate")
         tt_gate_proj_weight = ttnn.from_torch(
             state_dict[f"{prefix}weight"].T.unsqueeze(0).unsqueeze(0),
             device=mesh_device,
