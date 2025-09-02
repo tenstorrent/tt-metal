@@ -96,20 +96,30 @@ struct WriteTransactionIdTracker {
     }
     FORCE_INLINE bool transaction_flushed(tt::tt_fabric::BufferIndex buffer_index) const {
         auto trid = this->get_buffer_slot_trid(buffer_index);
-        if constexpr (EDM_TO_LOCAL_NOC == EDM_TO_DOWNSTREAM_NOC) {
-            return ncrisc_noc_nonposted_write_with_transaction_id_sent(EDM_TO_LOCAL_NOC, trid);
+        if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
+            return ncrisc_noc_nonposted_write_with_transaction_id_sent(0, trid) &&
+                   ncrisc_noc_nonposted_write_with_transaction_id_sent(1, trid);
         } else {
-            return ncrisc_noc_nonposted_write_with_transaction_id_sent(EDM_TO_DOWNSTREAM_NOC, trid) &&
-                   ncrisc_noc_nonposted_write_with_transaction_id_sent(EDM_TO_LOCAL_NOC, trid);
+            if constexpr (EDM_TO_LOCAL_NOC == EDM_TO_DOWNSTREAM_NOC) {
+                return ncrisc_noc_nonposted_write_with_transaction_id_sent(EDM_TO_LOCAL_NOC, trid);
+            } else {
+                return ncrisc_noc_nonposted_write_with_transaction_id_sent(EDM_TO_DOWNSTREAM_NOC, trid) &&
+                       ncrisc_noc_nonposted_write_with_transaction_id_sent(EDM_TO_LOCAL_NOC, trid);
+            }
         }
     }
     FORCE_INLINE void all_buffer_slot_transactions_acked() const {
         for (uint8_t trid = OFFSET_PARAM; trid < INVALID_TRID; ++trid) {
-            if constexpr (EDM_TO_LOCAL_NOC == EDM_TO_DOWNSTREAM_NOC) {
-                noc_async_write_barrier_with_trid(trid, EDM_TO_LOCAL_NOC);
+            if constexpr (ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES) {
+                noc_async_write_barrier_with_trid(0, trid);
+                noc_async_write_barrier_with_trid(1, trid);
             } else {
-                noc_async_write_barrier_with_trid(trid, EDM_TO_DOWNSTREAM_NOC);
-                noc_async_write_barrier_with_trid(trid, EDM_TO_LOCAL_NOC);
+                if constexpr (EDM_TO_LOCAL_NOC == EDM_TO_DOWNSTREAM_NOC) {
+                    noc_async_write_barrier_with_trid(trid, EDM_TO_LOCAL_NOC);
+                } else {
+                    noc_async_write_barrier_with_trid(trid, EDM_TO_DOWNSTREAM_NOC);
+                    noc_async_write_barrier_with_trid(trid, EDM_TO_LOCAL_NOC);
+                }
             }
         }
     }

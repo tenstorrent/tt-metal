@@ -226,7 +226,9 @@ FORCE_INLINE
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt_l1_ptr tt::tt_fabric::PacketHeader* packet_header, tt::tt_fabric::RoutingFields cached_routing_fields) {
+    volatile tt_l1_ptr tt::tt_fabric::PacketHeader* packet_header,
+    tt::tt_fabric::RoutingFields cached_routing_fields,
+    uint8_t noc_id) {
     // if the distance field is one, it means the range field decrements, else the start distance field decrements
     // TODO [optimization]: If we can make the terminal value 0, then we can save an instruction on the eq insn
     bool decrement_range = (cached_routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK) ==
@@ -238,14 +240,16 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 
 FORCE_INLINE void update_packet_header_for_next_hop(
     volatile tt_l1_ptr tt::tt_fabric::LowLatencyPacketHeader* packet_header,
-    tt::tt_fabric::LowLatencyRoutingFields cached_routing_fields) {
+    tt::tt_fabric::LowLatencyRoutingFields cached_routing_fields,
+    uint8_t noc_id) {
     packet_header->routing_fields.value =
         cached_routing_fields.value >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH;
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(
     volatile tt_l1_ptr tt::tt_fabric::LowLatencyMeshPacketHeader* packet_header,
-    tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {
+    tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields,
+    uint8_t noc_id) {
     // This is the hop index. At every ethernet hop, we increment by 1
     // so that the next receiver indexes into its respecive hop command
     // in packet_header.route_buffer[]
@@ -254,26 +258,29 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 
 template <uint8_t NUM_SENDER_BUFFERS>
 void update_packet_header_for_next_hop(
-    tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface, uint32_t value) {
+    tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface, uint32_t value, uint8_t noc_id) {
 #if defined(DYNAMIC_ROUTING_ENABLED)
     tt::tt_fabric::MeshPacketHeader* packet_base = nullptr;
     // Clear north/south when turning from trunk->branch
     downstream_edm_interface.template update_edm_buffer_slot_word<false>(
         reinterpret_cast<std::uintptr_t>(&(packet_base->mcast_params[tt::tt_fabric::eth_chan_directions::NORTH])),
         0,
-        tt::tt_fabric::edm_to_downstream_noc);
+        noc_id,
+        tt::tt_fabric::forward_and_local_write_noc_vc);
     std::uintptr_t offset =
         reinterpret_cast<std::uintptr_t>(&(packet_base->mcast_params[tt::tt_fabric::eth_chan_directions::EAST]));
 #else
     tt::tt_fabric::LowLatencyMeshPacketHeader* packet_base = nullptr;
     std::uintptr_t offset = reinterpret_cast<std::uintptr_t>(&(packet_base->routing_fields));
 #endif
-    downstream_edm_interface.template update_edm_buffer_slot_word(offset, value, tt::tt_fabric::edm_to_downstream_noc);
+    downstream_edm_interface.template update_edm_buffer_slot_word(
+        offset, value, noc_id, tt::tt_fabric::forward_and_local_write_noc_vc);
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(
     volatile tt_l1_ptr tt::tt_fabric::MeshPacketHeader* packet_header,
-    tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {}
+    tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields,
+    uint8_t noc_id) {}
 
 // This function forwards a packet to the downstream EDM channel for eventual sending
 // to the next chip in the line/ring
@@ -295,22 +302,27 @@ FORCE_INLINE
         uint16_t payload_size_bytes,
         ROUTING_FIELDS_TYPE cached_routing_fields,
         tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface,
-        uint8_t transaction_id) {
+        uint8_t transaction_id,
+        uint8_t noc_id = tt::tt_fabric::edm_to_downstream_noc) {
     // TODO: PERF - this should already be getting checked by the caller so this should be redundant make it an ASSERT
     ASSERT(downstream_edm_interface.edm_has_space_for_packet());  // best effort check
 
     // This is a good place to print the packet header for debug if you are trying to inspect packets
     // because it is before we start manipulating the header for forwarding
     if constexpr (increment_pointers) {
-        update_packet_header_for_next_hop(packet_header, cached_routing_fields);
+        update_packet_header_for_next_hop(packet_header, cached_routing_fields, noc_id);
     }
     downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<
         enable_deadlock_avoidance,
         tt::tt_fabric::edm_to_downstream_noc,
         stateful_api,
         increment_pointers>(
-        reinterpret_cast<size_t>(packet_header), payload_size_bytes + sizeof(PACKET_HEADER_TYPE), transaction_id);
+        reinterpret_cast<size_t>(packet_header),
+        payload_size_bytes + sizeof(PACKET_HEADER_TYPE),
+        transaction_id,
+        noc_id,
+        tt::tt_fabric::forward_and_local_write_noc_vc);
     if constexpr (!increment_pointers) {
-        update_packet_header_for_next_hop(downstream_edm_interface, cached_routing_fields.value);
+        update_packet_header_for_next_hop(downstream_edm_interface, cached_routing_fields.value, noc_id);
     }
 }
