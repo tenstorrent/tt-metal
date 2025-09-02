@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sub_device_types.hpp>
 #include <tracy/Tracy.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt_align.hpp>
@@ -167,6 +168,7 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     uint32_t processor_classes =
         MetalContext::instance().hal().get_processor_classes_count(programmable_core_type_index);
     std::vector<uint32_t> max_crtas(processor_classes);
+    std::vector<bool> seen(processor_classes);
 
     for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
         max_crtas[dispatch_class] = 0;
@@ -176,6 +178,14 @@ uint32_t configure_crta_offsets_for_kernel_groups(
         auto kernel = kernel_info.second;
         uint32_t dispatch_class = kernel->dispatch_class();
         max_crtas[dispatch_class] = std::max(max_crtas[dispatch_class], (uint32_t)kernel->common_runtime_args().size());
+        log_warning(
+            tt::LogMetal,
+            "Set max_crtas[{}] to {} by kernel {}",
+            dispatch_class,
+            max_crtas[dispatch_class],
+            kernel->name());
+        TT_FATAL(!seen[dispatch_class], "dispatch class {} already has a max crta size", dispatch_class);
+        seen[dispatch_class] = true;
     }
 
     // Derive crta offsets and sizes per dispatch class
