@@ -46,6 +46,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/serialization/intermesh_link_table.hpp"
 #include "tt_stl/small_vector.hpp"
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
 
 namespace tt::tt_fabric {
 
@@ -467,6 +468,10 @@ void ControlPlane::init_control_plane(
     } else {
         this->load_physical_chip_mapping(get_logical_chip_to_physical_chip_mapping(mesh_graph_desc_file));
     }
+
+    auto physical_system_descriptor = std::make_shared<tt_metal::PhysicalSystemDescriptor>();
+    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(
+        mesh_graph_desc_file, this->logical_mesh_chip_id_to_physical_chip_id_mapping_, physical_system_descriptor);
     this->initialize_intermesh_eth_links();
     this->generate_local_intermesh_link_table();
 }
@@ -2063,7 +2068,7 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
     auto board_id = chip_id_to_asic_id_.at(physical_chip_id);
     auto intermesh_links = this->get_intermesh_eth_links(physical_chip_id);
-
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     // Used to track the number of directions that could be assigned to intermesh links on this node
     uint32_t num_directions_assigned = 0;
 
@@ -2094,6 +2099,11 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
         }
         if (intermesh_routing_direction != RoutingDirection::NONE) {
             auto& direction_to_channel_map = router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
+            if (*(distributed_context.rank()) == 0) {
+                std::cout << "Assigning intermesh link direction to local host: "
+                          << static_cast<uint32_t>(intermesh_routing_direction) << " and channel: " << +eth_chan
+                          << " Fabric Node ID: " << fabric_node_id << std::endl;
+            }
             direction_to_channel_map[intermesh_routing_direction].push_back(eth_chan);
         }
     }

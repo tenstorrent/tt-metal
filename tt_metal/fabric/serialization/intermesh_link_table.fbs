@@ -1,3 +1,5 @@
+include "logical_eth_chan_table.fbs";
+
 namespace tt.tt_fabric.flatbuffer;
 
 table MeshId {
@@ -6,11 +8,6 @@ table MeshId {
 
 table MeshHostRankId {
   value: uint32;
-}
-
-table EthChanDescriptor {
-    board_id: uint64;
-    chan_id: uint32;
 }
 
 table EthernetLink {

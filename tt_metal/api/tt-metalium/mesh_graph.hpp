@@ -24,6 +24,7 @@ namespace tt {
 enum class ARCH;
 namespace tt_metal {
 enum class ClusterType : std::uint8_t;
+class PhysicalSystemDescriptor;
 }  // namespace tt_metal
 }  // namespace tt
 namespace tt::tt_fabric {
@@ -44,6 +45,15 @@ enum class FabricType {
     TORUS_X = 1 << 1,  // Connections along mesh_coord[1]
     TORUS_Y = 1 << 2,  // Connections along mesh_coord[0]
     TORUS_XY = (TORUS_X | TORUS_Y),
+};
+
+// TODO: first pass at switching over MeshId/chip_id_t to proper struct
+// Need to update the usage in routing table generator
+class FabricNodeId {
+public:
+    explicit FabricNodeId(MeshId mesh_id, std::uint32_t chip_id);
+    MeshId mesh_id{0};
+    std::uint32_t chip_id = 0;
 };
 
 FabricType operator|(FabricType lhs, FabricType rhs);
@@ -79,7 +89,11 @@ using InterMeshConnectivity = std::vector<std::vector<std::unordered_map<MeshId,
 using IntraMeshConnectivity = std::vector<std::vector<std::unordered_map<chip_id_t, RouterEdge>>>;
 class MeshGraph {
 public:
-    explicit MeshGraph(const std::string& mesh_graph_desc_file_path);
+    explicit MeshGraph(
+        const std::string& mesh_graph_desc_file_path,
+        std::optional<std::map<FabricNodeId, chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping =
+            std::nullopt,
+        std::shared_ptr<tt_metal::PhysicalSystemDescriptor> physical_system_descriptor = nullptr);
     MeshGraph() = delete;
     ~MeshGraph() = default;
 
@@ -122,7 +136,10 @@ private:
     void validate_mesh_id(MeshId mesh_id) const;
     std::unordered_map<chip_id_t, RouterEdge> get_valid_connections(
         const MeshCoordinate& src_mesh_coord, const MeshCoordinateRange& mesh_coord_range, FabricType fabric_type) const;
-    void initialize_from_yaml(const std::string& mesh_graph_desc_file_path);
+    void initialize_from_yaml(
+        const std::string& mesh_graph_desc_file_path,
+        std::optional<std::map<FabricNodeId, chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping,
+        std::shared_ptr<tt_metal::PhysicalSystemDescriptor> physical_system_descriptor);
 
     void add_to_connectivity(
         MeshId src_mesh_id,

@@ -18,7 +18,11 @@
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <tt_stl/indestructible.hpp>
 #include <tt_stl/caseless_comparison.hpp>
-
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include "tt_metal/impl/context/metal_context.hpp"
+#include <tt-metalium/multi_mesh_types.hpp>
+#include "tt_metal/fabric/serialization/logical_port_to_eth_chan.hpp"
+#include "tt_metal/fabric/serialization/connections_table.hpp"
 namespace tt {
 enum class ARCH;
 }  // namespace tt
@@ -60,8 +64,14 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
 
 bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test; }
 
-MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path) {
-    this->initialize_from_yaml(mesh_graph_desc_file_path);
+MeshGraph::MeshGraph(
+    const std::string& mesh_graph_desc_file_path,
+    std::optional<std::map<FabricNodeId, chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping,
+    std::shared_ptr<tt_metal::PhysicalSystemDescriptor> physical_system_descriptor) {
+    std::cout << "Mesh Graph: Creating Mesh Graph" << std::endl;
+    this->initialize_from_yaml(
+        mesh_graph_desc_file_path, logical_mesh_chip_id_to_physical_chip_id_mapping, physical_system_descriptor);
+    std::cout << "Mesh Graph: Mesh Graph Created" << std::endl;
 }
 
 void MeshGraph::add_to_connectivity(
@@ -163,7 +173,11 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
     return valid_connections;
 }
 
-void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_path) {
+void MeshGraph::initialize_from_yaml(
+    const std::string& mesh_graph_desc_file_path,
+    std::optional<std::map<FabricNodeId, chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping,
+    std::shared_ptr<tt_metal::PhysicalSystemDescriptor> physical_system_descriptor) {
+    using namespace tt::tt_metal::distributed::multihost;
     std::ifstream fdesc(mesh_graph_desc_file_path);
     TT_FATAL(not fdesc.fail(), "Failed to open file: {}", mesh_graph_desc_file_path);
 
@@ -354,6 +368,156 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
                 mesh_edge_ports_to_chip_id[*mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
             }
         }
+    }
+    std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>> connections;
+    if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
+        // Logical to physical mapping for exit node links per mesh
+        std::map<std::string, EthChanDescriptor> logical_port_to_eth_chan;
+        std::set<EthChanDescriptor> processed_exit_nodes;
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        auto chip_unique_ids = cluster.get_unique_chip_ids();
+
+        const auto& src_host = physical_system_descriptor->my_host_name();
+        std::vector<tt_metal::ExitNodeConnection> exit_nodes;
+        for (const auto& dst_host : physical_system_descriptor->get_all_hostnames()) {
+            if (dst_host == src_host) {
+                continue;
+            }
+            exit_nodes = physical_system_descriptor->get_connecting_exit_nodes(src_host, dst_host);
+            for (const auto& exit_node : exit_nodes) {
+                FabricNodeId curr_fabric_node_id(MeshId{0}, 0);
+                auto exit_node_descriptor =
+                    EthChanDescriptor{.board_id = *(exit_node.src_exit_node), .chan_id = exit_node.eth_conn.src_chan};
+
+                for (const auto& [physical_chip_id, unique_id] : chip_unique_ids) {
+                    if (unique_id == *(exit_node.src_exit_node)) {
+                        for (const auto& [fabric_node_id, chip] :
+                             logical_mesh_chip_id_to_physical_chip_id_mapping.value()) {
+                            if (physical_chip_id == chip) {
+                                curr_fabric_node_id = fabric_node_id;
+                                break;
+                            }
+                        }
+                    }
+                }
+                auto curr_log_chip_id = curr_fabric_node_id.chip_id;
+                for (const auto& [port_id, chip_id] : mesh_edge_ports_to_chip_id[1]) {
+                    if (chip_id == curr_log_chip_id) {
+                        auto port_id_string =
+                            std::string(enchantum::to_string(port_id.first)) + std::to_string(port_id.second);
+                        if (logical_port_to_eth_chan.find(port_id_string) == logical_port_to_eth_chan.end() &&
+                            processed_exit_nodes.find(exit_node_descriptor) == processed_exit_nodes.end()) {
+                            logical_port_to_eth_chan[port_id_string] = exit_node_descriptor;
+                            processed_exit_nodes.insert(exit_node_descriptor);
+                        }
+                    }
+                }
+            }
+        }
+        auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+        std::size_t serialized_table_size = 0;
+        std::vector<uint8_t> serialized_table;
+        if (*(distributed_context.rank()) != 0) {
+            auto serialized_table = serialize_logical_port_to_eth_chan_to_bytes(logical_port_to_eth_chan);
+            std::size_t serialized_table_size = serialized_table.size();
+            distributed_context.send(
+                tt::stl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
+                Rank{0},
+                Tag{0});
+            distributed_context.send(
+                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
+                Rank{0},
+                Tag{0});
+        } else {
+            distributed_context.recv(
+                tt::stl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
+                Rank{1},
+                Tag{0});
+            serialized_table.resize(serialized_table_size);
+            distributed_context.recv(
+                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
+                Rank{1},
+                Tag{0});
+            auto peer_table = deserialize_logical_port_to_eth_chan_from_bytes(serialized_table);
+            for (const auto& [my_port, my_eth_chan] : logical_port_to_eth_chan) {
+                for (const auto& [peer_port, peer_eth_chan] : peer_table) {
+                    for (const auto& exit_node : exit_nodes) {
+                        if (*exit_node.src_exit_node == my_eth_chan.board_id &&
+                            exit_node.eth_conn.src_chan == my_eth_chan.chan_id &&
+                            *exit_node.dst_exit_node == peer_eth_chan.board_id &&
+                            exit_node.eth_conn.dst_chan == peer_eth_chan.chan_id) {
+                            connections.push_back({{0, my_port}, {1, peer_port}});
+                            connections.push_back({{1, peer_port}, {0, my_port}});
+                            // std::cout << "Paired ports: " << my_port << " and " << peer_port << std::endl;
+                        }
+                    }
+                }
+            }
+        }
+        distributed_context.barrier();
+        if (*(distributed_context.rank()) == 0) {
+            auto serialized_connections = serialize_connections_table_to_bytes(connections);
+            std::size_t serialized_connections_size = serialized_connections.size();
+            distributed_context.send(
+                tt::stl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(&serialized_connections_size), sizeof(serialized_connections_size)),
+                Rank{1},
+                Tag{0});
+            distributed_context.send(
+                tt::stl::as_writable_bytes(
+                    tt::stl::Span<uint8_t>(serialized_connections.data(), serialized_connections.size())),
+                Rank{1},
+                Tag{0});
+        } else {
+            std::size_t serialized_connections_size = 0;
+            distributed_context.recv(
+                tt::stl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(&serialized_connections_size), sizeof(serialized_connections_size)),
+                Rank{0},
+                Tag{0});
+            std::vector<uint8_t> serialized_connections;
+            serialized_connections.resize(serialized_connections_size);
+            distributed_context.recv(
+                tt::stl::as_writable_bytes(
+                    tt::stl::Span<uint8_t>(serialized_connections.data(), serialized_connections.size())),
+                Rank{0},
+                Tag{0});
+            connections = deserialize_connections_table_from_bytes(serialized_connections);
+        }
+        distributed_context.barrier();
+        if (*(distributed_context.rank()) == 0) {
+            for (const auto& connection : connections) {
+                std::cout << "Connection: " << std::get<0>(connection).second << " and "
+                          << std::get<1>(connection).second << std::endl;
+            }
+        }
+        // exit(0);
+        for (const auto& connection : connections) {
+            auto src_mesh = std::get<0>(connection).first;
+            auto dst_mesh = std::get<1>(connection).first;
+            auto src_port = std::get<0>(connection).second;
+            auto dst_port = std::get<1>(connection).second;
+            // Extract channel ids from port strings
+            auto src_chan = static_cast<uint32_t>(std::stoul(src_port.substr(1, src_port.size() - 1)));
+            auto dst_chan = static_cast<uint32_t>(std::stoul(dst_port.substr(1, dst_port.size() - 1)));
+            auto src_port_dir =
+                enchantum::cast<RoutingDirection>(src_port.substr(0, 1), ttsl::ascii_caseless_comp).value();
+            auto dst_port_dir =
+                enchantum::cast<RoutingDirection>(dst_port.substr(0, 1), ttsl::ascii_caseless_comp).value();
+
+            port_id_t src_port_id = {src_port_dir, src_chan};
+            port_id_t dst_port_id = {dst_port_dir, dst_chan};
+            auto src_chip = mesh_edge_ports_to_chip_id[src_mesh].at(src_port_id);
+            auto dst_chip = mesh_edge_ports_to_chip_id[dst_mesh].at(dst_port_id);
+            if (*(distributed_context.rank()) == 0) {
+                std::cout << "Adding connectivity: " << src_mesh << " " << src_chip << " and " << dst_mesh << " "
+                          << dst_chip << " with direction: " << static_cast<uint32_t>(src_port_dir) << std::endl;
+            }
+            this->add_to_connectivity(MeshId{src_mesh}, src_chip, MeshId{dst_mesh}, dst_chip, src_port_dir);
+        }
+        return;
     }
     // Loop over Graph, populate inter mesh
     auto convert_yaml_to_port_id = [](const YAML::Node& node) -> std::pair<MeshId, port_id_t> {

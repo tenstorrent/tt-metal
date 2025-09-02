@@ -1,0 +1,17 @@
+namespace tt.tt_fabric.flatbuffer;
+
+table EthChanDescriptor {
+    board_id: uint64;
+    chan_id: uint32;
+}
+
+table LogicalPortEntry {
+  port_name: string;
+  eth_channel: EthChanDescriptor;
+}
+
+table LogicalPortToEthChanTable {
+  entries: [LogicalPortEntry];
+}
+
+root_type LogicalPortToEthChanTable;

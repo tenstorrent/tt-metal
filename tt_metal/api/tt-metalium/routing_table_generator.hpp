@@ -14,19 +14,16 @@
 #include <tt-metalium/fabric_types.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>
 
+namespace tt::tt_metal {
+
+class PhysicalSystemDescriptor;
+
+}  // namespace tt::tt_metal
+
 namespace tt::tt_fabric {
 
 using RoutingTable =
     std::vector<std::vector<std::vector<RoutingDirection>>>;  // [mesh_id][chip_id][target_chip_or_mesh_id]
-
-// TODO: first pass at switching over MeshId/chip_id_t to proper struct
-// Need to update the usage in routing table generator
-class FabricNodeId {
-public:
-    explicit FabricNodeId(MeshId mesh_id, std::uint32_t chip_id);
-    MeshId mesh_id{0};
-    std::uint32_t chip_id = 0;
-};
 
 bool operator==(const FabricNodeId& lhs, const FabricNodeId& rhs);
 bool operator!=(const FabricNodeId& lhs, const FabricNodeId& rhs);
@@ -38,7 +35,11 @@ std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id);
 
 class RoutingTableGenerator {
 public:
-    explicit RoutingTableGenerator(const std::string& mesh_graph_desc_yaml_file);
+    explicit RoutingTableGenerator(
+        const std::string& mesh_graph_desc_yaml_file,
+        std::optional<std::map<FabricNodeId, chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping =
+            std::nullopt,
+        std::shared_ptr<tt_metal::PhysicalSystemDescriptor> physical_system_descriptor = nullptr);
     ~RoutingTableGenerator() = default;
 
     void dump_to_yaml();

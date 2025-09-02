@@ -42,6 +42,8 @@ target_sources(
         fabric_tensix_builder.cpp
         compressed_routing_table.cpp
         serialization/intermesh_link_table.cpp
+        serialization/logical_port_to_eth_chan.cpp
+        serialization/connections_table.cpp
         serialization/physical_desc.cpp
         erisc_datamover_builder_helper.cpp
         ccl/ccl_common.cpp
@@ -52,6 +54,8 @@ target_sources(
 include(flatbuffers)
 set(FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/intermesh_link_table.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/logical_eth_chan_table.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/connections_table.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/physical_desc.fbs
 )
 
