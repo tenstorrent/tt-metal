@@ -24,8 +24,6 @@ class TtTransformerBlock(LightweightModule):
         use_paged_kv_cache=False,
         prefetcher_setup=None,
         tt_ccl=None,
-        scaling_tensor_q=None,
-        scaling_tensor_k=None,
     ):
         super().__init__()
 
@@ -62,8 +60,6 @@ class TtTransformerBlock(LightweightModule):
             use_paged_kv_cache=use_paged_kv_cache,
             prefetcher_setup=prefetcher_setup,
             tt_ccl=tt_ccl,
-            scaling_tensor_q=scaling_tensor_q,
-            scaling_tensor_k=scaling_tensor_k,
         )
         self.feed_forward = TtLlamaMLP(
             mesh_device=mesh_device,

@@ -5,7 +5,6 @@
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
 
 
 class TtLlamaAttention(LightweightModule):
@@ -22,8 +21,6 @@ class TtLlamaAttention(LightweightModule):
         use_paged_kv_cache=False,
         prefetcher_setup=None,
         tt_ccl=None,
-        scaling_tensor_q=None,
-        scaling_tensor_k=None,
     ):
         super().__init__()
 
@@ -418,8 +415,6 @@ class TtLlamaAttention(LightweightModule):
             qkv_memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
             use_optimal_ccl_for_llama=True,
         )
-
-        # breakpoint()
 
         if self.qk_norm:
             rm_mem_cfg_q = q_heads_pre_rot_1BQD.memory_config()
