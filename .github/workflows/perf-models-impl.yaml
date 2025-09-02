@@ -280,7 +280,7 @@ jobs:
             # Merge all the generated reports
             env python3 models/perf/merge_perf_results.py CHECK
         if: ${{ !cancelled() }}
-      
+
       # TODO: Fix the pipeline before enabling notifications.
       #- uses: tenstorrent/tt-metal/.github/actions/slack-report@main
       #  if: ${{ failure() }}
