@@ -42,4 +42,11 @@ void NoOp::set_steps(size_t steps) {
     this->m_steps = steps;
 }
 
+float NoOp::get_lr() const {
+    return 0.0f;
+}
+
+void NoOp::set_lr(float lr) {
+}
+
 }  // namespace ttml::optimizers
