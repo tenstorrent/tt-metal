@@ -8,6 +8,13 @@ from models.demos.yolov11.tt.common import TtnnConv, deallocate_tensors, sharded
 from models.demos.yolov11.tt.ttnn_yolov11_bottleneck import TtnnBottleneck
 
 
+def p(x, a="x"):
+    print(f"{a}'s  shape: {x.shape}")
+    print(f"{a}'s  layout: {x.layout}")
+    print(f"{a}'s  dtype: {x.dtype}")
+    print(f"{a}'s config: {x.memory_config()}")
+
+
 class TtnnC3K:
     def __init__(self, device, parameter, conv_pt):
         self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1)
@@ -24,6 +31,8 @@ class TtnnC3K:
         if use_shard_concat:
             x2 = ttnn.to_layout(x2, ttnn.ROW_MAJOR_LAYOUT)
             k2 = ttnn.to_layout(k2, ttnn.ROW_MAJOR_LAYOUT)
+            p(k2, "k2")
+            p(x2, "x2")
             x = sharded_concat([k2, x2], to_interleaved=False)
         else:
             x = ttnn.concat((k2, x2), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
