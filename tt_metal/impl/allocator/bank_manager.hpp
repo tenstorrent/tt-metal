@@ -41,23 +41,17 @@ public:
             bool operator>(const StateId& other) const noexcept { return value > other.value; }
         };
 
-        using AdjacencyList = tt::stl::SmallVector<tt::stl::SmallVector<StateId>>;
+        using AdjacencyList = ttsl::SmallVector<ttsl::SmallVector<StateId>>;
         AdjacencyList dependencies{};
 
         StateDependencies();
-        explicit StateDependencies(const std::unordered_map<StateId, tt::stl::SmallVector<StateId>>& dependencies_map);
+        explicit StateDependencies(const std::unordered_map<StateId, ttsl::SmallVector<StateId>>& dependencies_map);
 
         uint32_t num_states() const;
+        ttsl::SmallVector<StateId> states() const;
 
         bool operator==(const StateDependencies& other) const noexcept;
         bool operator!=(const StateDependencies& other) const noexcept { return !(*this == other); }
-    };
-
-    struct IntervalSet {
-        // Stored as sorted, disjoint intervals [start, end)
-        std::vector<std::pair<DeviceAddr, DeviceAddr>> ranges;
-        void add(DeviceAddr start, DeviceAddr end);
-        void remove(DeviceAddr start, DeviceAddr end);
     };
 
     BankManager(
@@ -127,8 +121,6 @@ private:
     // State-dependent members
     // Dependencies between states (also encodes number of states)
     StateDependencies state_dependencies_{};
-    // Allocator masks contributed by dependencies on other states
-    ttsl::SmallVector<std::unordered_map<uint32_t, IntervalSet>> reservations_by_source_{};
 
     // Track allocations per state
     ttsl::SmallVector<std::unordered_set<DeviceAddr>> allocated_buffers_{};
