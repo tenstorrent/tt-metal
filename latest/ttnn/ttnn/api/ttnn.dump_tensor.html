@@ -153,7 +153,6 @@
 <ul class="simple">
 <li><p><strong>file_name</strong> (<em>str</em><em> | </em><em>pathlib.Path</em>) – The file name.</p></li>
 <li><p><strong>tensor</strong> (<em>ttnn.Tensor</em>) – the tensor to be dumped.</p></li>
-<li><p><strong>enable_multihost_format</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to dump the tensor to the multi-host format. Defaults to <cite>False</cite>.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span>
@@ -166,7 +165,7 @@
 <p class="admonition-title">Example</p>
 <div class="doctest highlight-default notranslate">
 <div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">ones</span><span class="p">([</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">bfloat16</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dump_tensor</span><span class="p">(</span><span class="n">file_name</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">tensor</span><span class="o">.</span><span class="n">bin</span><span class="p">),</span> <span class="n">tensor</span><span class="o">=</span><span class="n">tensor</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dump_tensor</span><span class="p">(</span><span class="n">file_name</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">tensor</span><span class="o">.</span><span class="n">tensorbin</span><span class="p">),</span> <span class="n">tensor</span><span class="o">=</span><span class="n">tensor</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
