@@ -29,4 +29,3 @@ class TtnnBottleneck:
         x = self.cv2(device, x)
 
         return ttnn.add(input, x, memory_config=x.memory_config()) if self.shortcut else x
-
