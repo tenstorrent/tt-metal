@@ -91,7 +91,7 @@ def test_yolov8x_640(device, input_tensor, use_pretrained_weights, model_locatio
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [(torch.rand((1, 3, 640, 640)))], ids=["input_tensor1"])
-def test_Conv(device, input_tensor, model_location_generator):
+def test_conv(device, input_tensor, model_location_generator):
     disable_persistent_kernel_cache()
 
     torch_model = load_torch_model(model_location_generator)
@@ -140,7 +140,7 @@ def test_Conv(device, input_tensor, model_location_generator):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [(torch.rand((1, 160, 160, 160)))], ids=["input_tensor1"])
-def test_C2f(device, input_tensor, reset_seeds, model_location_generator):
+def test_c2f(device, input_tensor, reset_seeds, model_location_generator):
     disable_persistent_kernel_cache()
 
     torch_model = load_torch_model(model_location_generator)
@@ -184,7 +184,7 @@ def test_C2f(device, input_tensor, reset_seeds, model_location_generator):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [(torch.rand((1, 640, 20, 20)))], ids=["input_tensor1"])
-def test_SPPF(device, input_tensor, reset_seeds, model_location_generator):
+def test_sppf(device, input_tensor, reset_seeds, model_location_generator):
     disable_persistent_kernel_cache()
 
     torch_model = load_torch_model(model_location_generator)
@@ -225,7 +225,7 @@ def test_SPPF(device, input_tensor, reset_seeds, model_location_generator):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [(torch.rand((1, 64, 8400)))], ids=["input_tensor1"])
-def test_DFL(device, input_tensor, reset_seeds, model_location_generator):
+def test_dfl(device, input_tensor, reset_seeds, model_location_generator):
     disable_persistent_kernel_cache()
 
     torch_model = load_torch_model(model_location_generator)
