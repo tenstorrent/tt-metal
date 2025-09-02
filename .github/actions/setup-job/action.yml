@@ -17,13 +17,17 @@ inputs:
     description: 'Enable watcher'
     default: false
     type: boolean
+  fetch-depth:
+    description: 'Fetch depth for git'
+    default: 1
+    type: integer
 runs:
   using: "composite"
   steps:
     - name: 🧬 Checkout Repository
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0
+        fetch-depth: ${{ inputs.fetch-depth }}
         submodules: recursive
         path: ${{ inputs.path }}
 
