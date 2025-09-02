@@ -1,5 +1,3 @@
-# Simple n300_lb_cluster using V3 schema
-
 # Superpod template (4 pods)
 graph_templates {
   key: "n300_lb_superpod"
