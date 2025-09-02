@@ -453,7 +453,7 @@ def test_tt_upsample_forward(mesh_device, config, divide_T, reset_seeds, use_rea
     assert_quality(ref_output, tt_output_torch, pcc=0.989)
 
 
-def create_decoder_models(mesh_device, use_real_weights, **model_args):
+def create_decoder_models(mesh_device, use_real_weights, parallel_config, ccl_manager, **model_args):
     """Initialize both reference and TT decoder models with optional real weights."""
     # Create reference model
     reference_model = RefDecoder(**model_args)
@@ -473,6 +473,8 @@ def create_decoder_models(mesh_device, use_real_weights, **model_args):
     tt_model = TtDecoder(
         mesh_device=mesh_device,
         torch_ref=reference_model,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
         **model_args,
     )
 
@@ -532,7 +534,16 @@ def test_tt_decoder_forward(mesh_device, config, divide_T, reset_seeds, use_real
 
     # Create models
     logger.info("Creating VAE decoder models")
-    reference_model, tt_model = create_decoder_models(mesh_device, use_real_weights=use_real_weights, **model_args)
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=1)
+    vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=8, mesh_axis=1))
+
+    reference_model, tt_model = create_decoder_models(
+        mesh_device,
+        use_real_weights=use_real_weights,
+        parallel_config=vae_parallel_config,
+        ccl_manager=ccl_manager,
+        **model_args,
+    )
 
     # Create input tensor (latent representation)
     torch_input = torch.randn(N, C, T, H, W)
