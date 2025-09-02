@@ -30,7 +30,7 @@ class TtnnBottleneck:
         print(f"DEBUG Bottleneck: After cv1 shape = {x1.shape}")
         x2 = self.cv2(device, x)  # 64 → 32 (both operate on original input)
         print(f"DEBUG Bottleneck: After cv2 shape = {x2.shape}")
-        x = ttnn.add(x1, x2, memory_config=x1.memory_config())  # 32 + 32 = 32
-        print(f"DEBUG Bottleneck: After x1+x2 shape = {x.shape}")
-        # No residual connection since dimensions don't match (64 + 32)
+        x = ttnn.concat([x1, x2], 1, memory_config=x1.memory_config())  # 32 concat 32 = 64
+        print(f"DEBUG Bottleneck: After concat shape = {x.shape}")
+        # Concatenate to maintain 64 output channels for C3k2 balance
         return x

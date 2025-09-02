@@ -99,8 +99,7 @@ class Bottleneck(nn.Module):
         input = x
         x1 = self.cv1(x)  # 64 → 32
         x2 = self.cv2(x)  # 64 → 32 (both operate on original input)
-        x = x1 + x2       # 32 + 32 = 32 channels
-        # Note: No residual connection since dimensions don't match (64 + 32)
+        x = torch.cat([x1, x2], 1)  # Concatenate: 32 + 32 = 64 channels
         return x
 
 
