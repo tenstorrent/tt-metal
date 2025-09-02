@@ -52,6 +52,7 @@ target_sources(
     PRIVATE
         test_add.cpp
         test_add_int.cpp
+        test_sub_int.cpp
         test_broadcast_to.cpp
         test_generic_op.cpp
         test_graph_add.cpp
