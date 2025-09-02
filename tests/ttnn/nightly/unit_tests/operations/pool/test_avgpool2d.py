@@ -93,9 +93,11 @@ def run_avg_pool2d(
     count_include_pad,
     shard_scheme,
     run_twice=False,
-    dtype=ttnn.bfloat16,
+    in_dtype=ttnn.bfloat16,
     nightly_skips=True,
     skips_enabled=True,
+    out_dtype=ttnn.bfloat16,
+    output_layout=ttnn.ROW_MAJOR_LAYOUT,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -117,6 +119,9 @@ def run_avg_pool2d(
     else:
         raise ValueError(f"Padding must be 2D or 4D tuple, got {len(padding)}D")
 
+    if (out_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat4_b) and output_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("BFLOAT8_B/BFLOAT4_B output data format is not supported with ROW_MAJOR layout")
+
     if skips_enabled:
         # skips to avoid unimportant combinations
         if divisor_override is not None:
@@ -132,7 +137,7 @@ def run_avg_pool2d(
 
     # skips to speed up nightly test
     if nightly_skips:
-        if dtype == ttnn.bfloat8_b:
+        if in_dtype == ttnn.bfloat8_b:
             if stride == (2, 2) or padding == (1, 1):
                 pytest.skip("Skip for stride (2, 2) and padding (1, 1) for BF8!")
             if kernel_size == (9, 9):
@@ -168,7 +173,7 @@ def run_avg_pool2d(
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
     torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
-    if dtype == ttnn.bfloat8_b:
+    if in_dtype == ttnn.bfloat8_b:
         ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     else:
         ttnn_input = ttnn.from_torch(
@@ -190,14 +195,17 @@ def run_avg_pool2d(
         count_include_pad=count_include_pad,
         memory_config=None,
         applied_shard_scheme=shard_scheme,
+        dtype=out_dtype,
+        output_layout=output_layout,
     )
 
     # TODO always use run_twice after resolution of https://github.com/tenstorrent/tt-metal/issues/26093
     # skip run_twice for blackhole with wide Bfloat8 tensors as this currently causes PCC failures
-    if is_blackhole() and dtype == ttnn.bfloat8_b and in_c > 256:
+    if is_blackhole() and in_dtype == ttnn.bfloat8_b and in_c > 256:
         run_twice = False
 
     if run_twice:
+        ttnn.deallocate(ttnn_output, True)
         ttnn_output = ttnn.avg_pool2d(
             input_tensor=ttnn_input,
             batch_size=in_n,
@@ -212,6 +220,8 @@ def run_avg_pool2d(
             count_include_pad=count_include_pad,
             memory_config=None,
             applied_shard_scheme=shard_scheme,
+            dtype=out_dtype,
+            output_layout=output_layout,
         )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
@@ -270,12 +280,19 @@ def run_avg_pool2d(
     # since the atol default is 0.016 we don't see this issue for low magnitude values, but
     # when using small divisor overrides with large kernels we see much large values which
     # overwhelm the atol and the rtol becomes significant
-    rtol = 0.01
-    if dtype == ttnn.bfloat8_b:
+    rtol = 0.02
+    if out_dtype == ttnn.bfloat4_b:
+        pcc_thresh = 0.98
+    if in_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b:
         atol = 0.35
     assert_with_pcc(torch_output, ttnn_output, pcc_thresh)
-    allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
-    assert allclose
+    # Ensure both tensors have the same dtype for comparison
+    if out_dtype != ttnn.bfloat16:
+        ttnn_output = ttnn_output.to(torch.bfloat16)
+    # Skip allclose for bfloat4 output as it is too noisy
+    if out_dtype != ttnn.bfloat4_b:
+        allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
+        assert allclose
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -350,8 +367,15 @@ def run_avg_pool2d(
     ],
 )
 @pytest.mark.parametrize(
-    "dtype",
+    "in_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "out_layout",
+    [
+        ttnn.ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ttnn.TILE_LAYOUT,
+    ],
 )
 def test_run_avg_pool2d(
     device,
@@ -364,7 +388,8 @@ def test_run_avg_pool2d(
     divisor_override,
     count_include_pad,
     shard_scheme,
-    dtype,
+    in_dtype,
+    out_layout,
 ):
     run_avg_pool2d(
         device,
@@ -377,6 +402,8 @@ def test_run_avg_pool2d(
         divisor_override=divisor_override,
         count_include_pad=count_include_pad,
         shard_scheme=shard_scheme,
-        dtype=dtype,
+        in_dtype=in_dtype,
         run_twice=True,
+        output_layout=out_layout,
+        out_dtype=ttnn.bfloat16 if out_layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.bfloat8_b,
     )

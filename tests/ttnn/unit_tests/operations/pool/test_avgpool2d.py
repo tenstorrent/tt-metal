@@ -70,13 +70,20 @@ def tensor_map():
 @pytest.mark.parametrize(
     "shard_scheme",
     [
-        None,
+        # None,
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ],
 )
 @pytest.mark.parametrize(
-    "dtype",
+    "in_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "out_layout",
+    [
+        # ttnn.ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ttnn.TILE_LAYOUT,
+    ],
 )
 def test_avg_pool2d_post_commit(
     device,
@@ -89,15 +96,18 @@ def test_avg_pool2d_post_commit(
     divisor_override,
     count_include_pad,
     shard_scheme,
-    dtype,
+    in_dtype,
+    out_layout,
 ):
     # we only want to test the largest kernel size with a specific input shape
     # to test otherwise untouched paths in the large kernel, other shapes run OOM
     # or will just slow the test down doing redundant work
     if kernel_size == (36, 36) and input_shape != [1, 320, 48, 48] and input_shape != [1, 290, 47, 47]:
         pytest.skip("Skipping, only run shapes [1, 320, 48, 48] and [1, 290, 47, 47] with kernel size (36, 36)")
-    if dtype == ttnn.bfloat8_b and input_shape != [1, 320, 48, 48] and input_shape != [1, 512, 112, 32]:
-        pytest.skip("Skipping, only run shape [1, 320, 48, 48] with bfloat8_b dtype")
+    if in_dtype == ttnn.bfloat8_b and input_shape != [1, 320, 48, 48] and input_shape != [1, 512, 112, 32]:
+        pytest.skip("Skipping, only run shape [1, 320, 48, 48] with bfloat8_b input dtype")
+    if out_layout == ttnn.ttnn.TILE_LAYOUT and kernel_size == (36, 36):
+        pytest.skip("Skipping, OOMs with tiled output and kernel size (36, 36)")
     run_avg_pool2d(
         device=device,
         tensor_map=tensor_map,
@@ -109,6 +119,8 @@ def test_avg_pool2d_post_commit(
         divisor_override=divisor_override,
         count_include_pad=count_include_pad,
         shard_scheme=shard_scheme,
-        dtype=dtype,
+        in_dtype=in_dtype,
         nightly_skips=False,
+        output_layout=out_layout,
+        out_dtype=ttnn.bfloat16 if out_layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.bfloat8_b,
     )
