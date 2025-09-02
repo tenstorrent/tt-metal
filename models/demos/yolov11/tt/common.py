@@ -5,6 +5,7 @@
 import math
 
 import ttnn
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 class Yolov11Conv2D:
@@ -23,7 +24,10 @@ class Yolov11Conv2D:
         is_dfl=False,
         config_override=None,
         deallocate_activation=False,
+        split_weights=False,
+        core_count=None,
     ):
+        self.core_count = core_count
         self.is_detect = is_detect
         self.activation = activation
         self.is_dfl = is_dfl
@@ -31,6 +35,8 @@ class Yolov11Conv2D:
         self.device = device
         self.in_channels = conv.in_channels
         self.out_channels = conv.out_channels
+        if split_weights:
+            self.out_channels = self.out_channels // 2
         self.kernel_size = conv.kernel_size
         self.padding = conv.padding
         self.stride = conv.stride
@@ -41,7 +47,7 @@ class Yolov11Conv2D:
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=False,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
             math_approx_mode=True,
         )
         self.activation_dtype = activation_dtype
@@ -49,13 +55,20 @@ class Yolov11Conv2D:
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
-            enable_act_double_buffer=False,
+            enable_act_double_buffer=True,
             reshard_if_not_optimal=True if self.reshard else False,
             activation=self.activation,
+            enable_weights_double_buffer=True,
+            # core_grid=ttnn.CoreRangeSet({
+            #     ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))
+            # }),
         )
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
-
+        if self.core_count is not None:
+            shard_grid = get_shard_grid_from_num_cores(self.core_count, self.device)
+            self.conv_config.core_grid = shard_grid
+            self.conv_config.override_sharding_config = True
         if "bias" in conv_pth:
             bias = ttnn.from_device(conv_pth.bias)
             self.bias = bias
@@ -113,6 +126,9 @@ def sharded_concat(input_tensors, num_cores=64, dim=3, to_interleaved=True):
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
     in_shard_width = input_tensors[0].shape[-1]
     shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
+    print("wbfweyr", shard_height, in_shard_width)
+    # aligned_shard_height = roundup32(shard_height)
+    # aligned_shard_width = roundup32(in_shard_width)
     input_sharded_memory_config = ttnn.create_sharded_memory_config(
         (shard_height, in_shard_width),
         core_grid=shard_grid,
@@ -204,6 +220,8 @@ class TtnnConv:
         reshard=False,
         activation=None,
         deallocate_activation=False,
+        split_weights=False,
+        core_count=None,
     ):
         self.enable_act = enable_act
         if self.enable_act:
@@ -216,6 +234,8 @@ class TtnnConv:
             reshard=reshard,
             activation=activation,
             deallocate_activation=deallocate_activation,
+            split_weights=split_weights,
+            core_count=core_count,
         )
 
     def __call__(self, device, x):
