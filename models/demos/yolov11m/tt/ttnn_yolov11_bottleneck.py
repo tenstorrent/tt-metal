@@ -11,7 +11,7 @@ class TtnnBottleneck:
         self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1)
         self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2)
 
-    def __call__(self, device, x, tile_shape=32):
+    def __call__(self, device, x, tile_shape=64):
         print(f"DEBUG Bottleneck: Input shape = {x.shape}")
         input = x
         x = self.cv1(device, x)
