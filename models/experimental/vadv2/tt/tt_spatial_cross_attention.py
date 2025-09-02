@@ -72,7 +72,7 @@ class TtSpatialCrossAttention:
             index_query_per_img = ttnn.unsqueeze(index_query_per_img, 0)
             index_query_per_img = ttnn.unsqueeze(index_query_per_img, 0)
             index_query_per_img = ttnn.unsqueeze(index_query_per_img, 0)
-            output_tensor = ttnn.nonzero(index_query_per_img, queue_id=0)
+            output_tensor = ttnn.nonzero(index_query_per_img, queue_id=0, memory_config=ttnn.L1_MEMORY_CONFIG)
             no_of_non_zero_indices = output_tensor[0][..., 0].item()
             index_query_per_img = output_tensor[1][:, :, :, :no_of_non_zero_indices]
 
@@ -247,11 +247,12 @@ class TtMSDeformableAttention3D:
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_levels * self.num_points)
         )
-        attention_weights = ttnn.to_torch(attention_weights)  # OOM ISSUE
-        attention_weights = attention_weights.softmax(dim=-1)
-        attention_weights = ttnn.from_torch(
-            attention_weights, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
-        )
+        # attention_weights = ttnn.to_torch(attention_weights)  # OOM ISSUE
+        # attention_weights = attention_weights.softmax(dim=-1)
+        # attention_weights = ttnn.from_torch(
+        #     attention_weights, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
+        # )
+        attention_weights = ttnn.softmax(attention_weights, -1)
 
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_levels, self.num_points)
