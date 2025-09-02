@@ -31,6 +31,9 @@ tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh @cfjchu 
 tt_stl/ @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @omilyutin-tt
 tt_stl/**/CMakeLists.txt @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @omilyutin-tt @tenstorrent/metalium-developers-infra
 
+# Scaleout Tools
+scaleout_tools/ @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt
+
 # metal runtime
 tt_metal/**/CMakeLists.txt @tenstorrent/metalium-developers-infra
 tt_metal/ @tenstorrent/metalium-developers-infra # nothing should be caught by this, if so, someone added a path somewhere
