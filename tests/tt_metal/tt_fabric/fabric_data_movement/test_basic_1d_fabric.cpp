@@ -421,9 +421,9 @@ void RunTestUnicastRaw(
             log_info(
                 tt::LogTest,
                 "No fabric routers between Src MeshId {} ChipId {} - Dst MeshId {} ChipId {}",
-                src_fabric_node_id.mesh_id,
+                *(src_fabric_node_id.mesh_id),
                 src_fabric_node_id.chip_id,
-                *dst_fabric_node_id.mesh_id,
+                *(dst_fabric_node_id.mesh_id),
                 dst_fabric_node_id.chip_id);
 
             GTEST_SKIP() << "Skipping Test";
@@ -437,8 +437,8 @@ void RunTestUnicastRaw(
     log_info(tt::LogTest, "mesh size {:x}", mesh_shape.mesh_size());
     log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
     log_info(tt::LogTest, "mesh dimension 1 {:x}", mesh_shape[1]);
-    log_info(tt::LogTest, "Src MeshId {} ChipId {}", src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
-    log_info(tt::LogTest, "Dst MeshId {} ChipId {}", dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
+    log_info(tt::LogTest, "Src MeshId {} ChipId {}", *(src_fabric_node_id.mesh_id), src_fabric_node_id.chip_id);
+    log_info(tt::LogTest, "Dst MeshId {} ChipId {}", *(dst_fabric_node_id.mesh_id), dst_fabric_node_id.chip_id);
 
     auto edm_direction = control_plane.get_eth_chan_direction(src_fabric_node_id, edm_port);
     log_info(tt::LogTest, "Using edm port {} in direction {}", edm_port, edm_direction);
@@ -922,12 +922,15 @@ void RunTestMCastConnAPI(
     log_info(tt::LogTest, "mesh dimensions {:x}", mesh_shape.dims());
     log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
     log_info(tt::LogTest, "mesh dimension 1 {:x}", mesh_shape[1]);
-    log_info(tt::LogTest, "Mcast Src MeshId {} ChipId {}", src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
+    log_info(tt::LogTest, "Mcast Src MeshId {} ChipId {}", *(src_fabric_node_id.mesh_id), src_fabric_node_id.chip_id);
     log_info(
-        tt::LogTest, "Mcast Fwd Dst MeshId {} ChipId {}", left_fabric_node_id.mesh_id, left_fabric_node_id.chip_id);
+        tt::LogTest, "Mcast Fwd Dst MeshId {} ChipId {}", *(left_fabric_node_id.mesh_id), left_fabric_node_id.chip_id);
     log_info(tt::LogTest, "Mcast Fwd Dst Device is {} hops in direction: {}", fwd_hops, fwd_dir);
     log_info(
-        tt::LogTest, "Mcast Bwd Dst MeshId {} ChipId {}", right_fabric_node_id.mesh_id, right_fabric_node_id.chip_id);
+        tt::LogTest,
+        "Mcast Bwd Dst MeshId {} ChipId {}",
+        *(right_fabric_node_id.mesh_id),
+        right_fabric_node_id.chip_id);
     log_info(tt::LogTest, "Mcast Bwd Dst Device is {} hops in direction: {}", bwd_hops, bwd_dir);
 
     std::vector<uint32_t> sender_runtime_args = {
@@ -1259,11 +1262,11 @@ void RunTest2DMCastConnAPI(
     log_info(tt::LogTest, "mesh dimensions {:x}", mesh_shape.dims());
     log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
     log_info(tt::LogTest, "mesh dimension 1 {:x}", ew_dim);
-    log_info(tt::LogTest, "Mcast Src MeshId {} ChipId {}", src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
+    log_info(tt::LogTest, "Mcast Src MeshId {} ChipId {}", *(src_fabric_node_id.mesh_id), src_fabric_node_id.chip_id);
     log_info(
         tt::LogTest,
         "Mcast North East Branch Dst MeshId {} ChipId {}",
-        north_east_fabric_node_id.mesh_id,
+        *(north_east_fabric_node_id.mesh_id),
         north_east_fabric_node_id.chip_id);
     log_info(
         tt::LogTest,
@@ -1272,7 +1275,7 @@ void RunTest2DMCastConnAPI(
     log_info(
         tt::LogTest,
         "Mcast West Branch Dst MeshId {} ChipId {}",
-        north_west_fabric_node_id.mesh_id,
+        *(north_west_fabric_node_id.mesh_id),
         north_west_fabric_node_id.chip_id);
     log_info(
         tt::LogTest,
@@ -1281,7 +1284,7 @@ void RunTest2DMCastConnAPI(
     log_info(
         tt::LogTest,
         "Mcast North East Branch Dst MeshId {} ChipId {}",
-        south_east_fabric_node_id.mesh_id,
+        *(south_east_fabric_node_id.mesh_id),
         south_east_fabric_node_id.chip_id);
     log_info(
         tt::LogTest,
@@ -1290,7 +1293,7 @@ void RunTest2DMCastConnAPI(
     log_info(
         tt::LogTest,
         "Mcast West Branch Dst MeshId {} ChipId {}",
-        south_west_fabric_node_id.mesh_id,
+        *(south_west_fabric_node_id.mesh_id),
         south_west_fabric_node_id.chip_id);
     log_info(
         tt::LogTest,
@@ -1299,13 +1302,13 @@ void RunTest2DMCastConnAPI(
     log_info(
         tt::LogTest,
         "Mcast Right Direct Dst MeshId {} ChipId {}",
-        right_fabric_node_id.mesh_id,
+        *(right_fabric_node_id.mesh_id),
         right_fabric_node_id.chip_id);
     log_info(tt::LogTest, "Mcast Right Direct Dst Device is {} hops in direction  : RoutingDirection::E", east_hops);
     log_info(
         tt::LogTest,
         "Mcast Left Direct Dst MeshId {} ChipId {}",
-        left_fabric_node_id.mesh_id,
+        *(left_fabric_node_id.mesh_id),
         left_fabric_node_id.chip_id);
     log_info(tt::LogTest, "Mcast Left Direct Dst Device is {} hops in direction : RoutingDirection::W", west_hops);
 

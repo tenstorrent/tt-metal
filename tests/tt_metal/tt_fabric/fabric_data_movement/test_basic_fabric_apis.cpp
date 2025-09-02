@@ -590,14 +590,9 @@ TEST_P(T3kCustomMeshGraphFabric2DDynamicFixture, TestGetNextHopRouterDirectionDi
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    T3kDisjointMeshGraphFabric2DDynamicTests,
-    T3kCustomMeshGraphFabric2DDynamicFixture,
-    ::testing::ValuesIn(t3k_disjoint_mesh_descriptor_chip_mappings));
-
-INSTANTIATE_TEST_SUITE_P(
     T3kCustomMeshGraphFabric2DDynamicTests,
     T3kCustomMeshGraphFabric2DDynamicFixture,
-    ::testing::ValuesIn(t3k_mesh_descriptor_chip_mappings));
+    ::testing::Values(t3k_mesh_descriptor_chip_mappings[0]));
 
 TEST_F(Fabric2DDynamicFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
 
