@@ -30,6 +30,7 @@ class TtVoVNet:
                 base_address=f"stem.0",
                 device=self.device,
                 parameters=parameters,
+                deallocate_activation=True,
             ),
             TtSeparableConvNormAct(
                 base_address=f"stem.1",

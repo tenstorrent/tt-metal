@@ -43,7 +43,7 @@ class TtOsaStage:
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if self.pool:
-            N, C, H, W = x.shape
+            N, H, W, C = x.shape
             out_h = (
                 int(((H + 2 * self.maxpool_pad - (self.maxpool_dilation * 3 - 1) - 1) / self.maxpool_stride) + 1) + 1
             )
@@ -89,7 +89,7 @@ class TtOsaStage:
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
             x = ttnn.reshape(x, (N, H // 2, W // 2, C))
 
-            x = ttnn.permute(x, (0, 3, 1, 2))
+            # x = ttnn.permute(x, (0, 3, 1, 2))
 
         for i, module in enumerate(self.blocks):
             x = module.forward(x)

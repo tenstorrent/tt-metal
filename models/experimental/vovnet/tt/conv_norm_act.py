@@ -15,6 +15,7 @@ class TtConvNormAct:
         base_address=None,
         device=None,
         parameters=None,
+        deallocate_activation=False,
     ) -> None:
         self.device = device
         self.conv = Conv(
@@ -23,6 +24,7 @@ class TtConvNormAct:
             conv_params=[stride, stride, padding, padding],
             activation="relu",
             parameters=parameters,
+            deallocate_activation=deallocate_activation,
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
