@@ -96,6 +96,9 @@ public:
     void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
     tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
 
+    // Profiler thread pool
+    std::shared_ptr<tt::tt_metal::ThreadPool> profiler_thread_pool_;
+
 private:
     friend class tt::stl::Indestructible<MetalContext>;
     MetalContext();

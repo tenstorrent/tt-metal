@@ -773,6 +773,7 @@ bool DevicePool::close_device(chip_id_t device_id) {
 
 bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize) {
     ZoneScoped;
+    log_info(tt::LogMetal, "DevicePool::close_devices");
 
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
     std::vector<chip_id_t> devices_to_close;

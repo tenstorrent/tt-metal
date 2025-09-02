@@ -20,6 +20,7 @@
 #include "buffer.hpp"
 #include "common/TracyTTDeviceData.hpp"
 #include "core_coord.hpp"
+#include "thread_pool.hpp"
 #include "profiler_optional_metadata.hpp"
 #include "profiler_types.hpp"
 #include "tracy/TracyTTDevice.hpp"
@@ -187,6 +188,12 @@ public:
 
     ~DeviceProfiler();
 
+    // Thread pool for profiler
+    std::shared_ptr<tt::tt_metal::ThreadPool> thread_pool;
+
+    // Mutex for profiler thread pool
+    // std::mutex* profiler_thread_pool_mutex = nullptr;
+
     // Device-core Syncdata
     std::map<CoreCoord, SyncInfo> device_core_sync_info;
 
@@ -262,9 +269,9 @@ public:
 // device_markers_per_core_risc_map. These are direct references to the original objects, not copies of the data.
 // Thread safety warning: device_markers_per_core_risc_map MUST NOT be modified (no insertions, deletions, or rehashing)
 // while these references are in use, as this could invalidate the references and cause undefined behavior.
-std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDeviceMarkersVector(
-    const std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>>&
-        device_markers_per_core_risc_map);
+// std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDeviceMarkersVector(
+//     const std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>>&
+//         device_markers_per_core_risc_map);
 
 bool useFastDispatch(IDevice* device);
 

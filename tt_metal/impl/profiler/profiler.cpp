@@ -134,7 +134,8 @@ std::unordered_map<uint16_t, tracy::MarkerDetails> generateZoneSourceLocationsHa
 
 void mergeSortedDeviceMarkerChunks(
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
-    const std::vector<uint32_t>& device_markers_chunk_offsets) {
+    const std::vector<uint32_t>& device_markers_chunk_offsets,
+    std::shared_ptr<tt::tt_metal::ThreadPool> thread_pool) {
     ZoneScoped;
 
     const uint32_t num_chunks = device_markers_chunk_offsets.size() - 1;
@@ -143,25 +144,29 @@ void mergeSortedDeviceMarkerChunks(
     while (num_chunks_to_merge_together <= num_chunks) {
         uint32_t i = 0;
         while (i <= num_chunks - num_chunks_to_merge_together) {
-            TT_ASSERT(std::is_sorted(
-                device_markers.begin() + device_markers_chunk_offsets[i],
-                device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
-                [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
-                   std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
-            TT_ASSERT(std::is_sorted(
-                device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
-                device_markers.begin() + device_markers_chunk_offsets[i + num_chunks_to_merge_together],
-                [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
-                   std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
+            thread_pool->enqueue([&device_markers, &device_markers_chunk_offsets, i, num_chunks_to_merge_together]() {
+                TT_ASSERT(std::is_sorted(
+                    device_markers.begin() + device_markers_chunk_offsets[i],
+                    device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
+                    [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
+                       std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
+                TT_ASSERT(std::is_sorted(
+                    device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
+                    device_markers.begin() + device_markers_chunk_offsets[i + num_chunks_to_merge_together],
+                    [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
+                       std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
 
-            std::inplace_merge(
-                device_markers.begin() + device_markers_chunk_offsets[i],
-                device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
-                device_markers.begin() + device_markers_chunk_offsets[i + num_chunks_to_merge_together],
-                [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
-                   std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); });
+                std::inplace_merge(
+                    device_markers.begin() + device_markers_chunk_offsets[i],
+                    device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
+                    device_markers.begin() + device_markers_chunk_offsets[i + num_chunks_to_merge_together],
+                    [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
+                       std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); });
+            });
             i += num_chunks_to_merge_together;
         }
+
+        thread_pool->wait();
 
         TT_ASSERT(std::is_sorted(
             device_markers.begin() + device_markers_chunk_offsets[i - num_chunks_to_merge_together],
@@ -200,7 +205,8 @@ void mergeSortedDeviceMarkerChunks(
 // while these references are in use, as this could invalidate the references and cause undefined behavior.
 std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDeviceMarkersVector(
     const std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>>&
-        device_markers_per_core_risc_map) {
+        device_markers_per_core_risc_map,
+    std::shared_ptr<tt::tt_metal::ThreadPool> thread_pool) {
     ZoneScoped;
 
     uint32_t total_num_markers = 0;
@@ -224,7 +230,7 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDevice
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec(
         total_num_markers, std::cref(dummy_marker));
 
-    std::thread t([&device_markers_vec, &device_markers_per_core_risc_map, middle, middle_index]() {
+    thread_pool->enqueue([&device_markers_vec, &device_markers_per_core_risc_map, middle, middle_index]() {
         uint32_t i = middle_index;
         for (auto it = middle; it != device_markers_per_core_risc_map.end(); ++it) {
             for (const auto& [_, markers] : it->second) {
@@ -246,9 +252,9 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDevice
         }
     }
 
-    t.join();
+    thread_pool->wait();
 
-    mergeSortedDeviceMarkerChunks(device_markers_vec, device_markers_chunk_offsets);
+    mergeSortedDeviceMarkerChunks(device_markers_vec, device_markers_chunk_offsets, thread_pool);
 
     return device_markers_vec;
 }
@@ -1565,6 +1571,8 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
     std::filesystem::create_directories(this->output_dir);
     std::filesystem::path log_path = this->output_dir / DEVICE_SIDE_LOG;
 
+    this->thread_pool = tt::tt_metal::MetalContext::instance().profiler_thread_pool_;
+
     if (new_logs) {
         std::filesystem::remove(log_path);
     }
@@ -1586,21 +1594,27 @@ DeviceProfiler::~DeviceProfiler() {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
-    for (auto& [_, device_markers_per_risc_map] : this->device_markers_per_core_risc_map) {
-        for (auto& [risc_num, device_markers] : device_markers_per_risc_map) {
-            processDeviceMarkerData(device_markers);
-        }
+    for (auto& [core, _] : this->device_markers_per_core_risc_map) {
+        this->thread_pool->enqueue([this, core]() {
+            for (auto& [risc_num, device_markers] : this->device_markers_per_core_risc_map[core]) {
+                processDeviceMarkerData(device_markers);
+            }
+        });
     }
+
+    this->thread_pool->wait();
 
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
-        getSortedDeviceMarkersVector(this->device_markers_per_core_risc_map);
+        getSortedDeviceMarkersVector(this->device_markers_per_core_risc_map, this->thread_pool);
 
-    auto t = std::thread([this]() { dumpDeviceResults(); });
+    this->thread_pool->enqueue([this]() { dumpDeviceResults(); });
     pushTracyDeviceResults(device_markers_vec);
     for (auto& tracyCtx : device_tracy_contexts) {
-        TracyTTDestroy(tracyCtx.second);
+        this->thread_pool->enqueue([tracyCtx]() { TracyTTDestroy(tracyCtx.second); });
     }
-    t.join();
+
+    this->thread_pool->wait();
+
 #endif
 }
 
