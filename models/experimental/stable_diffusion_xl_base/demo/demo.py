@@ -24,6 +24,7 @@ def run_demo_inference(
     ttnn_device,
     is_ci_env,
     prompts,
+    negative_prompts,
     num_inference_steps,
     vae_on_device,
     encoders_on_device,
@@ -40,7 +41,12 @@ def run_demo_inference(
         prompts = [prompts]
 
     needed_padding = (batch_size - len(prompts) % batch_size) % batch_size
+    if isinstance(negative_prompts, list):
+        assert len(negative_prompts) == len(prompts), "prompts and negative_prompt lists must be the same length"
+
     prompts = prompts + [""] * needed_padding
+    if isinstance(negative_prompts, list):
+        negative_prompts = negative_prompts + [""] * needed_padding
 
     # 1. Load components
     profiler.start("diffusion_pipeline_from_pretrained")
@@ -76,7 +82,7 @@ def run_demo_inference(
         negative_prompt_embeds_torch,
         pooled_prompt_embeds_torch,
         negative_pooled_prompt_embeds_torch,
-    ) = tt_sdxl.encode_prompts(prompts)
+    ) = tt_sdxl.encode_prompts(prompts, negative_prompts)
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
         prompt_embeds_torch,
@@ -157,6 +163,10 @@ def run_demo_inference(
     (("An astronaut riding a green horse"),),
 )
 @pytest.mark.parametrize(
+    "negative_prompt",
+    ((None),),
+)
+@pytest.mark.parametrize(
     "num_inference_steps",
     ((50),),
 )
@@ -192,6 +202,7 @@ def test_demo(
     mesh_device,
     is_ci_env,
     prompt,
+    negative_prompt,
     num_inference_steps,
     vae_on_device,
     encoders_on_device,
@@ -203,6 +214,7 @@ def test_demo(
         mesh_device,
         is_ci_env,
         prompt,
+        negative_prompt,
         num_inference_steps,
         vae_on_device,
         encoders_on_device,
