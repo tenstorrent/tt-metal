@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
@@ -13,7 +12,6 @@
 #include <utility>
 
 using address_t = uint32_t;
-using tt::tt_metal::BufferType;
 using ttnn::ccl::Topology;
 
 ///////////////////////////////////////////////////
@@ -23,20 +21,22 @@ using ttnn::ccl::Topology;
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(1);
 constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(2);
-constexpr BufferType output_type = static_cast<BufferType>(get_compile_time_arg_val(3));
-constexpr uint32_t cb_output_id = get_compile_time_arg_val(4);
-constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(5);
-constexpr uint32_t output_page_size = get_compile_time_arg_val(6);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
-constexpr bool dynamic_alternate = get_compile_time_arg_val(9);
-constexpr bool fuse_op = get_compile_time_arg_val(10);
-constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(11));
-constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(12);
-constexpr uint32_t num_inputs = get_compile_time_arg_val(13);
-constexpr bool direction = get_compile_time_arg_val(14);  // 1 is forward, 0 is backward
+constexpr uint32_t cb_output_id = get_compile_time_arg_val(3);
+constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(4);
+constexpr uint32_t output_page_size = get_compile_time_arg_val(5);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
+constexpr bool dynamic_alternate = get_compile_time_arg_val(8);
+constexpr bool fuse_op = get_compile_time_arg_val(9);
+constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(10));
+constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(11);
+constexpr uint32_t num_inputs = get_compile_time_arg_val(12);
+constexpr bool direction = get_compile_time_arg_val(13);  // 1 is forward, 0 is backward
 
 void kernel_main() {
+    constexpr uint32_t page_size_base_idx = 14;
+    constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
+
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
@@ -53,11 +53,9 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    address_t output_addresses[num_inputs];
-    for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-        address_t output_address = get_arg_val<address_t>(arg_idx++);
-        output_addresses[input_idx] = output_address;
-    }
+    auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx, page_size_base_idx);
+    arg_idx += num_inputs;
+    auto output_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
@@ -80,17 +78,6 @@ void kernel_main() {
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
     pkt_hdr->to_chip_unicast(1);
-
-    // interleaved addrgen
-    constexpr bool output_is_dram = output_type == tt::tt_metal::BufferType::DRAM;
-    InterleavedAddrGenFast<output_is_dram> output_addrgens[num_inputs];
-    for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-        auto output_addrgen = InterleavedAddrGenFast<output_is_dram>{
-            .bank_base_address = output_addresses[input_idx],
-            .page_size = output_page_size,
-            .data_format = get_dataformat(cb_output_id)};
-        output_addrgens[input_idx] = output_addrgen;
-    }
 
     fabric_connection.open();
 
@@ -126,8 +113,6 @@ void kernel_main() {
 
                 // for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                 uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
-                uint64_t noc0_dest_noc_addr =
-                    get_noc_addr(tile_id, output_addrgens[input_idx], 0 /*offset*/, 0 /*noc_id*/);
 
                 pages_read_in_row++;
                 if (pages_read_in_row >= input_tensor_Wt) {
@@ -137,24 +122,25 @@ void kernel_main() {
 
                 if (num_pages_to_read == 2) {
                     uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
-                    uint64_t second_noc0_dest_noc_addr =
-                        get_noc_addr(second_tile_id, output_addrgens[input_idx], 0 /*offset*/, 0 /*noc_id*/);
 
                     if constexpr (direction == 1) {
                         // Backwards does local write
-                        noc_async_write_tile(tile_id, output_addrgens[input_idx], l1_read_addr);
-                        noc_async_write_tile(
-                            second_tile_id, output_addrgens[input_idx], l1_read_addr + output_page_size);
+                        noc_async_write(
+                            l1_read_addr, output_addrgens[input_idx].get_noc_addr(tile_id), output_page_size);
+                        noc_async_write(
+                            l1_read_addr + output_page_size,
+                            output_addrgens[input_idx].get_noc_addr(second_tile_id),
+                            output_page_size);
                     }
 
                     if constexpr (num_targets_in_direction) {
                         scatter_fabric_write_unidir(
-                            noc0_dest_noc_addr,
-                            second_noc0_dest_noc_addr,
+                            tile_id,
+                            second_tile_id,
+                            output_addrgens[input_idx],
                             pkt_hdr,
                             *fabric_direction_connection,
                             l1_read_addr,
-                            (uint16_t)output_page_size,
                             output_page_size);
                     }
 
@@ -166,12 +152,18 @@ void kernel_main() {
                 } else {
                     ASSERT(num_pages_to_read == 1);
                     if constexpr (direction == 1) {
-                        noc_async_write_tile(tile_id, output_addrgens[input_idx], l1_read_addr);
+                        noc_async_write(
+                            l1_read_addr, output_addrgens[input_idx].get_noc_addr(tile_id), output_page_size);
                     }
                     if constexpr (num_targets_in_direction) {
                         // Has valid targets to send to
                         fabric_write_unidir(
-                            noc0_dest_noc_addr, pkt_hdr, *fabric_direction_connection, l1_read_addr, output_page_size);
+                            tile_id,
+                            output_addrgens[input_idx],
+                            pkt_hdr,
+                            *fabric_direction_connection,
+                            l1_read_addr,
+                            output_page_size);
                     }
                 }
 
@@ -266,11 +258,7 @@ void kernel_main() {
                     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
                     cb_wait_front(cb_output_id, packet_size_in_pages);
                     size_t l1_read_addr = get_read_ptr(cb_output_id);
-                    uint64_t noc0_dest_noc_addr = get_noc_addr(
-                        tile_id_start + row_offset + pages_read_in_row,
-                        output_addrgens[input_idx],
-                        0 /*offset*/,
-                        0 /*noc_id*/);
+                    uint32_t first_tile_id = tile_id_start + row_offset + pages_read_in_row;
                     pages_read_in_row++;
                     if (pages_read_in_row >= slice_Wt) {
                         row_offset += stride_Wt;
@@ -278,11 +266,7 @@ void kernel_main() {
                     }
 
                     if (num_pages_to_read == 2) {
-                        uint64_t second_noc0_dest_noc_addr = get_noc_addr(
-                            tile_id_start + row_offset + pages_read_in_row,
-                            output_addrgens[input_idx],
-                            0 /*offset*/,
-                            0 /*noc_id*/);
+                        uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
                         pages_read_in_row++;
                         if (pages_read_in_row >= slice_Wt) {
                             row_offset += stride_Wt;
@@ -290,17 +274,22 @@ void kernel_main() {
                         }
 
                         scatter_fabric_write_unidir(
-                            noc0_dest_noc_addr,
-                            second_noc0_dest_noc_addr,
+                            first_tile_id,
+                            second_tile_id,
+                            output_addrgens[input_idx],
                             pkt_hdr,
                             *fabric_direction_connection,
                             l1_read_addr,
-                            (uint16_t)output_page_size,
                             output_page_size);
                     } else {
                         ASSERT(num_pages_to_read == 1);
                         fabric_write_unidir(
-                            noc0_dest_noc_addr, pkt_hdr, *fabric_direction_connection, l1_read_addr, output_page_size);
+                            first_tile_id,
+                            output_addrgens[input_idx],
+                            pkt_hdr,
+                            *fabric_direction_connection,
+                            l1_read_addr,
+                            output_page_size);
                     }
 
                     tiles_read += num_pages_to_read;

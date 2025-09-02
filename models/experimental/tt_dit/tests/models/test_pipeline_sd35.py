@@ -10,10 +10,9 @@ import ttnn
 from loguru import logger
 
 from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
-    StableDiffusion3Pipeline,
+    create_pipeline,
     TimingCollector,
 )
-from ...parallel.config import DiTParallelConfig, ParallelFactor
 
 
 @pytest.mark.parametrize(
@@ -34,9 +33,9 @@ from ...parallel.config import DiTParallelConfig, ParallelFactor
         [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
-        "t3k_cfg2_sp2_tp2",
-        "t3k_cfg2_sp1_tp4",
-        "tg_cfg2_sp4_tp4",
+        "2x4cfg1sp0tp1",
+        "2x4cfg0sp0tp1",
+        "4x8cfg1sp0tp1",
     ],
     indirect=["mesh_device"],
 )
@@ -45,6 +44,7 @@ from ...parallel.config import DiTParallelConfig, ParallelFactor
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 25000000}],
     indirect=True,
 )
+@pytest.mark.parametrize("use_cache", [True, False], ids=["yes_use_cache", "no_use_cache"])
 @pytest.mark.parametrize("traced", [True, False], ids=["yes_traced", "no_traced"])
 def test_sd35_pipeline(
     *,
@@ -62,63 +62,35 @@ def test_sd35_pipeline(
     no_prompt,
     model_location_generator,
     traced,
+    use_cache,
 ) -> None:
     """Test the new SD3.5 pipeline implementation."""
-    cfg_factor, cfg_axis = cfg
-    sp_factor, sp_axis = sp
-    tp_factor, tp_axis = tp
-
-    # Create parallel configuration for the new pipeline
-    parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=cfg_factor, mesh_axis=cfg_axis),
-        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
-        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
-    )
-
-    # Determine guidance condition
-    if guidance_scale > 1 and cfg_factor == 1:
-        guidance_cond = 2
-    else:
-        guidance_cond = 1
-
-    # Enable T5 based on device configuration
-    # T5 is disabled if mesh needs reshaping for CLIP encoder
-    submesh_shape = list(mesh_device.shape)
-    submesh_shape[cfg_axis] //= cfg_factor
-    enable_t5_text_encoder = submesh_shape[1] == 4  # T5 only works if submesh doesn't need reshaping
-
-    logger.info(f"Mesh device shape: {mesh_device.shape}")
-    logger.info(f"Submesh shape: {submesh_shape}")
-    logger.info(f"Parallel config: {parallel_config}")
-    logger.info(f"T5 enabled: {enable_t5_text_encoder}")
 
     # Create timing collector
     timing_collector = TimingCollector()
 
     # Create pipeline
-    pipeline = StableDiffusion3Pipeline(
-        checkpoint_name=f"stabilityai/stable-diffusion-3.5-{model_name}",
+    pipeline = create_pipeline(
         mesh_device=mesh_device,
-        enable_t5_text_encoder=enable_t5_text_encoder,
-        guidance_cond=guidance_cond,
-        parallel_config=parallel_config,
-        height=image_h,
-        width=image_w,
-        model_location_generator=model_location_generator,
+        batch_size=1,
+        image_w=image_w,
+        image_h=image_h,
+        guidance_scale=guidance_scale,
+        prompt_sequence_length=333,
+        spatial_sequence_length=4096,
+        max_t5_sequence_length=256,
+        cfg_config=cfg,
+        sp_config=sp,
+        tp_config=tp,
+        num_links=num_links,
+        model_checkpoint_path=model_location_generator(
+            f"stabilityai/stable-diffusion-3.5-{model_name}", model_subdir="StableDiffusion_35_Large"
+        ),
+        use_cache=use_cache,
     )
 
     # Set timing collector
     pipeline.timing_collector = timing_collector
-
-    # Prepare pipeline
-    pipeline.prepare(
-        batch_size=1,
-        width=image_w,
-        height=image_h,
-        guidance_scale=guidance_scale,
-        prompt_sequence_length=333,
-        spatial_sequence_length=4096,
-    )
 
     # Define test prompt
     prompt = (

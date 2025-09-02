@@ -31,11 +31,15 @@ using namespace tt::tt_metal;
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 const std::string golden_output =
-R"(Test Debug Print: ERISC
+    R"(Test Debug Print: ERISC
 Basic Types:
 101-1.618@0.122559
 e5551234569123456789
 -17-343-44444-5123456789
+Pointer:
+123
+456
+789
 SETPRECISION/FIXED/DEFAULTFLOAT:
 3.1416
 3.14159012
@@ -69,30 +73,18 @@ void RunTest(
         CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print.cpp", core, config);
 
         // Run the program
-        log_info(
-            tt::LogTest,
-            "Running print test on eth core {}:({},{}), {}",
-            device->id(),
-            core.x,
-            core.y,
-            processor
-        );
+        log_info(tt::LogTest, "Running print test on eth core {}:({},{}), {}", device->id(), core.x, core.y, processor);
         fixture->RunProgram(device, program);
 
         // Check the print log against golden output.
-        EXPECT_TRUE(
-            FilesMatchesString(
-                DPrintFixture::dprint_file_name,
-                golden_output
-            )
-        );
+        EXPECT_TRUE(FilesMatchesString(DPrintFixture::dprint_file_name, golden_output));
 
         // Clear the log file for the next core's test
         MetalContext::instance().dprint_server()->clear_log_file();
     }
 }
-}
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 TEST_F(DPrintFixture, ActiveEthTestPrint) {
     for (IDevice* device : this->devices_) {
@@ -101,12 +93,18 @@ TEST_F(DPrintFixture, ActiveEthTestPrint) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
-        this->RunTestOnDevice(
-            [](DPrintFixture *fixture, IDevice* device){
-                CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, true);
-            },
-            device
-        );
+
+        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+        for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+            log_info(tt::LogTest, "Test active ethernet DM{}", erisc_idx);
+            DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
+            this->RunTestOnDevice(
+                [=](DPrintFixture* fixture, IDevice* device) {
+                    CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, true, dm_processor);
+                },
+                device);
+        }
     }
 }
 TEST_F(DPrintFixture, IdleEthTestPrint) {
@@ -120,13 +118,15 @@ TEST_F(DPrintFixture, IdleEthTestPrint) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
-        this->RunTestOnDevice(
-            [](DPrintFixture* fixture, IDevice* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, false); },
-            device);
-        if (device->arch() == ARCH::BLACKHOLE) {
+        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+            tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
+        for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+            log_info(tt::LogTest, "Test idle ethernet DM{}", erisc_idx);
+            DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
+
             this->RunTestOnDevice(
-                [](DPrintFixture* fixture, IDevice* device) {
-                    CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, false, DataMovementProcessor::RISCV_1);
+                [=](DPrintFixture* fixture, IDevice* device) {
+                    CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, false, dm_processor);
                 },
                 device);
         }

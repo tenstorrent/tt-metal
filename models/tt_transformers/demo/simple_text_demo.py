@@ -272,11 +272,11 @@ def prepare_generator_args(
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            32 * 1024,  # max_seq_len
+            64 * 1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -292,7 +292,7 @@ def prepare_generator_args(
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -599,6 +599,18 @@ def test_demo_text(
 
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
+
+    hf_dir = os.getenv("HF_MODEL", "")
+    if "phi-3-mini-128k-instruct" in hf_dir.lower():
+        max_context_supported = 32 * 1024 * num_devices
+        # This condition is present since Phi3 mini has a limit of context length 32k for N150
+        # It makes sure neither the total_page_cache nor the max_seq_length exceeds this limit.
+        if (max_context_supported < max_seq_len) or (
+            max_context_supported < page_params["page_block_size"] * page_params["page_max_num_blocks_per_dp"]
+        ):
+            pytest.skip(
+                f"Max sequence length: {max_seq_len} for batch: {batch_size} not supported for model: {hf_dir} on device: {mesh_device}"
+            )
 
     # uneven split of devices per DP group not supported
     if data_parallel > num_devices or num_devices % data_parallel != 0:
@@ -1081,7 +1093,7 @@ def test_demo_text(
                 # N300 targets
                 # "N300_Qwen2.5-7B": 150,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # T3K targets
-                "T3K_Llama-3.1-70B": 188,
+                "T3K_Llama-3.1-70B": 204,
                 # "T3K_Qwen2.5-Coder-32B": 180,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # "T3K_Qwen2.5-72B": 211,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # "T3K_Qwen3-32B": 250, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
@@ -1095,7 +1107,7 @@ def test_demo_text(
                 # N300 targets
                 "N300_Qwen2.5-7B": 22,
                 # T3K targets
-                # "T3K_Llama-3.1-70B": 16, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
+                "T3K_Llama-3.1-70B": 15,
                 # "T3K_Qwen2.5-72B": 13, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
                 "T3K_Qwen2.5-Coder-32B": 21,
                 # "T3K_Qwen3-32B": 20, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)

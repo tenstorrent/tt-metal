@@ -35,6 +35,16 @@ on:
         required: false
         type: boolean
         default: false
+      run_sdpa_stress_tests:
+        description: 'Run TTNN nightly SDPA stress tests'
+        required: false
+        type: boolean
+        default: false
+      run_bos_tests:
+        description: 'Run TTNN BOS tests'
+        required: false
+        type: boolean
+        default: false
       timeout:
         description: 'Test timeout in minutes'
         required: false
@@ -78,6 +88,8 @@ jobs:
       run_pool_tests: ${{ github.event_name == 'schedule' || inputs.run_pool_tests }}
       run_sdxl_tests: ${{ github.event_name == 'schedule' || inputs.run_sdxl_tests }}
       run_train_tests: ${{ github.event_name == 'schedule' || inputs.run_train_tests }}
+      run_sdpa_stress_tests: ${{ github.event_name == 'schedule' || inputs.run_sdpa_stress_tests }}
+      run_ttnn-bos-tests: ${{ matrix.test-group.runner-label == 'P150b' && (github.event_name == 'schedule' || inputs.run_bos_tests) }}
   didt-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_didt_tests }}
     needs: build-artifact

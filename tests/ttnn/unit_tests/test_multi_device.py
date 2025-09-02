@@ -441,6 +441,14 @@ def test_multi_device_as_tensor_api_sharded_tensor(mesh_device, layout, memory_c
         assert_with_pcc(input_tensor, torch_loaded_tensor, pcc=expected_pcc)
 
 
+def test_tensor_file_extension_validation(tmp_path):
+    with pytest.raises(RuntimeError, match="must have .tensorbin extension"):
+        ttnn.load_tensor(str(tmp_path / "test.bin"))
+
+    with pytest.raises(RuntimeError, match="must have .tensorbin extension"):
+        ttnn.dump_tensor(str(tmp_path / "test.bin"), torch.rand((1, 1, 32, 32)))
+
+
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],

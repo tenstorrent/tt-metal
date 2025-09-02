@@ -6,6 +6,7 @@ from itertools import takewhile
 from typing import Any, Sequence
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
@@ -517,6 +518,11 @@ def dequantize_state_dict(state_dict, hf_config, dtype=torch.bfloat16):
     return dequantized_state_dict
 
 
+def dequantize_state_dicts(state_dict_list: list[dict[str, torch.Tensor] | None], hf_config):
+    dequant_state_dicts = [dequantize_state_dict(sd, hf_config) if sd is not None else None for sd in state_dict_list]
+    return dequant_state_dicts
+
+
 def get_state_dicts(
     dicts: Sequence[dict[str, torch.Tensor] | None],
     key: Any,
@@ -575,14 +581,33 @@ def sub_state_dicts(
     return tuple(None if d is None else sub_state_dict(d, prefix) for d in state_dicts)
 
 
+TENSOR_CACHE_EXTENSION = ".tensorbin"
+
+
 def save_and_get_path(path, tensor):
     """Save a tensor to a file and return the path."""
+    # Ensure the path has an appropriate extension
+    if not path.name.endswith(TENSOR_CACHE_EXTENSION):
+        path = path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
+
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
     memory_config = tensor.memory_config()
-    ttnn.dump_tensor(path, tensor, enable_multihost_format=True)
+    ttnn.dump_tensor(path, tensor)
     ttnn.deallocate(tensor)
     return SavedWeight(
         path=path, memory_config=memory_config
     )  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+
+
+def get_mesh_coords(mesh_shape: list[int], row: int = None, col: int = None) -> list[ttnn.MeshCoordinate]:
+    """Get mesh coordinates for a given mesh shape and optional row and column indices."""
+    if row:
+        assert 0 <= row < mesh_shape[0], "Row index out of bounds"
+    if col:
+        assert 0 <= col < mesh_shape[1], "Column index out of bounds"
+
+    row_select = range(mesh_shape[0]) if row is None else [row]
+    col_select = range(mesh_shape[1]) if col is None else [col]
+    return [ttnn.MeshCoordinate(r, c) for r in row_select for c in col_select]

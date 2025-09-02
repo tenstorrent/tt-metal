@@ -57,7 +57,7 @@ using std::uint32_t;
 
 using namespace tt;
 
-#define CAST_U8P(p) reinterpret_cast<uint8_t*>(p)
+#define CAST_U8P(p) (reinterpret_cast<uint8_t*>(p))
 
 namespace {
 
@@ -363,7 +363,7 @@ void WriteInitMagic(chip_id_t device_id, const CoreCoord& virtual_core, int risc
     // Force wait for first kernel launch by first writing a non-zero and waiting for a zero.
     std::vector<uint32_t> initbuf = std::vector<uint32_t>(DPRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
     initbuf[0] = uint32_t(enabled ? DEBUG_PRINT_SERVER_STARTING_MAGIC : DEBUG_PRINT_SERVER_DISABLED_MAGIC);
-    tt::llrt::write_hex_vec_to_core(device_id, virtual_core, initbuf, base_addr);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(device_id, virtual_core, initbuf, base_addr);
 
     // Prevent race conditions during runtime by waiting until the init value is actually written
     // DPrint is only used for debug purposes so this delay should not be a big issue.
@@ -373,10 +373,10 @@ void WriteInitMagic(chip_id_t device_id, const CoreCoord& virtual_core, int risc
     // 4. now we will access wpos at the starting magic which is incorrect
     uint32_t num_tries = 100000;
     while (num_tries-- > 0) {
-        auto result = tt::llrt::read_hex_vec_from_core(device_id, virtual_core, base_addr, 4);
-        if (result[0] == DEBUG_PRINT_SERVER_STARTING_MAGIC && enabled) {
-            return;
-        } else if (result[0] == DEBUG_PRINT_SERVER_DISABLED_MAGIC && !enabled) {
+        auto result =
+            tt::tt_metal::MetalContext::instance().get_cluster().read_core(device_id, virtual_core, base_addr, 4);
+        if ((result[0] == DEBUG_PRINT_SERVER_STARTING_MAGIC && enabled) ||
+            (result[0] == DEBUG_PRINT_SERVER_DISABLED_MAGIC && !enabled)) {
             return;
         }
     }
@@ -391,7 +391,7 @@ bool CheckInitMagicCleared(chip_id_t device_id, const CoreCoord& virtual_core, i
     // compute the buffer address for the requested risc
     uint32_t base_addr = tt::tt_metal::GetDprintBufAddr(device_id, virtual_core, risc_id);
 
-    auto result = tt::llrt::read_hex_vec_from_core(device_id, virtual_core, base_addr, 4);
+    auto result = tt::tt_metal::MetalContext::instance().get_cluster().read_core(device_id, virtual_core, base_addr, 4);
     return (result[0] != DEBUG_PRINT_SERVER_STARTING_MAGIC && result[0] != DEBUG_PRINT_SERVER_DISABLED_MAGIC);
 }  // CheckInitMagicCleared
 
@@ -796,7 +796,8 @@ void DPrintServer::Impl::detach_device(chip_id_t device_id) {
                     // Check if rpos < wpos, indicating unprocessed prints.
                     constexpr int eightbytes = 8;
                     uint32_t base_addr = tt::tt_metal::GetDprintBufAddr(device_id, virtual_core, risc_id);
-                    auto from_dev = tt::llrt::read_hex_vec_from_core(chip_id, virtual_core, base_addr, eightbytes);
+                    auto from_dev = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                        chip_id, virtual_core, base_addr, eightbytes);
                     uint32_t wpos = from_dev[0], rpos = from_dev[1];
                     if (rpos < wpos) {
                         outstanding_prints = true;
@@ -944,7 +945,8 @@ bool DPrintServer::Impl::peek_one_risc_non_blocking(
     // Device is incrementing wpos
     // Host is reading wpos and incrementing local rpos up to wpos
     // Device is filling the buffer and in the end waits on host to write rpos
-    auto from_dev = tt::llrt::read_hex_vec_from_core(chip_id, virtual_core, base_addr, DPRINT_BUFFER_SIZE);
+    auto from_dev = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        chip_id, virtual_core, base_addr, DPRINT_BUFFER_SIZE);
     DebugPrintMemLayout* l = reinterpret_cast<DebugPrintMemLayout*>(from_dev.data());
     uint32_t rpos = l->aux.rpos;
     uint32_t wpos = l->aux.wpos;
@@ -1173,7 +1175,8 @@ bool DPrintServer::Impl::peek_one_risc_non_blocking(
         std::vector<uint32_t> rposbuf;
         rposbuf.push_back(rpos);
         uint32_t offs = DebugPrintMemLayout().rpos_offs();
-        tt::llrt::write_hex_vec_to_core(chip_id, virtual_core, rposbuf, base_addr + offs);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            chip_id, virtual_core, rposbuf, base_addr + offs);
 
         // Return true to signal that some print data was read
         return true;

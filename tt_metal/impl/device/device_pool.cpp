@@ -23,9 +23,9 @@
 #include "device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "env_lib.hpp"
-#include "erisc_datamover_builder.hpp"
-#include "fabric_edm_packet_header.hpp"
 #include "hostdevcommon/fabric_common.h"
+#include <tt_metal/fabric/erisc_datamover_builder.hpp>
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "fabric_types.hpp"
 #include "hal.hpp"
 #include "host_api.hpp"
@@ -250,7 +250,7 @@ void DevicePool::initialize(
     _inst->l1_bank_remap.assign(l1_bank_remap.begin(), l1_bank_remap.end());
     _inst->init_profiler_ = init_profiler;
     _inst->initialize_fabric_and_dispatch_fw_ = initialize_fabric_and_dispatch_fw;
-    _inst->using_fast_dispatch = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
+    _inst->using_fast_dispatch_ = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
 
     std::vector<chip_id_t> device_ids_to_open = device_ids;
     // Never skip for TG Cluster
@@ -260,7 +260,7 @@ void DevicePool::initialize(
 
     // Fabric requires all devices to be open even though dispatch
     // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
-    if (_inst->using_fast_dispatch) {
+    if (_inst->using_fast_dispatch_) {
         // Check if fabric needs to be enabled (any remote devices).
         // Note, all devices must be open to use fabric. This check will happen in add_devices_to_pool.
         for (auto dev_id : device_ids_to_open) {
@@ -339,7 +339,7 @@ void DevicePool::initialize(
 }
 
 void DevicePool::initialize_fabric_and_dispatch_fw() const {
-    if (using_fast_dispatch && tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+    if (using_fast_dispatch_ && tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
         // Due to galaxy taking potentially taking a 2-3 minutes to compile all the firmware kernels
         log_info(
             tt::LogMetal, "Initializing Fabric and Dispatch Firmware for Galaxy cluster (this may take a few minutes)");
@@ -354,7 +354,7 @@ void DevicePool::initialize_host(IDevice* dev) const {
 
     // Create system memory writer for this device to have an associated interface to hardware command queue (i.e.
     // hugepage). Need to do this before FW init so we know what dispatch cores to reset.
-    if (this->using_fast_dispatch) {
+    if (using_fast_dispatch_) {
         detail::DispatchStateCheck(true);
         dev->init_command_queue_host();
     } else {
@@ -404,7 +404,7 @@ void DevicePool::initialize_active_devices() const {
 
     // Activate FD kernels
     // Remaining steps are for setting up FD
-    if (!this->using_fast_dispatch) {
+    if (!using_fast_dispatch_) {
         return;
     }
 
@@ -602,7 +602,7 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
         }
     }
 
-    if (this->using_fast_dispatch) {
+    if (using_fast_dispatch_) {
         populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
     }
 }
@@ -737,7 +737,7 @@ void DevicePool::teardown_fd(const std::unordered_set<chip_id_t>& devices_to_clo
     for (const auto& dev_id : devices_to_close) {
         // Device is still active at this point
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
-        if (!dev->using_fast_dispatch()) {
+        if (!using_fast_dispatch_) {
             continue;
         }
 
@@ -830,7 +830,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     // Dispatch kernels internally have a sync at the end to ensure all credits are returned
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
-        if (!dev->is_mmio_capable() || !dev->using_fast_dispatch()) {
+        if (!dev->is_mmio_capable() || !using_fast_dispatch_) {
             continue;
         }
 

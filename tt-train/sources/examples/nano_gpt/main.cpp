@@ -47,7 +47,7 @@ void signal_handler(int signum) {
     exit(signum);
 }
 
-using Model = std::shared_ptr<ttml::autograd::ModuleBase>;
+using Model = std::shared_ptr<ttml::models::BaseTransformer>;
 
 void model_to_eval(Model &model) {
     model->eval();
@@ -554,6 +554,7 @@ int main(int argc, char **argv) {
     bool is_eval = false;
     bool add_time_to_name = true;
     bool enable_wandb = false;
+    std::string safetensors_path = "";
     std::string save_and_exit_path = "";
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
@@ -562,6 +563,8 @@ int main(int argc, char **argv) {
     app.add_option("-n,--name", run_name, "Run name")->default_val(run_name);
     app.add_option("-s,--save_and_exit", save_and_exit_path, "Save and exit (path to dumped msgpack)")
         ->default_val(save_and_exit_path);
+    app.add_option("--safetensors", safetensors_path, "Loads safetensors model from the given path")
+        ->default_val(safetensors_path);
     CLI11_PARSE(app, argc, argv);
 
     auto yaml_config = YAML::LoadFile(config_name);
@@ -847,6 +850,11 @@ int main(int argc, char **argv) {
         },
         config.transformer_config);
 
+    if (!safetensors_path.empty()) {
+        fmt::print("Loading model from safetensors path: {}\n", safetensors_path);
+        model->load_from_safetensors(safetensors_path);
+        fmt::print("Model loaded from safetensors\n");
+    }
     if (!save_and_exit_path.empty()) {
         if (std::filesystem::exists(save_and_exit_path)) {
             throw std::runtime_error("Model path already exists: " + save_and_exit_path);
@@ -996,7 +1004,7 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
-                if (!device_config.enable_tp && !config.enable_mpi) {
+                if (device_config.enable_ddp && !config.enable_mpi) {
                     ttml::core::distributed::synchronize_parameters(parameters);
                 }
 
