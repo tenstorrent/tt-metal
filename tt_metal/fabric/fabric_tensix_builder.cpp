@@ -165,6 +165,8 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
             size_t risc_id = channels_on_core % num_used_riscs_per_tensix_;
             eth_chan_to_risc_id_[dev_id][eth_chan_id] = risc_id;
 
+            TT_FATAL(risc_id == 0, "currently not supporting multi-RISC configurations per tensix due to hang");
+
             channel_index++;
         }
     }
