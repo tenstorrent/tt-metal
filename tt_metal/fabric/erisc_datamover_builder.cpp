@@ -1271,7 +1271,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->fuse_receiver_flush_and_completion_ptr,
         fabric_context.need_deadlock_avoidance_support(this->direction),
         this->dateline_connection,
-        control_plane.is_intermesh_eth_link(local_physical_chip_id, this->my_eth_core_logical),
+        control_plane.is_cross_host_eth_link(local_physical_chip_id, this->my_eth_channel),
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,
