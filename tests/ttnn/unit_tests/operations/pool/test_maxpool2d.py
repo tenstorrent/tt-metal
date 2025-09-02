@@ -8,8 +8,9 @@ from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import run_max
 
 parameters = {
     "height_shard_tests": {
-        "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "in_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "in_place": [True, False],
+        "output_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_specs": [
             # Contains following parameters
             # [in_n, in_c, in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
@@ -35,8 +36,9 @@ parameters = {
         ],
     },
     "width_shard_tests": {
-        "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "in_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "in_place": [True, False],
+        "output_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_specs": [
             [1, 32768, 6, 6, 2, 2, 1, 1, 0, 0, 1, 1, False],  # wide in place untilize
             [1, 16384, 8, 8, 2, 2, 1, 1, 0, 0, 1, 1, False],  # normal in place untilize
@@ -44,8 +46,9 @@ parameters = {
         ],
     },
     "block_shard_tests": {
-        "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "in_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "in_place": [True, False],
+        "output_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_specs": [
             [1, 4096, 16, 16, 2, 2, 1, 1, 0, 0, 1, 1, False],  # wide in place untilize
             [1, 2048, 16, 16, 2, 2, 1, 1, 0, 0, 1, 1, False],  # normal in place untilize
@@ -57,7 +60,8 @@ parameters = {
         ],
     },
     "mem_config_tests": {
-        "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "in_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "output_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_specs": [
             [1, 32, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
         ],
@@ -66,10 +70,11 @@ parameters = {
 
 
 @pytest.mark.parametrize("input_spec", parameters["height_shard_tests"]["input_specs"])
-@pytest.mark.parametrize("dtype", parameters["height_shard_tests"]["dtype"])
+@pytest.mark.parametrize("in_dtype", parameters["height_shard_tests"]["in_dtype"])
 @pytest.mark.parametrize("in_place", parameters["height_shard_tests"]["in_place"])
+@pytest.mark.parametrize("output_layout", parameters["height_shard_tests"]["output_layout"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_max_pool2d_height_shard(device, dtype, in_place, input_spec):
+def test_max_pool2d_height_shard(device, in_dtype, in_place, output_layout, input_spec):
     (
         in_n,
         in_c,
@@ -87,6 +92,8 @@ def test_max_pool2d_height_shard(device, dtype, in_place, input_spec):
     ) = input_spec
     if kernel_h == 36 and in_place:
         pytest.skip("36x36 kernel in place runs out of memory")
+    if kernel_h == 36 and output_layout == ttnn.TILE_LAYOUT:
+        pytest.skip("36x36 kernel tiled output runs out of memory")
 
     torch_tensor_map = {}
     run_max_pool(
@@ -97,19 +104,22 @@ def test_max_pool2d_height_shard(device, dtype, in_place, input_spec):
         [dilation_h, dilation_w],
         device,
         torch_tensor_map,
-        dtype,
+        in_dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
         in_place=in_place,
+        output_layout=output_layout,
+        out_dtype=ttnn.bfloat16 if output_layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.bfloat8_b,
         nightly_skips=False,
     )
 
 
 @pytest.mark.parametrize("input_spec", parameters["width_shard_tests"]["input_specs"])
-@pytest.mark.parametrize("dtype", parameters["width_shard_tests"]["dtype"])
+@pytest.mark.parametrize("in_dtype", parameters["width_shard_tests"]["in_dtype"])
 @pytest.mark.parametrize("in_place", parameters["width_shard_tests"]["in_place"])
+@pytest.mark.parametrize("output_layout", parameters["width_shard_tests"]["output_layout"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_max_pool2d_width_shard(device, dtype, in_place, input_spec):
+def test_max_pool2d_width_shard(device, in_dtype, in_place, output_layout, input_spec):
     (
         in_n,
         in_c,
@@ -135,19 +145,22 @@ def test_max_pool2d_width_shard(device, dtype, in_place, input_spec):
         [dilation_h, dilation_w],
         device,
         torch_tensor_map,
-        dtype,
+        in_dtype,
         shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ceil_mode=ceil_mode,
         in_place=in_place,
+        output_layout=output_layout,
+        out_dtype=ttnn.bfloat16 if output_layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.bfloat8_b,
         nightly_skips=False,
     )
 
 
 @pytest.mark.parametrize("input_spec", parameters["block_shard_tests"]["input_specs"])
-@pytest.mark.parametrize("dtype", parameters["block_shard_tests"]["dtype"])
+@pytest.mark.parametrize("in_dtype", parameters["block_shard_tests"]["in_dtype"])
 @pytest.mark.parametrize("in_place", parameters["block_shard_tests"]["in_place"])
+@pytest.mark.parametrize("output_layout", parameters["block_shard_tests"]["output_layout"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_max_pool2d_block_shard(device, dtype, in_place, input_spec):
+def test_max_pool2d_block_shard(device, in_dtype, in_place, output_layout, input_spec):
     (
         in_n,
         in_c,
@@ -173,19 +186,22 @@ def test_max_pool2d_block_shard(device, dtype, in_place, input_spec):
         [dilation_h, dilation_w],
         device,
         torch_tensor_map,
-        dtype,
+        in_dtype,
         shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ceil_mode=ceil_mode,
         in_place=in_place,
+        output_layout=output_layout,
+        out_dtype=ttnn.bfloat16 if output_layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.bfloat8_b,
         nightly_skips=False,
     )
 
 
 @pytest.mark.parametrize("input_spec", parameters["mem_config_tests"]["input_specs"])
-@pytest.mark.parametrize("dtype", parameters["mem_config_tests"]["dtype"])
+@pytest.mark.parametrize("in_dtype", parameters["mem_config_tests"]["in_dtype"])
 @pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("output_layout", parameters["mem_config_tests"]["output_layout"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_max_pool2d_mem_config(device, dtype, input_spec, memory_config):
+def test_max_pool2d_mem_config(device, in_dtype, input_spec, output_layout, memory_config):
     (
         in_n,
         in_c,
@@ -211,10 +227,12 @@ def test_max_pool2d_mem_config(device, dtype, input_spec, memory_config):
         [dilation_h, dilation_w],
         device,
         torch_tensor_map,
-        dtype,
+        in_dtype,
         memory_config=memory_config,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
         in_place=False,
+        output_layout=output_layout,
+        out_dtype=ttnn.bfloat16 if output_layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.bfloat8_b,
         nightly_skips=False,
     )
