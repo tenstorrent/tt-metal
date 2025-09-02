@@ -22,10 +22,11 @@ namespace ttnn::operations::data_movement {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-// index_shape[...] <= src_shape[...]
-// index_shape[d != dim] <= input_shape[d != dim]
-// https://docs.pytorch.org/docs/stable/generated/torch.Tensor.scatter_.html#torch.Tensor.scatter_
 // validate dimension constraints before sending down to device operation working on the last dimension
+// inputs are validated according to
+// https://docs.pytorch.org/docs/stable/generated/torch.Tensor.scatter_.html#torch.Tensor.scatter_ index_shape[...] <=
+// src_shape[...]: index shape can't have any dimension longer than according dimension of source shape index_shape[d !=
+// dim] <= input_shape[d != dim]: index shape must be smaller than input shape on all dimensions except the scatter one
 void validate_inputs(
     const Tensor& input_tensor, const Tensor& index_tensor, const Tensor& source_tensor, const int32_t& dim) {
     const auto& input_shape{input_tensor.logical_shape()};
@@ -133,9 +134,9 @@ void check_support(
 
 Tensor pre_scatter_transform_tensor(
     const Tensor& input_tensor,
-    const int8_t& dim,
-    const bool& is_dim_last_idx,
-    const bool& is_rank_le_4d,
+    const int8_t dim,
+    const bool is_dim_last_idx,
+    const bool is_rank_le_4d,
     const std::optional<Shape>& index_shape = std::nullopt) {
     if (input_tensor.logical_shape() == ttnn::Shape{1} || input_tensor.logical_shape() == ttnn::Shape{0}) {
         return input_tensor;
@@ -162,9 +163,9 @@ Tensor pre_scatter_transform_tensor(
 Tensor pre_scatter_transform_tensor(
     const Tensor& input_tensor,
     Shape& after_transpose_shape,
-    const int8_t& dim,
-    const bool& is_dim_last_idx,
-    const bool& is_rank_le_4d,
+    const int8_t dim,
+    const bool is_dim_last_idx,
+    const bool is_rank_le_4d,
     const std::optional<Shape>& index_shape = std::nullopt) {
     if (input_tensor.logical_shape() == ttnn::Shape{1} || input_tensor.logical_shape() == ttnn::Shape{0}) {
         return input_tensor;
@@ -192,8 +193,8 @@ Tensor pre_scatter_transform_tensor(
 Tensor post_scatter_transform_tensor(
     Tensor& output_tensor,
     const Shape& after_transpose_shape,
-    const int32_t& dim,
-    const bool& is_dim_last_idx,
+    const int32_t dim,
+    const bool is_dim_last_idx,
     const Shape& original_logical_shape,
     const Layout& original_layout) {
     const auto orig_rank = original_logical_shape.rank();
@@ -228,6 +229,11 @@ Tensor post_scatter_transform_tensor(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
+// Writes all values from the tensor src into self at the indices specified in the index tensor.
+// For each value in src, its output index is specified by its index in src for dimension != dim and by the
+// corresponding value in index for dimension = dim. self, index and src (if it is a Tensor) should all have the same
+// number of dimensions. It is also required that index.size(d) <= src.size(d) for all dimensions d, and that
+// index.size(d) <= self.size(d) for all dimensions d != dim.Note that index and src do not broadcast.
 Tensor ScatterOperation::invoke(
     const QueueId& queue_id,
     const Tensor& input_tensor,
