@@ -31,9 +31,10 @@ def test_lt_implicit_broadcast(device, shapes):
     # torch_input_tensor_a = torch.tensor([209652396, -698378168])
     # torch_input_tensor_b = torch.tensor([-2060646285, -1347192322])
     # torch_input_tensor_b = -2060646285
-    torch_output_tensor = torch.lt(torch_input_tensor_a, torch_input_tensor_b)
     # print("input_a: ", torch_input_tensor_a)
     # print("input_b: ", torch_input_tensor_b)
+
+    torch_output_tensor = torch.lt(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -58,3 +59,4 @@ def test_lt_implicit_broadcast(device, shapes):
     # print(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    torch.equal()
