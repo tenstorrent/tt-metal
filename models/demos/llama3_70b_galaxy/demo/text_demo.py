@@ -190,7 +190,7 @@ def create_tt_model(
 # sampling_params (dict): Sampling parameters for decoding (temperature, top_p). If temperature is set to 0, argmax (greedy decode) is used.
 # stop_at_eos (bool): Whether to stop decoding when the model generates an EoS token
 # is_cur_pos_sharded (bool): Whether to replicate the cur pos tensor on sub core grid as an optimization
-# is_page_table_sharded (bool):  Whether to replicate the page table tensor on sub core grid as an optimization
+# is_page_table_sharded (bool):  Whether to replicate the page table tensor on sub core grid as an optimization (Currently page table sharding is only supported for BS=32)
 
 
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
