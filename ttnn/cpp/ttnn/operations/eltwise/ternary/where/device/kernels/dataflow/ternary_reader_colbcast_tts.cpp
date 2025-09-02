@@ -152,8 +152,7 @@ void kernel_main() {
                         tile_offset += Wt;
 #endif
 #if !SRC_BCAST_TRUE && !SRC_SHARDED_TRUE
-                        // For true tensor in column broadcast, don't increment width offset (broadcasting)
-                        // true_tile_offset += true_Wt;  // Commented out for broadcasting
+                        true_tile_offset += Wt;
 #endif
                     }
 #if !SRC_SHARDED_PREDICATE
