@@ -12,7 +12,7 @@ on:
         default: true
         type: boolean
       tag_type:
-        description: "Type of tag to create: 'rc' for release candidate, 'dev' for development, or '' for normal release"
+        description: "Type of tag to create: 'rc' for release candidate, 'nightly' for nightly development, or '' for normal release"
         default: ""
         type: string
     outputs:
@@ -49,10 +49,10 @@ jobs:
             currentNumberRCs=$(git tag | grep "$baseVersion"-rc | wc -l)
             newNumber=$(($currentNumberRCs+1))
             version="$baseVersion-rc$newNumber"
-          elif [ "$tagType" = "dev" ]; then
-            currentNumberDevs=$(git tag | grep "$baseVersion"-dev | wc -l)
+          elif [ "$tagType" = "nightly" ]; then
+            currentNumberDevs=$(git tag | grep "$baseVersion"-nightly | wc -l)
             newNumber=$(($currentNumberDevs+1))
-            version="$baseVersion-dev$newNumber"
+            version="$baseVersion-nightly$newNumber"
           else
             version="$baseVersion"
           fi

@@ -33,7 +33,7 @@ jobs:
     with:
       fetch_depth: 0
       bump_each_commit: false
-      tag_type: dev
+      tag_type: nightly
   create-changelog:
     needs: create-tag
     permissions: read-all
