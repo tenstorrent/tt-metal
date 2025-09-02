@@ -701,7 +701,7 @@ class Detect(nn.Module):
 
         y = torch.cat((y1, y2, y3), 2)
 
-        ya, yb = y.split((self.out_channel[0], self.out_channel[10]), 1)
+        ya, yb = y.split((self.out_channel[0], self.out_channel[13]), 1)
 
         ya = torch.reshape(ya, (ya.shape[0], int(ya.shape[1] / self.in_channel[24]), self.in_channel[24], ya.shape[2]))
         ya = torch.permute(ya, (0, 2, 1, 3))
