@@ -50,30 +50,6 @@
 namespace tt::tt_fabric {
 
 namespace {
-
-// TODO: remove once we have system descriptor apis
-struct UbbId {
-    std::uint32_t tray_id;
-    std::uint32_t asic_id;
-};
-
-const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
-    {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
-    {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
-};
-
-UbbId get_ubb_id(chip_id_t chip_id) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& tray_bus_ids = ubb_bus_ids.at(cluster.arch());
-    const auto bus_id = cluster.get_bus_id(chip_id);
-    auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
-    if (tray_bus_id_it != tray_bus_ids.end()) {
-        auto ubb_asic_id = bus_id & 0x0F;
-        return UbbId{tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id};
-    }
-    return UbbId{0, 0};  // Invalid UBB ID if not found
-}
-
 // TODO: Support custom operator< for eth_coord_t to allow usage in std::set
 struct EthCoordComparator {
     bool operator()(const eth_coord_t& eth_coord_a, const eth_coord_t& eth_coord_b) const {
@@ -170,6 +146,24 @@ std::pair<MeshId, MeshHostRankId> decode_mesh_id_and_rank(std::uint64_t encoded_
 }
 
 }  // namespace
+
+const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
+    {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
+    {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
+};
+
+UbbId get_ubb_id(chip_id_t chip_id) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& tray_bus_ids = ubb_bus_ids.at(cluster.arch());
+    const auto bus_id = cluster.get_bus_id(chip_id);
+    auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
+    if (tray_bus_id_it != tray_bus_ids.end()) {
+        auto ubb_asic_id = bus_id & 0x0F;
+        return UbbId{tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id};
+    }
+    return UbbId{0, 0};  // Invalid UBB ID if not found
+}
+
 
 void ControlPlane::initialize_dynamic_routing_plane_counts(
     const IntraMeshConnectivity& intra_mesh_connectivity,
@@ -632,7 +626,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
             // NOTE: This nw chip may not be set the same for UBB devices when using the Mock Cluster Descriptor
             if (cluster.get_board_type(0) == BoardType::UBB) {
                 for (const auto& chip_id : cluster.all_chip_ids()) {
-                    auto candidate_ubb_id = get_ubb_id(chip_id);
+                    auto candidate_ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
                     if (candidate_ubb_id.tray_id == 1 && candidate_ubb_id.asic_id == 1) {
                         nw_chip_physical_id = chip_id;
                     }
@@ -640,7 +634,6 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
             }
 
             const auto& physical_chip_ids = this->get_mesh_physical_chip_ids(mesh_container, nw_chip_physical_id);
-
             std::uint32_t i = 0;
             for (const auto& [_, fabric_chip_id] : mesh_container) {
                 logical_mesh_chip_id_to_physical_chip_id_mapping.emplace(
