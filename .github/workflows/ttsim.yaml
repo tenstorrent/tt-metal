@@ -1,0 +1,85 @@
+name: "[impl] TTSim Integration Tests"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      package-artifact-name:
+        required: true
+        type: string
+      product:
+        required: true
+        type: string
+
+jobs:
+  ttsim-integration:
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      volumes:
+        - /work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    env:
+      TT_METAL_HOME: /usr/libexec/tt-metalium
+      TT_METAL_SIMULATOR: /work/sim
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+    steps:
+
+      - name: Download packages artifact
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
+          path: /work/pkgs/
+
+      - name: Install packages
+        run: |
+          set -euo pipefail
+          apt update
+          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb
+
+      - name: Checkout ttsim
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/ttsim
+          ref: ad55f44869ee1c30cae78ea0ff67eea502ee0350
+          path: /work/ttsim
+
+      - name: Build ttsim
+        run: |
+          cd /work/ttsim/src
+          ../scripts/make.py _out/release_wh/ttsim
+
+      - name: Install ttsim
+        run: |
+          mkdir -p $TT_METAL_SIMULATOR
+          cp /work/ttsim/src/_out/release_wh/ttsim $TT_METAL_SIMULATOR/run.sh
+          cp $TT_METAL_HOME/tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml $TT_METAL_SIMULATOR/soc_descriptor.yaml
+
+      - name: Build And Test Metal Examples
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          for example in /usr/share/${{ inputs.product }}/examples/*; do
+
+            example_name=$(basename "$example")
+            echo "::group::${example_name} - build"
+            cd `mktemp -d`
+            cmake -G Ninja -S "$example" -B .
+            cmake --build .
+            echo "::endgroup::"
+
+            # Find and run the built executable
+            exec_path=$(find . -maxdepth 2 -type f -executable -not -name "*.so")
+            for exe in $exec_path; do
+              exe_basename=$(basename "$exe")
+              echo "::group::${exe_basename} - run"
+              "$exe"
+              echo "::endgroup::"
+            done
+          done
