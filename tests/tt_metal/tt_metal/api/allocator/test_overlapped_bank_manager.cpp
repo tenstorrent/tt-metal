@@ -243,10 +243,9 @@ INSTANTIATE_TEST_SUITE_P(
             /*expected_dependencies=*/{{StateId{1}}, {StateId{2}}, {StateId{0}}},
             /*expected_dependents=*/{{StateId{2}}, {StateId{0}}, {StateId{1}}}}));
 
-TEST(OverlappedAllocator, TestOverlappedBankManager) {
+TEST(OverlappedAllocator, IndependentStates) {
     // This test sets up a BankManager for DRAM and L1, mimicking Allocator initialization.
 
-    // Get device and soc descriptor
     // Single logical bank with offset 0 for simplicity
     std::vector<int64_t> bank_desc = {0};
 
@@ -270,26 +269,111 @@ TEST(OverlappedAllocator, TestOverlappedBankManager) {
             deps);
 
         // Allocate a buffer and check
-        uint32_t alloc_size = 64 * 1024;
-        auto addr = dram_bank_manager.allocate_buffer(
+        uint32_t alloc_size = 1024;
+        uint32_t alloc_size2 = 2048;
+        auto alloc1_addr1 = dram_bank_manager.allocate_buffer(
             alloc_size,
             alloc_size,
             /*bottom_up=*/true,
             CoreRangeSet(std::vector<CoreRange>{}),  // Not used for DRAM
             std::nullopt,
             BankManager::StateDependencies::StateId{0});
-        auto addr2 = dram_bank_manager.allocate_buffer(
+        EXPECT_EQ(alloc1_addr1, 0);
+
+        auto alloc2_addr1 = dram_bank_manager.allocate_buffer(
+            alloc_size2,
+            alloc_size2,
+            /*bottom_up=*/true,
+            CoreRangeSet(std::vector<CoreRange>{}),  // Not used for DRAM
+            std::nullopt,
+            BankManager::StateDependencies::StateId{1});
+        EXPECT_EQ(alloc2_addr1, 0);
+
+        auto alloc1_addr2 = dram_bank_manager.allocate_buffer(
             alloc_size,
             alloc_size,
             /*bottom_up=*/true,
             CoreRangeSet(std::vector<CoreRange>{}),  // Not used for DRAM
             std::nullopt,
+            BankManager::StateDependencies::StateId{0});
+        EXPECT_EQ(alloc1_addr2, alloc1_addr1 + alloc_size);
+
+        auto alloc2_addr2 = dram_bank_manager.allocate_buffer(
+            alloc_size2,
+            alloc_size2,
+            /*bottom_up=*/true,
+            CoreRangeSet(std::vector<CoreRange>{}),  // Not used for DRAM
+            std::nullopt,
             BankManager::StateDependencies::StateId{1});
-        EXPECT_EQ(addr, 0);
-        EXPECT_EQ(addr2, 0);
+        EXPECT_EQ(alloc2_addr2, alloc2_addr1 + alloc_size2);
     }
 }
 
+TEST(OverlappedAllocator, OverlappedStates) {
+    // This test sets up a BankManager for DRAM and L1, mimicking Allocator initialization.
+
+    // Single logical bank with offset 0 for simplicity
+    std::vector<int64_t> bank_desc = {0};
+
+    // DRAM setup
+    {
+        // Use per-channel DRAM size adjusted by allocator bases and alignment
+        const uint64_t dram_unreserved_base = 0;
+        const uint32_t dram_alignment = 1024;
+        const uint64_t dram_trace_region_size = 0;
+        const uint64_t dram_size = 1024 * 1024 * 1024;
+
+        // Set up BankManager for DRAM with default single-state dependencies
+        BankManager::StateDependencies deps{{{StateId{0}, {}}, {StateId{1}, {}}}};  // 2 states, no overlaps
+        BankManager dram_bank_manager(
+            BufferType::DRAM,
+            bank_desc,
+            dram_size,
+            dram_alignment,
+            /*alloc_offset=*/dram_unreserved_base,
+            /*disable_interleaved=*/false,
+            deps);
+
+        // Allocate a buffer and check
+        uint32_t alloc_size = 1024;
+        uint32_t alloc_size2 = 2048;
+        auto alloc1_addr1 = dram_bank_manager.allocate_buffer(
+            alloc_size,
+            alloc_size,
+            /*bottom_up=*/true,
+            CoreRangeSet(std::vector<CoreRange>{}),  // Not used for DRAM
+            std::nullopt,
+            BankManager::StateDependencies::StateId{0});
+        EXPECT_EQ(alloc1_addr1, 0);
+
+        auto alloc2_addr1 = dram_bank_manager.allocate_buffer(
+            alloc_size2,
+            alloc_size2,
+            /*bottom_up=*/true,
+            CoreRangeSet(std::vector<CoreRange>{}),  // Not used for DRAM
+            std::nullopt,
+            BankManager::StateDependencies::StateId{1});
+        EXPECT_EQ(alloc2_addr1, 0);
+
+        auto alloc1_addr2 = dram_bank_manager.allocate_buffer(
+            alloc_size,
+            alloc_size,
+            /*bottom_up=*/true,
+            CoreRangeSet(std::vector<CoreRange>{}),  // Not used for DRAM
+            std::nullopt,
+            BankManager::StateDependencies::StateId{0});
+        EXPECT_EQ(alloc1_addr2, alloc1_addr1 + alloc_size);
+
+        auto alloc2_addr2 = dram_bank_manager.allocate_buffer(
+            alloc_size2,
+            alloc_size2,
+            /*bottom_up=*/true,
+            CoreRangeSet(std::vector<CoreRange>{}),  // Not used for DRAM
+            std::nullopt,
+            BankManager::StateDependencies::StateId{1});
+        EXPECT_EQ(alloc2_addr2, alloc2_addr1 + alloc_size2);
+    }
+}
 TEST_F(DeviceSingleCardBufferFixture, Overlay_MergeUnmerge_RG_into_B) {
     // States: 0=R, 1=G, 2=B
     using SD = BankManager::StateDependencies;

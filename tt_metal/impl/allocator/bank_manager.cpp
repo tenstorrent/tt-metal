@@ -350,6 +350,10 @@ uint64_t BankManager::allocate_buffer(
     }
     TT_ASSERT(bool(allocators_[state.value]), "Allocator not initialized!");
 
+    for (auto r : allocators_[state.value]->available_addresses(size_per_bank)) {
+        std::cout << "Available address: " << r.first << " - " << r.second << std::endl;
+    }
+
     auto address = allocators_[state.value]->allocate(size_per_bank, bottom_up, address_limit);
     if (not address.has_value()) {
         TT_THROW(
