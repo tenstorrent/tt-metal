@@ -25,7 +25,7 @@ void kernel_main() {
     uint32_t exp_lo = (uint32_t)(expected_noc & 0xffffffffull);
     uint32_t exp_hi = (uint32_t)(expected_noc >> 32);
 
-    DPRINT << "[RX] wait sem=0x" << (uint32_t)sem_addr << " noc=0x" << (uint32_t)exp_hi << "_" << (uint32_t)exp_lo
+    DPRINT << "[RX] wait sem=0x" << HEX() << sem_addr << " noc=0x" << exp_hi << "_" << exp_lo << DEC()
            << " expect=" << expected_value << " core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ")\n";
 
     /* Debug spam: prove prints are flowing from this BR core */

@@ -70,7 +70,7 @@ TEST_F(Fabric2DFixture, UnicastConn_Timed_Skeleton) {
     auto t1 = std::chrono::high_resolution_clock::now();
 
     double sec = std::chrono::duration<double>(t1 - t0).count();
-    std::cout << "[UnicastConn_Timed_Skeleton] wall_time_s=" << sec << "\n";
+    // std::cout << "[UnicastConn_Timed_Skeleton] wall_time_s=" << sec << "\n";
 }
 
 struct PerfParams {

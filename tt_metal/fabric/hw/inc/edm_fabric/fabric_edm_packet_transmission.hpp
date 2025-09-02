@@ -137,6 +137,8 @@ FORCE_INLINE
     //     << " payload_sz=" << payload_size_bytes
     //     << " send_type=" << (uint32_t)header.noc_send_type << "\n";
 
+    WATCHER_RING_BUFFER_PUSH(0xED00'0000u | (uint32_t)rx_channel_id);
+
     tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
     if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
@@ -144,6 +146,10 @@ FORCE_INLINE
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto dest_address = header.command_fields.unicast_write.noc_address;
+            WATCHER_RING_BUFFER_PUSH(0xED01'0000u | (uint32_t)rx_channel_id);
+            WATCHER_RING_BUFFER_PUSH((uint32_t)(dest_address >> 32));          // HI
+            WATCHER_RING_BUFFER_PUSH((uint32_t)(dest_address & 0xffffffffu));  // LO
+            WATCHER_RING_BUFFER_PUSH((uint32_t)payload_size_bytes);            // size
             noc_async_write_one_packet_with_trid<false, false>(
                 payload_start_address,
                 dest_address,
@@ -157,6 +163,12 @@ FORCE_INLINE
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
             const uint64_t dest_address = header.command_fields.unicast_seminc.noc_address;
             const auto increment = header.command_fields.unicast_seminc.val;
+            uint32_t flush_bit = header.command_fields.unicast_seminc.flush ? 1u : 0u;
+            WATCHER_RING_BUFFER_PUSH(0xED02'0000u | flush_bit);
+            WATCHER_RING_BUFFER_PUSH((uint32_t)(dest_address >> 32));          // HI
+            WATCHER_RING_BUFFER_PUSH((uint32_t)(dest_address & 0xffffffffu));  // LO
+            WATCHER_RING_BUFFER_PUSH((uint32_t)increment);                     // +val
+
             if (header.command_fields.unicast_seminc.flush) {
                 flush_write_to_noc_pipeline(rx_channel_id);
             }
@@ -171,6 +183,11 @@ FORCE_INLINE
         case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
             const auto dest_address = header.command_fields.unicast_inline_write.noc_address;
             const auto value = header.command_fields.unicast_inline_write.value;
+            // WATCHER_RING_BUFFER_PUSH(0xED03'0000u | (uint32_t)rx_channel_id);
+            // WATCHER_RING_BUFFER_PUSH((uint32_t)(dest_address >> 32));          // HI
+            // WATCHER_RING_BUFFER_PUSH((uint32_t)(dest_address & 0xffffffffu));  // LO
+            // WATCHER_RING_BUFFER_PUSH(value);                                    // value
+            // WATCHER_RING_BUFFER_PUSH(0x0000000Fu);                              // dw mask used
             noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
                 dest_address,
                 value,
@@ -181,6 +198,10 @@ FORCE_INLINE
 
         case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
             const auto dest_address = header.command_fields.unicast_seminc_fused.noc_address;
+            WATCHER_RING_BUFFER_PUSH(0xED04'0000u | (uint32_t)rx_channel_id);
+            WATCHER_RING_BUFFER_PUSH((uint32_t)(dest_address >> 32));          // HI
+            WATCHER_RING_BUFFER_PUSH((uint32_t)(dest_address & 0xffffffffu));  // LO
+            WATCHER_RING_BUFFER_PUSH((uint32_t)payload_size_bytes);            // write size
             noc_async_write_one_packet_with_trid<false, false>(
                 payload_start_address,
                 dest_address,
@@ -192,6 +213,13 @@ FORCE_INLINE
 
             const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
             const auto increment = header.command_fields.unicast_seminc_fused.val;
+            const uint32_t flush_bit = header.command_fields.unicast_seminc_fused.flush ? 1u : 0u;
+
+            // RB: fused SEM-INC part (tag ED05)
+            WATCHER_RING_BUFFER_PUSH(0xED05'0000u | flush_bit);
+            WATCHER_RING_BUFFER_PUSH((uint32_t)(semaphore_dest_address >> 32));          // HI
+            WATCHER_RING_BUFFER_PUSH((uint32_t)(semaphore_dest_address & 0xffffffffu));  // LO
+            WATCHER_RING_BUFFER_PUSH((uint32_t)increment);
             if (header.command_fields.unicast_seminc_fused.flush) {
                 flush_write_to_noc_pipeline(rx_channel_id);
             }

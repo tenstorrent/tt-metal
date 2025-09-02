@@ -164,12 +164,12 @@ static_assert(
     "wait_for_host_signal must be 0 or 1");
 static_assert(MAIN_CT_ARGS_START_IDX == 4, "MAIN_CT_ARGS_START_IDX must be 4");
 
-constexpr uint32_t SWITCH_INTERVAL =
-#ifndef DEBUG_PRINT_ENABLED
-    get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 0);
-#else
-    0;
-#endif
+constexpr uint32_t SWITCH_INTERVAL = 50;
+// #ifndef DEBUG_PRINT_ENABLED
+//     get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 0);
+// #else
+//     0;
+// #endif
 constexpr bool enable_first_level_ack = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 1);
 constexpr bool fuse_receiver_flush_and_completion_ptr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 2);
 constexpr bool enable_ring_support = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 3);

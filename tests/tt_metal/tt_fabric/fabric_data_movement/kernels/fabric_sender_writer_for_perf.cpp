@@ -63,7 +63,6 @@ void kernel_main() {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
     zero_l1_buf((uint32_t*)header, sizeof(PACKET_HEADER_TYPE));
 
-    // >>> ADD: print the inputs we’re about to stamp
     DPRINT << "[WR] route-intent dst_mesh=" << (uint32_t)dst_mesh_id << " dst_dev=" << (uint32_t)dst_dev_id
            << " rx_xy=(" << rx_noc_x << "," << rx_noc_y << ")\n";
 
@@ -77,7 +76,6 @@ void kernel_main() {
         /*dst_mesh_id*/ dst_mesh_id,
         /*ew_dim*/ 0);
 
-    // >>> ADD: show what we actually wrote into the mesh header
     DPRINT << "[WR] send_type(write)=" << (uint32_t)header->noc_send_type << "\n";
     dump_header_words(header, "[WR] header words after set");
 
@@ -96,19 +94,19 @@ void kernel_main() {
         uint64_t dest_noc_addr;
         if (dst_is_dram) {
             const InterleavedAddrGen<true> gen{.bank_base_address = dst_base, .page_size = PAGE_SIZE};
-            dest_noc_addr = get_noc_addr(/*page_idx=*/i, gen);  // uses this kernel’s NoC
+            dest_noc_addr = get_noc_addr(/*page_idx=*/i, gen, /*remote_noc=*/0, /*NOC_INDEX=*/0);
         } else {
             const uint32_t l1_off = dst_base + i * PAGE_SIZE;
-            dest_noc_addr = safe_get_noc_addr(rx_noc_x, rx_noc_y, l1_off);  // uses this kernel’s NoC
+            dest_noc_addr = safe_get_noc_addr(rx_noc_x, rx_noc_y, l1_off, /*NOC_INDEX=*/0);
         }
 
         // Build the NOC header for this page
+        fabric_set_unicast_route(mh, eth_chan_directions::EAST, /*my_dev_id*/ 0, dst_dev_id, dst_mesh_id, /*ew_dim*/ 0);
         header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
 
-        DPRINT << "[WR] page " << i << " noc_lo=0x" << (uint32_t)(dest_noc_addr & 0xffffffffu) << " noc_hi=0x"
-               << (uint32_t)(dest_noc_addr >> 32) << " rx_xy=(" << rx_noc_x << "," << rx_noc_y << ")\n";
+        DPRINT << "[WR] page " << i << " noc_lo=0x" << HEX() << (uint32_t)(dest_noc_addr & 0xffffffffu) << " noc_hi=0x"
+               << (uint32_t)(dest_noc_addr >> 32) << DEC() << " rx_xy=(" << rx_noc_x << "," << rx_noc_y << ")\n";
 
-        // >>> ADD: minimally confirm send_type after stamping write command
         DPRINT << "[WR] send_type(write)=" << (uint32_t)header->noc_send_type << "\n";
 
         // 1) send payload (no header)
@@ -124,15 +122,17 @@ void kernel_main() {
 
     // Final signal: bump receiver semaphore so the receiver kernel exits
     if (sem_l1_addr != 0) {
-        const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr);
+        const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
         uint32_t sem_lo = (uint32_t)(sem_noc & 0xffffffffull);
         uint32_t sem_hi = (uint32_t)(sem_noc >> 32);
 
+        fabric_set_unicast_route(mh, eth_chan_directions::EAST, /*my_dev_id*/ 0, dst_dev_id, dst_mesh_id, /*ew_dim*/ 0);
         header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
+        WATCHER_RING_BUFFER_PUSH((uint32_t)(header->command_fields.unicast_seminc.noc_address & 0x00FFFFFFu));
+        WATCHER_RING_BUFFER_PUSH((uint32_t)(header->command_fields.unicast_seminc.noc_address >> 32));
 
-        // >>> ADD: confirm the sem-inc command & route still look right
-        DPRINT << "[WR] sem-inc dst noc_hi=0x" << sem_hi << " noc_lo=0x" << sem_lo << " rx_xy=(" << rx_noc_x << ","
-               << rx_noc_y << ")\n";
+        DPRINT << "[WR] sem-inc dst noc_hi=0x" << HEX() << sem_hi << " noc_lo=0x" << sem_lo << DEC() << " rx_xy=("
+               << rx_noc_x << "," << rx_noc_y << ")\n";
         DPRINT << "[WR] send_type(seminc)=" << (uint32_t)header->noc_send_type << "\n";
         dump_header_words(header, "[WR] header words before sem-inc send");
 
