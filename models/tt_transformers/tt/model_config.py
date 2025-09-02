@@ -389,6 +389,7 @@ def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.p
 class CheckpointType(Enum):
     Meta = auto()
     HuggingFace = auto()
+    ModelScope = auto()
 
 
 class ModelArgs:
@@ -467,6 +468,7 @@ class ModelArgs:
         self.fuse_mlp = False
         self.trust_remote_code_hf = False
         self.from_hf_url = False  # updated below if true
+        self.from_modelscope_local = False
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         self.dummy_weights = dummy_weights
         self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
@@ -482,8 +484,11 @@ class ModelArgs:
         # Remove trailing slashes so basename gets the right model name
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         HF_MODEL = os.getenv("HF_MODEL")
+        MODELSCOPE_MODEL = os.getenv("MODELSCOPE_MODEL")
         self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
         assert not (LLAMA_DIR and HF_MODEL), "Only one of LLAMA_DIR or HF_MODEL should be set"
+        assert not (LLAMA_DIR and MODELSCOPE_MODEL), "Only one of LLAMA_DIR or MODELSCOPE_MODEL should be set"
+        assert not (HF_MODEL and MODELSCOPE_MODEL), "Only one of HF_MODEL or MODELSCOPE_MODEL should be set"
         if LLAMA_DIR:
             if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH")]):
                 logger.warning("LLAMA_DIR will override LLAMA_CKPT_DIR and LLAMA_TOKENIZER_PATH")
@@ -503,12 +508,21 @@ class ModelArgs:
                 -1
             ]  # HF model names use / even on windows. May be overridden by config.
             self.from_hf_url = True
+        elif MODELSCOPE_MODEL:
+            self.CKPT_DIR = MODELSCOPE_MODEL
+            self.TOKENIZER_PATH = MODELSCOPE_MODEL
+            if not self.CACHE_PATH:
+                self.CACHE_PATH = os.path.join("model_cache", "modelscope", MODELSCOPE_MODEL, self.device_name)
+            else:
+                self.CACHE_PATH = os.path.join(self.CACHE_PATH, self.device_name)
+            self.model_name = MODELSCOPE_MODEL
+            self.from_modelscope_local = True
         else:
             assert (
                 False
-            ), "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct or LLAMA_DIR to a Meta-style checkpoint directory"
+            ), "Please set HF_MODEL/MODELSCOPE_MODEL to a HuggingFace/ModelScope name e.g. meta-llama/Llama-3.1-8B-Instruct or LLAMA_DIR to a Meta-style checkpoint directory"
 
-        if not dummy_weights and not HF_MODEL:
+        if not dummy_weights and not HF_MODEL and not MODELSCOPE_MODEL:
             # Assert if all folders and files exist
             assert os.path.exists(
                 self.CKPT_DIR
@@ -543,6 +557,9 @@ class ModelArgs:
             self.checkpoint_type = CheckpointType.HuggingFace
             if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
                 self.trust_remote_code_hf = True
+            self._set_hf_params(self.CKPT_DIR)
+        elif MODELSCOPE_MODEL:
+            self.checkpoint_type = CheckpointType.ModelScope
             self._set_hf_params(self.CKPT_DIR)
         elif not dummy_weights:
             self.checkpoint_type = self.detect_checkpoint_type()
@@ -1771,6 +1788,9 @@ class ModelArgs:
                 state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
         elif self.checkpoint_type == CheckpointType.Meta:
             state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
+        elif self.checkpoint_type == CheckpointType.ModelScope:
+            # ModelScope uses the same file format as HuggingFace, so we use the same loading logic
+            state_dict = load_hf_state_dict(self.CKPT_DIR)
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
@@ -1798,7 +1818,7 @@ class ModelArgs:
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
 
-        if self.checkpoint_type == CheckpointType.HuggingFace:
+        if self.checkpoint_type in [CheckpointType.HuggingFace, CheckpointType.ModelScope]:
             if self.is_multimodal:
                 state_dict = standardize_hf_keys_multimodal(state_dict)
                 state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
