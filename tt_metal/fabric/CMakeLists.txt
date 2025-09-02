@@ -49,6 +49,9 @@ target_sources(
         physical_system_descriptor.cpp
 )
 
+# Make .clang-tidy available in the fabric binary directory for generated files
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/.clang-tidy ${CMAKE_CURRENT_BINARY_DIR}/.clang-tidy COPYONLY)
+
 # Include helper functions and generate headers from flatbuffer schemas
 include(flatbuffers)
 set(FLATBUFFER_SCHEMAS
