@@ -30,18 +30,18 @@ void MAIN {
     // the circular buffer to registers so the SFPU can use it.
     // the first 0 in copy_tile is the index into the circular buffer
     // and the second 0 is the offset into the registers. This case
-    // we are copying the 0th tile from the circular buffer to the 0th tile
-    // in the registers.
+    // we are copying the 0th tile from the source data circular buffer to the 0th tile
+    // in the registers and 0th tile from the ones tile to the 1st tile in the registers.
     cb_wait_front(src_cb_index, one_tile);
     cb_wait_front(ones_cb_index, one_tile);
     copy_tile(src_cb_index, /*offset*/ 0, /*register_offset*/ 0);
     copy_tile(ones_cb_index, /*offset*/ 0, /*register_offset*/ 1);
 
-    // Compute the exponential of the tile using the SFPU. This
-    // operation is in-place. It takes data from tile 0 in the
-    // registers and writes the result back to tile 0 in the
-    // registers.
-    // Telling the SFPU to perform exponential. This is required each time we
+    //
+    // Fused operations
+    //
+    // Compute the softplus of the tile using the SFPU.
+    // *_init() - Telling the SFPU to perform given operation. This is required each time we
     // switch to a different SFPU operation.
     exp_tile_init();
     exp_tile(0);  // exp(input)

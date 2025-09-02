@@ -128,6 +128,7 @@ int main() {
     // and enables efficient operations on the accelerator.
     src_vec = tilize_nfaces(src_vec, constants::TILE_WIDTH, constants::TILE_HEIGHT);
 
+    // Dram buffer config
     constexpr uint32_t single_tile_size = sizeof(bfloat16) * constants::TILE_HEIGHT * constants::TILE_WIDTH;
     tt_metal::InterleavedBufferConfig dram_config{
         .device = device,
@@ -199,12 +200,10 @@ int main() {
     // Reverse the tilization to get the result in the row-major format that the CPU expects
     result_vec = untilize_nfaces(result_vec, constants::TILE_WIDTH, constants::TILE_HEIGHT);
 
-    fmt::print("Output vector of size {}\n", result_vec.size());
-
     // Calculate the Pearson correlation coefficient (PCC) between the golden vector and the result vector
     // This is a measure of how similar the two vectors are.
     // A PCC close to 1 indicates that the two vectors are very similar.
-    float pearson = check_bfloat16_vector_pcc(golden_vec, result_vec);
+    const float pearson = check_bfloat16_vector_pcc(golden_vec, result_vec);
     fmt::print("Metalium vs Golden -- PCC = {}\n", pearson);
     TT_FATAL(pearson > 0.999, "PCC not high enough. Result PCC: {}, Expected PCC: 0.999", pearson);
 
