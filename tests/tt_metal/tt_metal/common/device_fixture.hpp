@@ -93,6 +93,58 @@ public:
     }
 };
 
+class MeshDeviceSingleCardFixture : public MeshDispatchFixture {
+protected:
+    void SetUp() override {
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->create_devices();
+    }
+
+    void TearDown() override {
+        if (!id_to_device_.empty()) {
+            for (auto [device_id, device] : id_to_device_) {
+                device.reset();
+            }
+        }
+    }
+
+    virtual bool validate_dispatch_mode() {
+        this->slow_dispatch_ = true;
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (!slow_dispatch) {
+            log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
+            this->slow_dispatch_ = false;
+            return false;
+        }
+        return true;
+    }
+
+    void create_devices() {
+        std::vector<chip_id_t> ids;
+        for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
+            ids.push_back(id);
+        }
+        const auto& dispatch_core_config =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        id_to_device_ = distributed::MeshDevice::create_unit_meshes(
+            ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config);
+        devices_.clear();
+        for (auto [device_id, device] : id_to_device_) {
+            devices_.push_back(device);
+        }
+        this->num_devices_ = this->devices_.size();
+    }
+
+    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_{};
+    std::map<chip_id_t, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
+    size_t num_devices_{};
+};
+
+class MeshDeviceSingleCardBufferFixture : public MeshDeviceSingleCardFixture {};
+
 class DeviceFixture : public DispatchFixture {
 private:
     std::map<chip_id_t, tt::tt_metal::IDevice*> id_to_device_;
@@ -172,11 +224,6 @@ public:
     }
 };
 
-class DeviceFixtureWithL1Small : public DeviceFixture {
-public:
-    DeviceFixtureWithL1Small() : DeviceFixture(24 * 1024) {}
-};
-
 class DeviceSingleCardFixture : public DispatchFixture {
 protected:
     void SetUp() override {
@@ -216,8 +263,6 @@ protected:
     std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
     size_t num_devices_{};
 };
-
-class DeviceSingleCardBufferFixture : public DeviceSingleCardFixture {};
 
 class BlackholeSingleCardFixture : public DeviceSingleCardFixture {
 protected:
