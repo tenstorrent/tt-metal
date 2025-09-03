@@ -249,6 +249,9 @@ std::map<std::string, std::string> get_defines_fp32(
             if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
                 new_defines.insert({"BITWISE_UINT16_INIT", fmt::format("binary_bitwise_tile_init();")});
                 op_name = "bitwise_and_uint16_binary_tile";
+            } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
+                new_defines.insert({"BITWISE_UINT32_INIT", fmt::format("binary_bitwise_tile_init();")});
+                op_name = "bitwise_and_uint32_binary_tile";
             } else {
                 new_defines.insert({"BITWISE_INIT", fmt::format("binary_bitwise_tile_init();")});
                 op_name = "bitwise_and_binary_tile";
@@ -258,6 +261,9 @@ std::map<std::string, std::string> get_defines_fp32(
             if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
                 new_defines.insert({"BITWISE_UINT16_INIT", fmt::format("binary_bitwise_tile_init();")});
                 op_name = "bitwise_or_uint16_binary_tile";
+            } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
+                new_defines.insert({"BITWISE_UINT32_INIT", fmt::format("binary_bitwise_tile_init();")});
+                op_name = "bitwise_or_uint32_binary_tile";
             } else {
                 new_defines.insert({"BITWISE_INIT", fmt::format("binary_bitwise_tile_init();")});
                 op_name = "bitwise_or_binary_tile";
@@ -267,6 +273,9 @@ std::map<std::string, std::string> get_defines_fp32(
             if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
                 new_defines.insert({"BITWISE_UINT16_INIT", fmt::format("binary_bitwise_tile_init();")});
                 op_name = "bitwise_xor_uint16_binary_tile";
+            } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
+                new_defines.insert({"BITWISE_UINT32_INIT", fmt::format("binary_bitwise_tile_init();")});
+                op_name = "bitwise_xor_uint32_binary_tile";
             } else {
                 new_defines.insert({"BITWISE_INIT", fmt::format("binary_bitwise_tile_init();")});
                 op_name = "bitwise_xor_binary_tile";

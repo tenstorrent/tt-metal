@@ -399,18 +399,24 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case BITWISE_AND:
             if (dtype == DataType::UINT16) {
                 return {"binary_bitwise_tile_init();", "bitwise_and_uint16_binary_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"binary_bitwise_tile_init();", "bitwise_and_uint32_binary_tile"};
             } else {
                 return {"binary_bitwise_tile_init();", "bitwise_and_binary_tile"};
             }
         case BITWISE_OR:
             if (dtype == DataType::UINT16) {
                 return {"binary_bitwise_tile_init();", "bitwise_or_uint16_binary_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"binary_bitwise_tile_init();", "bitwise_or_uint32_binary_tile"};
             } else {
                 return {"binary_bitwise_tile_init();", "bitwise_or_binary_tile"};
             }
         case BITWISE_XOR:
             if (dtype == DataType::UINT16) {
                 return {"binary_bitwise_tile_init();", "bitwise_xor_uint16_binary_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"binary_bitwise_tile_init();", "bitwise_xor_uint32_binary_tile"};
             } else {
                 return {"binary_bitwise_tile_init();", "bitwise_xor_binary_tile"};
             }
