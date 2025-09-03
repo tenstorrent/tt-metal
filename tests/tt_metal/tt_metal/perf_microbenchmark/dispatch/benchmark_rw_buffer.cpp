@@ -20,6 +20,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <benchmark/benchmark.h>
 #include "context/metal_context.hpp"
@@ -132,15 +133,14 @@ static_assert(ELEMENT_SHAPE_2K[0] % PAGE_SIDE == 0 && ELEMENT_SHAPE_2K[1] % PAGE
  * Then we need to round it up to the nearest multiple of PAGE_SIDE, which would be 352.
  */
 static constexpr auto compute_sharded_side_size(auto element_side, auto num_cores) {
-    auto shard_side = element_side / num_cores;
-    shard_side += (element_side % num_cores > 0 ? 1 : 0);
-    // Rounding up to the nearest multiple of PAGE_HEIGHT
-    shard_side += (PAGE_SIDE - shard_side % PAGE_SIDE);
-    return shard_side;
+    auto element_per_core = div_up(element_side, num_cores);
+    auto pages_per_core = div_up(element_per_core, PAGE_SIDE);
+    return pages_per_core * PAGE_SIDE;
 }
 
 // Quick test case
 static_assert(compute_sharded_side_size(4096, 12) == 352);
+static_assert(compute_sharded_side_size(PAGE_SIDE * 2 , 2) == PAGE_SIDE);
 
 static constexpr auto compute_shard_shape(auto element_shape, auto num_cores, TensorMemoryLayout sharding)
     -> decltype(element_shape) {
