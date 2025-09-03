@@ -246,7 +246,7 @@ void kernel_main() {
                     auto p_local_means = reinterpret_cast<volatile uint16_t*>(get_read_ptr(cb_ex_partial));
                     auto p_local_vars = p_local_means + TILE_WIDTH * TILE_HEIGHT;
 
-                    auto local_result = combine_welford<32, num_channels_per_group * num_rows_per_group / 32, 2>(p_local_means, p_local_vars);
+                    auto local_result = combine_welford_stats<32, num_channels_per_group * num_rows_per_group / 32, 2>(p_local_means, p_local_vars);
                     DPRINT << "local mean: " << BF16(local_result.mean) << " local var: " << BF16(local_result.variance) << " local count: " << local_result.count << ENDL();
 
                     // Write this to cb_ex_global
