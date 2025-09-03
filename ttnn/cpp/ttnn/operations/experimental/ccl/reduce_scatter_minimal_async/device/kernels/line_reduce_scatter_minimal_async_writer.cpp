@@ -26,7 +26,7 @@ using ttnn::ccl::Topology;
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(1);
-constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(2);
+constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(2);  // 4
 constexpr uint32_t cb_compute_output_id = get_compile_time_arg_val(3);
 constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(4);
 constexpr uint32_t tile_granularity = get_compile_time_arg_val(5);
@@ -44,24 +44,26 @@ constexpr bool do_final_reduction = get_compile_time_arg_val(16);
 constexpr uint32_t num_total_reduction_steps = get_compile_time_arg_val(17);
 constexpr bool sync_with_other_direction = get_compile_time_arg_val(18);
 constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(19);
+constexpr bool use_barrier_sem = get_compile_time_arg_val(20);
+constexpr size_t barrier_sem = get_compile_time_arg_val(21);
 
-constexpr bool is_termination_master = get_compile_time_arg_val(20);
-constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(21);
-constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(22);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(23);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(24);
-constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(25);
-constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(26);
-constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(27);
-constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(28);
-constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(29);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(30);
-constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(31);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(32);
+constexpr bool is_termination_master = get_compile_time_arg_val(22);
+constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(23);
+constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(24);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(25);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(26);
+constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(27);
+constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(28);
+constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(29);
+constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(30);
+constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(31);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(32);
+constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(33);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(34);
 constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
-    ccl_routing_utils::get_line_unicast_route_info_from_args<33>();
+    ccl_routing_utils::get_line_unicast_route_info_from_args<35>();
 constexpr ccl_routing_utils::line_multicast_route_info_t multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<33 + ccl_routing_utils::num_line_unicast_args>();
+    ccl_routing_utils::get_line_multicast_route_info_from_args<35 + ccl_routing_utils::num_line_unicast_args>();
 
 constexpr uint32_t batch_num_pages = batch_slice_num_pages * ring_size;
 constexpr uint32_t intermediate_num_pages = batch_num_pages * num_batches;
@@ -86,10 +88,7 @@ void kernel_main() {
     uint32_t opposite_core_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t opposite_core_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
 
-    bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
-    size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
-
     uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
@@ -100,7 +99,7 @@ void kernel_main() {
     uint32_t num_mux_clients = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr uint32_t ct_idx =
-        33 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
+        35 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
 
 #ifdef INTERMEDIATE_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
