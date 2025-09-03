@@ -131,7 +131,9 @@ private:
 template <typename Struct>
 class StructBuffer {
 public:
-    StructBuffer(const StructInfo info) : info_(info), storage_(std::make_unique<std::byte[]>(info.get_size())) {}
+    StructBuffer(const StructInfo info) : info_(info), storage_(std::make_unique<std::byte[]>(info.get_size())) {
+        std::fill(data(), data() + size(), std::byte{0});
+    }
     StructBuffer(const StructBuffer& other) : StructBuffer(other.info_) {
         std::copy(other.data(), other.data() + size(), data());
     }
