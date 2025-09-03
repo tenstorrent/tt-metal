@@ -2,6 +2,8 @@
 #include <queue>
 #include <unistd.h>
 
+#include <tt-logger/tt-logger.hpp>
+
 #include <telemetry/telemetry_provider.hpp>
 #include <hal/hal.hpp>
 #include <telemetry/ethernet/ethernet_metrics.hpp>
@@ -35,7 +37,7 @@ std::shared_ptr<TelemetrySnapshot> create_new_handoff_buffer(TelemetrySnapshot *
             // Custom deleter: do not delete, just return to pool. We use shared_ptr for its
             // thread-safe reference counting, allowing a buffer to be passed to multiple
             // consumers.
-            std::cout << "[TelemetryProvider] Returned buffer" << std::endl;
+            log_debug(tt::LogAlways, "TelemetryProvider: Returned buffer");
             return_buffer_to_pool(buffer);
         }
     );
@@ -49,11 +51,11 @@ std::shared_ptr<TelemetrySnapshot> get_writeable_buffer() {
         // Get a free buffer
         buffer = available_buffers_.front();
         available_buffers_.pop();
-        std::cout << "[TelemetryProvider] Got buffer from pool" << std::endl;
+        log_debug(tt::LogAlways, "TelemetryProvider: Got buffer from pool");
     } else {
         // Pool exhausted, create new buffer
         buffer = new TelemetrySnapshot();
-        std::cout << "[TelemetryProvider] Allocated new buffer" << std::endl;
+        log_debug(tt::LogAlways, "TelemetryProvider: Allocated new buffer");
     }
 
     // Ensure it is clear
@@ -61,26 +63,6 @@ std::shared_ptr<TelemetrySnapshot> get_writeable_buffer() {
 
     // Return a RAII handle that will automatically return buffer to pool
     return create_new_handoff_buffer(buffer);
-}
-
-static void update(
-    std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
-    std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
-    std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
-    const std::unique_ptr<tt::umd::Cluster>& cluster) {
-    std::chrono::steady_clock::time_point start_of_update_cycle = std::chrono::steady_clock::now();
-
-    for (auto &metric: bool_metrics) {
-        metric->update(cluster, start_of_update_cycle);
-    }
-
-    for (auto &metric: uint_metrics) {
-        metric->update(cluster, start_of_update_cycle);
-    }
-
-    for (auto& metric : double_metrics) {
-        metric->update(cluster, start_of_update_cycle);
-    }
 }
 
 static std::string get_cluster_wide_telemetry_path(const Metric &metric) {
@@ -99,6 +81,31 @@ static std::string get_cluster_wide_telemetry_path(const Metric &metric) {
         }
     }
     return path;
+}
+
+static void update(
+    std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
+    std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
+    std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
+    const std::unique_ptr<tt::umd::Cluster>& cluster) {
+    log_info(tt::LogAlways, "Starting telemetry readout...");
+    std::chrono::steady_clock::time_point start_of_update_cycle = std::chrono::steady_clock::now();
+
+    for (auto &metric: bool_metrics) {
+        metric->update(cluster, start_of_update_cycle);
+    }
+
+    for (auto &metric: uint_metrics) {
+        metric->update(cluster, start_of_update_cycle);
+    }
+
+    for (auto& metric : double_metrics) {
+        metric->update(cluster, start_of_update_cycle);
+    }
+
+    std::chrono::steady_clock::time_point end_of_update_cycle = std::chrono::steady_clock::now();
+    auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_of_update_cycle - start_of_update_cycle).count();
+    log_info(tt::LogAlways, "Telemetry readout took {} ms", duration_ms);
 }
 
 static void send_initial_snapshot(
@@ -191,6 +198,7 @@ static void send_delta(
 static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers) {
     std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
     std::unique_ptr<tt::tt_metal::Hal> hal = create_hal(cluster);
+    log_info(tt::LogAlways, "Created cluster and HAL");
 
     // Create vectors of all metrics we will monitor by value type
     size_t id = 1;
@@ -211,6 +219,7 @@ static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> s
             }
         }
     }
+    log_info(tt::LogAlways, "Created Ethernet metrics");
 
     // Create ARC telemetry metrics for MMIO-capable chips
     for (const auto& [chip_identifier, reader] : create_arc_telemetry_readers_for_mmio_chips(cluster)) {
@@ -239,15 +248,20 @@ static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> s
         double_metrics.push_back(std::make_unique<ARCDoubleMetric>(id++, reader, tt::umd::TelemetryTag::ASIC_TEMPERATURE, "ASICTemperature", asic_temp_mask, asic_temp_scale, MetricUnit::CELSIUS, ARCDoubleMetric::Signedness::SIGNED));
         double_metrics.push_back(std::make_unique<ARCDoubleMetric>(id++, reader, tt::umd::TelemetryTag::BOARD_TEMPERATURE, "BoardTemperature", 0xffffffff, 1.0/65536.0, MetricUnit::CELSIUS, ARCDoubleMetric::Signedness::SIGNED));
     }
+    log_info(tt::LogAlways, "Created ARC metrics");
+    log_info(tt::LogAlways, "Initialized telemetry thread");
 
     // Continuously monitor on a loop
     update(bool_metrics, uint_metrics, double_metrics, cluster);
     send_initial_snapshot(subscribers, bool_metrics, uint_metrics, double_metrics);
+    log_info(tt::LogAlways, "Obtained initial readout and sent snapshot");
     while (!stopped_.load()) {
         std::this_thread::sleep_for(MONITOR_INTERVAL_SECONDS);
         update(bool_metrics, uint_metrics, double_metrics, cluster);
         send_delta(subscribers, bool_metrics, uint_metrics, double_metrics);
     }
+
+    log_info(tt::LogAlways, "Telemetry thread stopped");
 }
 
 void run_telemetry_provider(std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers) {

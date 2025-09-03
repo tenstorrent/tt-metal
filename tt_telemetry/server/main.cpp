@@ -103,25 +103,26 @@ int main(int argc, char* argv[]) {
     }
 
     // Web server
-    std::cout << "Starting primary web server on port " << port << std::endl;
+    log_info(tt::LogAlways, "Starting primary web server on port {}", port);
     std::future<bool> web_server;
     std::shared_ptr<TelemetrySubscriber> web_server_subscriber;
     std::tie(web_server, web_server_subscriber) = run_web_server(port);
 
     // Web server #2 (testing the ability of our producer to supply two consumers)
-    std::cout << "Starting secondary web server on port 5555" << std::endl;
+    uint16_t secondary_port = 5555;
+    log_info(tt::LogAlways, "Starting secondary web server on port {}", secondary_port);
     std::future<bool> web_server2;
     std::shared_ptr<TelemetrySubscriber> web_server2_subscriber;
-    std::tie(web_server2, web_server2_subscriber) = run_web_server(5555);
+    std::tie(web_server2, web_server2_subscriber) = run_web_server(secondary_port);
 
     if (use_mock_telemetry) {
         // Mock telemetry
-        std::cout << "Using mock telemetry data" << std::endl;
+        log_info(tt::LogAlways, "Using mock telemetry data");
         MockTelemetryProvider mock_telemetry{web_server_subscriber, web_server2_subscriber};
         mock_telemetry.run();
     } else {
         // Real telemetry
-        std::cout << "Using real hardware telemetry data" << std::endl;
+        log_info(tt::LogAlways, "Using real hardware telemetry data");
         run_telemetry_provider({web_server_subscriber, web_server2_subscriber});
     }
 
