@@ -4,6 +4,7 @@
 #include <map>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include "debug_tools_fixture.hpp"
 #include "gtest/gtest.h"
@@ -22,7 +23,7 @@ class IDevice;
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt::tt_metal;
 
-TEST_F(DPrintFixture, TensixTestPrintInvalidCore) {
+TEST_F(DPrintMeshFixture, TensixTestPrintInvalidCore) {
     // Set DPRINT enabled on a mix of invalid and valid cores. Previously this would hang during
     // device setup, but not the print server should simply ignore the invalid cores.
     std::map<CoreType, std::vector<CoreCoord>> dprint_cores;
@@ -32,8 +33,8 @@ TEST_F(DPrintFixture, TensixTestPrintInvalidCore) {
 
     // We expect that even though illegal worker cores were requested, device setup did not hang.
     // So just make sure that device setup worked and then close the device.
-    for (IDevice* device : this->devices_) {
-        EXPECT_TRUE(device != nullptr);
+    for (auto& mesh_device : this->devices_) {
+        EXPECT_TRUE(mesh_device != nullptr);
     }
     tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, false);
 }
