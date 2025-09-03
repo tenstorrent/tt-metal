@@ -94,11 +94,13 @@ ALWI void welford_M2_to_var(uint32_t scale_factor) {
  * This call is blocking and is only available on the compute engine.
  * This function converts m2 to variance and packs both mean and variance into the DST register.
  *
+ * @param scale_factor The scale factor to apply to the variance.
+ *
  * @return None. Mean and variance tiles are updated in place. 32 values each are written to the DST register.
  *         All 32 values are written to the first face of the DST register. Each valid value is followed by an invalid
  * value.
  */
-ALWI void welford_final() { MATH(llk_math_welfords_sfpu<0, 0, 0, 2>(0, 0, 0)); }
+ALWI void welford_final(uint32_t scale_factor) { MATH((llk_math_welfords_sfpu<0, 0, 0, 2>(scale_factor, 0, 0))); }
 
 /**
  * Uses a copy of the ternery_sfpu_init
