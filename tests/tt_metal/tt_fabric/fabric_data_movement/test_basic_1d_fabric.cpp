@@ -1052,7 +1052,7 @@ void RunTestMCastConnAPI(
                 routing_direction,
                 physical_end_device_ids[i]);
 
-            auto receiver_device = fixture->get_device(physical_end_device_ids[i]);
+            const auto& receiver_device = fixture->get_device(physical_end_device_ids[i]);
             std::vector<uint32_t> recv_status;
 
             tt_metal::detail::ReadFromDeviceL1(
