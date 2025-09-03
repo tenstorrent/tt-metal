@@ -18,7 +18,7 @@ class Yolov11Conv2D:
         activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
         reshard=False,
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        shard_layout=None,  # Use interleaved to reduce circular buffer usage
         is_detect=False,
         is_dfl=False,
         config_override=None,
@@ -49,9 +49,9 @@ class Yolov11Conv2D:
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
-            enable_act_double_buffer=True,  # Enable to reduce memory pressure
-            enable_split_reader=True,       # Enable to reduce L1 buffer conflicts
-            enable_weights_double_buffer=True,  # Enable weights double buffer for memory optimization
+            enable_act_double_buffer=False,  # Disable to reduce circular buffer usage
+            enable_split_reader=True,       # Keep enabled to reduce L1 buffer conflicts
+            enable_weights_double_buffer=False,  # Disable to reduce circular buffer usage
             reshard_if_not_optimal=True if self.reshard else False,
             activation=self.activation,
         )
