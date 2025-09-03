@@ -69,18 +69,18 @@ class TtSpatialCrossAttention:
         for i, mask_per_img in enumerate(bev_mask):
             index_query_per_img = ttnn.sum(mask_per_img[0], -1)
             index_query_per_img = ttnn.to_layout(index_query_per_img, ttnn.ROW_MAJOR_LAYOUT)
-            index_query_per_img = ttnn.unsqueeze(index_query_per_img, 0)
-            index_query_per_img = ttnn.unsqueeze(index_query_per_img, 0)
-            index_query_per_img = ttnn.unsqueeze(index_query_per_img, 0)
+            for _ in range(3):  # unsqueeze 3 times
+                index_query_per_img = ttnn.unsqueeze(index_query_per_img, 0)
             output_tensor = ttnn.nonzero(index_query_per_img, queue_id=0, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(index_query_per_img)
+
             no_of_non_zero_indices = output_tensor[0][..., 0].item()
             index_query_per_img = output_tensor[1][:, :, :, :no_of_non_zero_indices]
 
-            index_query_per_img = ttnn.squeeze(index_query_per_img, 0)
-            index_query_per_img = ttnn.squeeze(index_query_per_img, 0)
-            index_query_per_img = ttnn.squeeze(index_query_per_img, 0)
-
+            for _ in range(3):  # squeeze back
+                index_query_per_img = ttnn.squeeze(index_query_per_img, 0)
             indexes.append(index_query_per_img)
+            ttnn.deallocate(output_tensor[0])
 
         max_len = max([each.shape[0] for each in indexes])
         query = ttnn.to_torch(query)
@@ -96,6 +96,7 @@ class TtSpatialCrossAttention:
                 reference_points_rebatch[j, i, : len(index_query_per_img)] = reference_points_per_img[
                     j, index_query_per_img
                 ]
+
         queries_rebatch = ttnn.from_torch(queries_rebatch, dtype=ttnn.bfloat16, device=self.device)
         reference_points_rebatch = ttnn.from_torch(reference_points_rebatch, dtype=ttnn.bfloat16, device=self.device)
         num_cams, l, bs, embed_dims = key.shape
@@ -114,6 +115,9 @@ class TtSpatialCrossAttention:
             spatial_shapes=spatial_shapes,
             level_start_index=level_start_index,
         )
+        ttnn.deallocate(queries_rebatch)
+        ttnn.deallocate(reference_points_rebatch)
+
         queries = ttnn.reshape(queries, (bs, self.num_cams, max_len, self.embed_dims))
 
         queries = ttnn.to_torch(queries)
@@ -241,6 +245,7 @@ class TtMSDeformableAttention3D:
         sampling_offsets = ttnn.reshape(
             sampling_offsets, (bs, num_query, self.num_heads, self.num_levels, self.num_points, 2)
         )
+        ttnn.reallocate(sampling_offsets)
         attention_weights = ttnn.linear(query, params.attention_weights.weight, bias=params.attention_weights.bias)
         ttnn.deallocate(params.attention_weights.weight)
         ttnn.deallocate(params.attention_weights.bias)
@@ -252,6 +257,7 @@ class TtMSDeformableAttention3D:
         # attention_weights = ttnn.from_torch(
         #     attention_weights, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
         # )
+
         attention_weights = ttnn.softmax(attention_weights, -1)
 
         attention_weights = ttnn.reshape(
