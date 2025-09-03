@@ -1,0 +1,75 @@
+graph_templates {
+  key: "5_wh_galaxy_y_torus_superpod"
+  value {
+    children {
+      name: "pod1"
+      pod_ref { pod_descriptor: "wh_galaxy_y_torus" }
+    }
+    children {
+      name: "pod2"
+      pod_ref { pod_descriptor: "wh_galaxy_y_torus" }
+    }
+    children {
+      name: "pod3"
+      pod_ref { pod_descriptor: "wh_galaxy_y_torus" }
+    }
+    children {
+      name: "pod4"
+      pod_ref { pod_descriptor: "wh_galaxy_y_torus" }
+    }
+    children {
+      name: "pod5"
+      pod_ref { pod_descriptor: "wh_galaxy_y_torus" }
+    }
+    internal_connections {
+      key: "QSFP"
+      value {
+        connections { port_a { path: ["pod3"] tray_id: 4 port_id: 3 } port_b { path: ["pod2"] tray_id: 4 port_id: 3 } }
+        connections { port_a { path: ["pod3"] tray_id: 4 port_id: 4 } port_b { path: ["pod1"] tray_id: 4 port_id: 4 } }
+        connections { port_a { path: ["pod3"] tray_id: 4 port_id: 6 } port_b { path: ["pod5"] tray_id: 4 port_id: 6 } }
+        connections { port_a { path: ["pod3"] tray_id: 2 port_id: 6 } port_b { path: ["pod4"] tray_id: 2 port_id: 3 } }
+        connections { port_a { path: ["pod2"] tray_id: 4 port_id: 4 } port_b { path: ["pod1"] tray_id: 4 port_id: 3 } }
+        connections { port_a { path: ["pod2"] tray_id: 4 port_id: 6 } port_b { path: ["pod5"] tray_id: 4 port_id: 5 } }
+        connections { port_a { path: ["pod2"] tray_id: 2 port_id: 6 } port_b { path: ["pod4"] tray_id: 2 port_id: 4 } }
+        connections { port_a { path: ["pod2"] tray_id: 3 port_id: 6 } port_b { path: ["pod3"] tray_id: 1 port_id: 6 } }
+        connections { port_a { path: ["pod1"] tray_id: 4 port_id: 6 } port_b { path: ["pod5"] tray_id: 4 port_id: 4 } }
+        connections { port_a { path: ["pod1"] tray_id: 2 port_id: 6 } port_b { path: ["pod4"] tray_id: 2 port_id: 5 } }
+        connections { port_a { path: ["pod1"] tray_id: 3 port_id: 6 } port_b { path: ["pod3"] tray_id: 3 port_id: 6 } }
+        connections { port_a { path: ["pod1"] tray_id: 1 port_id: 6 } port_b { path: ["pod2"] tray_id: 1 port_id: 3 } }
+        connections { port_a { path: ["pod5"] tray_id: 2 port_id: 6 } port_b { path: ["pod4"] tray_id: 4 port_id: 6 } }
+        connections { port_a { path: ["pod5"] tray_id: 3 port_id: 6 } port_b { path: ["pod3"] tray_id: 3 port_id: 4 } }
+        connections { port_a { path: ["pod5"] tray_id: 1 port_id: 6 } port_b { path: ["pod2"] tray_id: 1 port_id: 5 } }
+        connections { port_a { path: ["pod5"] tray_id: 1 port_id: 5 } port_b { path: ["pod1"] tray_id: 1 port_id: 4 } }
+        connections { port_a { path: ["pod4"] tray_id: 3 port_id: 6 } port_b { path: ["pod3"] tray_id: 3 port_id: 3 } }
+        connections { port_a { path: ["pod4"] tray_id: 1 port_id: 6 } port_b { path: ["pod2"] tray_id: 1 port_id: 6 } }
+        connections { port_a { path: ["pod4"] tray_id: 1 port_id: 5 } port_b { path: ["pod1"] tray_id: 1 port_id: 5 } }
+        connections { port_a { path: ["pod4"] tray_id: 1 port_id: 3 } port_b { path: ["pod5"] tray_id: 1 port_id: 3 } }
+      }
+    }
+  }
+}
+
+# Root instance with concrete host mappings
+root_instance {
+  template_name: "5_wh_galaxy_y_torus_superpod"
+  child_mappings {
+    key: "pod1"
+    value { host_id: 0 }
+  }
+  child_mappings {
+    key: "pod2"
+    value { host_id: 1 }
+  }
+  child_mappings {
+    key: "pod3"
+    value { host_id: 2 }
+  }
+  child_mappings {
+    key: "pod4"
+    value { host_id: 3 }
+  }
+  child_mappings {
+    key: "pod5"
+    value { host_id: 4 }
+  }
+}

@@ -273,6 +273,7 @@ target_link_libraries(
 ############################################################################################################################
 
 add_subdirectory(tt_stl)
+add_subdirectory(scaleout_tools)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
 
