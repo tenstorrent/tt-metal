@@ -32,24 +32,24 @@ struct Host {
     uint32_t shelf_u;
 };
 
-struct LogicalChipConnection {
+struct LogicalChannelEndpoint {
     HostId host_id;
     TrayId tray_id;
     AsicChannel asic_channel;
 
-    auto operator<=>(const LogicalChipConnection& other) const = default;
+    auto operator<=>(const LogicalChannelEndpoint& other) const = default;
 };
 
-struct PhysicalChannelConnection {
+struct PhysicalChannelEndpoint {
     std::string hostname;
     TrayId tray_id;
     uint32_t asic_location;
     tt::scaleout_tools::ChanId channel_id;
 
-    auto operator<=>(const PhysicalChannelConnection& other) const = default;
+    auto operator<=>(const PhysicalChannelEndpoint& other) const = default;
 };
 
-struct PhysicalPortConnection {
+struct PhysicalPortEndpoint {
     std::string hostname;
     std::string aisle;
     uint32_t rack;
@@ -57,21 +57,23 @@ struct PhysicalPortConnection {
     PortType port_type;
     PortId port_id;
 
-    auto operator<=>(const PhysicalPortConnection& other) const = default;
+    auto operator<=>(const PhysicalPortEndpoint& other) const = default;
 };
 
 // Overload operator<< for readable test output
-std::ostream& operator<<(std::ostream& os, const PhysicalChannelConnection& conn);
-std::ostream& operator<<(std::ostream& os, const PhysicalPortConnection& conn);
+std::ostream& operator<<(std::ostream& os, const PhysicalChannelEndpoint& conn);
+std::ostream& operator<<(std::ostream& os, const PhysicalPortEndpoint& conn);
 
-using LogicalChipConnectionPair = std::pair<LogicalChipConnection, LogicalChipConnection>;
+using LogicalChannelConnection = std::pair<LogicalChannelEndpoint, LogicalChannelEndpoint>;
+using PhysicalChannelConnection = std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint>;
 
 struct Node {
     std::unordered_map<TrayId, Board> boards;
     HostId host_id = HostId(0);
     // Board-to-board connections within this node: PortType -> [(tray_id, port_id) <-> (tray_id, port_id)]
-    std::unordered_map<PortType, std::vector<std::pair<std::pair<TrayId, PortId>, std::pair<TrayId, PortId>>>>
-        inter_board_connections;
+    using PortEndpoint = std::pair<TrayId, PortId>;
+    using PortConnection = std::pair<PortEndpoint, PortEndpoint>;
+    std::unordered_map<PortType, std::vector<PortConnection>> inter_board_connections;
 };
 
 // Resolved graph instance with concrete nodes
@@ -82,12 +84,9 @@ struct ResolvedGraphInstance {
     std::unordered_map<std::string, std::unique_ptr<ResolvedGraphInstance>> subgraphs;  // Nested graph children
 
     // All connections within this graph instance
-    std::unordered_map<
-        PortType,
-        std::vector<std::pair<
-            std::tuple<std::vector<std::string>, TrayId, PortId>,  // Path, tray_id, port_id
-            std::tuple<std::vector<std::string>, TrayId, PortId>>>>
-        internal_connections;
+    using PortEndpoint = std::tuple<std::vector<std::string>, TrayId, PortId>;  // Path, tray_id, port_id
+    using PortConnection = std::pair<PortEndpoint, PortEndpoint>;
+    std::unordered_map<PortType, std::vector<PortConnection>> internal_connections;
 };
 
 class CablingGenerator {
@@ -98,7 +97,7 @@ public:
     // Getters for all data
     const std::vector<Host>& get_deployment_hosts() const;
     const std::unordered_map<std::pair<HostId, TrayId>, const Board*, HostTrayHasher>& get_boards_by_host_tray() const;
-    const std::vector<LogicalChipConnectionPair>& get_chip_connections() const;
+    const std::vector<LogicalChannelConnection>& get_chip_connections() const;
 
     // Method to emit factory system descriptor
     void emit_factory_system_descriptor(const std::string& output_path) const;
@@ -128,7 +127,7 @@ private:
 
     std::unique_ptr<ResolvedGraphInstance> root_instance_;
     std::unordered_map<std::pair<HostId, TrayId>, const Board*, HostTrayHasher> boards_by_host_tray_;
-    std::vector<LogicalChipConnectionPair> chip_connections_;
+    std::vector<LogicalChannelConnection> chip_connections_;
     std::vector<Host> deployment_hosts_;
 };
 
@@ -137,12 +136,12 @@ private:
 // Hash specializations
 namespace std {
 template <>
-struct hash<tt::scaleout_tools::LogicalChipConnection>;
+struct hash<tt::scaleout_tools::LogicalChannelEndpoint>;
 
 template <>
-struct hash<tt::scaleout_tools::PhysicalChannelConnection>;
+struct hash<tt::scaleout_tools::PhysicalChannelEndpoint>;
 
 template <>
-struct hash<tt::scaleout_tools::PhysicalPortConnection>;
+struct hash<tt::scaleout_tools::PhysicalPortEndpoint>;
 
 }  // namespace std
