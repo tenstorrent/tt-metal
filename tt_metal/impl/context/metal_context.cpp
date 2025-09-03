@@ -592,60 +592,6 @@ void MetalContext::initialize_control_plane() {
 void MetalContext::reset_cores(chip_id_t device_id) {
     ZoneScoped;
 
-    auto get_active_erisc_launch_flag_addr = [&]() {
-        auto core_type_idx = hal_->get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-        std::uint32_t launch_erisc_addr = hal_->get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
-        return launch_erisc_addr;
-    };
-
-    auto erisc_app_still_running = [&](CoreCoord virtual_core) {
-        // Check if the kernel/erisc_app is still running on a ethernet core with context switching enabled
-        // The LAUNCH_ERISC_APP_FLAG is reset to 0 after reset/reboot, and set to 1 when Metal runtime launches erisc
-        // app FW Only applicable to WORMHOLE ethernet cores today, but could in theory extend to other cores, remove
-        // assert if so
-        if (cluster_->arch() != ARCH::WORMHOLE_B0) {
-            return false;
-        }
-        TT_ASSERT(
-            cluster_->is_ethernet_core(virtual_core, device_id),
-            "Invalid core {} for context switch check",
-            virtual_core.str());
-        std::uint32_t launch_erisc_addr = get_active_erisc_launch_flag_addr();
-        auto data = cluster_->read_core(device_id, virtual_core, launch_erisc_addr, sizeof(std::uint32_t));
-        return (data[0] != 0);
-    };
-
-    // Send exit_erisc_kernel to the launch message
-    auto erisc_send_exit_signal = [&](CoreCoord virtual_core, bool is_idle_eth) {
-        go_msg_t go_msg{};
-        std::memset(&go_msg, 0, sizeof(go_msg_t));
-        log_info(
-            tt::LogMetal,
-            "While initializing device {}, {} ethernet dispatch core {} detected as still "
-            "running, issuing exit signal.",
-            device_id,
-            is_idle_eth ? "idle" : "active",
-            virtual_core.str());
-
-        DeviceAddr launch_addr = hal_->get_dev_addr(
-            is_idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH,
-            HalL1MemAddrType::LAUNCH);
-
-        std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
-        data = cluster_->read_core(device_id, virtual_core, launch_addr, sizeof(launch_msg_t));
-
-        launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
-        launch_msg->kernel_config.exit_erisc_kernel = 1;
-        llrt::write_launch_msg_to_core(device_id, virtual_core, launch_msg, &go_msg, launch_addr, false);
-
-        if (!is_idle_eth) {
-            // Active
-            std::vector<uint32_t> clear_flag_data = {0};
-            cluster_->write_core_immediate(
-                device_id, virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
-        }
-    };
-
     // Assert worker cores + dispatch cores, in case they were in a bad state from before.
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> device_to_early_exit_cores;
 
@@ -654,8 +600,8 @@ void MetalContext::reset_cores(chip_id_t device_id) {
         for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
             CoreCoord virtual_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-            if (erisc_app_still_running(virtual_core)) {
-                erisc_send_exit_signal(virtual_core, false /* is_idle_eth */);
+            if (erisc_app_still_running(device_id, virtual_core)) {
+                erisc_send_exit_signal(device_id, virtual_core, false /* is_idle_eth */);
                 device_to_early_exit_cores[device_id].insert(virtual_core);
             }
         }
@@ -1250,5 +1196,49 @@ MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_
 const MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() const {
     return MetalContext::command_queue_id_stack_for_thread_;
 }
+
+uint32_t MetalContext::get_active_erisc_launch_flag_addr() {
+    auto core_type_idx = hal_->get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+    std::uint32_t launch_erisc_addr = hal_->get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
+    return launch_erisc_addr;
+};
+
+bool MetalContext::erisc_app_still_running(chip_id_t device_id, CoreCoord virtual_core) {
+    // Check if the kernel/erisc_app is still running on a ethernet core with context switching enabled
+    // The LAUNCH_ERISC_APP_FLAG is reset to 0 after reset/reboot, and set to 1 when Metal runtime launches erisc
+    // app FW Only applicable to WORMHOLE ethernet cores today, but could in theory extend to other cores, remove
+    // assert if so
+    if (cluster_->arch() != ARCH::WORMHOLE_B0) {
+        return false;
+    }
+    TT_ASSERT(
+        cluster_->is_ethernet_core(virtual_core, device_id),
+        "Invalid core {} for context switch check",
+        virtual_core.str());
+    std::uint32_t launch_erisc_addr = get_active_erisc_launch_flag_addr();
+    auto data = cluster_->read_core(device_id, virtual_core, launch_erisc_addr, sizeof(std::uint32_t));
+    return (data[0] != 0);
+};
+
+// Send exit_erisc_kernel to the launch message
+void MetalContext::erisc_send_exit_signal(chip_id_t device_id, CoreCoord virtual_core, bool is_idle_eth) {
+    go_msg_t go_msg{};
+    DeviceAddr launch_addr = hal_->get_dev_addr(
+        is_idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH,
+        HalL1MemAddrType::LAUNCH);
+
+    std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
+    data = cluster_->read_core(device_id, virtual_core, launch_addr, sizeof(launch_msg_t));
+
+    launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
+    launch_msg->kernel_config.exit_erisc_kernel = 1;
+    llrt::write_launch_msg_to_core(device_id, virtual_core, launch_msg, &go_msg, launch_addr, false);
+
+    if (!is_idle_eth) {
+        // Active
+        std::vector<uint32_t> clear_flag_data = {0};
+        cluster_->write_core_immediate(device_id, virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
+    }
+};
 
 }  // namespace tt::tt_metal

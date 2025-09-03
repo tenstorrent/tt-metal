@@ -24,7 +24,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_command_processor_async/all_gather_command_processor_async.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
@@ -155,17 +155,19 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
 
         log_info(LogTest, "Enqueue AllGather");
 
-        // Enqueue the all_gather_async operation on each device.
+        // Enqueue the all_gather_command_processor_async operation on each device.
         // It does not support command queue ID as a parameter and internally uses command queue 0.
         std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
             multi_device_global_semaphore};
-        const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_async(
+        const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_command_processor_async(
             device_tensors,
-            0,
+            /* dim */ 0,
             multi_dev_semaphore,
-            1,
+            /* persistent_output_buffer */ std::nullopt,
+            /* num_links */ 1,
             operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             ttnn::ccl::Topology::Linear,
+            /* cluster_axis */ std::nullopt,
             SubDeviceId(0));
 
         log_info(LogTest, "Enqueue dummy ops");
@@ -329,17 +331,19 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
 
         log_info(LogTest, "Enqueue AllGather");
 
-        // Enqueue the all_gather_async operation on each device.
+        // Enqueue the all_gather_command_processor_async operation on each device.
         // It does not support command queue ID as a parameter and internally uses command queue 0.
         std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
             multi_device_global_semaphore};
-        const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_async(
+        const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_command_processor_async(
             device_tensors,
-            0,
+            /* dim */ 0,
             multi_dev_semaphore,
-            1,
+            /* persistent_output_buffer */ std::nullopt,
+            /* num_links */ 1,
             operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             ttnn::ccl::Topology::Linear,
+            /* cluster_axis */ std::nullopt,
             SubDeviceId(0));
 
         log_info(LogTest, "Enqueue dummy ops");
@@ -530,17 +534,19 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
 
         log_info(LogTest, "Enqueue AllGather");
 
-        // Enqueue the all_gather_async operation on each device.
+        // Enqueue the all_gather_command_processor_async operation on each device.
         // It does not support command queue ID as a parameter and internally uses command queue 0.
         std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
             multi_device_global_semaphore};
-        const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_async(
+        const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_command_processor_async(
             device_tensors,
-            0,
+            /* dim */ 0,
             multi_dev_semaphore,
-            1,
+            /* persistent_output_buffer */ std::nullopt,
+            /* num_links */ 1,
             operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             ttnn::ccl::Topology::Linear,
+            /* cluster_axis */ std::nullopt,
             SubDeviceId(0));
 
         log_info(LogTest, "Enqueue dummy ops");

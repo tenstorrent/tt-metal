@@ -72,6 +72,7 @@ def compare_tensors_using_pcc(
 
 
 PRE_OPERATION_HOOKS = []
+POST_OPERATION_HOOKS = []
 
 push_current_command_queue_id_for_thread = ttnn._ttnn.core.push_current_command_queue_id_for_thread
 pop_current_command_queue_id_for_thread = ttnn._ttnn.core.pop_current_command_queue_id_for_thread
@@ -100,38 +101,6 @@ def register_pre_operation_hook(hook):
     PRE_OPERATION_HOOKS.pop()
 
 
-POST_OPERATION_HOOKS = []
-
-
-def cq_id_pre_hook(operation, function_args, function_kwargs):
-    """Pre-operation hook to handle cq_id parameter by temporarily changing command queue"""
-    cq_id = None
-
-    # Check for cq_id from operation kwargs (highest priority)
-    if "cq_id" in function_kwargs:
-        cq_id = function_kwargs.pop("cq_id")
-
-    # Track whether we pushed a cq_id for this operation (store on the function object)
-    cq_id_pre_hook._cq_id_pushed = False
-
-    # If we have a cq_id to use, save current state and switch
-    if cq_id is not None:
-        push_current_command_queue_id_for_thread(cq_id)
-        cq_id_pre_hook._cq_id_pushed = True
-
-    return None
-
-
-def cq_id_post_hook(operation, function_args, function_kwargs, output):
-    """Post-operation hook to restore original command queue after operation completes"""
-    # Only pop if we actually pushed a cq_id in the pre-hook
-    if cq_id_pre_hook._cq_id_pushed:
-        pop_current_command_queue_id_for_thread()
-        cq_id_pre_hook._cq_id_pushed = False  # Reset for next operation
-
-    return None
-
-
 @contextmanager
 def command_queue(cq_id: int):
     """Context manager to set a default command queue for all TTNN operations within this context.
@@ -145,13 +114,13 @@ def command_queue(cq_id: int):
     Example:
         with ttnn.command_queue(1):
             result = ttnn.some_operation(tensor)  # Will use cq_id 1
-            result2 = ttnn.other_operation(tensor, cq_id=0)  # Will use cq_id 2 (overrides context)
+            result2 = ttnn.other_operation(tensor, cq_id=0)  # Will use cq_id 0 (overrides context)
     """
     if cq_id is None:
         raise ValueError("cq_id cannot be None in command_queue context")
 
-    logger.debug(f"Switching command queue id from {cq_id}")
     push_current_command_queue_id_for_thread(cq_id)
+    logger.info(f"Pushed command queue id {cq_id} for thread")
     try:
         yield
     finally:
@@ -163,13 +132,8 @@ def command_queue(cq_id: int):
                 f"This might indicate an operation didn't properly restore the command queue state. "
                 f"Restoring to original value {cq_id}."
             )
-
+        logger.info(f"Popping command queue id {cq_id} for thread")
         pop_current_command_queue_id_for_thread()
-
-
-# Register cq_id hooks globally - enabled by default for all TTNN operations
-PRE_OPERATION_HOOKS.append(cq_id_pre_hook)
-POST_OPERATION_HOOKS.append(cq_id_post_hook)
 
 
 @contextmanager
@@ -404,7 +368,17 @@ class FastOperation:
         return hash(self.python_fully_qualified_name)
 
     def __call__(self, *function_args, **function_kwargs):
-        return self.function(*function_args, **function_kwargs)
+        cq_id = None
+        if "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        if cq_id is None:
+            result = self.function(*function_args, **function_kwargs)
+        else:
+            with command_queue(cq_id):
+                result = self.function(*function_args, **function_kwargs)
+
+        return result
 
     def __post_init__(self):
         if self.function.__doc__ is None:
@@ -583,6 +557,10 @@ class Operation:
                 if not is_top_level_operation:
                     return decorated_function(*function_args, **function_kwargs)
 
+                cq_id = None
+                if "cq_id" in function_kwargs:
+                    cq_id = function_kwargs.pop("cq_id")
+
                 for hook in PRE_OPERATION_HOOKS:
                     hook_return_value = hook(self, function_args, function_kwargs)
                     if hook_return_value is not None:
@@ -630,7 +608,13 @@ class Operation:
                     decorated_function = comparison_decorator(decorated_function)
 
                 ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-                output = decorated_function(*function_args, **function_kwargs)
+
+                if cq_id is None:
+                    output = decorated_function(*function_args, **function_kwargs)
+                else:
+                    with command_queue(cq_id):
+                        output = decorated_function(*function_args, **function_kwargs)
+
                 captured_graph = ttnn.graph.end_graph_capture()
 
                 local_tensor_comparison_records = []

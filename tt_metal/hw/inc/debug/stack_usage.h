@@ -42,11 +42,13 @@ static inline uint32_t get_dispatch_class() {
     return DISPATCH_CLASS_TENSIX_DM0;
 #elif defined(COMPILE_FOR_NCRISC)
     return DISPATCH_CLASS_TENSIX_DM1;
-#elif defined(COMPILE_FOR_ERISC)
-    return DISPATCH_CLASS_ETH_DM0;
 #elif defined(COMPILE_FOR_IDLE_ERISC)
     return COMPILE_FOR_IDLE_ERISC == 0 ? DISPATCH_CLASS_ETH_DM0
         : DISPATCH_CLASS_ETH_DM1;
+#elif defined(COMPILE_FOR_AERISC)
+    return COMPILE_FOR_AERISC == 0 ? DISPATCH_CLASS_ETH_DM0 : DISPATCH_CLASS_ETH_DM1;
+#elif defined(COMPILE_FOR_ERISC)
+    return DISPATCH_CLASS_ETH_DM0;
 #elif defined(COMPILE_FOR_TRISC)
     return DISPATCH_CLASS_TENSIX_COMPUTE;
 #else
@@ -60,8 +62,7 @@ static inline void record_stack_usage(uint32_t stack_free) {
         // not computed
         return;
 
-    unsigned idx = debug_get_which_riscv();
-    debug_stack_usage_t::usage_t tt_l1_ptr* usage = &GET_MAILBOX_ADDRESS_DEV(watcher.stack_usage)->cpu[idx];
+    debug_stack_usage_t::usage_t tt_l1_ptr* usage = &GET_MAILBOX_ADDRESS_DEV(watcher.stack_usage)->cpu[PROCESSOR_INDEX];
     // min_free is initialized to zero, which we want to compare as
     // least noteworthy, and an offset free stack of one as the most
     // noteworthy. Decrement the former, so zero wraps around before

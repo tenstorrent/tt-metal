@@ -25,7 +25,6 @@ void py_bind_point_to_point(py::module& module) {
                 send_coord (ttnn.MeshCoordinate): Coordinate of device containing input_tensor (shard).
                 receive_coord (ttnn.MeshCoordinate): Coordinate of device receiving input_tensor (shard).
                 topology (ttnn.Topology): Fabric topology.
-                semaphore (ttnn.GlobalSemaphore): Semaphore allocated on all devices
 
             Keyword Args:
                 optional_output_tensoe (ttnn.Tensor,optional): Optional output tensor.
@@ -47,7 +46,6 @@ void py_bind_point_to_point(py::module& module) {
                         receiver_coord,
                         sender_coord,
                         ttnn.Topology.Linear,
-                        receiver_semaphore)
                 >>>  sent_tensor_torch = ttnn.to_torch(
                 >>>      sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
                 >>>  )
@@ -65,15 +63,13 @@ void py_bind_point_to_point(py::module& module) {
                const MeshCoordinate& receiver_coord,
                const MeshCoordinate& sender_coord,
                const ccl::Topology topology,
-               const GlobalSemaphore& semaphore,
                const std::optional<ttnn::Tensor> optional_output_tensor) {
-                return self(input_tensor, receiver_coord, sender_coord, topology, semaphore, optional_output_tensor);
+                return self(input_tensor, receiver_coord, sender_coord, topology, optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("receiver_coord"),
             py::arg("sender_coord"),
             py::arg("topology"),
-            py::arg("semaphore"),
             py::kw_only(),
             py::arg("optional_output_tensor") = std::nullopt});
 }
