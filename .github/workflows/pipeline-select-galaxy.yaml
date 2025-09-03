@@ -154,7 +154,7 @@ jobs:
     if: ${{ needs.determine-tests.outputs.run-quick == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/galaxy-quick.yaml
+    uses: ./.github/workflows/galaxy-quick-impl.yaml
     with:
       extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
