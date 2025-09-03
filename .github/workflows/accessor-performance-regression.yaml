@@ -79,7 +79,7 @@ jobs:
           path: docker-job-baseline
 
       - name: ⬇️ Setup Baseline Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@philei/tensor-accessor-perf-regression-tests
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-baseline-artifact.outputs.build-artifact-name }}
@@ -115,6 +115,7 @@ jobs:
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+        path: docker-job-baseline
 
   build-artifact:
     needs: generate-baseline-performance
@@ -145,7 +146,7 @@ jobs:
         PYTHONPATH: /work
         TT_METAL_HOME: /work
       volumes:
-        - ${{ github.workspace }}/docker-job-baseline:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent"
     defaults:
@@ -197,3 +198,4 @@ jobs:
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+        path: docker-job
