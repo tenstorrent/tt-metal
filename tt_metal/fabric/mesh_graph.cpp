@@ -294,15 +294,15 @@ void MeshGraph::initialize_intermesh_mapping(
     std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>> resolved_connections;
     if (my_rank == 0) {
         for (const auto& [src_mesh, port_identifiers] : port_id_table) {
-            std::cout << "Query Port Identifiers for Mesh " << *src_mesh << std::endl;
             for (const auto& [dest_mesh, src_ports] : port_identifiers) {
-                std::cout << "Connected to Mesh " << *dest_mesh << std::endl;
                 const auto& dest_ports = port_id_table[dest_mesh][src_mesh];
                 // Iterate over src ports. For each src port, determine which dst port it connects to
                 for (const auto& src_port : src_ports) {
                     const auto& connection_hash = src_port.connection_hash;
                     for (const auto& dest_port : dest_ports) {
                         if (dest_port.connection_hash == connection_hash) {
+                            std::cout << "Connecting: " << *src_mesh << " " << src_port.port_tag << " and "
+                                      << *dest_mesh << " " << dest_port.port_tag << std::endl;
                             resolved_connections.push_back(
                                 {{*src_mesh, src_port.port_tag}, {*dest_mesh, dest_port.port_tag}});
                             break;

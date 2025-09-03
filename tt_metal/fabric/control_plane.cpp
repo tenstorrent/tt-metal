@@ -2100,11 +2100,9 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
         }
         if (intermesh_routing_direction != RoutingDirection::NONE) {
             auto& direction_to_channel_map = router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
-            if (*(distributed_context.rank()) == 0) {
-                std::cout << "Assigning intermesh link direction to local host: "
-                          << static_cast<uint32_t>(intermesh_routing_direction) << " and channel: " << +eth_chan
-                          << " Fabric Node ID: " << fabric_node_id << std::endl;
-            }
+            std::cout << "Assigning intermesh link direction to local host: "
+                      << static_cast<uint32_t>(intermesh_routing_direction) << " and channel: " << +eth_chan
+                      << " Fabric Node ID: " << fabric_node_id << std::endl;
             direction_to_channel_map[intermesh_routing_direction].push_back(eth_chan);
         }
     }
