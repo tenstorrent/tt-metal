@@ -58,7 +58,7 @@ class TtSppf:
         for i in range(len(y)):
             y[i] = ttnn.sharded_to_interleaved(y[i])
             y[i] = ttnn.to_layout(y[i], ttnn.ROW_MAJOR_LAYOUT)
-        concat_output = ttnn.concat(y, dim=-1)
+        concat_output = ttnn.concat(y, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         for i in range(len(y)):
             ttnn.deallocate(y[i])
