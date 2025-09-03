@@ -12,6 +12,7 @@ import ttnn
 from ...layers.normalization import GroupNorm
 from ...layers.conv3d import ContextParallelConv3d
 from ...utils.tensor import bf16_tensor
+from ...parallel.config import vae_slice_reshard
 
 if TYPE_CHECKING:
     pass
@@ -357,6 +358,8 @@ class CausalUpsampleBlock:
         self.temporal_expansion = temporal_expansion
         self.spatial_expansion = spatial_expansion
         self.out_channels = out_channels
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -414,29 +417,20 @@ class CausalUpsampleBlock:
 
     def reshard_output(self, x_NTHWC):
         if self.mesh_device.get_num_devices() > 1 and self.temporal_expansion > 1:
-            x_NTHWC_host = ttnn.to_torch(
-                x_NTHWC,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[0, 1]
-                ),
-            )
             HW = x_NTHWC.shape[2] * x_NTHWC.shape[3]
             C = x_NTHWC.shape[4]
             num_devices = self.mesh_device.get_num_devices()
             padded_T = ((self.reshard_time_map[C][HW] + num_devices - 1) // num_devices) * num_devices
-            x_NTHWC_host = x_NTHWC_host[
-                :, self.temporal_expansion - 1 : padded_T + (self.temporal_expansion - 1), :, :, :
-            ]
-            x_NTHWC = ttnn.from_torch(
-                x_NTHWC_host,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[None, 1]
-                ),
+            x_NTHWC = ttnn.squeeze(x_NTHWC, 0)
+            x_NTHWC = vae_slice_reshard(
+                self.ccl_manager,
+                x_NTHWC,
+                cluster_axis=1,
+                dim=0,
+                output_shape=padded_T,
+                output_offset=self.temporal_expansion - 1,
             )
+            x_NTHWC = ttnn.unsqueeze(x_NTHWC, 0)
         return x_NTHWC
 
     def __call__(self, x_NTHWC):
