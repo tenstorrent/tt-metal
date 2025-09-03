@@ -795,8 +795,10 @@ jobs:
   ttnn-homogenize-and-publish-run-result:
     name: Homogenize and publish run result
     needs:
+      - build-artifact
       - ttnn-run-single-sweep
       - ttnn-run-sweeps-parallel
+    if: ${{ always() && (needs.ttnn-run-single-sweep.result == 'success' || needs.ttnn-run-sweeps-parallel.result == 'success') }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
