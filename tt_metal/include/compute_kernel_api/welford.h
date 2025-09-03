@@ -45,10 +45,10 @@ namespace ckernel {
  * @return None. Mean and m2 tiles are updated in place.
  */
 
-ALWI void welford_tile<uint32_t input_dst_index, uint32_t mean_dst_index, uint32_t m2_dst_index, uint32_t reformat_dst>(
-    uint32_t current_row, uint32_t final_row, uint32_t num_skip_rows) {
-    MATH(llk_math_welfords_sfpu<input_dst_index, mean_dst_index, m2_dst_index, reformat_dst>(
-        current_row, final_row, num_skip_rows));
+template <uint32_t input_dst_index, uint32_t mean_dst_index, uint32_t m2_dst_index, uint32_t reformat_dst>
+ALWI void welford_tile(uint32_t current_row, uint32_t final_row, uint32_t num_skip_rows) {
+    MATH((llk_math_welfords_sfpu<input_dst_index, mean_dst_index, m2_dst_index, reformat_dst>(
+        current_row, final_row, num_skip_rows)));
 }
 
 /**
@@ -59,11 +59,13 @@ ALWI void welford_tile<uint32_t input_dst_index, uint32_t mean_dst_index, uint32
  * This call is blocking and is only available on the compute engine.
  * This function converts m2 to variance and packs both mean and variance into the DST register.
  *
+ * @param scale_factor The scale factor to apply to the variance.
+ *
  * @return None. Mean and variance tiles are updated in place. 32 values each are written to the DST register.
  *         All 32 values are written to the first face of the DST register. Each valid value is followed by an invalid
  * value.
  */
-ALWI void welford_final() { MATH(llk_math_welfords_sfpu<0, 0, 0, 2>(0, 0, 0)); }
+ALWI void welford_final(uint32_t scale_factor) { MATH((llk_math_welfords_sfpu<0, 0, 0, 2>(scale_factor, 0, 0))); }
 
 /**
  * Uses a copy of the ternery_sfpu_init
