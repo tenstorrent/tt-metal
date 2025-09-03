@@ -27,7 +27,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const std::string& mode,
     const std::string& padding_mode,
     bool use_precomputed_grid,
-    bool extend_channels) {
+    bool batch_output_channels) {
     tt::tt_metal::Program program{};
 
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -73,15 +73,15 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
         use_precomputed_grid ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT : STANDARD_GRID_ELEMENTS_PER_POINT;
     const uint32_t grid_batching_factor = grid_last_dim / num_of_elements_per_grid_point;
 
-    // Calculate grid sticks and output sticks separately based on extend_channels
+    // Calculate grid sticks and output sticks separately based on batch_output_channels
     uint32_t grid_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
     uint32_t output_nsticks =
-        extend_channels ? grid_nsticks :          // extend_channels=true: 1 output stick per grid stick
-            grid_nsticks * grid_batching_factor;  // extend_channels=false: K output sticks per grid stick
+        batch_output_channels ? grid_nsticks :    // batch_output_channels=true: 1 output stick per grid stick
+            grid_nsticks * grid_batching_factor;  // batch_output_channels=false: K output sticks per grid stick
 
     // Work distribution explanation:
-    // - extend_channels=true: 1 grid stick → 1 output stick (C*K channels)
-    // - extend_channels=false: 1 grid stick → K output sticks (C channels each)
+    // - batch_output_channels=true: 1 grid stick → 1 output stick (C*K channels)
+    // - batch_output_channels=false: 1 grid stick → K output sticks (C channels each)
     // Reader processes grid_nsticks, Writer processes output_nsticks
 
     // Get device grid for multicore
@@ -277,8 +277,8 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
         // Calculate output sticks this core will produce
         uint32_t output_sticks_per_core =
-            extend_channels ? grid_sticks_per_core :          // extend_channels=true: 1:1 ratio
-                grid_sticks_per_core * grid_batching_factor;  // extend_channels=false: 1:K ratio
+            batch_output_channels ? grid_sticks_per_core :    // batch_output_channels=true: 1:1 ratio
+                grid_sticks_per_core * grid_batching_factor;  // batch_output_channels=false: 1:K ratio
 
         reader_rt_arguments[2] = grid_sticks_per_core;   // Reader: grid sticks
         reader_rt_arguments[3] = grid_sticks_processed;  // Reader: grid stick start id

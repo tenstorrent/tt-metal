@@ -19,7 +19,7 @@ struct GridSample {
     const std::string mode_;
     const std::string padding_mode_;
     const bool use_precomputed_grid_;
-    const bool extend_channels_;
+    const bool batch_output_channels_;
     const tt::tt_metal::MemoryConfig output_mem_config_;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
@@ -27,14 +27,14 @@ struct GridSample {
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("mode", "padding_mode", "use_precomputed_grid", "extend_channels", "output_mem_config");
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "mode", "padding_mode", "use_precomputed_grid", "batch_output_channels", "output_mem_config");
     auto attribute_values() const {
         return std::forward_as_tuple(
             this->mode_,
             this->padding_mode_,
             this->use_precomputed_grid_,
-            this->extend_channels_,
+            this->batch_output_channels_,
             this->output_mem_config_);
     }
 };
@@ -51,6 +51,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const std::string& mode,
     const std::string& padding_mode,
     bool use_precomputed_grid,
-    bool extend_channels);
+    bool batch_output_channels);
 
 }  // namespace ttnn::operations::grid_sample

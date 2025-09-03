@@ -35,7 +35,7 @@ struct ExecuteGridSample {
         const std::string& mode = "bilinear",
         const std::string& padding_mode = "zeros",
         bool use_precomputed_grid = false,
-        bool extend_channels = false,
+        bool batch_output_channels = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 

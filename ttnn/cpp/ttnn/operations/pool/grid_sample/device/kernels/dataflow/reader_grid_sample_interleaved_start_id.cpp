@@ -51,7 +51,7 @@ void kernel_main() {
     constexpr uint32_t input_height = get_compile_time_arg_val(5);
     constexpr uint32_t input_width = get_compile_time_arg_val(6);
     constexpr uint32_t output_hw_size = get_compile_time_arg_val(7);
-    constexpr uint32_t num_grids = get_compile_time_arg_val(8);
+    constexpr uint32_t grid_batches = get_compile_time_arg_val(8);
 
     constexpr auto src_args = TensorAccessorArgs<9>();
     constexpr auto grid_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
@@ -85,7 +85,7 @@ void kernel_main() {
 
     // Outer loop: iterate over spatial positions (output sticks)
     for (uint32_t spatial_pos = start_page_id; spatial_pos < end_id; ++spatial_pos) {
-        // Read the grid stick for this spatial position (contains num_grids sets of coordinates)
+        // Read the grid stick for this spatial position (contains grid_batches sets of coordinates)
         uint32_t l1_write_grid_addr = get_write_ptr(grid_cb_index);
         uint64_t grid_noc_addr = s0.get_noc_addr(spatial_pos);
 
@@ -97,8 +97,8 @@ void kernel_main() {
         uint32_t curr_batch = spatial_pos / output_hw_size;
         uint32_t batch_offset = curr_batch * input_height * input_width;
 
-        // Inner loop: process num_grids coordinate sets within this spatial position
-        for (uint32_t grid_idx = 0; grid_idx < num_grids; ++grid_idx) {
+        // Inner loop: process grid_batches coordinate sets within this spatial position
+        for (uint32_t grid_idx = 0; grid_idx < grid_batches; ++grid_idx) {
             uint16_t weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf;
             int32_t h0, h1, w0, w1;
 
