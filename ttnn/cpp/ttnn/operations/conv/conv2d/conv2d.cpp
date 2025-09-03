@@ -494,9 +494,9 @@ Result conv2d_DRAM(
             queue_id,
             sliced_output_tensor,
             dram_output_tensor,
-            std::array<uint32_t, 4>{0, output_slice_height_start, output_slice_width_start, 0},
-            std::array<uint32_t, 4>{batch_size, output_slice_height_end, output_slice_width_end, out_channels},
-            std::array<uint32_t, 4>{1, 1, 1, 1});
+            ttnn::SmallVector<uint32_t>{0, output_slice_height_start, output_slice_width_start, 0},
+            ttnn::SmallVector<uint32_t>{batch_size, output_slice_height_end, output_slice_width_end, out_channels},
+            ttnn::SmallVector<uint32_t>{1, 1, 1, 1});
         first_run = false;
         output_slice_dim_start += output_slice_size;
         slice_index++;
