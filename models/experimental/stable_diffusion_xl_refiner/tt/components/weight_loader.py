@@ -32,3 +32,19 @@ class ResNetWeightLoader:
             self.conv_weights_3 = None
             self.conv_bias_3 = None
             self.has_conv_shortcut = False
+
+
+class TransformerBlockWeightLoader:
+    def __init__(self, state_dict, module_path):
+        self.module_path = module_path
+        self._load_all_weights(state_dict)
+
+    def _load_all_weights(self, state_dict):
+        self.norm_weights_1 = state_dict[f"{self.module_path}.norm1.weight"]
+        self.norm_bias_1 = state_dict[f"{self.module_path}.norm1.bias"]
+
+        self.norm_weights_2 = state_dict[f"{self.module_path}.norm2.weight"]
+        self.norm_bias_2 = state_dict[f"{self.module_path}.norm2.bias"]
+
+        self.norm_weights_3 = state_dict[f"{self.module_path}.norm3.weight"]
+        self.norm_bias_3 = state_dict[f"{self.module_path}.norm3.bias"]
