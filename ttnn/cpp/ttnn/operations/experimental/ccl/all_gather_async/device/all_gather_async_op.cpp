@@ -490,6 +490,41 @@ Tensor all_gather_async(
         barrier_semaphore);
 }
 
+std::vector<Tensor> all_gather_async(
+    const std::vector<Tensor>& input_tensors,
+    const uint32_t dim,
+    const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphore,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    bool use_all_gather_async_llama_sharded,
+    bool use_optimal_ccl_for_llama,
+    const std::optional<GlobalSemaphore>& barrier_semaphore) {
+    std::vector<GlobalSemaphore> semaphore;
+    semaphore.reserve(multi_device_global_semaphore.size());
+    for (size_t i = 0; i < multi_device_global_semaphore.size(); i++) {
+        semaphore.push_back(multi_device_global_semaphore.at(i).global_semaphores.at(i));
+    }
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(input_tensors.size());
+    for (size_t i = 0; i < input_tensors.size(); i++) {
+        output_tensors.push_back(all_gather_async_impl(
+            input_tensors[i],
+            dim,
+            semaphore,
+            num_links,
+            memory_config,
+            topology,
+            sub_device_id,
+            ttnn::ccl::get_active_physical_devices(input_tensors),
+            use_all_gather_async_llama_sharded,
+            use_optimal_ccl_for_llama,
+            barrier_semaphore));
+    }
+    return output_tensors;
+}
+
 Tensor all_gather_async(
     const Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,

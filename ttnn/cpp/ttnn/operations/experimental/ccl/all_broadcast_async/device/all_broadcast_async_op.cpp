@@ -211,6 +211,18 @@ std::vector<Tensor> all_broadcast_async(
         ttnn::ccl::get_active_physical_devices(input_tensor));
 }
 
+std::vector<Tensor> all_broadcast_async(
+    const Tensor& input_tensor,
+    const std::vector<IDevice*>& devices,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const ttnn::ccl::Topology topology,
+    std::optional<uint32_t> cluster_axis,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    return all_broadcast_async_impl(
+        input_tensor, num_links, memory_config, topology, cluster_axis, sub_device_id, devices);
+}
+
 }  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

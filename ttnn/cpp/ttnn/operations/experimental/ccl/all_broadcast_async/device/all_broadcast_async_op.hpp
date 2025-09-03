@@ -103,6 +103,15 @@ std::vector<Tensor> all_broadcast_async(
     std::optional<uint32_t> cluster_axis = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
+std::vector<Tensor> all_broadcast_async(
+    const Tensor& input_tensor,
+    const std::vector<IDevice*>& devices,
+    uint32_t num_links = 1,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
+
 }  // namespace operations::experimental::ccl
 
 }  // namespace ttnn
