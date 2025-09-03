@@ -53,15 +53,10 @@ void kernel_main() {
     uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;
     uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
 
-    const InterleavedPow2AddrGen<true> s0 = {
-        .bank_base_address = in0_tensor_addr,
-
-        .log_base_2_of_page_size = tile_size_pow2_exponent};
-
-    const InterleavedPow2AddrGen<true> s1 = {
-        .bank_base_address = in1_tensor_addr,
-
-        .log_base_2_of_page_size = tile_size_pow2_exponent};
+    constexpr auto in0_args = TensorAccessorArgs<0>();
+    constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
+    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr, single_tile_size_bytes);
+    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr, single_tile_size_bytes);
 
     for (uint32_t b = 0; b < num_blocks; b++) {
         cb_reserve_back(cb_id_in0, in0_block_num_tiles);

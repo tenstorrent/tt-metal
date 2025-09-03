@@ -27,7 +27,7 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    constexpr bool out_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr auto out_args = TensorAccessorArgs<0>();
 
     // READER
     // in1 block args
@@ -83,16 +83,12 @@ void kernel_main() {
     // WRITER
     // single-tile
     const uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
-    const DataFormat output_data_format = get_dataformat(cb_id_out0);
 
     volatile tt_l1_ptr uint32_t* in1_mcast_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_receiver_semaphore_addr);
 
     // WRITER
-    const InterleavedAddrGenFast<out_is_dram> s = {
-        .bank_base_address = out_tensor_addr,
-        .page_size = output_single_tile_size_bytes,
-        .data_format = output_data_format};
+    const auto s = TensorAccessor(out_args, out_tensor_addr, output_single_tile_size_bytes);
 
     for (uint32_t b = 0; b < batch; b++) {
         for (uint32_t block = 0; block < num_blocks; block++) {
