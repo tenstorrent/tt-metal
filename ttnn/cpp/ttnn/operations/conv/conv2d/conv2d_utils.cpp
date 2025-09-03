@@ -203,7 +203,6 @@ ParallelConfig determine_output_parallel_config(
         } else if (input_parallel_config.shard_scheme == ttnn::TensorMemoryLayout::BLOCK_SHARDED) {
             const uint32_t start_divisor_c =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.y : compute_grid_size.x;
-            // uint32_t num_cores_c = find_closest_largest_divisor(out_channels_ntiles, start_divisor_c);
             uint32_t num_cores_c = find_closest_largest_divisor_with_num_padding(out_channels_ntiles, start_divisor_c);
             const uint32_t num_cores_nhw = get_num_cores_nhw_from_parallel_config(input_parallel_config);
             const uint32_t cores_x =

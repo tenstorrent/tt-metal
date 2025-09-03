@@ -503,8 +503,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
     const tt::tt_metal::CBHandle cb_partials = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).handle;
 
-    TT_FATAL(filter_h >= 1 && filter_w >= 1, "Sharded input not supported for this conv yet!");
-
     std::string reader_kernel;
     std::string compute_kernel =
         "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";

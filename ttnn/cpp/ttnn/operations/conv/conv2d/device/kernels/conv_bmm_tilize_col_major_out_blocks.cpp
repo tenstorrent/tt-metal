@@ -133,6 +133,10 @@ void MAIN {
     constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks;
 #endif
 
+    // For block sharded conv2d, compute kernels may be scheduled on cores that only need tilize
+    // operations (input grid) while actual matmul occurs on different cores (output grid).
+    // Skip dummy compute operations when possible to reduce di/dt issues, but allow dummy
+    // tilize operations on cores without input data for code simplicity.
     bool skip_compute = false;
     if constexpr (check_skip_compute) {
         skip_compute = (bool)get_arg_val<uint32_t>(0);
