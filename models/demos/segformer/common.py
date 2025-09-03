@@ -16,20 +16,16 @@ def load_config(config_name="configs/segformer_semantic_config.json"):
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found at: {config_path}")
 
-    config = AutoConfig.from_pretrained(config_path, local_files_only=os.getenv("CI") == "true")
+    config = AutoConfig.from_pretrained(config_path)
     return config
 
 
 def load_torch_model(reference_model, target_prefix, module="semantic_sub", model_location_generator=None):
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
         if module == "image_classification":
-            torch_model = SegformerForImageClassification.from_pretrained(
-                "nvidia/mit-b0", local_files_only=os.getenv("CI") == "true"
-            )
+            torch_model = SegformerForImageClassification.from_pretrained("nvidia/mit-b0")
         elif module == "semantic_sub":
-            torch_model = SegformerForSemanticSegmentation.from_pretrained(
-                "nvidia/segformer-b0-finetuned-ade-512-512", local_files_only=os.getenv("CI") == "true"
-            )
+            torch_model = SegformerForSemanticSegmentation.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
         state_dict = torch_model.state_dict()
     else:
         if module == "image_classification":

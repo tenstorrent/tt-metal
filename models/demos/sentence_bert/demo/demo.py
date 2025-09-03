@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 import numpy as np
 import pytest
 import torch
@@ -32,8 +30,8 @@ inputs = [
 
 def run_sentence_bert_demo_inference(device, inputs, model_name, sequence_length, model_location_generator):
     inputs = inputs * device.get_num_devices()
-    config = transformers.BertConfig.from_pretrained(model_name, local_files_only=os.getenv("CI") == "true")
-    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name, local_files_only=os.getenv("CI") == "true")
+    config = transformers.BertConfig.from_pretrained(model_name)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
     encoded_input = tokenizer(
         inputs, padding="max_length", max_length=sequence_length, truncation=True, return_tensors="pt"
     )

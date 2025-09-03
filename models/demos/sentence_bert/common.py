@@ -22,9 +22,7 @@ def load_config(config_name="configs/config.json"):
 
 def load_torch_model(reference_model, target_prefix="", model_location_generator=None):
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
-        torch_model = transformers.AutoModel.from_pretrained(
-            "emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", local_files_only=os.getenv("CI") == "true"
-        )
+        torch_model = transformers.AutoModel.from_pretrained("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr")
         state_dict = torch_model.state_dict()
     else:
         weights = (
