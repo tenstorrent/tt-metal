@@ -381,7 +381,7 @@ void kernel_main() {
                     }
                     DPRINT << ENDL();
 
-                    auto local_result = combine_welford<32, num_channels_per_group * num_rows_per_group / 32, 2>(p_local_means, p_local_vars);
+                    auto local_result = combine_welford_stats<32, num_channels_per_group * num_rows_per_group / 32, 2>(p_local_means, p_local_vars);
                     DPRINT << "local combined mean: " << BF16(local_result.mean) << " local combined var: " << BF16(local_result.variance) << " local count: " << local_result.count << ENDL();
 
                     // Write this to cb_ex_global
@@ -420,7 +420,7 @@ void kernel_main() {
                     DPRINT << ENDL();
 
                     // Read mean and variance arrays from cb_ex_global, then combine using Welford
-                    auto global_result = combine_welford<num_mcast_cores, num_channels_per_group * num_rows_per_group, 16>(p_global_means, p_global_vars);
+                    auto global_result = combine_welford_stats<num_mcast_cores, num_channels_per_group * num_rows_per_group, 16>(p_global_means, p_global_vars);
                     DPRINT << "global combined mean: " << BF16(global_result.mean) << " global combined var: " << BF16(global_result.variance) << ENDL();
 
                     // Write this to cb_ex_global
