@@ -96,7 +96,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           mkdir -p generated/test_reports
-          if [ "${{ inputs.nightly }}" = "true" ]; then
+          if ${{ inputs.nightly }}; then
             GTEST_FILTER=""
           else
             GTEST_FILTER='--gtest_filter=*-*NIGHTLY_*'
