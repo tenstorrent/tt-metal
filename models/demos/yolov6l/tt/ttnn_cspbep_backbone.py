@@ -55,7 +55,14 @@ class TtCSPBepBackbone:
             activation="silu",
             reshape=True,
         )
-        self.erblock4_1 = TtBepC3(device, parameters.ERBlock_4[1], model_params.ERBlock_4[1], n=18)
+        self.erblock4_1 = TtBepC3(
+            device,
+            parameters.ERBlock_4[1],
+            model_params.ERBlock_4[1],
+            n=18,
+            shard_layout_cv2=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout_rep_block_first_two=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        )
 
         self.erblock5_0 = Yolov6l_Conv2D(
             device=device,
