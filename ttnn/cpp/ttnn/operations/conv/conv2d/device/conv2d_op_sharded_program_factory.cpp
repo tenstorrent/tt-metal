@@ -170,7 +170,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         "Expected input channels to be padded for 16 byte alignment in L1 ({} % 16 != 0)",
         input_channels_padded);
 
-    const uint32_t act_matrix_height_ntiles = out_block_h_ntiles * parallelization_config.num_cores_nhw_out;
+    const uint32_t act_matrix_height_ntiles = out_block_h_ntiles * parallelization_config.num_cores_nhw;
     const uint32_t act_matrix_height = act_matrix_height_ntiles * tt::constants::TILE_HEIGHT;
 
     if (has_bias) {
@@ -394,8 +394,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const tt::tt_metal::DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
 
     TT_FATAL(act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0, "Error");
-    uint32_t total_noop_cores = total_num_cores_per_weight_slice - parallelization_config.num_cores_nhw_out;
-    uint32_t total_active_num_cores = parallelization_config.num_cores_nhw_out * num_weight_slices_width;
+    uint32_t total_noop_cores = total_num_cores_per_weight_slice - parallelization_config.num_cores_nhw;
+    uint32_t total_active_num_cores = parallelization_config.num_cores_nhw * num_weight_slices_width;
     TT_FATAL(!block_sharded || total_noop_cores == 0, "All cores should be active for block sharded convs");
 
     if (has_bias) {

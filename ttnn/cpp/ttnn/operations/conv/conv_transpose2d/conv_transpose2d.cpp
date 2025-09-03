@@ -188,7 +188,6 @@ Result conv_transpose2d(
         conv_out_memory_config,
         get_num_cores_nhw_from_parallel_config(parallel_config),
         get_num_cores_channels_from_parallel_config(parallel_config),
-        get_num_cores_nhw_from_parallel_config(output_parallel_config),
         get_num_cores_channels_from_parallel_config(output_parallel_config));
 
     const uint32_t input_channels_alignment = get_input_channels_alignment(

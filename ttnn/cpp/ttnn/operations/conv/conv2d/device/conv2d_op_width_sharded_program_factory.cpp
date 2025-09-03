@@ -136,10 +136,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] = compute_opt_conv_activation_as_mm_shape(
-        ashape_with_channels_padded,
-        sliding_window_config,
-        parallelization_config.num_cores_nhw_out,
-        out_block_h_ntiles);
+        ashape_with_channels_padded, sliding_window_config, parallelization_config.num_cores_nhw, out_block_h_ntiles);
     TT_FATAL(act_matrix_shape.size() == 3, "Error");
     TT_FATAL(act_matrix_shape[0] == 1, "Error");
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];

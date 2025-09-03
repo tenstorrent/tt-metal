@@ -979,7 +979,6 @@ static OptimizedConvBlockConfig get_opt_block_config(
             conv_out_memory_config,
             get_num_cores_nhw_from_parallel_config(parallel_config),
             get_num_cores_channels_from_parallel_config(parallel_config),
-            get_num_cores_nhw_from_parallel_config(output_parallel_config),
             get_num_cores_channels_from_parallel_config(output_parallel_config));
 
     uint32_t in_channels_padded =
