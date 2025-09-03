@@ -9,6 +9,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
@@ -28,15 +29,22 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
-static void RunTest(DPrintFixture* fixture, IDevice* device) {
+static void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
     // Set up program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     // This tests prints only on a single core
     CoreCoord xy_start = {0, 0};
     CoreCoord xy_end = {0, 0};
+
     KernelHandle brisc_print_kernel_id = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/print_with_wait.cpp",
         CoreRange(xy_start, xy_end),
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
@@ -48,14 +56,14 @@ static void RunTest(DPrintFixture* fixture, IDevice* device) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
             const std::vector<uint32_t> args = { delay_cycles, x, y };
             SetRuntimeArgs(
-                program,
+                program_,
                 brisc_print_kernel_id,
                 CoreCoord{x, y},
                 args
             );
         }
     }
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(mesh_device, workload);
     // Close system instantly after running to attempt to cut off prints.
     fixture->TearDownTestSuite();
 
@@ -69,15 +77,15 @@ static void RunTest(DPrintFixture* fixture, IDevice* device) {
     }
     EXPECT_TRUE(
         FileContainsAllStrings(
-            DPrintFixture::dprint_file_name,
+            DPrintMeshFixture::dprint_file_name,
             expected_output
         )
     );
 }
 
-TEST_F(DPrintFixture, TensixTestPrintFinish) {
-    auto devices = this->devices_;
+TEST_F(DPrintMeshFixture, TensixTestPrintFinish) {
+    auto mesh_devices = this->devices_;
     // Run only on the first device, as this tests disconnects devices and this can cause
     // issues on multi-device setups.
-    this->RunTestOnDevice(RunTest, devices[0]);
+    this->RunTestOnDevice(RunTest, mesh_devices.at(0));
 }

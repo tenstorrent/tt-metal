@@ -90,8 +90,10 @@ protected:
         // closed all devices
         if (!id_to_device_.empty()) {
             for (auto [device_id, device] : id_to_device_) {
+                device->close();
                 device.reset();
             }
+
             id_to_device_.clear();
             devices_.clear();
         }
