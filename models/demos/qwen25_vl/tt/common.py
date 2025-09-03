@@ -38,6 +38,23 @@ def merge_vision_tokens(
     return input_embeds
 
 
+def rotary_embed(position_ids):
+    """
+    Apply rotary embeddings to the input embeddings
+    """
+    inv_freq_expanded = ttnn.repeat(ttnn.reshape(self.inv_freq, (1, 1, -1, 1)), (3, position_ids.shape[1], -1, 1))
+    position_ids_expanded = ttnn.reshape(
+        position_ids, (3, position_ids.shape[1], 1, position_ids.shape[2])
+    )  # shape (3, bs, 1, positions)
+
+    freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(2, 3)
+    emb = ttnn.concat((freqs, freqs), dim=-1)
+    cos = ttnn.cos(emb) * self.attention_scaling
+    sin = ttnn.sin(emb) * self.attention_scaling
+
+    return cos, sin
+
+
 def preprocess_inputs_prefill(
     input_embeds,
     model_args,
