@@ -79,10 +79,8 @@ template <bool stream_load, bool aligned_load>
 void nt_memcpy_128b(uint8_t* __restrict dst, const uint8_t* __restrict src, size_t n) {
     size_t num_lines = n / (INNER_LOOP * sizeof(__m128i));
     constexpr size_t inner_blk_size = INNER_LOOP * sizeof(__m128i);
-    size_t i = 0;
-    for (i = 0; i < num_lines; i++) {
-        size_t j = 0;
-        for (j = 0; j < INNER_LOOP; j++) {
+    for (size_t i = 0; i < num_lines; i++) {
+        for (size_t j = 0; j < INNER_LOOP; j++) {
             __m128i blk;
             if constexpr (stream_load) {
                 blk = _mm_stream_load_si128((__m128i*)src);
