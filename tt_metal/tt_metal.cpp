@@ -639,7 +639,7 @@ void read_pages_to_host_helper(
     const uint32_t& host_page_id,
     const uint32_t& core_page_id,
     const uint32_t& bank_id) {
-    uint32_t host_buffer_start = host_page_id * page_size;
+    uint64_t host_buffer_start = uint64_t(host_page_id) * page_size;
     if (dev_buffer.is_l1()) {
         auto core_coordinates =
             device->worker_core_from_logical_core(dev_buffer.allocator()->get_logical_core_from_bank_id(bank_id));

@@ -941,10 +941,11 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;
     float winv = 1.0f / std::sqrt(num_rows_per_batch_per_core * num_datum_row_per_group);  // bcast-w scaler
-    bfloat16 bfloat_winv_value = bfloat16(winv);
+    // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
+    bfloat16 bfloat_winv_value = bfloat16::truncate(winv);
     uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     float cinv = 1.0f / std::sqrt(num_cores_per_batch * num_cores_per_group);  // bcast-cores scaler
-    bfloat16 bfloat_cinv_value = bfloat16(cinv);
+    bfloat16 bfloat_cinv_value = bfloat16::truncate(cinv);
     uint32_t packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv_value, bfloat_cinv_value});
     union {
         float f;
@@ -1437,9 +1438,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t x_CB_size_group_2 = 0;
     uint32_t xmm_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t xmm_CB_size_group_2 = 0;
-    uint32_t ex_partial_CB_size = single_tile_size;   // partial Ex
-    uint32_t ex2_partial_CB_size = single_tile_size;  // partial Ex2
-    uint32_t ex_global_CB_size = ex_partial_CB_size;  // the final result Ex
+    uint32_t ex_partial_CB_size = single_tile_size;     // partial Ex
+    uint32_t ex2_partial_CB_size = single_tile_size;    // partial Ex2
+    uint32_t ex_global_CB_size = ex_partial_CB_size;    // the final result Ex
     uint32_t ex2_global_CB_size = ex2_partial_CB_size;  // the final result Ex2
     uint32_t xmm2_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t xmm2_CB_size_group_2 = 0;
@@ -1626,7 +1627,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             group_index += 1;
         }
         if (group_index >= mcast_groups.size()) {
-            mcast_groups.push_back(std::vector<CoreCoord>());  // Add a new group
+            mcast_groups.push_back(std::vector<CoreCoord>());          // Add a new group
             mcast_virtual_groups.push_back(std::vector<CoreCoord>());  // Add a new group
         }
         mcast_groups[group_index].push_back(core_coords[i]);
@@ -2283,7 +2284,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     std::vector<KernelHandle> reader_receiver_kernel_ids;
     float winv_group_1 =
         1.0f / std::sqrt(num_rows_per_batch_per_core_group_1 * num_channels_per_group);  // bcast-w scaler
-    bfloat16 bfloat_winv_value_group_1 = bfloat16(winv_group_1);
+    // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
+    bfloat16 bfloat_winv_value_group_1 = bfloat16::truncate(winv_group_1);
     uint32_t packed_winv_value_group_1 =
         pack_two_bfloat16_into_uint32({bfloat_winv_value_group_1, bfloat_winv_value_group_1});
     float winv_group_2 = winv_group_1;
@@ -2292,12 +2294,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     if (num_batches_per_core_group_2 > 0) {
         winv_group_2 =
             1.0f / std::sqrt(num_rows_per_batch_per_core_group_2 * num_channels_per_group);  // bcast-w scaler
-        bfloat_winv_value_group_2 = bfloat16(winv_group_2);
+        bfloat_winv_value_group_2 = bfloat16::truncate(winv_group_2);
         packed_winv_value_group_2 =
             pack_two_bfloat16_into_uint32({bfloat_winv_value_group_2, bfloat_winv_value_group_2});
     }
     float cinv = 1.0f / std::sqrt(num_cores_per_batch * num_cores_per_group);  // bcast-cores scaler
-    bfloat16 bfloat_cinv_value = bfloat16(cinv);
+    bfloat16 bfloat_cinv_value = bfloat16::truncate(cinv);
     uint32_t packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv_value, bfloat_cinv_value});
     union {
         float f;
