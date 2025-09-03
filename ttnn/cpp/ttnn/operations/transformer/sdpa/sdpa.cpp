@@ -243,29 +243,6 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
         .at(0);
 }
 
-ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
-    const ttnn::Tensor& input_tensor_q,
-    const ttnn::Tensor& input_tensor_k,
-    const uint32_t head_dim_v,
-    const std::optional<ttnn::Tensor>& attn_mask,
-    bool is_causal,
-    std::optional<float> scale,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    return invoke(
-        DefaultQueueId,
-        input_tensor_q,
-        input_tensor_k,
-        head_dim_v,
-        std::move(attn_mask),
-        is_causal,
-        scale,
-        memory_config,
-        std::move(program_config),
-        compute_kernel_config);
-}
-
 ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
