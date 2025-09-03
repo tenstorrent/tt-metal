@@ -71,20 +71,8 @@ jobs:
           cp /work/ttsim/src/_out/release_wh/ttsim $TT_METAL_SIMULATOR/run.sh
           cp $TT_METAL_HOME/tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml $TT_METAL_SIMULATOR/soc_descriptor.yaml
 
-      - name: Build Metal Examples
-        timeout-minutes: 5
-        run: |
-          for example in /usr/share/${{ inputs.product }}/examples/*; do
-            example_name=$(basename "$example")
-            echo "::group::${example_name} - build"
-            cd `mktemp -d`
-            cmake -G Ninja -S "$example" -B .
-            cmake --build .
-            echo "::endgroup::"
-          done
-
-      - name: Run Metal Examples
-        timeout-minutes: 10
+      - name: Build and Run Metal Examples
+        timeout-minutes: 15
         run: |
           working_examples=(
             "add_2_integers_in_compute"
@@ -100,8 +88,14 @@ jobs:
             example_path="/usr/share/${{ inputs.product }}/examples/${example_name}"
 
             if [[ -d "$example_path" ]]; then
-              echo "::group::${example_name} - run"
-              cd `mktemp -d`
+              echo "::group::${example_name} - build and run"
+              build_dir=$(mktemp -d)
+              cd "$build_dir"
+
+              # Build the example
+              cmake -G Ninja -S "$example_path" -B .
+              cmake --build .
+
               # Find and run the built executable
               exec_path=$(find . -maxdepth 2 -type f -executable -not -name "*.so")
               for exe in $exec_path; do
