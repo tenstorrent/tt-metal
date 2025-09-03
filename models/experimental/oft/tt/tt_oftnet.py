@@ -49,18 +49,6 @@ class TTOftNet:
         self.oft8 = TtOFT(device, parameters.oft8, 256, grid_res, grid_height, features, calib, grid)
         self.oft16 = TtOFT(device, parameters.oft16, 256, grid_res, grid_height, features, calib, grid)
         self.oft32 = TtOFT(device, parameters.oft32, 256, grid_res, grid_height, features, calib, grid)
-        # self.oft8 = ReferenceOFT(256, grid_res, grid_height, 1 / 8.0)
-        # print(f"parameters.oft8.conv3d.weight shape: {parameters.oft8.conv3d.weight}")
-        # self.oft8.conv3d.weight = nn.Parameter(parameters.oft8.conv3d.weight)
-        # self.oft8.conv3d.bias = nn.Parameter(parameters.oft8.conv3d.bias)
-
-        # self.oft16 = ReferenceOFT(256, grid_res, grid_height, 1 / 16.0)
-        # self.oft16.conv3d.weight = nn.Parameter(parameters.oft16.conv3d.weight)
-        # self.oft16.conv3d.bias = nn.Parameter(parameters.oft16.conv3d.bias)
-
-        # self.oft32 = ReferenceOFT(256, grid_res, grid_height, 1 / 32.0)
-        # self.oft32.conv3d.weight = nn.Parameter(parameters.oft32.conv3d.weight)
-        # self.oft32.conv3d.bias = nn.Parameter(parameters.oft32.conv3d.bias)
 
         self.topdown = [
             block(
@@ -85,43 +73,20 @@ class TTOftNet:
     def forward(self, device, input_tensor, calib, grid):
         if use_signpost:
             signpost(header="OftNet module started")
-        # print(f"Input tensor shape: {input_tensor.shape}, dtype: {input_tensor.dtype}")
-        # print(f"Calib shape: {calib.shape}, dtype: {calib.dtype}")
-        # print(f"Grid shape: {grid.shape}, dtype: {grid.dtype}")
-        # print(f"self.mean shape: {self.mean.shape}, dtype: {self.mean.dtype}")
-        # print(f"self.std shape: {self.std.shape}, dtype: {self.std.dtype}")
+
         input_tensor = input_tensor - self.mean
         input_tensor = ttnn.div(input_tensor, self.std)
         if input_tensor.layout == ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # print(f"Input tensor after normalization: {input_tensor.shape}, dtype: {input_tensor.dtype}")
-        # print(f"input_tensor layout: {input_tensor.layout}, memory_config: {input_tensor.memory_config()}")
-        # input_tensor = ttnn.div(input_tensor, self.std)
-        # ttnn.deallocate(self.mean)
-        # ttnn.deallocate(self.std)
-        # input_tensor = ttnn.move(input_tensor)
-        # print(f"Input tensor after normalization: {input_tensor.shape}, dtype: {input_tensor.dtype}")
-        # print(f"input_tensor layout: {input_tensor.layout}, memory_config: {input_tensor.memory_config()}")
-        # return input_tensor
 
         feats8, feats16, feats32 = self.frontend.forward(device, input_tensor)
-        # print(f"feats8 layout: {feats8.layout}, memory_config: {feats8.memory_config()}")
-        # print(f"feats16 layout: {feats16.layout}, memory_config: {feats16.memory_config()}")
-        # print(f"feats32 layout: {feats32.layout}, memory_config: {feats32.memory_config()}")
-        # return feats8, feats16, feats32 #input_tensor
 
         lat8, lat8_h, lat8_w = self.lat8(device, feats8)
-        # print(f"Lat8 shape: {lat8.shape}, dtype: {lat8.dtype}")
-        # print(f"lat8 layout: {lat8.layout}, memory_config: {lat8.memory_config()}")
         if lat8.layout == ttnn.TILE_LAYOUT:
             lat8 = ttnn.to_layout(lat8, ttnn.ROW_MAJOR_LAYOUT)
-        # print(f"Lat8 after sharded_to_interleaved shape: {lat8.shape}, dtype: {lat8.dtype}")
-        # print(f"lat8 layout: {lat8.layout}, memory_config: {lat8.memory_config()}")
+
         lat8 = self.bn8(device, lat8, lat8_h, lat8_w, shard="HS")
         lat8 = ttnn.relu(lat8)
-        print(
-            f"lat8 shape: {lat8.shape}, dtype: {lat8.dtype}, layout: {lat8.layout} memory_config: {lat8.memory_config()}"
-        )
         lat8 = ttnn.sharded_to_interleaved(lat8, ttnn.DRAM_MEMORY_CONFIG)
         lat8 = ttnn.to_layout(lat8, ttnn.TILE_LAYOUT)
 
@@ -238,10 +203,3 @@ class TTOftNet:
             signpost(header="Slicing finished")
             signpost(header="OftNet finished")
         return parts  # ortho, ortho16, ortho32 #input_tensor
-
-    def normalize(self, input_tensor):
-        """
-        Normalize the input tensor using the mean and std.
-        """
-        input_tensor = ttnn.subtract(input_tensor, self.mean, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        input_tensor = ttnn.div(input_tensor, self.std, memory_config=ttnn.DRAM_MEMORY_CONFIG)
