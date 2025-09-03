@@ -247,66 +247,6 @@ inline void SetRuntimeArgsImpl(
     }
 }
 
-void SetRuntimeArgsImpl(
-    const std::shared_ptr<Kernel>& kernel,
-    const CoreCoord& core_coord,
-    const std::shared_ptr<RuntimeArgs>& runtime_args_ptr,
-    bool /*blocking*/) {
-    std::vector<uint32_t> resolved_runtime_args = {};
-    resolved_runtime_args.reserve(runtime_args_ptr->size());
-
-    for (const auto& arg : *(runtime_args_ptr)) {
-        const auto resolved = std::visit(
-            ttsl::overloaded{
-                [](Buffer* buffer) { return buffer->address(); },
-                [](uint32_t address) { return address; },
-            },
-            arg);
-        resolved_runtime_args.push_back(resolved);
-    }
-    kernel->set_runtime_args(core_coord, resolved_runtime_args);
-}
-
-inline void SetRuntimeArgsImpl(
-    const std::shared_ptr<Kernel> kernel,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::shared_ptr<RuntimeArgs>& runtime_args,
-    bool blocking) {
-    // SetRuntimeArgs API for Async CQ Mode
-    std::visit(
-        ttsl::overloaded{
-            [&](const CoreCoord& core_spec) { SetRuntimeArgsImpl(kernel, core_spec, runtime_args, blocking); },
-            [&](const CoreRange& core_spec) {
-                for (auto x = core_spec.start_coord.x; x <= core_spec.end_coord.x; x++) {
-                    for (auto y = core_spec.start_coord.y; y <= core_spec.end_coord.y; y++) {
-                        SetRuntimeArgsImpl(kernel, CoreCoord(x, y), runtime_args, blocking);
-                    }
-                }
-            },
-            [&](const CoreRangeSet& core_spec) {
-                for (const auto& core_range : core_spec.ranges()) {
-                    for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-                        for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                            SetRuntimeArgsImpl(kernel, CoreCoord(x, y), runtime_args, blocking);
-                        }
-                    }
-                }
-            },
-        },
-        core_spec);
-}
-
-inline void SetRuntimeArgsImpl(
-    const std::shared_ptr<Kernel>& kernel,
-    const std::vector<CoreCoord>& core_spec,
-    const std::vector<std::shared_ptr<RuntimeArgs>>& runtime_args,
-    bool blocking) {
-    // SetRuntimeArgs API for Async CQ Mode (support vector of runtime args)
-    for (size_t i = 0; i < core_spec.size(); i++) {
-        SetRuntimeArgsImpl(kernel, core_spec[i], runtime_args[i], blocking);
-    }
-}
-
 }  // namespace
 
 namespace detail {
