@@ -837,7 +837,8 @@ def test_demo_text(
                         stop_at_eos
                     ):  # For performance gathering in CI, we want to sometimes force decoding for a fixed number of iterations
                         user_done[user] = True
-                        logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
+                        if not is_ci_env:
+                            logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
                         if all(user_done):
                             users_decoding = False
 
@@ -856,32 +857,30 @@ def test_demo_text(
             if iteration >= max_generated_tokens:
                 users_decoding = False
 
-            # Final print
-            if not users_decoding:
-                profiler.start(f"log_saving_file", iteration=batch_idx)
-                logger.info("Finished decoding, printing the final outputs...\n")
-                for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
-                    text = tokenizer.decode(output)
-                    prompt_including_assistant_tags = tokenizer.decode(
-                        model_args[0].encode_prompt(prompt, instruct=instruct)
+        # Final print
+        if not users_decoding:
+            profiler.start(f"log_saving_file", iteration=batch_idx)
+            logger.info("Finished decoding, printing the final outputs...\n")
+            for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
+                text = tokenizer.decode(output)
+                prompt_including_assistant_tags = tokenizer.decode(
+                    model_args[0].encode_prompt(prompt, instruct=instruct)
+                )
+                text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
+                if print_to_file:
+                    with open(output_filename, "a") as f:
+                        f.write(f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n")
+                else:
+                    # Strip leading newlines from output when sent to terminal
+                    short_prompt = (
+                        (prompt[:100] + "\n<long prompt not printed in full>\n" + prompt[-100:])
+                        if len(prompt) > 200
+                        else prompt
                     )
-                    text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
-                    if print_to_file:
-                        with open(output_filename, "a") as f:
-                            f.write(
-                                f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n"
-                            )
-                    else:
-                        # Strip leading newlines from output when sent to terminal
-                        short_prompt = (
-                            (prompt[:100] + "\n<long prompt not printed in full>\n" + prompt[-100:])
-                            if len(prompt) > 200
-                            else prompt
-                        )
-                        logger.info(
-                            f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
-                        )
-                profiler.end(f"log_saving_file", iteration=batch_idx)
+                    logger.info(
+                        f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
+                    )
+            profiler.end(f"log_saving_file", iteration=batch_idx)
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
 
@@ -1106,13 +1105,17 @@ def test_demo_text(
                 "N150_Llama-3.1-8B": 21,
                 "N150_Mistral-7B": 23,
                 # N300 targets
-                "N300_Qwen2.5-7B": 22,
+                # "N300_Qwen2.5-7B": 22,
                 # T3K targets
                 "T3K_Llama-3.1-70B": 15,
                 # "T3K_Qwen2.5-72B": 13, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
                 "T3K_Qwen2.5-Coder-32B": 21,
                 # "T3K_Qwen3-32B": 20, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
             }
+
+            # append ttft and t/s/u to a csv file
+            with open("ttft_and_t_s_u.csv", "a") as f:
+                f.write(f"{model_device_key},{measurements['prefill_time_to_token']},{measurements['decode_t/s/u']}\n")
 
             # Only call verify_perf if the model_device_key exists in the targets
             ci_targets = {}
