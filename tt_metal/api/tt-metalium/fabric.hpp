@@ -29,6 +29,7 @@ class MeshShape;
 namespace tt::tt_fabric {
 class FabricNodeId;
 enum class RoutingDirection;
+struct FabricEriscDatamoverConfig;
 size_t get_tt_fabric_channel_buffer_size_bytes();
 size_t get_tt_fabric_packet_header_size_bytes();
 size_t get_tt_fabric_max_payload_size_bytes();
@@ -151,6 +152,8 @@ public:
     std::vector<uint32_t> get_fabric_mux_compile_time_args() const;
 
     // Returns the base compile time args without stream IDs (for custom stream ID override)
+    std::vector<uint32_t> get_fabric_mux_compile_time_main_args(
+        const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const;
     std::vector<uint32_t> get_fabric_mux_compile_time_main_args() const;
 
     // Returns the run-time arguments for the mux kernel depending on the connection setup with fabric router

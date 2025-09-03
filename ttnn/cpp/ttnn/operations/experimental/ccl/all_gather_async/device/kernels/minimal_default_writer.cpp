@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -18,7 +17,6 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 
 using address_t = uint32_t;
-using tt::tt_metal::BufferType;
 using ttnn::ccl::Topology;
 using namespace tt::tt_fabric::linear::experimental;
 
@@ -27,38 +25,37 @@ using namespace tt::tt_fabric::linear::experimental;
 ///////////////////////////////////////////////////
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
-constexpr BufferType output_type = static_cast<BufferType>(get_compile_time_arg_val(1));
-constexpr uint32_t cb_output_id = get_compile_time_arg_val(2);
-constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(3);
-constexpr uint32_t output_page_size = get_compile_time_arg_val(4);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(5);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(6);
-constexpr bool fuse_op = get_compile_time_arg_val(7);
-constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(8));
-constexpr bool direction = get_compile_time_arg_val(9);  // 1 is forward, 0 is backward
-constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(10);
+constexpr uint32_t cb_output_id = get_compile_time_arg_val(1);
+constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(2);
+constexpr uint32_t output_page_size = get_compile_time_arg_val(3);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(4);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(5);
+constexpr bool fuse_op = get_compile_time_arg_val(6);
+constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(7));
+constexpr bool direction = get_compile_time_arg_val(8);  // 1 is forward, 0 is backward
+constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(9);
 
-constexpr bool is_termination_master = get_compile_time_arg_val(11);
-constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(12);
-constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(13);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(14);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(15);
-constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(16);
-constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(17);
-constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(18);
-constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(19);
-constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(20);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(21);
-constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(22);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(23);
+constexpr bool is_termination_master = get_compile_time_arg_val(10);
+constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(11);
+constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(12);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(13);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(14);
+constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(15);
+constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(16);
+constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(17);
+constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(18);
+constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(19);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(20);
+constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(21);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(22);
 
 constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
-    ccl_routing_utils::get_line_unicast_route_info_from_args<24>();
+    ccl_routing_utils::get_line_unicast_route_info_from_args<23>();
 constexpr ccl_routing_utils::line_multicast_route_info_t barrier_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<24 + ccl_routing_utils::num_line_unicast_args>();
+    ccl_routing_utils::get_line_multicast_route_info_from_args<23 + ccl_routing_utils::num_line_unicast_args>();
 
 inline constexpr uint32_t sharded_args_start_idx =
-    24 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
+    23 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -113,11 +110,8 @@ void kernel_main() {
 
     arg_idx += rt_increment;
 #else
-    constexpr bool output_is_dram = output_type == tt::tt_metal::BufferType::DRAM;
-    const InterleavedAddrGenFast<output_is_dram> output_addrgen = {
-        .bank_base_address = output_address,
-        .page_size = output_page_size,
-        .data_format = get_dataformat(cb_output_id)};
+    constexpr auto output_tensor_args = TensorAccessorArgs<sharded_args_start_idx>();
+    const auto output_addrgen = TensorAccessor(output_tensor_args, output_address, output_page_size);
 #endif
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
