@@ -65,9 +65,9 @@ void kernel_main() {
                 continue;
             }
 
-            for (int c = 0; c < 10000; ++c) {
-                asm volatile("nop");
-            }
+            // for (int c = 0; c < 10000; ++c) {
+            //     asm volatile("nop");
+            // }
 
             // TODO: might want to check if the buffer has wrapped or not
             // if wrapped, then wait for credits from the receiver
