@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_defs.h"
 #include "noc_nonblocking_api.h"
 
 using namespace sfpi;
@@ -13,7 +14,7 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_tanh() {
     // SFPU microcode
     vUInt l0 = l_reg[LRegs::LReg0];
@@ -34,7 +35,7 @@ inline void calculate_tanh() {
     l_reg[LRegs::LReg2] = l2;
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void tanh_init() {
     uint imm0;
     uint imm1;

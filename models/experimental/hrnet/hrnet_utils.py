@@ -7,18 +7,10 @@ from models.utility_functions import torch_to_tt_tensor_rm
 
 
 def create_batchnorm(out_ch, state_dict, base_address: str, device=None):
-    weight = torch_to_tt_tensor_rm(
-        state_dict[f"{base_address}.weight"], device, put_on_device=False
-    )
-    bias = torch_to_tt_tensor_rm(
-        state_dict[f"{base_address}.bias"], device, put_on_device=False
-    )
-    running_mean = torch_to_tt_tensor_rm(
-        state_dict[f"{base_address}.running_mean"], device, put_on_device=False
-    )
-    running_variance = torch_to_tt_tensor_rm(
-        state_dict[f"{base_address}.running_var"], device, put_on_device=False
-    )
+    weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.weight"], device, put_on_device=False)
+    bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.bias"], device, put_on_device=False)
+    running_mean = torch_to_tt_tensor_rm(state_dict[f"{base_address}.running_mean"], device, put_on_device=False)
+    running_variance = torch_to_tt_tensor_rm(state_dict[f"{base_address}.running_var"], device, put_on_device=False)
     num_batches_tracked = torch_to_tt_tensor_rm(
         state_dict[f"{base_address}.num_batches_tracked"], device, put_on_device=False
     )

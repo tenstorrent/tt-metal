@@ -7,13 +7,13 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
-
+#include "llk_defs.h"
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 void copy_dest_value(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out /* unused */) {
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
