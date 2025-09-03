@@ -20,7 +20,7 @@
 #include "compute_kernel_api/xlogy.h"
 #include "compute_kernel_api/gcd.h"
 #include "compute_kernel_api/lcm.h"
-#include "compute_kernel_api/relational_int32_sfpu.h"
+#include "compute_kernel_api/binary_comp.h"
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
@@ -132,6 +132,9 @@ void MAIN {
 #endif
 #ifdef LT_INT32_INIT
             LT_INT32_INIT
+#endif
+#ifdef GT_INT32_INIT
+            GT_INT32_INIT
 #endif
 #ifdef BITWISE_INIT
             BITWISE_INIT
