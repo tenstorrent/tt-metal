@@ -6,10 +6,13 @@
 
 #include <algorithm>
 #include <enchantum/enchantum.hpp>
+#include <filesystem>
 #include <fstream>
 #include <google/protobuf/text_format.h>
-
 #include <scaleout_tools/connector/connector.hpp>
+#include <tt_stl/caseless_comparison.hpp>
+#include <tt_stl/reflection.hpp>
+#include <tt_stl/span.hpp>
 
 // Add protobuf includes
 #include "protobuf/cluster_config.pb.h"
@@ -245,6 +248,31 @@ std::shared_ptr<ResolvedGraphInstance> build_graph_instance(
     return resolved;
 }
 
+// Simple path resolution for connection processing
+std::pair<Pod&, HostId> resolve_pod_from_path(
+    ttsl::Span<const std::string> path, std::shared_ptr<ResolvedGraphInstance> graph) {
+    if (!graph) {
+        throw std::runtime_error("Graph not set");
+    }
+
+    if (path.size() == 1) {
+        // Direct pod reference
+        if (graph->pods.count(path[0])) {
+            auto& pod = graph->pods.at(path[0]);
+            return {pod, pod.host_id};
+        }
+        throw std::runtime_error("Pod not found: " + path[0]);
+    } else {
+        // Multi-level path - descend into subgraph
+        const std::string& next_level = path[0];
+        if (!graph->subgraphs.count(next_level)) {
+            throw std::runtime_error("Subgraph not found: " + next_level);
+        }
+
+        return resolve_pod_from_path(path.subspan(1), graph->subgraphs.at(next_level));
+    }
+}
+
 // Constructor
 CablingGenerator::CablingGenerator(
     const std::string& cluster_descriptor_path, const std::string& deployment_descriptor_path) {
@@ -333,6 +361,12 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
         endpoint_b->set_chan_id(*end.asic_channel.channel_id);
     }
 
+    // Create parent directory if it doesn't exist
+    std::filesystem::path output_file_path(output_path);
+    if (output_file_path.has_parent_path()) {
+        std::filesystem::create_directories(output_file_path.parent_path());
+    }
+
     std::ofstream output_file(output_path);
     if (!output_file.is_open()) {
         throw std::runtime_error("Failed to open output file: " + output_path);
@@ -380,31 +414,6 @@ void CablingGenerator::collect_host_assignments(
     for (const auto& [subgraph_name, subgraph] : graph->subgraphs) {
         std::string sub_path = path_prefix.empty() ? subgraph_name : path_prefix + "/" + subgraph_name;
         collect_host_assignments(subgraph, sub_path, host_to_pod_path);
-    }
-}
-
-// Simple path resolution for connection processing
-std::pair<Pod&, HostId> CablingGenerator::resolve_pod_from_path(
-    ttsl::Span<const std::string> path, std::shared_ptr<ResolvedGraphInstance> graph) {
-    if (!graph) {
-        graph = root_instance_;
-    }
-
-    if (path.size() == 1) {
-        // Direct pod reference
-        if (graph->pods.count(path[0])) {
-            auto& pod = graph->pods.at(path[0]);
-            return {pod, pod.host_id};
-        }
-        throw std::runtime_error("Pod not found: " + path[0]);
-    } else {
-        // Multi-level path - descend into subgraph
-        const std::string& next_level = path[0];
-        if (!graph->subgraphs.count(next_level)) {
-            throw std::runtime_error("Subgraph not found: " + next_level);
-        }
-
-        return resolve_pod_from_path(path.subspan(1), graph->subgraphs.at(next_level));
     }
 }
 
@@ -545,4 +554,46 @@ void CablingGenerator::populate_boards_from_resolved_graph(std::shared_ptr<Resol
     }
 }
 
+// Overload operator<< for readable test output
+std::ostream& operator<<(std::ostream& os, const PhysicalChannelConnection& conn) {
+    os << "PhysicalChannelConnection{hostname='" << conn.hostname << "', tray_id=" << *conn.tray_id
+       << ", asic_location=" << conn.asic_location << ", channel_id=" << *conn.channel_id << "}";
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const PhysicalPortConnection& conn) {
+    os << "PhysicalPortConnection{hostname='" << conn.hostname << "', aisle='" << conn.aisle << "', rack=" << conn.rack
+       << ", shelf_u=" << conn.shelf_u << ", port_type=" << enchantum::to_string(conn.port_type)
+       << ", port_id=" << *conn.port_id << "}";
+    return os;
+}
+
 }  // namespace tt::scaleout_tools
+
+// Hash specializations
+namespace std {
+template <>
+struct hash<tt::scaleout_tools::LogicalChipConnection> {
+    std::size_t operator()(const tt::scaleout_tools::LogicalChipConnection& conn) const {
+        return tt::stl::hash::hash_objects_with_default_seed(
+            *conn.host_id, conn.tray_id, conn.asic_channel.asic_location, conn.asic_channel.channel_id);
+    }
+};
+
+template <>
+struct hash<tt::scaleout_tools::PhysicalChannelConnection> {
+    std::size_t operator()(const tt::scaleout_tools::PhysicalChannelConnection& conn) const {
+        return tt::stl::hash::hash_objects_with_default_seed(
+            conn.hostname, *conn.tray_id, conn.asic_location, conn.channel_id);
+    }
+};
+
+template <>
+struct hash<tt::scaleout_tools::PhysicalPortConnection> {
+    std::size_t operator()(const tt::scaleout_tools::PhysicalPortConnection& conn) const {
+        return tt::stl::hash::hash_objects_with_default_seed(
+            conn.hostname, conn.aisle, conn.rack, conn.shelf_u, conn.port_type, *conn.port_id);
+    }
+};
+
+}  // namespace std
