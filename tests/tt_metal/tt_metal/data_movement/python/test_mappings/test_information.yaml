@@ -227,8 +227,8 @@ tests:
       Performance fluctuates because the flush disturbes the steady state and will randomly create
       traffic that sometimes has head of line blocking, and sometimes not.
 
-  202:
-    name: "DRAM Sharded Row Major Writer Hardcoded"
+  400:
+    name: "I2S - DRAM Sharded Row Major Writer"
     comment: |
       Here, we are getting ~4B/cycle. There are multiple reasons for such BW.
       The first one is the large number of get_noc_addr(stick_id, s0) calls, without them the BW
@@ -240,34 +240,34 @@ tests:
       which slows things a lot. Because of this, this performance is expected.
       Another note is that the more transactions we have, the more BW will be degraded, because of the additional operations inside the loop.
 
-  203:
-    name: "DRAM Sharded Tile Writer Hardcoded"
+  401:
+    name: "I2S - DRAM Sharded Tile Writer"
     comment: |
       Here, we are getting ~16.7B/cycle which is the expected BW, for the config: num of transactions = 8, transaction size = 4096B
 
-  204:
-    name: "DRAM Interleaved Tile Reader Hardcoded"
+  402:
+    name: "I2S - DRAM Interleaved Tile Reader"
     comment: |
       Here, we are getting ~11.5B/cycle when reading from DRAM, with the num of transactions = 4, and
       transaction size = 2048B. Compared to our DRAM Interleaved Page Read Numbers, we can see that
       that is the expected performance.
 
-  205:
-    name: "L1 Interleaved Tile Reader Hardcoded"
+  403:
+    name: "I2S - L1 Interleaved Tile Reader"
     comment: |
       When reading from L1 we are getting ~14B/cycle, which is also expected
       compared to our L1 Interleaved Page Read Numbers
 
-  206:
-    name: "DRAM Interleaved Row Major Reader Hardcoded"
+  404:
+    name: "I2S - DRAM Interleaved Row Major Reader"
     comment: |
       Here, we are getting ~11B/cycle when reading from DRAM, with the num of transactions = 128,
       and transaction size = 512B. Compared to our DRAM Interleaved Page Read Numbers, we can see that
       that is a bit below expected performance, but when we take into account the runtime arguments overhead,
       this is expected.
 
-  207:
-    name: "L1 Interleaved Row Major Reader Hardcoded"
+  405:
+    name: "I2S - L1 Interleaved Row Major Reader"
     comment: |
       When reading from L1 with the same config we are also getting ~11.5B/cycle, which is ~60%
       of the performance when compared to our L1 Interleaved Page Read Numbers. The reason for this is the

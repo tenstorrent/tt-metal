@@ -19,7 +19,7 @@ This test suite addresses the functionality and performance (i.e. bandwidth) of 
 | All from all                | 70           | Read transactions from multiple cores to multiple cores.                             |
 | Interleaved Page Read/Write | 61-69, 71-75 | Reads and writes pages between interleaved buffers and a Tensix core.                |
 | Deinterleave                | 200-201      | Tests deinterleaving                                                                 |
-| Interleaved to Sharded      | 202-207      | Tests interleaved to sharded data movement operations for different memory layouts.  |
+| I2S Hardcoded               | 400-405      | Tests interleaved to sharded data movement operations for different memory layouts.  |
 
 ## Running Tests
 ### C++ Gtests

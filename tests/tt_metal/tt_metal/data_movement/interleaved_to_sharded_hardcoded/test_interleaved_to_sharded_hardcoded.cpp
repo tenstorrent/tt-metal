@@ -326,7 +326,7 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
 //=================================================================
 
 // Test 1: Writer Sharded DRAM Row Major
-TEST_F(DeviceFixture, TensixDataMovementWriterShardedDramRowMajor) {
+TEST_F(DeviceFixture, TensixDataMovementI2SWriterShardedDramRowMajor) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
@@ -372,7 +372,7 @@ TEST_F(DeviceFixture, TensixDataMovementWriterShardedDramRowMajor) {
 }
 
 // Test 2: Writer Sharded DRAM Tile
-TEST_F(DeviceFixture, TensixDataMovementWriterShardedDramTile) {
+TEST_F(DeviceFixture, TensixDataMovementI2SWriterShardedDramTile) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
@@ -419,7 +419,7 @@ TEST_F(DeviceFixture, TensixDataMovementWriterShardedDramTile) {
 }
 
 // Test 3: Interleaved Reader Tile (DRAM)
-TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedReaderTileHardcoded) {
+TEST_F(DeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderTile) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
@@ -460,7 +460,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedReaderTileHardcoded) {
 }
 
 // Test 4: Interleaved Reader Tile (L1)
-TEST_F(DeviceFixture, TensixDataMovementL1InterleavedReaderTileHardcoded) {
+TEST_F(DeviceFixture, TensixDataMovementI2SL1InterleavedReaderTile) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
@@ -501,7 +501,7 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedReaderTileHardcoded) {
 }
 
 // Test 5: Interleaved Reader Row Major (DRAM)
-TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedReaderRowMajor) {
+TEST_F(DeviceFixture, TensixDataMovementI2SDRAMInterleavedReaderRowMajor) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
@@ -544,7 +544,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedReaderRowMajor) {
 }
 
 // Test 6: Interleaved Reader Row Major (L1)
-TEST_F(DeviceFixture, TensixDataMovementL1InterleavedReaderRowMajor) {
+TEST_F(DeviceFixture, TensixDataMovementI2SL1InterleavedReaderRowMajor) {
     if (arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }

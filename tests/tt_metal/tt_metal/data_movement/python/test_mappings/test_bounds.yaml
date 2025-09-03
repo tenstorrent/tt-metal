@@ -182,32 +182,32 @@
     riscv_0:
       bandwidth: 60
 
-"DRAM Sharded Row Major Writer Hardcoded":
+"I2S - DRAM Sharded Row Major Writer":
   wormhole_b0:
     riscv_0:
       bandwidth: 4
 
-"DRAM Sharded Tile Writer Hardcoded":
+"I2S - DRAM Sharded Tile Writer":
   wormhole_b0:
     riscv_0:
       bandwidth: 16
 
-"DRAM Interleaved Tile Reader Hardcoded":
+"I2S - DRAM Interleaved Tile Reader":
   wormhole_b0:
     riscv_1:
       bandwidth: 10
 
-"L1 Interleaved Tile Reader Hardcoded":
+"I2S - L1 Interleaved Tile Reader":
   wormhole_b0:
     riscv_1:
       bandwidth: 13
 
-"DRAM Interleaved Row Major Reader Hardcoded":
+"I2S - DRAM Interleaved Row Major Reader":
   wormhole_b0:
     riscv_1:
       bandwidth: 10.5
 
-"L1 Interleaved Row Major Reader Hardcoded":
+"I2S - L1 Interleaved Row Major Reader":
   wormhole_b0:
     riscv_1:
       bandwidth: 10.5

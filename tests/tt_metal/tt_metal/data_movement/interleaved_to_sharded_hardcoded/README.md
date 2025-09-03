@@ -1,7 +1,7 @@
 # Interleaved to Sharded Hardcoded Data Movement Tests
 
 This test suite implements tests that measure the performance (i.e. bandwidth) of interleaved to sharded data movement operations between Tensix cores.
-They are based on kernel runtime arguments of existing metal tests.
+They are based on kernel runtime arguments of existing metal tests (test_interleaved_to_dram_height_sharded, test_interleaved_to_dram_width_sharded, test_interleaved_to_dram_sharded_via_to_memory_layout)
 
 ## Test Flow
 
@@ -24,9 +24,9 @@ The interleaved to sharded patterns are the exact ones as gotten from the base t
 ## Test Cases
 Each test case uses various data formats and page sizes depending on the memory layout.
 
-1. **DRAM Sharded Row Major Writer** - Tests writing data to DRAM in sharded row major layout.
-2. **DRAM Sharded Tile Writer** - Tests writing data to DRAM in sharded tile layout.
-3. **DRAM Interleaved Tile Reader** - Tests reading data from DRAM in interleaved tile format.
-4. **L1 Interleaved Tile Reader** - Tests reading data from L1 memory in interleaved tile format.
-5. **DRAM Interleaved Row Major Reader** - Tests reading data from DRAM in interleaved row major format.
-6. **L1 Interleaved Row Major Reader** - Tests reading data from L1 memory in interleaved row major format.
+1. **I2S - DRAM Sharded Row Major Writer** - Tests writing data to DRAM in sharded row major layout.
+2. **I2S - DRAM Sharded Tile Writer** - Tests writing data to DRAM in sharded tile layout.
+3. **I2S - DRAM Interleaved Tile Reader** - Tests reading data from DRAM in interleaved tile format.
+4. **I2S - L1 Interleaved Tile Reader** - Tests reading data from L1 memory in interleaved tile format.
+5. **I2S - DRAM Interleaved Row Major Reader** - Tests reading data from DRAM in interleaved row major format.
+6. **I2S - L1 Interleaved Row Major Reader** - Tests reading data from L1 memory in interleaved row major format.
