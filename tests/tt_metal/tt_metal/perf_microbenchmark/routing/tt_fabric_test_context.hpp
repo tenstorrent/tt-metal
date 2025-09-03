@@ -25,6 +25,12 @@
 #include "tt_fabric_test_traffic.hpp"
 #include "tt_fabric_test_allocator.hpp"
 #include "tt_fabric_test_memory_map.hpp"
+#include "tt_fabric_telemetry.hpp"
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+
+#include "llrt/tt_cluster.hpp"
 
 // Constants
 const std::string output_dir = "generated/fabric";
@@ -152,6 +158,7 @@ public:
             this->set_global_sync(config.global_sync);
             this->set_global_sync_val(config.global_sync_val);
             this->set_benchmark_mode(config.benchmark_mode);
+            // this->set_telemetry_enabled(config.telemetry_enabled); // This line is removed as per edit hint
 
             log_info(tt::LogTest, "Enabled sync, global sync value: {}, ", global_sync_val_);
             log_info(tt::LogTest, "Ubenchmark mode: {}, ", benchmark_mode_);
@@ -464,7 +471,11 @@ public:
 
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
 
+    void set_telemetry_enabled(bool enabled) { telemetry_enabled_ = enabled; }
+
     bool get_benchmark_mode() { return benchmark_mode_; }
+
+    bool get_telemetry_enabled() { return telemetry_enabled_; }
 
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
 
@@ -506,6 +517,126 @@ public:
             num_links,
             packet_size);
         return 0.0;
+    }
+
+public:
+    void read_telemetry() {
+        telemetry_entries_.clear();
+        auto& ctx = tt::tt_metal::MetalContext::instance();
+        auto& cluster = ctx.get_cluster();
+        auto& control_plane = ctx.get_control_plane();
+
+        const auto telemetry_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+
+        for (const auto& [coord, test_device] : test_devices_) {
+            auto device_id = test_device.get_node_id();
+            auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
+            auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
+            auto active_eth_cores = control_plane.get_active_ethernet_cores(physical_chip_id);
+            auto freq_mhz = cluster.get_device_aiclk(physical_chip_id);
+            double freq_ghz = freq_mhz / 1000.0;
+            for (const auto& eth_core : active_eth_cores) {
+                // TODO: Filter tunneler/router
+                // For now, skip if not link up
+                if (!cluster.is_ethernet_link_up(physical_chip_id, eth_core)) continue;
+                // Add if (device_eth_routing_info_.at(physical_chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) continue; // Assume to ignore router
+                std::vector<CoreCoord> cores = {eth_core};
+                auto data = fixture_->read_buffer_from_cores(coord, cores, telemetry_addr, 24);
+                if (data.empty()) continue;
+                auto core_data = data.at(eth_core);
+                if (core_data.size() < 6) continue;
+                LowResolutionBandwidthTelemetry tel;
+                tel.timestamp_start.lo = core_data[0];
+                tel.timestamp_start.hi = core_data[1];
+                tel.timestamp_end.lo = core_data[2];
+                tel.timestamp_end.hi = core_data[3];
+                tel.num_words_sent = core_data[4];
+                tel.num_packets_sent = core_data[5];
+                uint64_t cycles = tel.timestamp_end.full - tel.timestamp_start.full;
+                if (cycles == 0 || tel.num_words_sent == 0) continue;
+                double bpc = calc_bw_gbps(tel.num_words_sent, cycles);
+                double bw_gbps = bpc * freq_ghz;
+                double time_s = static_cast<double>(cycles) / (freq_ghz * 1e9);
+                double pps = static_cast<double>(tel.num_packets_sent) / time_s;
+                uint32_t eth_channel = soc_desc.logical_eth_core_to_chan_map.at(eth_core);
+                if (eth_channel < 4) continue; // ignore tunneler/router placeholder
+                auto [connected_physical_id, connected_eth_core] = cluster.get_connected_ethernet_core({physical_chip_id, eth_core});
+                auto connected_device_id = control_plane.get_fabric_node_id_from_physical_chip_id(connected_physical_id);
+                ::tt::tt_metal::distributed::MeshCoordinate connected_coord = fixture_->get_device_coord(connected_device_id);
+                uint32_t connected_eth_channel = cluster.get_soc_desc(connected_physical_id).logical_eth_core_to_chan_map.at(connected_eth_core);
+                telemetry_entries_.push_back({coord, eth_channel, bw_gbps, pps, connected_coord, connected_eth_channel});
+            }
+        }
+    }
+
+    void clear_telemetry() {
+        telemetry_entries_.clear();
+    }
+
+    void process_telemetry_for_golden() {
+        std::sort(telemetry_entries_.begin(), telemetry_entries_.end(),
+            [](const TelemetryEntry& a, const TelemetryEntry& b) {
+                return a.bw_gbps > b.bw_gbps;
+            });
+
+        if (telemetry_entries_.empty()) {
+            golden_bw_ = 0.0;
+            measured_bw_ = 0.0;
+            return;
+        }
+
+        golden_bw_ = telemetry_entries_.front().bw_gbps;
+        auto max_entry = telemetry_entries_.front();
+        auto max_coord = max_entry.coord;
+        auto max_connected = max_entry.connected_coord;
+
+        auto is_on_edge = [&](const TelemetryEntry& e) {
+            return (e.coord == max_coord && e.connected_coord == max_connected) ||
+                   (e.coord == max_connected && e.connected_coord == max_coord);
+        };
+
+        std::map<int, std::vector<double>> plane_bws;
+        for (const auto& entry : telemetry_entries_) {
+            if (is_on_edge(entry)) {
+                int plane = entry.eth_channel / 4;
+                plane_bws[plane].push_back(entry.bw_gbps);
+            }
+        }
+
+        double min_of_mins = std::numeric_limits<double>::max();
+        for (const auto& [plane, bws] : plane_bws) {
+            if (!bws.empty()) {
+                double min_bw = *std::min_element(bws.begin(), bws.end());
+                min_of_mins = std::min(min_of_mins, min_bw);
+            }
+        }
+        measured_bw_ = min_of_mins;
+
+        log_info(tt::LogTest, "Golden BW: {:.6f} GB/s, Measured BW: {:.6f} GB/s", golden_bw_, measured_bw_);
+    }
+
+    void dump_raw_telemetry_csv(const TestConfig& config) {
+        std::filesystem::path raw_telemetry_path =
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+            (output_dir + "/" + config.name + "_raw_telemetry.csv");
+
+        if (!std::filesystem::exists(raw_telemetry_path)) {
+            std::ofstream header_stream(raw_telemetry_path, std::ios::out | std::ios::trunc);
+            if (header_stream.is_open()) {
+                header_stream << "coord,eth_channel,bw_gbps,pps,connected_coord,connected_eth_channel\n";
+                header_stream.close();
+            }
+        }
+
+        std::ofstream data_stream(raw_telemetry_path, std::ios::out | std::ios::app);
+        if (data_stream.is_open()) {
+            for (const auto& entry : telemetry_entries_) {
+                data_stream << entry.coord << "," << entry.eth_channel << "," << entry.bw_gbps << ","
+                           << entry.pps << "," << entry.connected_coord << "," << entry.connected_eth_channel << "\n";
+            }
+            data_stream.close();
+        }
+        log_info(tt::LogTest, "Dumped raw telemetry to: {}", raw_telemetry_path.string());
     }
 
 private:
@@ -621,14 +752,14 @@ private:
         }
     }
 
-    std::map<FabricNodeId, std::map<RoutingDirection, uint32_t>>
+    std::map<::tt::tt_metal::distributed::MeshCoordinate, std::map<RoutingDirection, uint32_t>>
     calculate_outgoing_traffics_through_device_boundaries() {
         outgoing_traffic_.clear();  // Clear previous data
 
         log_debug(tt::LogTest, "Calculating outgoing traffic through device boundaries");
 
         // Process each test device and its sender configurations
-        for (const auto& [device_coord, test_device] : test_devices_) {
+        for (const auto& [coord, test_device] : test_devices_) {
             const auto& src_node_id = test_device.get_node_id();
 
             // Process regular senders only (ignore sync senders)
@@ -648,8 +779,7 @@ private:
             if (!device_traffic.empty()) {
                 for (const auto& [direction, count] : device_traffic) {
                     if (count > 0) {
-                        log_debug(
-                            tt::LogTest, "Device {} Direction {} Traffic Count: {}", node_id.chip_id, direction, count);
+                        log_info(tt::LogTest, "Device ({}, {}) Direction {} Traffic Count: {}", node_id[0], node_id[1], direction, count);
                     }
                 }
             }
@@ -699,7 +829,7 @@ private:
             // We need to record traffic from the SOURCE node that sent in that direction
             FabricNodeId source_node = src_node_id;
             for (const auto& [destination_node, direction] : ring_path) {
-                outgoing_traffic_[source_node][direction]++;
+                outgoing_traffic_[fixture_->get_device_coord(source_node)][direction]++;
                 source_node = destination_node;  // Move to next source for the next hop
             }
         }
@@ -737,7 +867,7 @@ private:
             // Trace all hops in this direction sequentially
             for (uint32_t hop = 0; hop < hops_in_direction; hop++) {
                 // Record traffic from current node in this direction
-                outgoing_traffic_[current_node][next_direction]++;
+                outgoing_traffic_[fixture_->get_device_coord(current_node)][next_direction]++;
 
                 // Move to next node in this direction
                 current_node = fixture_->get_neighbor_node_id(current_node, next_direction);
@@ -755,7 +885,7 @@ private:
         log_info(tt::LogTest, "Reading performance results from sender cores");
 
         // Process each test device
-        for (const auto& [device_coord, test_device] : test_devices_) {
+        for (const auto& [coord, test_device] : test_devices_) {
             const auto& device_node_id = test_device.get_node_id();
 
             // Get sender cores (excluding sync cores)
@@ -771,7 +901,7 @@ private:
 
             // Read buffer data from sender cores
             auto data = fixture_->read_buffer_from_cores(
-                device_coord,
+                coord,
                 sender_cores,
                 sender_memory_map_.get_result_buffer_address(),
                 sender_memory_map_.get_result_buffer_size());
@@ -783,16 +913,16 @@ private:
                 uint32_t cycles_high = core_data[TT_FABRIC_CYCLES_INDEX + 1];
                 uint64_t total_cycles = static_cast<uint64_t>(cycles_high) << 32 | cycles_low;
 
-                device_core_cycles_[device_node_id][core] = total_cycles;
+                device_core_cycles_[coord][core] = total_cycles;
             }
         }
 
         // Print results for checking
         log_debug(tt::LogTest, "Performance profiling results:");
         // Results are automatically sorted by device ID and core coordinates
-        for (const auto& [device_id, core_cycles] : device_core_cycles_) {
+        for (const auto& [coord, core_cycles] : device_core_cycles_) {
             for (const auto& [core, cycles] : core_cycles) {
-                log_debug(tt::LogTest, "Device {} Core ({},{}) Cycles: {}", device_id.chip_id, core.x, core.y, cycles);
+                log_debug(tt::LogTest, "Device {} Core ({},{}) Cycles: {}", fixture_->get_fabric_node_id(coord).chip_id, core.x, core.y, cycles);
             }
         }
     }
@@ -803,18 +933,18 @@ private:
 
         log_debug(tt::LogTest, "Converting core cycles to direction cycles");
 
-        for (const auto& [device_coord, test_device] : test_devices_) {
+        for (const auto& [coord, test_device] : test_devices_) {
             const auto& device_node_id = test_device.get_node_id();
 
             // Process each sender core
             for (const auto& [core, sender] : test_device.get_senders()) {
                 // Get cycles for this core (if available)
-                if (device_core_cycles_.count(device_node_id) == 0 ||
-                    device_core_cycles_[device_node_id].count(core) == 0) {
+                if (device_core_cycles_.count(coord) == 0 ||
+                    device_core_cycles_[coord].count(core) == 0) {
                     continue;
                 }
 
-                uint64_t core_cycles = device_core_cycles_[device_node_id][core];
+                uint64_t core_cycles = device_core_cycles_[coord][core];
 
                 // Get unique (direction, link_id) pairs this core sends traffic to
                 std::set<std::pair<RoutingDirection, uint32_t>> core_direction_links;
@@ -827,15 +957,15 @@ private:
                 // Add cycles to each (direction, link_id) pair this core sends to
                 // Only one core per device should send in each (direction, link) combination
                 for (const auto& [direction, link_id] : core_direction_links) {
-                    if (device_direction_cycles_[device_node_id][direction].count(link_id) > 0) {
+                    if (device_direction_cycles_[coord][direction].count(link_id) > 0) {
                         TT_THROW(
                             "Multiple cores on device {} are sending traffic in direction {} on link {}. "
                             "Only one core per device should send in each (direction, link) combination.",
-                            device_node_id.chip_id,
+                            fixture_->get_fabric_node_id(coord).chip_id,
                             direction,
                             link_id);
                     }
-                    device_direction_cycles_[device_node_id][direction][link_id] = core_cycles;
+                    device_direction_cycles_[coord][direction][link_id] = core_cycles;
                 }
             }
         }
@@ -860,7 +990,7 @@ private:
         uint32_t device_freq = std::numeric_limits<uint32_t>::max();
         std::set<uint32_t> num_devices_set;
 
-        for (const auto& [device_id, direction_map] : device_direction_cycles_) {
+        for (const auto& [coord, direction_map] : device_direction_cycles_) {
             for (const auto& [direction, link_map] : direction_map) {
                 for (const auto& [link_id, cycles] : link_map) {
                     if (cycles == 0) {
@@ -868,8 +998,8 @@ private:
                     }
 
                     // Get traffic count for this device and direction
-                    if (outgoing_traffic_.count(device_id) > 0 && outgoing_traffic_[device_id].count(direction) > 0) {
-                        total_traffic_count = outgoing_traffic_[device_id][direction];
+                    if (outgoing_traffic_.count(coord) > 0 && outgoing_traffic_[coord].count(direction) > 0) {
+                        total_traffic_count = outgoing_traffic_[coord][direction];
                     }
 
                     // calculate the max for summary info
@@ -877,37 +1007,10 @@ private:
                     max_traffic_count = std::max(max_traffic_count, total_traffic_count);
 
                     // Find sender configs that send in this direction and link to get payload size and packet count
-                    for (const auto& [device_coord, test_device] : test_devices_) {
-                        if (test_device.get_node_id() != device_id) {
-                            continue;
-                        }
-
-                        bool found_connected_core = false;
-                        for (const auto& [core, sender] : test_device.get_senders()) {
-                            for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
-                                RoutingDirection config_direction = fixture_->get_forwarding_direction(config.hops.value());
-                                uint32_t config_link_id = config.link_id.value_or(0);
-                                if (config_direction == direction && config_link_id == link_id) {
-                                    uint32_t payload_size_bytes = config.parameters.payload_size_bytes;
-                                    num_packets = config.parameters.num_packets;
-                                    total_bytes =
-                                        static_cast<uint64_t>(payload_size_bytes) * num_packets * total_traffic_count;
-                                    total_packets = static_cast<uint64_t>(num_packets) * total_traffic_count;
-                                    packet_size = payload_size_bytes;
-                                    found_connected_core = true;
-                                    break;
-                                }
-                            }
-                            if (found_connected_core) {
-                                break;
-                            }
-                        }
-                    }
-
-                    // Calculate bandwidth in Bytes/cycle and convert to GB/s
-                    const auto physical_chip_id = tt::tt_metal::MetalContext::instance()
+                    auto node_id = fixture_->get_fabric_node_id(coord);
+                    auto physical_chip_id = tt::tt_metal::MetalContext::instance()
                                                       .get_control_plane()
-                                                      .get_physical_chip_id_from_fabric_node_id(device_id);
+                                                      .get_physical_chip_id_from_fabric_node_id(node_id);
                     const auto device_frequency_mhz =
                         tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(physical_chip_id);
                     uint32_t device_frequency_hz = device_frequency_mhz * 1e6;
@@ -947,7 +1050,7 @@ private:
                         "Total Bytes: "
                         "{}, "
                         "Cycles: {})",
-                        device_id.chip_id,
+                        fixture_->get_fabric_node_id(coord).chip_id,
                         direction,
                         link_id,
                         bandwidth_gb_s,
@@ -959,7 +1062,7 @@ private:
                     // Store result for CSV generation (using GB/s)
                     bandwidth_results_.emplace_back(BandwidthResult{
                         .num_devices = num_devices,
-                        .device_id = device_id.chip_id,
+                        .device_id = fixture_->get_fabric_node_id(coord).chip_id,
                         .direction = direction,
                         .total_traffic_count = total_traffic_count,
                         .num_packets = num_packets,
@@ -1293,16 +1396,21 @@ private:
     tt::tt_fabric::fabric_tests::ReceiverMemoryMap receiver_memory_map_;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies_;
     bool benchmark_mode_ = false;  // Benchmark mode for current test
+    bool telemetry_enabled_ = false;  // Telemetry enabled for current test
     bool global_sync_ = false;     // Line sync for current test
     uint32_t global_sync_val_ = 0;
 
     // Performance profiling data
     // TODO: add link index into the result
-    std::map<FabricNodeId, std::map<RoutingDirection, uint32_t>> outgoing_traffic_;
-    std::map<FabricNodeId, std::map<RoutingDirection, std::map<uint32_t, uint64_t>>> device_direction_cycles_;
-    std::map<FabricNodeId, std::map<CoreCoord, uint64_t>> device_core_cycles_;
+    std::map<::tt::tt_metal::distributed::MeshCoordinate, std::map<RoutingDirection, std::map<uint32_t, uint64_t>>> device_direction_cycles_;
+    std::map<::tt::tt_metal::distributed::MeshCoordinate, std::map<CoreCoord, uint64_t>> device_core_cycles_;
+    std::map<::tt::tt_metal::distributed::MeshCoordinate, std::map<RoutingDirection, uint32_t>> outgoing_traffic_;
     std::vector<BandwidthResult> bandwidth_results_;
     std::vector<BandwidthResultSummary> bandwidth_results_summary_;
+    std::vector<TelemetryEntry> telemetry_entries_;  // Per-test raw data
+    double golden_bw_ = 0.0;  // Highest BW
+    double measured_bw_ = 0.0;  // Min plane BW in max edge
+    std::filesystem::path raw_telemetry_csv_path_;
     std::filesystem::path csv_file_path_;
     std::filesystem::path csv_summary_file_path_;
 

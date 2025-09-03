@@ -495,6 +495,10 @@ inline ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& te
         test_config.global_sync = parse_scalar<bool>(test_yaml["sync"]);
     }
 
+    if (test_yaml["telemetry_enabled"]) {
+        test_config.telemetry_enabled = test_yaml["telemetry_enabled"].as<bool>(test_config.benchmark_mode);
+    }
+
     return test_config;
 }
 
