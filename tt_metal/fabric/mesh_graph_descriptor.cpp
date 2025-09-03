@@ -8,8 +8,6 @@
 #include <filesystem>
 #include <algorithm>
 #include <set>
-#include <iomanip>
-#include <unordered_map>
 #include <unordered_set>
 #include "assert.hpp"
 
@@ -122,51 +120,40 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshG
 
     // Run validation groups with early exit checkpoints
     {
-        auto errs = validate_basic_structure(proto);
-        all_errors.insert(all_errors.end(), errs.begin(), errs.end());
+        validate_basic_structure(proto, all_errors);
         if (!all_errors.empty()) return all_errors;
     }
 
     {
-        auto errs = validate_names(proto);
-        all_errors.insert(all_errors.end(), errs.begin(), errs.end());
-        auto errs2 = validate_channels(proto);
-        all_errors.insert(all_errors.end(), errs2.begin(), errs2.end());
-        auto errs3 = validate_architecture_consistency(proto);
-        all_errors.insert(all_errors.end(), errs3.begin(), errs3.end());
+        validate_names(proto, all_errors);
+        validate_channels(proto, all_errors);
+        validate_architecture_consistency(proto, all_errors);
         if (!all_errors.empty()) return all_errors;
     }
 
     {
-        auto errs = validate_mesh_topology(proto);
-        all_errors.insert(all_errors.end(), errs.begin(), errs.end());
-        auto errs2 = validate_express_connections(proto);
-        all_errors.insert(all_errors.end(), errs2.begin(), errs2.end());
-        auto errs3 = validate_graph_descriptors(proto);
-        all_errors.insert(all_errors.end(), errs3.begin(), errs3.end());
-        auto errs4 = validate_graph_topology_and_connections(proto);
-        all_errors.insert(all_errors.end(), errs4.begin(), errs4.end());
+        validate_mesh_topology(proto, all_errors);
+        validate_express_connections(proto, all_errors);
+        validate_graph_descriptors(proto, all_errors);
+        validate_graph_topology_and_connections(proto, all_errors);
         if (!all_errors.empty()) return all_errors;
     }
 
     return all_errors;
 }
 
-std::vector<std::string> MeshGraphDescriptor::validate_basic_structure(const proto::MeshGraphDescriptor& proto) {
-    std::vector<std::string> errors;
+void MeshGraphDescriptor::validate_basic_structure(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors) {
     if (proto.mesh_descriptors_size() == 0) {
         errors.push_back("There must be at least one mesh descriptor");
     }
     if (!proto.has_top_level_instance()) {
         errors.push_back("Top level instance is required");
     }
-    return errors;
 }
 
 
 
-std::vector<std::string> MeshGraphDescriptor::validate_names(const proto::MeshGraphDescriptor& proto) {
-    std::vector<std::string> error_messages;
+void MeshGraphDescriptor::validate_names(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
 
     unsigned int mesh_counter = 0;
 
@@ -220,12 +207,10 @@ std::vector<std::string> MeshGraphDescriptor::validate_names(const proto::MeshGr
         }
     }
 
-    return error_messages;
 }
 
 
-std::vector<std::string> MeshGraphDescriptor::validate_mesh_topology(const proto::MeshGraphDescriptor& proto) {
-    std::vector<std::string> error_messages;
+void MeshGraphDescriptor::validate_mesh_topology(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
 
     // Validate basic mesh properties (names and dimensions)
     for (const auto& mesh : proto.mesh_descriptors()) {
@@ -267,11 +252,9 @@ std::vector<std::string> MeshGraphDescriptor::validate_mesh_topology(const proto
         }
     }
 
-    return error_messages;
 }
 
-std::vector<std::string> MeshGraphDescriptor::validate_architecture_consistency(const proto::MeshGraphDescriptor& proto) {
-    std::vector<std::string> error_messages;
+void MeshGraphDescriptor::validate_architecture_consistency(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
 
     // Check all architectures are the same
     if (proto.mesh_descriptors_size() > 0) {
@@ -279,7 +262,7 @@ std::vector<std::string> MeshGraphDescriptor::validate_architecture_consistency(
         if (!std::all_of(proto.mesh_descriptors().begin(), proto.mesh_descriptors().end(),
                         [first_arch](const auto& mesh) { return mesh.arch() == first_arch; })) {
             error_messages.push_back("All mesh descriptors must have the same architecture");
-            return error_messages;
+            return;
         }
     }
 
@@ -321,11 +304,9 @@ std::vector<std::string> MeshGraphDescriptor::validate_architecture_consistency(
         }
     }
 
-    return error_messages;
 }
 
-std::vector<std::string> MeshGraphDescriptor::validate_channels(const proto::MeshGraphDescriptor& proto) {
-    std::vector<std::string> error_messages;
+void MeshGraphDescriptor::validate_channels(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
 
     // Check all channel counts > 0
     for (const auto& mesh : proto.mesh_descriptors()) {
@@ -366,11 +347,9 @@ std::vector<std::string> MeshGraphDescriptor::validate_channels(const proto::Mes
         }
     }
 
-    return error_messages;
 }
 
-std::vector<std::string> MeshGraphDescriptor::validate_express_connections(const proto::MeshGraphDescriptor& proto) {
-    std::vector<std::string> error_messages;
+void MeshGraphDescriptor::validate_express_connections(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
 
     // Validate express connections
     for (const auto& mesh : proto.mesh_descriptors()) {
@@ -403,11 +382,9 @@ std::vector<std::string> MeshGraphDescriptor::validate_express_connections(const
         }
     }
 
-    return error_messages;
 }
 
-std::vector<std::string> MeshGraphDescriptor::validate_graph_descriptors(const proto::MeshGraphDescriptor& proto) {
-    std::vector<std::string> error_messages;
+void MeshGraphDescriptor::validate_graph_descriptors(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
 
     // Check that there is at least one instance in the graph and validate references
     for (const auto& graph : proto.graph_descriptors()) {
@@ -433,11 +410,9 @@ std::vector<std::string> MeshGraphDescriptor::validate_graph_descriptors(const p
         }
     }
 
-    return error_messages;
 }
 
-std::vector<std::string> MeshGraphDescriptor::validate_graph_topology_and_connections(const proto::MeshGraphDescriptor& proto) {
-    std::vector<std::string> error_messages;
+void MeshGraphDescriptor::validate_graph_topology_and_connections(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
 
     // Combine all checks into a single loop over graph_descriptors
     for (const auto& graph : proto.graph_descriptors()) {
@@ -476,7 +451,6 @@ std::vector<std::string> MeshGraphDescriptor::validate_graph_topology_and_connec
         }
     }
 
-    return error_messages;
 }
 
 // Dynamic checks to implement
