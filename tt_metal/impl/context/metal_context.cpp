@@ -55,6 +55,7 @@ void MetalContext::initialize(
     const BankMapping& l1_bank_remap,
     size_t worker_l1_size,
     bool minimal) {
+    ZoneScoped;
 
     if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
         TT_THROW(
@@ -199,6 +200,8 @@ void MetalContext::initialize(
 }
 
 void MetalContext::teardown() {
+    ZoneScoped;
+
     if (!initialized_) {
         return;
     }
