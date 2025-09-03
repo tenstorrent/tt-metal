@@ -1,9 +1,9 @@
 name: Package and release
 on:
-  push:
-      branches:
-        - 'stable'
   workflow_dispatch:
+  push:
+      branches: ['stable']
+
 
 permissions:
   actions: read
