@@ -1,7 +1,16 @@
 name: Regression Testing
 on:
   workflow_call:
-
+    outputs:
+      packages-artifact-name:
+        description: "Name to give download-artifact to get the packages"
+        value: ${{ jobs.build-artifact.outputs.packages-artifact-name }}
+      build-artifact-name:
+        description: "Name of the published build artifact"
+        value: ${{ jobs.build-artifact.outputs.build_artifact_name }}
+      wheel-artifact-name:
+        description: "Name of the published wheel artifact"
+        value: ${{ jobs.build-wheel.outputs.wheel_artifact_name }}
 permissions:
   actions: read
   contents: write

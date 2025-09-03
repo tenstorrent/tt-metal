@@ -166,7 +166,7 @@ jobs:
     with:
       version: ${{ needs.create-tag.outputs.version }}
       tag-latest:  ${{ needs.release-precheck.outputs.is-release-candidate != 'true' }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
   release-docs:
     needs: [
       regression-testing,
@@ -178,9 +178,9 @@ jobs:
     uses: ./.github/workflows/docs-latest-public.yaml
     with:
       version: ${{ needs.create-tag.outputs.version }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.regression-testing.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.regression-testing.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
     secrets: inherit
   publish-to-pypi:
     name: >-
@@ -202,7 +202,7 @@ jobs:
     - name: Download all the dists
       uses: actions/download-artifact@v4
       with:
-        name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+        name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
         path: dist/
     - name: Publish distribution 📦 to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
