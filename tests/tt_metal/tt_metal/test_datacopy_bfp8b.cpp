@@ -33,6 +33,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/bfloat_utils.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -128,7 +129,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        std::vector<uint32_t> src_vec = create_random_vector_of_bfp8(
+        std::vector<uint32_t> src_vec = test_utils::create_random_vector_of_bfp8(
             dram_buffer_size,
             /*is_exp_a=*/false,
             100,
