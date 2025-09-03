@@ -79,7 +79,7 @@ jobs:
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e HF_TOKEN=${{ secrets.HUGGINGFACE_TOKEN }}
-            -v /localdev/blackhole_demos:/localdev/blackhole_demos:ro
+            -v /localdev/blackhole_demos:/localdev/blackhole_demos:rw
           install_wheel: true
           run_args: |
             if [[ "${{ matrix.test-group.name }}" == *"llama"* ]]; then
