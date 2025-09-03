@@ -199,8 +199,6 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         # reconstruct the inputs that Qwen2.5-VL expects
         inputs = CustomNamespace()
         inputs.input_ids = tokens.to(images[0].attention_mask.dtype)
-        inputs.pixel_values = torch.concat([im.pixel_values for im in images], dim=0)
-        logger.info(f"inputs.pixel_values: {inputs.pixel_values.shape}")
         inputs.attention_mask = torch.concat(
             [
                 torch.nn.functional.pad(im.attention_mask, (0, padded_seq_len - im.attention_mask.shape[-1]), value=0)
@@ -208,10 +206,10 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             ],
             dim=0,
         )
+        logger.info(f"inputs.attention_mask: {inputs.attention_mask.shape}")
         if "pixel_values" in images[0]:
             # we currently do not support mixed inputs of text-only users and text-image users; hence checking images[0] is enough
             inputs.pixel_values = torch.concat([im.pixel_values for im in images], dim=0)
-            logger.info(f"inputs.attention_mask: {inputs.attention_mask.shape}")
             inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in images], dim=0)
 
             time_input_reconstruction = time.time() - start_step
@@ -224,7 +222,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             logger.info(f"Vision prefill time: {time_vision_prefill:.4f}s")
         else:
             # text-only users
-            image_embeds = torch.tensor([], dtype=torch.bfloat16, device=self.model.mesh_device)  # [INFO] empty tensor
+            image_embeds = torch.tensor([], dtype=torch.bfloat16)  # [INFO] empty tensor
 
         # Prepare text + vision inputs for decoder model
         start_step = time.time()
