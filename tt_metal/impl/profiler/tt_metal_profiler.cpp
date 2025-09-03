@@ -276,11 +276,11 @@ void setShift(int device_id, int64_t shift, double scale, const SyncInfo& root_s
         return;
     }
     log_info(tt::LogMetal, "Device sync data for device: {}, delay: {} ns, freq scale: {}", device_id, shift, scale);
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_mid_run_dump()) {
         log_warning(
             tt::LogMetal,
-            "Note that tracy mid-run push is enabled. This means device-device sync is not as accurate. "
-            "Please do not use tracy mid-run push for sensitive device-device event analysis.");
+            "Note that tracy mid-run data dumping is enabled. This means device-device sync is not as accurate. Please "
+            "do not use tracy mid-run data dumping for sensitive device-device event analysis.");
     }
 
     auto device_profiler_it = tt_metal_device_profiler_map.find(device_id);
@@ -769,22 +769,22 @@ void ReadDeviceProfilerResults(
 #endif
 }
 
-bool pushToTracyMidRun(const ProfilerReadState state) {
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
+bool dumpDeviceProfilerDataMidRun(const ProfilerReadState state) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_mid_run_dump()) {
         return false;
     }
 
     TT_FATAL(
-        tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push() &&
+        tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_mid_run_dump() &&
             !tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only(),
-        "Cannot push to Tracy GUI mid-run if only profiling trace runs");
+        "Cannot dump data mid-run if only profiling trace runs");
 
     TT_FATAL(
-        tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push() &&
+        tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_mid_run_dump() &&
             !tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores(),
-        "Cannot push to Tracy GUI mid-run if profiling dispatch cores");
+        "Cannot dump data mid-run if profiling dispatch cores");
 
-    return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push() &&
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_mid_run_dump() &&
            state == ProfilerReadState::NORMAL;
 }
 
@@ -811,10 +811,11 @@ void ProcessDeviceProfilerResults(
             profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
         }
 
-        if (pushToTracyMidRun(state)) {
+        if (dumpDeviceProfilerDataMidRun(state)) {
             std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
                 getSortedDeviceMarkersVector(profiler.device_markers_per_core_risc_map);
             profiler.pushTracyDeviceResults(device_markers_vec);
+            profiler.dumpDeviceResults();
             profiler.device_markers_per_core_risc_map.clear();
         }
     }
