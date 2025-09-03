@@ -194,9 +194,9 @@ class TtDetect:
         cls_output_1 = ttnn.squeeze(cls_output_1, dim=0)
         cls_output_2 = ttnn.squeeze(cls_output_2, dim=0)
 
-        cls_output_0 = ttnn.sharded_to_interleaved(cls_output_0)
-        cls_output_1 = ttnn.sharded_to_interleaved(cls_output_1)
-        cls_output_2 = ttnn.sharded_to_interleaved(cls_output_2)
+        cls_output_0 = ttnn.sharded_to_interleaved(cls_output_0, memory_config=ttnn.L1_MEMORY_CONFIG)
+        cls_output_1 = ttnn.sharded_to_interleaved(cls_output_1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        cls_output_2 = ttnn.sharded_to_interleaved(cls_output_2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         reg_output_0 = ttnn.permute(reg_output_0, (0, 3, 1, 2))
         reg_output_0 = ttnn.reshape(reg_output_0, (1, 4, reg_output_0.shape[3]))
@@ -219,8 +219,8 @@ class TtDetect:
         c1, c2 = reg_dist_list[:, :, :2], reg_dist_list[:, :, 2:4]
         c1 = ttnn.to_layout(c1, layout=ttnn.TILE_LAYOUT)
         c2 = ttnn.to_layout(c2, layout=ttnn.TILE_LAYOUT)
-        x1y1 = self.anchors - c1
-        x2y2 = self.anchors + c2
+        x1y1 = ttnn.sub(self.anchors, c1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x2y2 = ttnn.add(self.anchors, c2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         c_xy = x1y1 + x2y2
         c_xy = ttnn.div(c_xy, 2)

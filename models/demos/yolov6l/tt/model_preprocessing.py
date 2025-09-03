@@ -33,10 +33,20 @@ def generate_anchors(device, feats, fpn_strides, grid_cell_offset=0.5, weights_m
     stride_tensor = torch.cat(stride_tensor)
     return (
         ttnn.from_torch(
-            anchor_points, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=weights_mesh_mapper
+            anchor_points,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=weights_mesh_mapper,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         ),
         ttnn.from_torch(
-            stride_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=weights_mesh_mapper
+            stride_tensor,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=weights_mesh_mapper,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         ),
     )
 
@@ -81,7 +91,12 @@ def create_yolov6l_model_parameters(model: Model, torch_input: torch.Tensor, dev
 
     ones_tensor = torch.ones((1, 8400, 1), dtype=torch.float32)
     ones_tensor = ttnn.from_torch(
-        ones_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=weights_mesh_mapper
+        ones_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        mesh_mapper=weights_mesh_mapper,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     if "detect" in parameters:
         parameters.detect["anchors"] = anchor_points
