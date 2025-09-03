@@ -1831,7 +1831,7 @@ void RunTestChipMCast1D(
 
     for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
         for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            auto receiver_device = fixture->get_device(physical_end_device_ids[i]);
+            const auto& receiver_device = fixture->get_device(physical_end_device_ids[i]);
 
             log_info(
                 tt::LogTest,
