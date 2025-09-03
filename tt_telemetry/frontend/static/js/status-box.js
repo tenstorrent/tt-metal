@@ -1,4 +1,5 @@
 import { LitElement, html, css } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js';
+import { formatFloat } from './utils.js';
 
 // STATUS BOX COMPONENT - Individual clickable status boxes
 export class StatusBox extends LitElement {
@@ -388,7 +389,7 @@ export class StatusBox extends LitElement {
 
         if (this.type === 'valued') {
             statusClass = 'valued';
-            const valueDisplay = this.value !== null ? this.value : 'N/A';
+            const valueDisplay = formatFloat(this.value);
             const unitDisplay = this.unitDisplayLabel ? ` ${this.unitDisplayLabel}` : '';
             content = html`
                 <div class="valued-name ${scaleClass}">${displayName}</div>

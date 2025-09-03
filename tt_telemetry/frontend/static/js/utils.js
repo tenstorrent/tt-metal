@@ -48,3 +48,30 @@ export function arrayOfPairsToObject(pairsArray) {
 
     return obj;
 }
+
+/**
+ * Formats a numeric value to display with up to 2 decimal places.
+ * Removes trailing zeros and unnecessary decimal points.
+ * Examples: 4 -> "4", 4.1 -> "4.1", 4.12 -> "4.12", 4.123 -> "4.12"
+ *
+ * @param {any} value - The value to format
+ * @returns {string} - Formatted string representation
+ */
+export function formatFloat(value) {
+    if (value === null || value === undefined) {
+        return 'N/A';
+    }
+    
+    // If it's not a number, return as-is
+    if (typeof value !== 'number') {
+        return String(value);
+    }
+    
+    // If it's an integer, return without decimal places
+    if (Number.isInteger(value)) {
+        return String(value);
+    }
+    
+    // Format to 2 decimal places and remove trailing zeros
+    return parseFloat(value.toFixed(2)).toString();
+}
