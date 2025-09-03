@@ -2,12 +2,12 @@ import torch.nn as nn
 import ttnn
 from .tt_config import get_resnet_config
 from .tt_resnet_components import (
-    ResNetWeightLoader,
-    ResNetNormalizationLayer,
-    ResNetConvolutionLayer,
     ResNetTimeEmbedding,
     ResNetShortcutConnection,
 )
+from .components.weight_loader import ResNetWeightLoader
+from .components.convolution_layer import ConvolutionLayer
+from .components.group_normalization_layer import GroupNormalizationLayer
 
 
 class TtResnetBlock2D(nn.Module):
@@ -16,16 +16,15 @@ class TtResnetBlock2D(nn.Module):
         device,
         state_dict,
         module_path,
-        use_conv_shortcut: bool = False,
     ):
         super().__init__()
 
         self.device = device
         self.module_path = module_path
-        self.use_conv_shortcut = use_conv_shortcut
 
         # Configuration setup
         self.block_config = get_resnet_config(module_path)
+        self.use_conv_shortcut = self.block_config.use_conv_shortcut
 
         # Initialize components
         self._initialize_components(state_dict)
@@ -39,31 +38,30 @@ class TtResnetBlock2D(nn.Module):
         # 5. conv_layer_2
         # 6. shortcut (if use_conv_shortcut is True)
 
-        # Load weights
         self.weight_loader = ResNetWeightLoader(state_dict, self.module_path, self.use_conv_shortcut)
 
-        self.norm_layer_1 = ResNetNormalizationLayer(
+        self.norm_layer_1 = GroupNormalizationLayer(
             self.device,
             self.weight_loader.norm_weights_1,
             self.weight_loader.norm_bias_1,
             self.block_config.norm1,
         )
 
-        self.norm_layer_2 = ResNetNormalizationLayer(
+        self.norm_layer_2 = GroupNormalizationLayer(
             self.device,
             self.weight_loader.norm_weights_2,
             self.weight_loader.norm_bias_2,
             self.block_config.norm2,
         )
 
-        self.conv_layer_1 = ResNetConvolutionLayer(
+        self.conv_layer_1 = ConvolutionLayer(
             self.device,
             self.weight_loader.conv_weights_1,
             self.weight_loader.conv_bias_1,
             self.block_config.conv1,
         )
 
-        self.conv_layer_2 = ResNetConvolutionLayer(
+        self.conv_layer_2 = ConvolutionLayer(
             self.device,
             self.weight_loader.conv_weights_2,
             self.weight_loader.conv_bias_2,
@@ -78,7 +76,7 @@ class TtResnetBlock2D(nn.Module):
 
         self.shortcut_connection = ResNetShortcutConnection(
             self.device,
-            use_conv_shortcut=self.use_conv_shortcut,  # Use actual presence of weights
+            use_conv_shortcut=self.use_conv_shortcut,
             conv_weights=self.weight_loader.conv_weights_3,
             conv_bias=self.weight_loader.conv_bias_3,
             conv_config=self.block_config.conv_shortcut if self.use_conv_shortcut else None,
@@ -89,21 +87,19 @@ class TtResnetBlock2D(nn.Module):
         hidden_states = input_tensor
 
         # First normalization + activation
-        hidden_states = self.norm_layer_1.apply(hidden_states)
+        hidden_states = self.norm_layer_1.apply(hidden_states, B, C, H, W)
+        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         hidden_states = ttnn.silu(hidden_states)
 
         # First convolution
         hidden_states, [C, H, W] = self.conv_layer_1.apply(hidden_states, B, C, H, W)
 
-        # Time embedding
-        temb = self.time_embedding.apply(temb)
-
         # Add time embedding
-        hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        hidden_states = ttnn.add(hidden_states, temb, use_legacy=True)
+        hidden_states = self.time_embedding.apply(hidden_states, temb)
 
         # Second normalization + activation
-        hidden_states = self.norm_layer_2.apply(hidden_states)
+        hidden_states = self.norm_layer_2.apply(hidden_states, B, C, H, W)
+        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         hidden_states = ttnn.silu(hidden_states)
 
         # Second convolution
@@ -111,8 +107,5 @@ class TtResnetBlock2D(nn.Module):
 
         # Apply shortcut connection
         hidden_states, [C, H, W] = self.shortcut_connection.apply(input_tensor, hidden_states, input_shape)
-
-        # hidden_states = ttnn.add(hidden_states, input_tensor, use_legacy=True)
-        # hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         return hidden_states, [C, H, W]
