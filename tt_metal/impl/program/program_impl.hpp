@@ -85,11 +85,15 @@ struct KernelGroup {
     CoreType get_core_type() const;
 };
 
+struct CommonRTAInfo {
+    uint32_t offset = 0;
+    uint32_t size = 0;
+};
+
 // Contains the program's worker memory map
 struct ProgramConfig {
     uint32_t rta_offset;
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets;
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
+    std::unordered_map<KernelHandle, CommonRTAInfo> crta_info;
     uint32_t sem_offset;
     uint32_t sem_size;
     uint32_t cb_offset;
@@ -110,8 +114,7 @@ struct ProgramOffsetsState {
     // Unique RTA offset.
     uint32_t rta_offset = 0;
     // Common RTA offsets and sizes.
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets{};
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes{};
+    std::unordered_map<KernelHandle, CommonRTAInfo> crta_info;
     // Semaphore offsets and sizes.
     uint32_t sem_offset = 0;
     uint32_t sem_size = 0;

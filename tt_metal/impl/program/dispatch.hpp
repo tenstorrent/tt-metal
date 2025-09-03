@@ -10,14 +10,12 @@
 #include <tt-metalium/program.hpp>
 #include <stdint.h>
 #include <vector_aligned.hpp>
-#include <array>
 #include <memory>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "core_coord.hpp"
-#include "dev_msgs.h"
 #include "dispatch/dispatch_settings.hpp"
 #include "kernel_types.hpp"
 #include "program_impl.hpp"
@@ -68,8 +66,7 @@ uint32_t finalize_rt_args(
     uint32_t base_offset,
     uint32_t programmable_core_type_index,
     uint32_t& rta_offset,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes);
+    std::unordered_map<KernelHandle, CommonRTAInfo>& crta_info);
 
 uint32_t finalize_sems(
     uint32_t programmable_core_type_index,

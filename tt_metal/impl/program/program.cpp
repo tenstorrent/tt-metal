@@ -1718,8 +1718,7 @@ std::unordered_map<uint64_t, ProgramCommandSequence> &Program::get_cached_progra
 void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const ProgramOffsetsState& state) {
     auto& program_config = get_program_config(index);
     program_config.rta_offset = state.rta_offset;
-    program_config.crta_offsets = state.crta_offsets;
-    program_config.crta_sizes = state.crta_sizes;
+    program_config.crta_info = state.crta_info;
     program_config.sem_offset = state.sem_offset;
     program_config.sem_size = state.sem_size;
     program_config.cb_offset = state.cb_offset;
@@ -1793,8 +1792,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             state.config_base_offset,
             index,
             state.rta_offset,
-            state.crta_offsets,
-            state.crta_sizes);
+            state.crta_info);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
