@@ -173,7 +173,8 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
                 binary_op = FpuBinaryOp::ADD;
             }
             break;
-        case BinaryOpType::GT: postprocess = unary::UnaryOpType::GTZ; break;
+        // case BinaryOpType::GT: postprocess = unary::UnaryOpType::GTZ; break;
+        // case BinaryOpType::LT: postprocess = unary::UnaryOpType::LTZ; break;
         // case BinaryOpType::LT:
         //     if (dtype != DataType::INT32) {
         //         postprocess = unary::UnaryOpType::LTZ;
@@ -184,6 +185,13 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
         case BinaryOpType::LT:
             if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::LT;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
+        case BinaryOpType::GT:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::GT;
             } else {
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
@@ -454,6 +462,12 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case LT:
             if (dtype == DataType::INT32) {
                 return {"lt_int32_tile_init();", "lt_int32_tile"};
+            } else {
+                return {"sub_binary_tile_init();", "sub_binary_tile"};
+            }
+        case GT:
+            if (dtype == DataType::INT32) {
+                return {"gt_int32_tile_init();", "gt_int32_tile"};
             } else {
                 return {"sub_binary_tile_init();", "sub_binary_tile"};
             }
