@@ -41,7 +41,7 @@ def get_DRAM_conv_config(module_path, idx):
         block_id = int(parts[parts.index("up_blocks") + 1])
         if "upsamplers" not in module_path and block_id == 0:
             return None
-    slice_type = ttnn.Conv2dSliceWidth
+    slice_type = ttnn.Conv2dDRAMSliceWidth
     return ttnn.Conv2dSliceConfig(
         slice_type=slice_type,
     )

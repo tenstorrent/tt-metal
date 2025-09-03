@@ -102,8 +102,8 @@ def test_conv_features(
     )
 
 
-SliceHeight = ttnn.Conv2dSliceHeight
-SliceWidth = ttnn.Conv2dSliceWidth
+SliceHeight = ttnn.Conv2dDRAMSliceHeight
+SliceWidth = ttnn.Conv2dDRAMSliceWidth
 
 
 @pytest.mark.parametrize(
@@ -130,9 +130,6 @@ SliceWidth = ttnn.Conv2dSliceWidth
 @pytest.mark.parametrize(
     "has_bias, fp32_accum, packer_l1_acc",
     [[True, True, False]],
-)
-@pytest.mark.skip(
-    reason="Temporarily disabled due to issues - see ticket: https://github.com/tenstorrent/tt-metal/issues/26930"
 )
 def test_conv_dram(
     device,
@@ -188,8 +185,5 @@ def test_conv_dram(
         output_layout=input_layout,
         run_twice=True,
         fast_compare=True,
-        slice_config=ttnn.Conv2dSliceConfig(
-            slice_type=slice_type,
-            num_slices=num_slices,
-        ),
+        use_dram=True,
     )
