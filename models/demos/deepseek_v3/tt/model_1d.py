@@ -4,6 +4,7 @@
 import math
 from pathlib import Path
 from typing import Any
+from venv import logger
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
@@ -33,8 +34,17 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 class Model1D(SharedStateAddOn, AbstractModule):
     NUM_MLP_META_LAYERS = 1
     NUM_MLP_ROWS = 3
-    NUM_MOE_META_LAYERS = 1
-    NUM_MOE_ROWS = 1
+    NUM_MOE_META_LAYERS = 2
+    NUM_MOE_ROWS = 4
+
+    @classmethod
+    def get_metalayer_padding_map(cls, hf_config, mesh_shape):
+        moe_meta_layer_mapping = cls.create_meta_layer_mapping(
+            hf_config.first_k_dense_replace,
+            hf_config.num_hidden_layers - hf_config.first_k_dense_replace,
+            mesh_shape[0],
+        )
+        return [[item is None for item in row] for row in moe_meta_layer_mapping]
 
     @classmethod
     def convert_weights(
@@ -180,6 +190,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
         """Create the model configuration for decode mode."""
 
         mesh_shape = list(mesh_device.shape)
+        metalayer_padding_map = cls.get_metalayer_padding_map(hf_config, mesh_shape)
 
         norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
 
@@ -199,9 +210,9 @@ class Model1D(SharedStateAddOn, AbstractModule):
                 MoEDecoderBlock.decode_model_config(
                     hf_config,
                     mesh_device,
-                    is_padding_layer=[False, True, True, True],
+                    is_padding_layer=metalayer_padding_map[ml],
                 )
-                for _ in range(cls.NUM_MOE_META_LAYERS)
+                for ml in range(cls.NUM_MOE_META_LAYERS)
             ],
             "transfer_row": PointToPointConfig(
                 topology=ttnn.Topology.Linear,
@@ -217,14 +228,21 @@ class Model1D(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
     ) -> ModelState:
+        mesh_shape = list(mesh_device.shape)
+        metalayer_padding_map = cls.get_metalayer_padding_map(hf_config, mesh_shape)
+
         return {
             "mlp_decoder_block": [
                 DecoderBlock.create_shared_state(hf_config, mesh_device, is_padding_layer=None)
                 for _ in range(cls.NUM_MLP_META_LAYERS)
             ],
             "moe_decoder_block": [
-                MoEDecoderBlock.create_shared_state(hf_config, mesh_device, is_padding_layer=[False, True, True, True])
-                for _ in range(cls.NUM_MOE_META_LAYERS)
+                MoEDecoderBlock.create_shared_state(
+                    hf_config,
+                    mesh_device,
+                    is_padding_layer=metalayer_padding_map[ml],
+                )
+                for ml in range(cls.NUM_MOE_META_LAYERS)
             ],
         }
 
@@ -237,6 +255,8 @@ class Model1D(SharedStateAddOn, AbstractModule):
         ccl: CCL1D,
     ) -> Any:
         """Create the state for the 1D model."""
+        mesh_shape = list(mesh_device.shape)
+        metalayer_padding_map = cls.get_metalayer_padding_map(hf_config, mesh_shape)
 
         return {
             "embedding": Embedding1D.create_state(hf_config, mesh_device, ccl),
@@ -246,15 +266,20 @@ class Model1D(SharedStateAddOn, AbstractModule):
             ],
             "moe_decoder_block": [
                 MoEDecoderBlock.create_state(
-                    hf_config, mesh_device, paged_config, is_padding_layer=[False, True, True, True], ccl=ccl
+                    hf_config,
+                    mesh_device,
+                    paged_config,
+                    is_padding_layer=metalayer_padding_map[ml],
+                    ccl=ccl,
                 )
-                for _ in range(cls.NUM_MOE_META_LAYERS)
+                for ml in range(cls.NUM_MOE_META_LAYERS)
             ],
             "transfer_row": {
                 "semaphore": ccl.get_point_to_point_sem(0),
             },
             "norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
             "lm_head": LMHead.create_state(hf_config, mesh_device, ccl),
+            "metalayer_padding_map": metalayer_padding_map,
         }
 
     @classmethod
@@ -304,6 +329,8 @@ class Model1D(SharedStateAddOn, AbstractModule):
     ) -> ttnn.Tensor:
         """Forward pass for decode mode."""
 
+        metalayer_padding_map = cfg["metalayer_padding_map"]
+        logger.info(f"metalayer_padding_map metalayer_padding_map = {metalayer_padding_map}")
         x = Embedding1D.forward_decode(x, cfg["embedding"])
 
         # Stage 1: MLP Decoder Block
@@ -324,6 +351,8 @@ class Model1D(SharedStateAddOn, AbstractModule):
         # Stage 2: MoE Decoder Block
         for row_idx in range(cls.NUM_MOE_ROWS):
             for meta_layer_idx in range(cls.NUM_MOE_META_LAYERS):
+                if metalayer_padding_map[meta_layer_idx][row_idx]:
+                    continue
                 x = MoEDecoderBlock.forward_decode(
                     x,
                     row_idx,
