@@ -66,19 +66,19 @@ std::ostream& operator<<(std::ostream& os, const PhysicalPortConnection& conn);
 
 using LogicalChipConnectionPair = std::pair<LogicalChipConnection, LogicalChipConnection>;
 
-struct Pod {
+struct Node {
     std::unordered_map<TrayId, Board> boards;
     HostId host_id = HostId(0);
-    // Board-to-board connections within this pod: PortType -> [(tray_id, port_id) <-> (tray_id, port_id)]
+    // Board-to-board connections within this node: PortType -> [(tray_id, port_id) <-> (tray_id, port_id)]
     std::unordered_map<PortType, std::vector<std::pair<std::pair<TrayId, PortId>, std::pair<TrayId, PortId>>>>
         inter_board_connections;
 };
 
-// Resolved graph instance with concrete pods
+// Resolved graph instance with concrete nodes
 struct ResolvedGraphInstance {
     std::string template_name;
     std::string instance_name;
-    std::unordered_map<std::string, Pod> pods;                                          // Direct pod children (by name)
+    std::unordered_map<std::string, Node> nodes;  // Direct node children (by name)
     std::unordered_map<std::string, std::shared_ptr<ResolvedGraphInstance>> subgraphs;  // Nested graph children
 
     // All connections within this graph instance
@@ -104,14 +104,14 @@ public:
     void emit_factory_system_descriptor(const std::string& output_path) const;
 
 private:
-    // Validate that each host_id is assigned to exactly one pod
+    // Validate that each host_id is assigned to exactly one node
     void validate_host_id_uniqueness();
 
-    // Recursively collect all host_id assignments with their pod paths
+    // Recursively collect all host_id assignments with their node paths
     void collect_host_assignments(
         std::shared_ptr<ResolvedGraphInstance> graph,
         const std::string& path_prefix,
-        std::unordered_map<HostId, std::string>& host_to_pod_path);
+        std::unordered_map<HostId, std::string>& host_to_node_path);
 
     // Utility function to generate logical chip connections from cluster hierarchy
     void generate_logical_chip_connections();
@@ -124,7 +124,7 @@ private:
 
     // Caches for optimization
     std::unordered_map<std::string, Board> board_templates_;
-    std::unordered_map<std::string, Pod> pod_templates_;  // Templates with host_id=0
+    std::unordered_map<std::string, Node> node_templates_;  // Templates with host_id=0
 
     std::shared_ptr<ResolvedGraphInstance> root_instance_;
     std::unordered_map<std::pair<HostId, TrayId>, const Board*, HostTrayHasher> boards_by_host_tray_;

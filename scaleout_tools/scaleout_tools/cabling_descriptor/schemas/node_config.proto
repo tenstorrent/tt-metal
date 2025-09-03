@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package tt.scaleout_tools.cabling_generator.proto;
 
-message PodDescriptor {
+message NodeDescriptor {
     message Board {
       uint32 tray_id = 1;
       string board_type = 2;

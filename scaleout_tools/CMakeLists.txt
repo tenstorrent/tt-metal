@@ -3,7 +3,7 @@ project(scaleout_tools)
 include(protobuf)
 set(PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/scaleout_tools/factory_system_descriptor/schemas/factory_system_descriptor.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/scaleout_tools/cabling_descriptor/schemas/pod_config.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/scaleout_tools/cabling_descriptor/schemas/node_config.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/scaleout_tools/cabling_descriptor/schemas/cluster_config.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/scaleout_tools/deployment_descriptor/schemas/deployment.proto
 )
