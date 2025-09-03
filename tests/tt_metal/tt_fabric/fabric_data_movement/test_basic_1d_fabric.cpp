@@ -2127,16 +2127,13 @@ void FabricUnicastCommon(
 
     std::vector<tt::tt_metal::IDevice*> receiver_devices;
     std::vector<FabricNodeId> dest_fabric_node_ids;
-    std::vector<chip_id_t> first_hop_phys_chip_ids;
     receiver_devices.reserve(dir_configs.size());
-    first_hop_phys_chip_ids.reserve(dir_configs.size());
     for (auto [dir, num_hops] : dir_configs) {
         // pick destination device at the num_hops-th neighbor
         uint32_t dst_index = num_hops - 1;
         auto dst_physical_device_id = physical_end_device_ids_by_dir[dir][dst_index];
         receiver_devices.push_back(DevicePool::instance().get_active_device(dst_physical_device_id));
         // connection is to first hop for each direction
-        first_hop_phys_chip_ids.push_back(physical_end_device_ids_by_dir[dir][0]);
         dest_fabric_node_ids.push_back(tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_physical_device_id));
     }
     auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
@@ -2180,26 +2177,16 @@ void FabricUnicastCommon(
         receiver_virtual_core.x,
         receiver_virtual_core.y,
     };
-    std::unordered_map<eth_chan_directions, std::pair<uint8_t, uint8_t>> hops_per_dir;
     for (auto [dir, num_hops] : dir_configs) {
         sender_runtime_args.push_back(num_hops);
-        hops_per_dir[control_plane.routing_direction_to_eth_direction(dir)] = std::make_pair(num_hops, 0);
-    }
-
-    std::vector<tt::tt_fabric::FabricNodeId> next_hop_nodes;
-    next_hop_nodes.reserve(first_hop_phys_chip_ids.size());
-    for (auto phys : first_hop_phys_chip_ids) {
-        next_hop_nodes.push_back(tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(phys));
     }
 
     append_routing_plane_connection_manager_rt_args(
         src_fabric_node_id,
-        next_hop_nodes,
         dest_fabric_node_ids,
         sender_program,
         sender_kernel,
         {sender_logical_core},
-        hops_per_dir,
         sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
@@ -2303,10 +2290,8 @@ void FabricMulticastCommon(
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
 
     // Adjust lists to start from start_distance for each direction
-    std::vector<chip_id_t> first_hop_phys_chip_ids;
     std::vector<FabricNodeId> dest_fabric_node_ids;
     for (auto [dir, start_distance, range] : dir_configs) {
-        first_hop_phys_chip_ids.push_back(physical_end_device_ids_by_dir[dir][0]);
         physical_end_device_ids_by_dir[dir] = std::vector(
             physical_end_device_ids_by_dir[dir].begin() + (start_distance - 1),
             physical_end_device_ids_by_dir[dir].end());
@@ -2347,11 +2332,9 @@ void FabricMulticastCommon(
         receiver_virtual_core.x,
         receiver_virtual_core.y,
     };
-    std::unordered_map<eth_chan_directions, std::pair<uint8_t, uint8_t>> hops_per_dir;
     for (auto [dir, start_distance, range] : dir_configs) {
         sender_runtime_args.push_back(start_distance);
         sender_runtime_args.push_back(range);
-        hops_per_dir[control_plane.routing_direction_to_eth_direction(dir)] = std::make_pair(start_distance, range);
     }
 
     auto sender_program = tt_metal::CreateProgram();
@@ -2366,20 +2349,12 @@ void FabricMulticastCommon(
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = compile_time_args});
 
-    std::vector<tt::tt_fabric::FabricNodeId> next_hop_nodes;
-    next_hop_nodes.reserve(first_hop_phys_chip_ids.size());
-    for (auto phys : first_hop_phys_chip_ids) {
-        next_hop_nodes.push_back(tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(phys));
-    }
-
     append_routing_plane_connection_manager_rt_args(
         src_fabric_node_id,
-        next_hop_nodes,
         dest_fabric_node_ids,
         sender_program,
         sender_kernel,
         {sender_logical_core},
-        hops_per_dir,
         sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
