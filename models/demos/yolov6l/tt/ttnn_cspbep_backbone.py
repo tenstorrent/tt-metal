@@ -39,7 +39,6 @@ class TtCSPBepBackbone:
             parameters.ERBlock_2[1],
             model_params.ERBlock_2[1],
             n=6,
-            reshape=False,
         )
 
         self.erblock3_0 = Yolov6l_Conv2D(
@@ -53,7 +52,6 @@ class TtCSPBepBackbone:
             parameters.ERBlock_3[1],
             model_params.ERBlock_3[1],
             n=12,
-            reshape=False,
         )
 
         self.erblock4_0 = Yolov6l_Conv2D(
@@ -68,7 +66,6 @@ class TtCSPBepBackbone:
             parameters.ERBlock_4[1],
             model_params.ERBlock_4[1],
             n=18,
-            reshape=False,
         )
 
         self.erblock5_0 = Yolov6l_Conv2D(
@@ -85,7 +82,6 @@ class TtCSPBepBackbone:
             n=6,
             shard_layout_cv2=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             shard_layout_rep_block_first_two=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            reshape=False,
         )
         self.erblock5_2 = TtSppf(device, parameters.ERBlock_5[2].sppf, model_params.ERBlock_5[2].sppf)
 
