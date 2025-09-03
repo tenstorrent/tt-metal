@@ -34,8 +34,8 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
 
         case WhereVariant::TTS:
             if (broadcast_type == WhereBroadcastType::COL_BCAST) {
-                reader_kernel = KernelName::ReaderColBcastTTS;    // Use dedicated TTS column broadcast reader
-                compute_kernel = KernelName::ComputeColBcastTTS;  // Use dedicated TTS column broadcast compute
+                reader_kernel = KernelName::ReaderColBcastTTS;
+                compute_kernel = KernelName::ComputeColBcastTTS;
                 writer_kernel = KernelName::WriterNoBcast;
             } else {
                 reader_kernel = KernelName::ReaderNoBcastTTS;

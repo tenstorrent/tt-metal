@@ -113,7 +113,7 @@ Tensor WhereOperation::invoke(
                 predicate.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
 
             if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
-                log_info(tt::LogOp, "Where LLK - TTT");
+                log_debug(tt::LogOp, "Where LLK - TTT");
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(t_true.dtype());
                 return ttnn::prim::where(
@@ -138,7 +138,7 @@ Tensor WhereOperation::invoke(
                 ttnn::operations::ternary::get_broadcast_type(predicate.logical_shape(), t_true.logical_shape());
 
             if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
-                log_info(tt::LogOp, "Where LLK - TTS");
+                log_debug(tt::LogOp, "Where LLK - TTS");
                 float scalar_false = std::get<float>(value_false);
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(t_true.dtype());
@@ -159,7 +159,7 @@ Tensor WhereOperation::invoke(
                 condition = ttnn::typecast(queue_id, predicate, t_false.dtype());
             }
             if (ternary_utils::have_same_shape(predicate, t_false)) {
-                log_info(tt::LogOp, "Where LLK - TST");
+                log_debug(tt::LogOp, "Where LLK - TST");
                 float scalar_true = std::get<float>(value_true);
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(t_false.dtype());
@@ -176,7 +176,7 @@ Tensor WhereOperation::invoke(
             // TSS case: tensor-scalar-scalar
             const auto& t_true = std::get<float>(value_true);
             const auto& t_false = std::get<float>(value_false);
-            log_info(tt::LogOp, "Where LLK - TSS");
+            log_debug(tt::LogOp, "Where LLK - TSS");
             unary::UnaryOpType op_type = unary::UnaryOpType::WHERE_TSS;
 
             return ttnn::operations::unary::Unary_chain::invoke(
@@ -188,7 +188,7 @@ Tensor WhereOperation::invoke(
         }
     }
 
-    log_info(tt::LogOp, "Where - legacy");
+    log_debug(tt::LogOp, "Where - legacy");
     return std::visit(
         [&](const auto&... values) {
             return ternary_utils::where_impl(

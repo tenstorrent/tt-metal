@@ -113,22 +113,22 @@ void set_or_update_runtime_arguments(
             aD = predicate_shape.rank() >= 5 ? predicate_shape[-5] : 1;
             aN = predicate_shape[-4];
             aC = predicate_shape[-3];
-            aHt = (predicate_shape[-2] + tile.get_height() - 1) / tile.get_height();  // Ceiling division
-            aWt = (predicate_shape[-1] + tile.get_width() - 1) / tile.get_width();    // Ceiling division
+            aHt = predicate_shape[-2] / tile.get_height();
+            aWt = predicate_shape[-1] / tile.get_width();
 
             // Get shape dims for value_true (b) - broadcast tensor
             bD = value_true_shape.rank() >= 5 ? value_true_shape[-5] : 1;
             bN = value_true_shape[-4];
             bC = value_true_shape[-3];
-            bHt = (value_true_shape[-2] + tile.get_height() - 1) / tile.get_height();  // Ceiling division
-            bWt = (value_true_shape[-1] + tile.get_width() - 1) / tile.get_width();    // Ceiling division
+            bHt = value_true_shape[-2] / tile.get_height();
+            bWt = value_true_shape[-1] / tile.get_width();
 
             // Get shape dims for value_false (f) - using actual false tensor shape
             fD = value_false_shape.rank() >= 5 ? value_false_shape[-5] : 1;
             fN = value_false_shape[-4];
             fC = value_false_shape[-3];
-            fHt = (value_false_shape[-2] + tile.get_height() - 1) / tile.get_height();  // Ceiling division
-            fWt = (value_false_shape[-1] + tile.get_width() - 1) / tile.get_width();    // Ceiling division
+            fHt = value_false_shape[-2] / tile.get_height();
+            fWt = value_false_shape[-1] / tile.get_width();
 
             // Get shape dims for output (c)
             cD = output_shape.rank() >= 5 ? output_shape[-5] : 1;
@@ -152,22 +152,19 @@ void set_or_update_runtime_arguments(
         if (variant == WhereVariant::TTS) {
             // TTS: predicate (arg 0) + value_true tensor (arg 1)
             // For column broadcast, read predicate to CB0 and true tensor to CB1
-            // Compute will still do where(pred, pred, false) using data appropriately
-
-            // For TTS column broadcast, calculate has_sharding like TTT
             if (broadcast_type == WhereBroadcastType::COL_BCAST) {
                 has_sharding = predicate_tensor.memory_config().is_sharded() ||
                                value_true_tensor.value().memory_config().is_sharded() ||
                                output.memory_config().is_sharded();
             }
 
-            // Initialize dimensions for TTS like TTT
+            // Initialize dimensions for TTS
             const auto out_rank = output.logical_shape().rank();
             aND = extract_nD_dims(predicate_tensor, out_rank);           // predicate nD
             bND = extract_nD_dims(value_true_tensor.value(), out_rank);  // value_true nD
             cND = extract_nD_dims(output, out_rank);                     // output nD
 
-            // Extract shape dimensions using binary_ng approach
+            // Extract shape dimensions
             const auto predicate_shape = predicate_tensor.padded_shape();
             const auto value_true_shape = value_true_tensor.value().padded_shape();
             const auto& output_shape = output.padded_shape();
@@ -177,8 +174,8 @@ void set_or_update_runtime_arguments(
             aD = predicate_shape.rank() >= 5 ? predicate_shape[-5] : 1;
             aN = predicate_shape[-4];
             aC = predicate_shape[-3];
-            aHt = (predicate_shape[-2] + tile.get_height() - 1) / tile.get_height();  // Ceiling division
-            aWt = (predicate_shape[-1] + tile.get_width() - 1) / tile.get_width();    // Ceiling division
+            aHt = predicate_shape[-2] / tile.get_height();
+            aWt = predicate_shape[-1] / tile.get_width();
 
             // Get shape dims for value_true (b) - broadcast tensor
             bD = value_true_shape.rank() >= 5 ? value_true_shape[-5] : 1;
@@ -194,25 +191,22 @@ void set_or_update_runtime_arguments(
             cHt = output_shape[-2] / tile.get_height();
             cWt = output_shape[-1] / tile.get_width();
 
-            // Match binary_ng logic: only set tile counts if sharding is enabled
-            // For non-sharded (interleaved) mode, these remain 0 like binary_ng
+            // Only set tile counts if sharding is enabled
+            // For non-sharded (interleaved) mode, these remain 0
             if (has_sharding) {
                 a_num_tiles = aHt * aWt;  // predicate tiles per core
                 b_num_tiles = bHt * bWt;  // value_true tiles per core
                 c_current_shard_width = cWt;
             }
-            // If not sharded, a_num_tiles, b_num_tiles, c_current_shard_width remain 0 (like binary_ng)
+            // If not sharded, a_num_tiles, b_num_tiles, c_current_shard_width remain 0
 
-            uint32_t true_tensor_addr = (broadcast_type == WhereBroadcastType::COL_BCAST)
-                                            ? value_true_tensor.value().buffer()->address()
-                                            :  // Use true tensor for CB1 in col broadcast
-                                            value_true_tensor.value().buffer()->address();  // Normal case
+            uint32_t true_tensor_addr = value_true_tensor.value().buffer()->address();
 
             if (broadcast_type == WhereBroadcastType::COL_BCAST) {
-                // TTS column broadcast: use extended arguments like TTT
+                // TTS column broadcast: use extended arguments
                 std::array<uint32_t, 27> reader_runtime_args = {
                     predicate_tensor.buffer()->address(),  // 0: predicate address (CB0)
-                    true_tensor_addr,                      // 1: true tensor address (CB1) - predicate for col broadcast
+                    true_tensor_addr,                      // 1: true tensor address (CB1)
                     0u,                                    // 2: unused (but expected by kernel interface)
                     num_tiles_per_core,                    // 3: num_tiles_per_core
                     start_tile_id,                         // 4: start_tile_id
@@ -459,14 +453,8 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     // Handle data formats based on variant and tensor availability
     DataFormat value_true_data_format, value_false_data_format;
     if (variant == WhereVariant::TTS) {
-        // TTS: CB1 uses true tensor data for column broadcast
-        if (broadcast_type == WhereBroadcastType::COL_BCAST) {
-            // For column broadcast, CB1 uses true tensor data
-            value_true_data_format = datatype_to_dataformat_converter(value_true_tensor.value().dtype());
-        } else {
-            // Normal case: CB1 uses value_true data
-            value_true_data_format = datatype_to_dataformat_converter(value_true_tensor.value().dtype());
-        }
+        // TTS: only value_true tensor exists
+        value_true_data_format = datatype_to_dataformat_converter(value_true_tensor.value().dtype());
 
         // the bfloat16 impl of where_llk uses UINT16 instr set.
         // If the bfloat16 inputs' CBs are set to UINT16 dataformat this will enable us to get 'NaN' for bfloat16 dtype
@@ -714,20 +702,12 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     tt_metal::ReaderDataMovementConfig reader_config;
 
     if (variant == WhereVariant::TTS) {
-        // TTS: c_0 = predicate, c_1 = value_true tensor (or predicate for col broadcast)
+        // TTS: c_0 = predicate, c_1 = value_true tensor
         std::vector<uint32_t> reader_compile_time_args = {
             (std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_true_tensor_cb};
 
-        if (broadcast_type == WhereBroadcastType::COL_BCAST) {
-            // For column broadcast, use predicate for both CB0 and CB1
-            // Use dedicated TTS column broadcast kernel
-            TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
-            TensorAccessorArgs(*value_true_tensor.value().buffer()).append_to(reader_compile_time_args);
-        } else {
-            // Normal case: CB0 = predicate, CB1 = value_true
-            TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
-            TensorAccessorArgs(*value_true_tensor.value().buffer()).append_to(reader_compile_time_args);
-        }
+        TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(*value_true_tensor.value().buffer()).append_to(reader_compile_time_args);
         reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines);
 
     } else if (variant == WhereVariant::TST) {
@@ -774,18 +754,10 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
 
     // c_1 assignment depends on variant
     if (variant == WhereVariant::TTS) {
-        // TTS: c_1 = value_true tensor (or predicate for col broadcast)
-        if (broadcast_type == WhereBroadcastType::COL_BCAST) {
-            // For column broadcast, CB1 uses true tensor data
-            unpack_to_dest_mode[tt::CBIndex::c_1] = (value_true_tensor.value().dtype() == DataType::FLOAT32)
-                                                        ? UnpackToDestMode::UnpackToDestFp32
-                                                        : UnpackToDestMode::Default;
-        } else {
-            // Normal case: CB1 uses value_true data
-            unpack_to_dest_mode[tt::CBIndex::c_1] = (value_true_tensor.value().dtype() == DataType::FLOAT32)
-                                                        ? UnpackToDestMode::UnpackToDestFp32
-                                                        : UnpackToDestMode::Default;
-        }
+        // TTS: c_1 = value_true tensor
+        unpack_to_dest_mode[tt::CBIndex::c_1] = (value_true_tensor.value().dtype() == DataType::FLOAT32)
+                                                    ? UnpackToDestMode::UnpackToDestFp32
+                                                    : UnpackToDestMode::Default;
     } else if (variant == WhereVariant::TST) {
         // TST: c_1 = value_false tensor
         unpack_to_dest_mode[tt::CBIndex::c_1] = (value_false_tensor.value().dtype() == DataType::FLOAT32)
@@ -828,9 +800,9 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         kernel_defines["BCAST_TRUE"] = true_is_bcast ? "1" : "0";
         kernel_defines["BCAST_FALSE"] = false_is_bcast ? "1" : "0";
     } else if (variant == WhereVariant::TTS && broadcast_type == WhereBroadcastType::COL_BCAST) {
-        // TTS column broadcast configuration - compute kernel handles broadcast logic
+        // TTS column broadcast configuration
         kernel_defines["BCAST_PRED"] = pred_is_bcast ? "1" : "0";
-        kernel_defines["BCAST_TRUE"] = true_is_bcast ? "1" : "0";  // CB1 may need broadcast
+        kernel_defines["BCAST_TRUE"] = true_is_bcast ? "1" : "0";
         kernel_defines["BCAST_FALSE"] = "0";                       // False is scalar for TTS
     }
 

@@ -34,12 +34,6 @@ void kernel_main() {
     const uint32_t dst_shard_width = get_arg_val<uint32_t>(25);
     const uint32_t src_num_tiles = get_arg_val<uint32_t>(26);  // moved to end
 
-    // For compatibility, map to variable names
-    const uint32_t src_addr = src0_addr;       // predicate address
-    const uint32_t true_addr = src1_addr;      // true tensor address
-    const uint32_t start_tile_id = start_id;   // start tile id
-    const uint32_t dst_num_tiles = num_tiles;  // num tiles per core
-
     constexpr auto predicate_cb = tt::CBIndex::c_0;
     constexpr auto true_cb = tt::CBIndex::c_1;
 
@@ -47,8 +41,8 @@ void kernel_main() {
     constexpr auto src0_args = TensorAccessorArgs<2>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
-    const auto s0 = TensorAccessor(src0_args, src_addr, get_tile_size(predicate_cb));
-    const auto s1 = TensorAccessor(src1_args, true_addr, get_tile_size(true_cb));
+    const auto s0 = TensorAccessor(src0_args, src0_addr, get_tile_size(predicate_cb));
+    const auto s1 = TensorAccessor(src1_args, src1_addr, get_tile_size(true_cb));
 
     constexpr uint32_t onetile = 1;
     const uint32_t HtWt = Ht * Wt;
@@ -56,11 +50,11 @@ void kernel_main() {
     const uint32_t tiles_per_n = C * HtWt;
     const uint32_t tiles_per_d = N * tiles_per_n;
     const uint32_t tiles_per_nd = D * tiles_per_d;
-    const uint32_t offset_nd = start_tile_id % tiles_per_nd;
+    const uint32_t offset_nd = start_id % tiles_per_nd;
     const uint32_t offset_d = offset_nd % tiles_per_d;
     const uint32_t offset_n = offset_d % tiles_per_n;
     const uint32_t offset_c = offset_n % HtWt;
-    uint32_t start_nd = start_tile_id / tiles_per_nd;
+    uint32_t start_nd = start_id / tiles_per_nd;
     uint32_t start_d = offset_nd / tiles_per_d;
     uint32_t start_n = offset_d / tiles_per_n;
     uint32_t start_c = offset_n / HtWt;
@@ -97,11 +91,11 @@ void kernel_main() {
     // Main loop for reading tiles
 
     uint32_t num_tiles_read = 0;
-    for (uint32_t nd = start_nd; nd < cND && num_tiles_read < dst_num_tiles; ++nd, start_d = 0) {
-        for (uint32_t d = start_d; d < D && num_tiles_read < dst_num_tiles; ++d, start_n = 0) {
-            for (uint32_t n = start_n; n < N && num_tiles_read < dst_num_tiles; ++n, start_c = 0) {
-                for (uint32_t c = start_c; c < C && num_tiles_read < dst_num_tiles; ++c, start_th = 0) {
-                    for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
+    for (uint32_t nd = start_nd; nd < cND && num_tiles_read < num_tiles; ++nd, start_d = 0) {
+        for (uint32_t d = start_d; d < D && num_tiles_read < num_tiles; ++d, start_n = 0) {
+            for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
+                for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_th = 0) {
+                    for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th) {
 #if SRC_BCAST_PREDICATE
                         cb_reserve_back(predicate_cb, onetile);
 #if !SRC_SHARDED_PREDICATE
@@ -123,7 +117,7 @@ void kernel_main() {
                         cb_push_back(true_cb, onetile);
 #endif
 
-                        for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
+                        for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < num_tiles;
                              ++tw, ++num_tiles_read) {
 #if !SRC_BCAST_PREDICATE
                             cb_reserve_back(predicate_cb, onetile);

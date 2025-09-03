@@ -71,11 +71,11 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
         # ((1, 1, 1, 1024), (1, 1, 1024, 1024), (1, 1, 1, 1024)),  # Arow, B, Crow
         # ((1, 1, 1024, 1024), (1, 1024), (1024, 1024)),  # A, Brow, C
         # ((1024), (1), (1024)),
-        # ((2, 2, 1024, 1024), (1, 1024), (1024, 1024)),
-        # # Bcast cases for dim -2
+        ((2, 2, 1024, 1024), (1, 1024), (1024, 1024)),
+        # Bcast cases for dim -2
         # ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # A, Bcol, C
         # ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1024)),  # Acol, B, C
-        ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1)),  # A, Bcol, C
+        # ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1)),  # A, Bcol, C
         # ((1, 1, 64, 1), (1, 1, 64, 64), (1, 1, 64, 64)),  # A, Bcol, C
         # ((1, 1, 1024, 1), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # Acol, Bcol, C
         # ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1)),  # A, Bcol, Ccol
@@ -88,10 +88,10 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
         # ((4, 1, 1, 1, 128, 128), (4, 2, 2, 2, 128, 128), (4, 1, 2, 1, 128, 128)),
     ],
 )
-# @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
+# @pytest.mark.parametrize("variant", ["TTS", "TTT"])
 # @pytest.mark.parametrize("scalar", [15.5, 10.0, 5.0, -11.33])
-@pytest.mark.parametrize("variant", ["TTS"])
-@pytest.mark.parametrize("scalar", [15.5])
+@pytest.mark.parametrize("variant", ["TTT"])
+@pytest.mark.parametrize("scalar", [-11.33])
 @pytest.mark.parametrize("condition", [1])
 def test_ttnn_where_bcast(c_shape, t_shape, f_shape, variant, scalar, condition, device):
     torch.manual_seed(0)
@@ -119,8 +119,6 @@ def test_ttnn_where_bcast(c_shape, t_shape, f_shape, variant, scalar, condition,
         ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
     result = ttnn.to_torch(ttnn_result)
-    print(result)
-    print(golden)
 
     assert torch_equal_nan(result, golden)
 
