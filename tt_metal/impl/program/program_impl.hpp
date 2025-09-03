@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "jit_build/build.hpp"
 #include "program_command_sequence.hpp"
 
 #include "tt-metalium/buffer.hpp"
@@ -22,6 +21,7 @@
 #include "tt-metalium/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt_metal.hpp"
+#include "llrt/hal.hpp"
 
 #include <umd/device/tt_core_coordinates.h>             // CoreType
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
@@ -31,7 +31,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <future>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -79,10 +78,9 @@ struct KernelGroup {
     uint32_t total_rta_size{};
     uint32_t kernel_text_offsets[NUM_PROCESSORS_PER_CORE_TYPE]{};
     uint32_t kernel_bin_sizes[NUM_PROCESSORS_PER_CORE_TYPE]{};
-    launch_msg_t launch_msg{};
-    go_msg_t go_msg{};
+    dev_msgs::launch_msg_t launch_msg;
+    dev_msgs::go_msg_t go_msg;
 
-    KernelGroup();
     KernelGroup(
         const detail::ProgramImpl& program,
         uint32_t programmable_core_type_index,
