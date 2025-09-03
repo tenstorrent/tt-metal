@@ -22,11 +22,17 @@ void validate_pool2d(
     const Pool2DType pool_type,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     const MemoryConfig& out_mem_config,
-    const std::optional<const int32_t> divisor_override) {
+    const std::optional<const int32_t> divisor_override,
+    const Layout& output_layout) {
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
     TT_FATAL(input.buffer() != nullptr, "Operands to reshape need to be allocated in buffers on device!");
     TT_FATAL(input.dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now. Tracked by issue #23338");
+
+    // Blackhole does not support tiled output for pool operations
+    if (input.device()->arch() == tt::ARCH::BLACKHOLE) {
+        TT_FATAL(output_layout == Layout::ROW_MAJOR, "Blackhole does not support tiled output for pool operations");
+    }
 
     TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded");
     TT_FATAL(out_mem_config.is_sharded(), "Output memory config needs to be sharded");
@@ -51,7 +57,8 @@ void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_att
         op_attr.pool_type_,
         op_attr.sliding_window_config_,
         op_attr.memory_config_,
-        op_attr.divisor_override_);
+        op_attr.divisor_override_,
+        op_attr.output_layout_);
 }
 
 void Pool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
@@ -60,7 +67,8 @@ void Pool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr
         op_attr.pool_type_,
         op_attr.sliding_window_config_,
         op_attr.memory_config_,
-        op_attr.divisor_override_);
+        op_attr.divisor_override_,
+        op_attr.output_layout_);
 }
 
 Pool2D::spec_return_value_t Pool2D::compute_output_specs(
