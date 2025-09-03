@@ -313,16 +313,8 @@ private:
     // Returns std::nullopt if not in multi-host context
     LocalMeshBinding initialize_local_mesh_binding();
 
-    // Calculate routing information from src_chip_id to all other chips and store in fixed 64-byte blocks
-    void calculate_chip_to_all_routing_fields_1D(
-        uint16_t src_chip_id, uint8_t num_chips) const;
-
     template <bool compressed>
     void write_all_to_all_routing_fields_1D(uint8_t num_chips) const;
-
-    // Calculate routing information from src_chip_id to all other chips in 2D mesh and store in route_buffer format
-    void calculate_chip_to_all_routing_fields_2D(
-        uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) const;
 
     template <bool compressed>
     void write_all_to_all_routing_fields_2D(uint16_t num_chips, uint16_t ew_dim) const;
