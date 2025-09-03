@@ -765,7 +765,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
     softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
     softmax_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
 
-    auto softmax_kernels_id = CreateKernel(
+    CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/compute/softmax_sharded.cpp",
         all_device_cores,

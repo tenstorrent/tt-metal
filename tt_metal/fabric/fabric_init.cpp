@@ -88,13 +88,6 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
         bool is_dateline_upstream_adjacent_edm_along_row =
             (chip1 < mesh_num_columns && chip0 == chip1 + mesh_num_columns) ||
             (chip1 >= (mesh_num_columns * (mesh_num_rows - 1)) && chip0 == chip1 - mesh_num_columns);
-        bool is_dateline_upstream_adjacent_upstream_edm_along_column =
-            (chip0 % mesh_num_columns == 1 && chip1 == chip0 + 1) ||
-            (chip0 % mesh_num_columns == mesh_num_columns - 2 && chip1 == chip0 - 1);
-        bool is_dateline_upstream_adjacent_upstream_edm_along_row =
-            (chip0 >= mesh_num_columns && chip0 < (2 * mesh_num_columns) && chip1 == chip0 + mesh_num_columns) ||
-            (chip0 >= (mesh_num_columns * (mesh_num_rows - 2)) && chip0 < (mesh_num_columns * (mesh_num_rows - 1)) &&
-             chip1 == chip0 - mesh_num_columns);
         bool is_edm_along_row = ((larger_chip_id - smaller_chip_id) == mesh_num_columns) ||
                                 (smaller_chip_id == larger_chip_id % mesh_num_columns);
 

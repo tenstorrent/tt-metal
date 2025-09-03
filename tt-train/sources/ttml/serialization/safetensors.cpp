@@ -52,12 +52,6 @@ void SafetensorSerialization::visit_safetensors_file(const std::filesystem::path
         throw std::runtime_error("file too small for safetensors");
     }
 
-    auto mmap_deleter = [file_size](void* addr) {
-        if (addr != MAP_FAILED) {
-            munmap(addr, file_size);
-        }
-    };
-
     auto map = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
     if (map == MAP_FAILED) {
         throw std::runtime_error(fmt::format("mmap failed: {}", std::strerror(errno)));

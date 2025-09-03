@@ -307,7 +307,6 @@ void send_msg_to_eth_mailbox(
     bool wait_for_ack,
     int timeout_ms) {
     constexpr auto k_sleep_time = std::chrono::nanoseconds{50};
-    constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
@@ -399,7 +398,6 @@ void send_msg_to_eth_mailbox(
 }
 
 void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms) {
-    constexpr auto k_CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
@@ -422,8 +420,6 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
             const auto now = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
             if (elapsed > timeout_ms) {
-                auto core_type_idx =
-                    hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
                 TT_THROW(
                     "Device {}: Timed out while waiting for active ethernet core {} to become active again. "
                     "Try resetting the board. Is the firmware updated? Minimum tt-firmware version is 18.8.0",
