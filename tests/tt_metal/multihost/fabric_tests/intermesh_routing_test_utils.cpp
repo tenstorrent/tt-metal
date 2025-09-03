@@ -97,7 +97,7 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
     auto src_physical_device_id = devices[random_dev]->get_devices()[0]->id();
     auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
     auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-    auto sender_device = devices[random_dev];
+    const auto& sender_device = devices[random_dev];
     // Randomly select a tx core
     const auto& worker_grid_size = sender_device->compute_with_storage_grid_size();
     auto sender_x = std::uniform_int_distribution<uint32_t>(0, worker_grid_size.x - 2)(global_rng);
