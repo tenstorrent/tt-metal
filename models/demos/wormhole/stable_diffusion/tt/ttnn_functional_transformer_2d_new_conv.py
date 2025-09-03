@@ -7,6 +7,7 @@ import os
 import torch
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import reshard_for_output_channels_divisibility
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_basic_transformer_block import basic_transformer_block
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     dealloc_input,
@@ -260,16 +261,7 @@ class transformer_2d_model:
             return_weights_and_bias=True,
             dtype=ttnn.bfloat8_b,
         )
-        is_bs = hidden_states.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
-        xdim = hidden_states.memory_config().shard_spec.grid.bounding_box().grid_size().x
-        if is_bs:
-            out_channels_tiles = self.proj_in_out_channels // (ttnn.TILE_SIZE)
-            xdim = hidden_states.memory_config().shard_spec.grid.bounding_box().grid_size().x
-            if out_channels_tiles % xdim != 0:
-                print(
-                    f"xdim: {xdim}, mem cfg: {hidden_states.memory_config()}, conv_shortcut_out_channels: {self.proj_in_out_channels}"
-                )
-                assert False, "invalid output"
+        hidden_states = reshard_for_output_channels_divisibility(hidden_states, self.proj_in_out_channels)
 
         inner_dim = hidden_states.shape[-1]
         # hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -332,16 +324,7 @@ class transformer_2d_model:
                     return_weights_and_bias=True,
                     dtype=ttnn.bfloat8_b,
                 )
-                is_bs = hidden_states.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
-                xdim = hidden_states.memory_config().shard_spec.grid.bounding_box().grid_size().x
-                if is_bs:
-                    out_channels_tiles = self.proj_out_out_channels // (ttnn.TILE_SIZE)
-                    xdim = hidden_states.memory_config().shard_spec.grid.bounding_box().grid_size().x
-                    if out_channels_tiles % xdim != 0:
-                        print(
-                            f"xdim: {xdim}, mem cfg: {hidden_states.memory_config()}, conv_shortcut_out_channels: {self.proj_out_out_channels}"
-                        )
-                        assert False, "invalid output"
+                hidden_states = reshard_for_output_channels_divisibility(hidden_states, self.proj_out_out_channels)
 
                 if hidden_states.memory_config() != residual.memory_config():
                     residual = ttnn.to_memory_config(residual, hidden_states.memory_config())
