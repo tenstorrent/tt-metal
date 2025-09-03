@@ -10,7 +10,6 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/core_descriptor.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include "tt_metal/hw/inc/dev_msgs.h"
 #include <tt-metalium/allocator_types.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <llrt/hal.hpp>
@@ -126,8 +125,8 @@ private:
         chip_id_t device_id,
         const HalProgrammableCoreType& core_type,
         CoreCoord virtual_core,
-        launch_msg_t* launch_msg,
-        go_msg_t* go_msg);
+        dev_msgs::launch_msg_t::View launch_msg,
+        dev_msgs::go_msg_t::ConstView go_msg);
     void initialize_and_launch_firmware(chip_id_t device_id);
 
     bool initialized_ = false;

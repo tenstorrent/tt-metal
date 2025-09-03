@@ -20,14 +20,12 @@
 #include "assert.hpp"
 #include "control_plane.hpp"
 #include "core_coord.hpp"
+#include "dev_msgs.h"
 #include "device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "env_lib.hpp"
-#include "hostdevcommon/fabric_common.h"
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
-#include "fabric/fabric_edm_packet_header.hpp"
 #include "fabric_types.hpp"
-#include "hal.hpp"
 #include "host_api.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>

@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>
 
+#include "dev_msgs.h"  // TODO: remove
 #include "tt_metal/impl/dispatch/device_command.hpp"
 
 struct CQDispatchWritePackedCmd;
