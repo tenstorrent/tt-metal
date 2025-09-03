@@ -16,6 +16,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -118,7 +119,6 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     uint32_t block_size_t = 0;
     uint32_t max_blocks_per_seq = 0;
     uint32_t page_table_stick_size = 0;
-    bool page_table_is_dram = true;
     tt::DataFormat page_table_df = tt::DataFormat::Int32;
 
     if (is_chunked) {
@@ -131,7 +131,6 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         TT_FATAL(
             page_table_stick_size % 32 == 0,
             "page table page size in bytes must be a multiple of 32 due to address alignment");
-        page_table_is_dram = page_table_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
         TT_FATAL(
             page_table_stick_size % 32 == 0,
@@ -144,7 +143,6 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         log_debug(tt::LogOp, "block_size_t: {}", block_size_t);
         log_debug(tt::LogOp, "max_blocks_per_seq: {}", max_blocks_per_seq);
         log_debug(tt::LogOp, "page_table_stick_size: {}", page_table_stick_size);
-        log_debug(tt::LogOp, "page_table_is_dram: {}", page_table_is_dram);
         log_debug(tt::LogOp, "page_table_df: {}", page_table_df);
     }
 
@@ -345,9 +343,14 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                                                       (std::uint32_t)use_provided_mask,
                                                       (std::uint32_t)use_padded_mask,
                                                       (uint32_t)is_chunked,
-                                                      (uint32_t)page_table_is_dram,
                                                       block_size_t,
                                                       page_table_stick_size};
+
+    TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(attn_mask.has_value() ? attn_mask->buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
@@ -371,6 +374,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
     };
+
+    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
@@ -403,6 +408,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         (uint32_t)is_chunked,
         scale_union.u,
     };
+
+    TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);

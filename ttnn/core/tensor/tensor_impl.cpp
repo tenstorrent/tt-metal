@@ -86,7 +86,7 @@ uint32_t element_size_bytes(DataType dtype) {
         case DataType::UINT32: return sizeof(uint32_t);
         case DataType::UINT16: return sizeof(uint16_t);
         case DataType::UINT8: return sizeof(uint8_t);
-        case DataType::BFLOAT8_B: return sizeof(std::byte);
+        case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: return sizeof(std::byte);
         default: TT_THROW("Unsupported data type");
     }
@@ -535,12 +535,10 @@ Tensor to_host(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
 
     // For performance, perform all allocations via DistributedHostBuffer::transform, run from multiple threads.
     auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
-    for (const auto& coord : storage.coords) {
-        distributed_host_buffer.emplace_shard(coord, []() { return HostBuffer(); });
-    }
 
-    distributed_host_buffer = distributed_host_buffer.transform(
-        [&](const HostBuffer&) { return allocate_host_buffer(tensor.tensor_spec()); },
+    distributed_host_buffer.emplace_shards(
+        storage.coords,
+        [&](const distributed::MeshCoordinate&) { return allocate_host_buffer(tensor.tensor_spec()); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
     mesh_cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
@@ -649,7 +647,7 @@ template <typename T>
 Tensor to_device(
     const Tensor& tensor,
     distributed::MeshDevice* mesh_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config,
     ttnn::QueueId cq_id) {
     if (tensor.storage_type() == StorageType::DEVICE) {
         return tensor;  // Tensor already on device
@@ -657,13 +655,18 @@ Tensor to_device(
 
     TT_FATAL(mesh_device != nullptr, "Need target device in order to move tensor to device!");
 
-    TensorSpec tensor_spec(
-        tensor.logical_shape(), tensor.tensor_spec().tensor_layout().with_memory_config(memory_config));
+    std::optional<TensorSpec> tensor_spec_overriden_memory_config;
+    if (memory_config) {
+        tensor_spec_overriden_memory_config = tensor.tensor_spec().with_memory_config(*memory_config);
+    }
 
-    auto mesh_buffer = allocate_device_buffer(mesh_device, tensor_spec);
+    const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
+                                  ? &tensor_spec_overriden_memory_config.value()
+                                  : &tensor.tensor_spec();
+    auto mesh_buffer = allocate_device_buffer(mesh_device, *tensor_spec);
     DeviceStorage mesh_storage =
-        to_device_mesh_buffer<T>(tensor.storage(), mesh_buffer, tensor_spec, *tensor.tensor_attributes, cq_id);
-    return Tensor(std::move(mesh_storage), tensor_spec, tensor.distributed_tensor_config(), tensor.tensor_topology());
+        to_device_mesh_buffer<T>(tensor.storage(), mesh_buffer, *tensor_spec, *tensor.tensor_attributes, cq_id);
+    return Tensor(std::move(mesh_storage), *tensor_spec, tensor.distributed_tensor_config(), tensor.tensor_topology());
 }
 
 template <typename T>
@@ -695,7 +698,7 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
         shards.push_back({device_coord, distributed_host_buffer.get_shard(device_coord)});
     }
 
-    DistributedHostBuffer dst_distributed_host_buffer = DistributedHostBuffer::create(device->shape());
+    DistributedHostBuffer dst_distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
     const size_t expected_size_bytes = device_tensor.tensor_spec().compute_packed_buffer_size_bytes();
     for (const auto& [device_coord, host_buffer] : shards) {
         dst_distributed_host_buffer.emplace_shard(device_coord, [&]() {
@@ -749,39 +752,39 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, ttnn::Queu
 template Tensor to_device<bfloat16>(
     const Tensor& tensor,
     distributed::MeshDevice* target_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config,
     ttnn::QueueId cq_id);
 template Tensor to_device<float>(
     const Tensor& tensor,
     distributed::MeshDevice* target_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config,
     ttnn::QueueId cq_id);
 template Tensor to_device<int32_t>(
     const Tensor& tensor,
     distributed::MeshDevice* target_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config,
     ttnn::QueueId cq_id);
 template Tensor to_device<uint32_t>(
     const Tensor& tensor,
     distributed::MeshDevice* target_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config,
     ttnn::QueueId cq_id);
 template Tensor to_device<uint16_t>(
     const Tensor& tensor,
     distributed::MeshDevice* target_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config,
     ttnn::QueueId cq_id);
 template Tensor to_device<uint8_t>(
     const Tensor& tensor,
     distributed::MeshDevice* target_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config,
     ttnn::QueueId cq_id);
 
 template <>
 Tensor to_device<bfloat4_b>(
     const Tensor& tensor,
     distributed::MeshDevice* target_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config,
     ttnn::QueueId cq_id) {
     return to_device<uint32_t>(tensor, target_device, memory_config, cq_id);
 }
@@ -790,7 +793,7 @@ template <>
 Tensor to_device<bfloat8_b>(
     const Tensor& tensor,
     distributed::MeshDevice* target_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config,
     ttnn::QueueId cq_id) {
     return to_device<uint32_t>(tensor, target_device, memory_config, cq_id);
 }

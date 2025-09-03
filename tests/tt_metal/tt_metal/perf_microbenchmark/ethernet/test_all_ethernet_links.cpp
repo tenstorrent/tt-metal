@@ -113,6 +113,9 @@ tt_metal::IDevice* find_device_with_id(const std::vector<tt_metal::IDevice*>& de
 }
 
 class ConnectedDevicesHelper {
+private:
+    std::map<chip_id_t, tt_metal::IDevice*> devices_map;
+
 public:
     ConnectedDevicesHelper(const TestParams& params) : device_open_(false) {
         this->arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -123,7 +126,7 @@ public:
 
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
+        this->devices_map = tt::tt_metal::detail::CreateDevices(ids);
         this->devices = tt::DevicePool::instance().get_all_active_devices();
 
         this->initialize_sender_receiver_pairs(params);
@@ -139,9 +142,8 @@ public:
     void TearDown() {
         device_open_ = false;
         tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
-        for (unsigned int id = 0; id < this->devices.size(); id++) {
-            tt::tt_metal::CloseDevice(this->devices.at(id));
-        }
+        tt::tt_metal::detail::CloseDevices(this->devices_map);
+        this->devices.clear();
     }
 
     std::vector<tt_metal::IDevice*> devices;

@@ -44,7 +44,7 @@ void MAIN {
             cb_wait_front(cb_input, 1);
             tile_regs_acquire();
 
-            copy_tile_to_dst_init_short(cb_input);
+            copy_tile_init(cb_input);
             copy_tile(cb_input, 0, 0);
             tanh_tile_init();
             tanh_tile(0);
@@ -58,7 +58,7 @@ void MAIN {
             // exp(2x)
             cb_reserve_back(cb_exp_2x, 1);
             tile_regs_acquire();
-            copy_tile_to_dst_init_short(cb_input);
+            copy_tile_init(cb_input);
             copy_tile(cb_input, 0, 0);
 
             mul_unary_tile(0, two);
@@ -77,7 +77,7 @@ void MAIN {
             cb_reserve_back(cb_sub, 1);
             cb_wait_front(cb_exp_2x, 1);
             tile_regs_acquire();
-            copy_tile_to_dst_init_short(cb_exp_2x);
+            copy_tile_init(cb_exp_2x);
             copy_tile(cb_exp_2x, 0, 0);
 
             sub_unary_tile(0, one);
@@ -94,7 +94,7 @@ void MAIN {
 
             cb_reserve_back(cb_add, 1);
             tile_regs_acquire();
-            copy_tile_to_dst_init_short(cb_exp_2x);
+            copy_tile_init(cb_exp_2x);
             copy_tile(cb_exp_2x, 0, 0);
 
             add_unary_tile(0, one);
@@ -123,12 +123,12 @@ void MAIN {
 #endif
 
 #ifdef TANH_FP32
-            copy_tile_to_dst_init_short(cb_sub);
+            copy_tile_init(cb_sub);
             copy_tile(cb_sub, 0, 0);
-            copy_tile_to_dst_init_short(cb_add);
+            copy_tile_init(cb_add);
             copy_tile(cb_add, 0, 1);
             mul_binary_tile_init();
-            mul_binary_tile(0, 1);
+            mul_binary_tile(0, 1, 0);
 #endif
 
             tile_regs_commit();
@@ -141,28 +141,28 @@ void MAIN {
             cb_pop_front(cb_sub, 1);
             cb_pop_front(cb_add, 1);
 
-            // output = cb_tanh_lut if x > 3.5, otherwise cb_tanh_exp
+            // output = cb_tanh_lut if abs(x) > 3.5, otherwise cb_tanh_exp
             cb_wait_front(cb_tanh_lut, 1);
             cb_wait_front(cb_tanh_exp, 1);
             cb_wait_front(cb_input, 1);
 
             tile_regs_acquire();
-            copy_tile_to_dst_init_short(cb_input);
+            copy_tile_init(cb_input);
             copy_tile(cb_input, 0, 0);
             abs_tile_init();
             abs_tile(0);
             unary_gt_tile_init();
             unary_gt_tile(0, limit);
-            copy_tile_to_dst_init_short(cb_tanh_lut);
+            copy_tile_init(cb_tanh_lut);
             copy_tile(cb_tanh_lut, 0, 1);
-            copy_tile_to_dst_init_short(cb_tanh_exp);
+            copy_tile_init(cb_tanh_exp);
             copy_tile(cb_tanh_exp, 0, 2);
             where_tile_init();
 #ifdef TANH_FP32
-            where_fp32_tile(0, 1, 2);
+            where_fp32_tile(0, 1, 2, 0);
 #endif
 #ifdef TANH_BF16
-            where_tile(0, 1, 2);
+            where_tile(0, 1, 2, 0);
 #endif
             tile_regs_commit();
             tile_regs_wait();

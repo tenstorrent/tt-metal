@@ -1035,11 +1035,11 @@ inline __attribute__((always_inline)) void ncrisc_noc_read_any_len_with_state(
  * | dst_noc_addr                    | Encoding of the destination NOC location (x,y)+address   | uint64_t  | Results of \a get_noc_addr calls | True     |
  * | len_bytes                       | Size of the transaction in bytes.                        | uint32_t  | 0..1 MB                          | False    |
  * | vc                              | Which VC to use for the transaction                      | uint32_t  | 0 - 3                            | False    |
- * | non_posted (template parameter) | Whether the transaction is nonposted (i.e. requires ack) | bool      | true or false                    | False    |
+ * | posted (template parameter)     | Whether the transaction is posted (i.e. no ack required) | bool      | true or false                    | False    |
  * | one_packet (template parameter) | Whether transaction size is <= NOC_MAX_BURST_SIZE        | bool      | true or false                    | False    |
  */
 // clang-format on
-template <bool non_posted = true, bool one_packet = false>
+template <bool posted = false, bool one_packet = false>
 inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
     uint32_t noc, uint32_t cmd_buf, uint64_t dst_noc_addr, uint32_t len_bytes = 0, const uint32_t vc = 0) {
     while (!noc_cmd_buf_ready(noc, cmd_buf));
@@ -1047,7 +1047,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
     uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
                              0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
                              0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
-                             (non_posted ? NOC_CMD_RESP_MARKED : 0x0);
+                             (!posted ? NOC_CMD_RESP_MARKED : 0x0);
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
     // Handles writing to PCIe
@@ -1079,24 +1079,20 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
  * | dst_local_addr                      | Address in local L1 memory on destination core           | uint32_t  | 0..1 MB                                                  | True     |
  * | len_bytes                           | Size of transaction in bytes                             | uint32_t  | 0..1 MB                                                  | False    |
  * | noc_mode (template parameter)       | NOC mode for the transaction                             | uint8_t   | DM_DEDICATED_NOC, DM_DYNAMIC_NOC or DM_INVALID_NOC (0-2) | False    |
- * | non_posted (template parameter)     | Whether the transaction is nonposted (i.e. requires ack) | bool      | true or false                                            | False    |
+ * | posted (template parameter)         | Whether the transaction is posted (i.e. no ack required) | bool      | true or false                                            | False    |
  * | update_counter (template parameter) | Whether to increment write counters                      | bool      | true or false                                            | False    |
  * | one_packet (template parameter)     | Whether transaction size is <= NOC_MAX_BURST_SIZE        | bool      | true or false                                            | False    |
  */
 // clang-format on
-template <
-    uint8_t noc_mode = DM_DEDICATED_NOC,
-    bool non_posted = true,
-    bool update_counter = true,
-    bool one_packet = false>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool posted = false, bool update_counter = true, bool one_packet = false>
 inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
     if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
-        if constexpr (non_posted) {
+        if constexpr (posted) {
+            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+        } else {
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
-        } else {
-            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
         }
     }
 
@@ -1110,11 +1106,11 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 
     if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
-        if constexpr (non_posted) {
+        if constexpr (posted) {
+            noc_posted_writes_num_issued[noc] += 1;
+        } else {
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += 1;
-        } else {
-            noc_posted_writes_num_issued[noc] += 1;
         }
     }
 }
@@ -1134,11 +1130,11 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
  * | dst_local_addr                      | Address in local L1 memory on destination core           | uint32_t  | 0..1 MB                                                  | True     |
  * | len_bytes                           | Size of transaction in bytes                             | uint32_t  | 0..1 MB                                                  | True     |
  * | noc_mode (template parameter)       | NOC mode for the transaction                             | uint8_t   | DM_DEDICATED_NOC, DM_DYNAMIC_NOC or DM_INVALID_NOC (0-2) | False    |
- * | non_posted (template parameter)     | Whether the transaction is nonposted (i.e. requires ack) | bool      | true or false                                            | False    |
+ * | posted (template parameter)         | Whether the transaction is posted (i.e. no ack required) | bool      | true or false                                            | False    |
  * | update_counter (template parameter) | Whether to increment write counters                      | bool      | true or false                                            | False    |
  */
 // clang-format on
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool non_posted = true, bool update_counter = true>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool posted = false, bool update_counter = true>
 inline __attribute__((always_inline)) void ncrisc_noc_write_any_len_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes) {
     if (len_bytes > NOC_MAX_BURST_SIZE) {
@@ -1146,7 +1142,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_any_len_with_state(
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
 
         while (len_bytes > NOC_MAX_BURST_SIZE) {
-            ncrisc_noc_write_with_state<noc_mode, non_posted, update_counter, true /* one_packet */>(
+            ncrisc_noc_write_with_state<noc_mode, posted, update_counter, true /* one_packet */>(
                 noc, cmd_buf, src_local_addr, dst_local_addr);
 
             len_bytes -= NOC_MAX_BURST_SIZE;
@@ -1156,7 +1152,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_any_len_with_state(
     }
 
     // left-over packet
-    ncrisc_noc_write_with_state<noc_mode, non_posted, update_counter>(
+    ncrisc_noc_write_with_state<noc_mode, posted, update_counter>(
         noc, cmd_buf, src_local_addr, dst_local_addr, len_bytes);
 }
 
@@ -1272,6 +1268,308 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
         } else {
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += 1;
+        }
+    }
+}
+
+// clang-format off
+/**
+ * The stateful NOC commands provide granular control over NOC register programming by writing
+ * only a subset of registers for each transaction. This approach leverages the fact that many
+ * transactions re-use certain values (e.g. length, coordinates) while varying others.
+ *
+ * This design provides significant advantages over previous stateful APIs:
+ * - Fine-grained control: Users can specify exactly which registers to update per transaction
+ * - Better optimization: Avoid unnecessary register writes for unchanged values
+ * - Flexible transaction patterns: Support complex sequences with selective updates
+ * - Performance benefits: Reduce NOC register write overhead for repetitive operations
+ *
+ * The flags parameter uses a bitmask approach to specify which registers to program.
+ * Making template functions with a long list of booleans makes understanding what registers
+ * are being set tedious. This is an attempt to pack that data in a way thats ~easy to visually parse.
+ *
+ * S/s: write, do not write to src address register (NOC_TARG_ADDR_LO)
+ * N/n: write, do not write to noc coordinates register (NOC_RET_ADDR_COORDINATE)
+ * D/d: write, do not write to dst address register (NOC_RET_ADDR_LO)
+ * L/l: write, do not write to length register (NOC_AT_LEN_BE)
+ *
+ * M/m: write, do not write to multicast register (NOC_CMD_BRCST_PACKET)
+ * K/k: write, do not write to linked register (NOC_CMD_VC_LINKED)
+ * P/p: write, do not write to posted register (NOC_CMD_RESP_MARKED)
+ *
+ * V/v: write, do not write to value register (NOC_AT_DATA)
+ * B/b: write, do not write to byte-enable register (NOC_AT_LEN_BE)
+ *
+ * WAIT/wait: wait, do not wait for command buffer readiness (NOC_CMD_CTRL)
+ * SEND/send: send, do not send the transaction immediately (NOC_CTRL_SEND_REQ)
+ */
+// clang-format on
+constexpr uint32_t CQ_NOC_FLAG_SRC = 0x01;
+constexpr uint32_t CQ_NOC_FLAG_NOC = 0x02;
+constexpr uint32_t CQ_NOC_FLAG_DST = 0x04;
+constexpr uint32_t CQ_NOC_FLAG_LEN = 0x08;
+
+constexpr uint32_t CQ_NOC_INLINE_FLAG_VAL = 0x10;
+constexpr uint32_t CQ_NOC_INLINE_FLAG_BE = 0x20;
+
+constexpr uint32_t CQ_NOC_CMD_FLAG_MCAST = 0x01;
+constexpr uint32_t CQ_NOC_CMD_FLAG_LINKED = 0x02;
+constexpr uint32_t CQ_NOC_CMD_FLAG_POSTED = 0x04;
+
+enum CQNocFlags {
+    CQ_NOC_sndl = 0,
+    CQ_NOC_sndL = CQ_NOC_FLAG_LEN,
+    CQ_NOC_snDl = CQ_NOC_FLAG_DST,
+    CQ_NOC_snDL = CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
+    CQ_NOC_sNdl = CQ_NOC_FLAG_NOC,
+    CQ_NOC_sNdL = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_LEN,
+    CQ_NOC_sNDl = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
+    CQ_NOC_sNDL = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
+    CQ_NOC_Sndl = CQ_NOC_FLAG_SRC,
+    CQ_NOC_SndL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_LEN,
+    CQ_NOC_SnDl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_DST,
+    CQ_NOC_SnDL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
+    CQ_NOC_SNdl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC,
+    CQ_NOC_SNdL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_LEN,
+    CQ_NOC_SNDl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
+    CQ_NOC_SNDL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
+};
+
+enum CQNocCmdFlags {
+    CQ_NOC_mkp = 0,
+    CQ_NOC_mkP = CQ_NOC_CMD_FLAG_POSTED,
+    CQ_NOC_mKp = CQ_NOC_CMD_FLAG_LINKED,
+    CQ_NOC_mKP = CQ_NOC_CMD_FLAG_LINKED | CQ_NOC_CMD_FLAG_POSTED,
+    CQ_NOC_Mkp = CQ_NOC_CMD_FLAG_MCAST,
+    CQ_NOC_MkP = CQ_NOC_CMD_FLAG_MCAST | CQ_NOC_CMD_FLAG_POSTED,
+    CQ_NOC_MKp = CQ_NOC_CMD_FLAG_MCAST | CQ_NOC_CMD_FLAG_LINKED,
+    CQ_NOC_MKP = CQ_NOC_CMD_FLAG_MCAST | CQ_NOC_CMD_FLAG_LINKED | CQ_NOC_CMD_FLAG_POSTED,
+};
+
+enum CQNocInlineFlags {
+    CQ_NOC_INLINE_ndvb = 0,
+    CQ_NOC_INLINE_ndvB = CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_ndVb = CQ_NOC_INLINE_FLAG_VAL,
+    CQ_NOC_INLINE_ndVB = CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_nDvb = CQ_NOC_FLAG_DST,
+    CQ_NOC_INLINE_nDvB = CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_nDVb = CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL,
+    CQ_NOC_INLINE_nDVB = CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_Ndvb = CQ_NOC_FLAG_NOC,
+    CQ_NOC_INLINE_NdvB = CQ_NOC_FLAG_NOC | CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_NdVb = CQ_NOC_FLAG_NOC | CQ_NOC_INLINE_FLAG_VAL,
+    CQ_NOC_INLINE_NdVB = CQ_NOC_FLAG_NOC | CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_NDvb = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
+    CQ_NOC_INLINE_NDvB = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_NDVb = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL,
+    CQ_NOC_INLINE_NDVB = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
+};
+
+enum CQNocWait {
+    CQ_NOC_wait = 0,
+    CQ_NOC_WAIT = 1,
+};
+enum CQNocSend {
+    CQ_NOC_send = 0,
+    CQ_NOC_SEND = 1,
+};
+
+// clang-format off
+/**
+ * Initializes the stateful registers for NOC read operations using a specific command buffer.
+ * This function sets up the basic NOC read command configuration that will be reused across
+ * multiple read transactions using the same command buffer.
+ *
+ * Return value: None
+ *
+ * | Argument                     | Description                                     | Data type | Valid range | Required |
+ * |------------------------------|-------------------------------------------------|-----------|-------------|----------|
+ * | noc                          | Which NOC to use for the transaction            | uint32_t  | 0 or 1      | True     |
+ * | cmd_buf (template parameter) | Which command buffer to initialize              | uint32_t  | 0 - 3       | True     |
+ */
+// clang-format on
+template <uint32_t cmd_buf>
+inline __attribute__((always_inline)) void noc_read_init_state(uint32_t noc) {
+    uint32_t noc_rd_cmd_field =
+        NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+}
+
+// clang-format off
+/**
+ * Initiates an asynchronous read transaction using previously initialized stateful registers.
+ * This function must be preceded by a call to \a noc_read_init_state for the same command buffer.
+ * The function leverages stateful NOC registers to minimize register writes for repeated transactions
+ * with similar characteristics.
+ *
+ * This function provides more granular control compared to previous stateful NOC APIs by allowing
+ * selective register updates via the flags parameter. Users can specify exactly which NOC registers
+ * (source address, destination address, coordinates, length) should be programmed on each call,
+ * enabling fine-tuned optimization for specific transaction patterns.
+ *
+ * Return value: None
+ *
+ * | Argument                      | Description                                              | Data type        | Valid range                                              | Required |
+ * |-------------------------------|----------------------------------------------------------|------------------|----------------------------------------------------------|----------|
+ * | noc                           | Which NOC to use for the transaction                     | uint32_t         | 0 or 1                                                   | True     |
+ * | src_addr                      | Source NOC address (x,y)+local address                   | uint64_t         | Results of \a get_noc_addr calls                         | True     |
+ * | dst_addr                      | Destination address in local L1 memory                   | uint32_t         | 0..1 MB                                                  | True     |
+ * | size                          | Size of transaction in bytes                             | uint32_t         | 0..NOC_MAX_BURST_SIZE for single packet                  | True     |
+ * | noc_mode (template parameter) | NOC mode for the transaction                             | uint8_t          | DM_DEDICATED_NOC, DM_DYNAMIC_NOC or DM_INVALID_NOC (0-2) | False    |
+ * | cmd_buf (template parameter)  | Which command buffer to use for the transaction          | uint32_t         | 0 - 3                                                    | True     |
+ * | flags (template parameter)    | Which NOC registers to update in this call               | enum CQNocFlags  | Combination of CQ_NOC_FLAG_* flags                       | True     |
+ * | send (template parameter)     | Whether to send the transaction immediately              | enum CQNocSend   | CQ_NOC_SEND or CQ_NOC_send                               | False    |
+ * | wait (template parameter)     | Whether to wait for command buffer readiness             | enum CQNocWait   | CQ_NOC_WAIT or CQ_NOC_wait                               | False    |
+ */
+// clang-format on
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    uint32_t cmd_buf,
+    enum CQNocFlags flags,
+    enum CQNocSend send = CQ_NOC_SEND,
+    enum CQNocWait wait = CQ_NOC_WAIT>
+inline __attribute__((always_inline)) void noc_read_with_state(
+    uint32_t noc, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+    }
+
+    if constexpr (wait) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+    }
+    if constexpr (flags & CQ_NOC_FLAG_SRC) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_addr);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_DST) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_addr);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_addr >> 32) & NOC_PCIE_MASK);
+        NOC_CMD_BUF_WRITE_REG(
+            noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(src_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_LEN) {
+        // TODO: Runtime assert for size < MAX_BURST_SIZE
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, size);
+    }
+    if constexpr (send) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    }
+
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        noc_reads_num_issued[noc] += 1;
+    }
+}
+
+// clang-format off
+/**
+ * Initializes the stateful registers for NOC write operations using a specific command buffer.
+ * This function sets up the basic NOC write command configuration including VC, multicast,
+ * linked, and posted flags that will be reused across multiple write transactions using
+ * the same command buffer.
+ *
+ * Return value: None
+ *
+ * | Argument                       | Description                                        | Data type           | Valid range         | Required |
+ * |--------------------------------|----------------------------------------------------|---------------------|---------------------|----------|
+ * | noc                            | Which NOC to use for the transaction               | uint32_t            | 0 or 1              | True     |
+ * | vc                             | Virtual channel to use for the transactions        | uint32_t            | 0 - 3               | True     |
+ * | cmd_buf (template parameter)   | Which command buffer to initialize                 | uint32_t            | 0 - 3               | True     |
+ * | cmd_flags (template parameter) | Command flags for multicast/linked/posted options  | enum CQNocCmdFlags  | CQ_NOC_mkp variants | False    |
+ */
+// clang-format on
+template <uint32_t cmd_buf, enum CQNocCmdFlags cmd_flags = CQ_NOC_mkp>
+inline __attribute__((always_inline)) void noc_write_init_state(uint32_t noc, uint32_t vc) {
+    constexpr bool multicast_path_reserve = true;
+    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
+                             ((cmd_flags & CQ_NOC_CMD_FLAG_LINKED) ? NOC_CMD_VC_LINKED : 0x0) |
+                             ((cmd_flags & CQ_NOC_CMD_FLAG_MCAST)
+                                  ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET)
+                                  : 0x0) |
+                             ((cmd_flags & CQ_NOC_CMD_FLAG_POSTED) ? 0 : NOC_CMD_RESP_MARKED);
+
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+}
+
+// clang-format off
+/**
+ * Initiates an asynchronous write transaction using previously initialized stateful registers.
+ * This function must be preceded by a call to \a noc_write_init_state for the same command buffer.
+ * The function leverages stateful NOC registers to minimize register writes for repeated transactions
+ * with similar characteristics.
+ *
+ * This function provides more granular control compared to previous stateful NOC APIs by allowing
+ * selective register updates via the flags parameter. Users can specify exactly which NOC registers
+ * (source address, destination address, coordinates, length) should be programmed on each call,
+ * enabling fine-tuned optimization for specific transaction patterns.
+ *
+ * Return value: None
+ *
+ * | Argument                            | Description                                              | Data type       | Valid range                                              | Required |
+ * |-------------------------------------|----------------------------------------------------------|-----------------|----------------------------------------------------------|----------|
+ * | noc                                 | Which NOC to use for the transaction                     | uint32_t        | 0 or 1                                                   | True     |
+ * | src_addr                            | Source address in local L1 memory                        | uint32_t        | 0..1 MB                                                  | True     |
+ * | dst_addr                            | Destination NOC address (x,y)+local address              | uint64_t        | Results of \a get_noc_addr calls                         | True     |
+ * | size                                | Size of transaction in bytes                             | uint32_t        | 0..NOC_MAX_BURST_SIZE for single packet                  | False    |
+ * | ndests                              | Number of destinations for multicast operations          | uint32_t        | 1 or more                                                | False    |
+ * | noc_mode (template parameter)       | NOC mode for the transaction                             | uint8_t         | DM_DEDICATED_NOC, DM_DYNAMIC_NOC or DM_INVALID_NOC (0-2) | False    |
+ * | cmd_buf (template parameter)        | Which command buffer to use for the transaction          | uint32_t        | 0 - 3                                                    | True     |
+ * | flags (template parameter)          | Which NOC registers to update in this call               | enum CQNocFlags | Combination of CQ_NOC_FLAG_* flags                       | True     |
+ * | send (template parameter)           | Whether to send the transaction immediately              | enum CQNocSend  | CQ_NOC_SEND or CQ_NOC_send                               | False    |
+ * | wait (template parameter)           | Whether to wait for command buffer readiness             | enum CQNocWait  | CQ_NOC_WAIT or CQ_NOC_wait                               | False    |
+ * | update_counter (template parameter) | Whether to increment write counters                      | bool            | true or false                                            | False    |
+ * | posted (template parameter)         | Whether the transaction is posted (no ack required)      | bool            | true or false                                            | False    |
+ */
+// clang-format on
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    uint32_t cmd_buf,
+    enum CQNocFlags flags,
+    enum CQNocSend send = CQ_NOC_SEND,
+    enum CQNocWait wait = CQ_NOC_WAIT,
+    bool update_counter = true,
+    bool posted = false>
+inline __attribute__((always_inline)) void noc_write_with_state(
+    uint32_t noc, uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
+    if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
+        if constexpr (posted) {
+            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+        } else {
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, ndests);
+        }
+    }
+
+    if constexpr (wait) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+    }
+    if constexpr (flags & CQ_NOC_FLAG_SRC) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_DST) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_addr);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+        // Handles writing to PCIe
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_addr >> 32) & NOC_PCIE_MASK);
+        NOC_CMD_BUF_WRITE_REG(
+            noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_LEN) {
+        // TODO: Runtime assert for size < MAX_BURST_SIZE
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, size);
+    }
+    if constexpr (send) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    }
+
+    if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
+        if constexpr (posted) {
+            noc_posted_writes_num_issued[noc] += 1;
+        } else {
+            noc_nonposted_writes_num_issued[noc] += 1;
+            noc_nonposted_writes_acked[noc] += ndests;
         }
     }
 }

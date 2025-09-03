@@ -178,9 +178,7 @@ PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<
             data_type = optional_data_type.value();
         } else if (py_dtype.equal(torch.attr("float32"))) {
             data_type = DataType::FLOAT32;
-        } else if (py_dtype.equal(torch.attr("float16"))) {
-            data_type = DataType::BFLOAT16;
-        } else if (py_dtype.equal(torch.attr("bfloat16"))) {
+        } else if (py_dtype.equal(torch.attr("float16")) || py_dtype.equal(torch.attr("bfloat16"))) {
             data_type = DataType::BFLOAT16;
         } else if (py_dtype.equal(torch.attr("int64"))) {
             data_type = DataType::UINT32;
@@ -510,7 +508,7 @@ py::object convert_tt_tensor_to_torch_tensor(const RowMajorHostBuffer& row_major
         switch (row_major_host_buffer.data_type) {
             case DataType::UINT8: return torch.attr("uint8");
             case DataType::UINT16: return torch.attr("int16");
-            case DataType::INT32: return torch.attr("int32");
+            case DataType::INT32:
             case DataType::UINT32: return torch.attr("int32");
             case DataType::BFLOAT16: return torch.attr("bfloat16");
             case DataType::BFLOAT8_B:
@@ -547,7 +545,7 @@ py::object convert_tt_tensor_to_numpy_tensor(const RowMajorHostBuffer& row_major
         switch (row_major_host_buffer.data_type) {
             case DataType::UINT8: return np.attr("ubyte");
             case DataType::UINT16: return np.attr("int16");
-            case DataType::INT32: return np.attr("int32");
+            case DataType::INT32:
             case DataType::UINT32: return np.attr("int32");
             case DataType::BFLOAT16: TT_THROW("Bfloat16 is not supported for numpy!");
             case DataType::BFLOAT8_B:
@@ -953,9 +951,11 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "to",
-            py::overload_cast<MeshDevice*, const MemoryConfig&, QueueId>(&Tensor::to_device, py::const_),
+            [](const Tensor& self, MeshDevice* device, std::optional<const MemoryConfig>& mem_config, QueueId cq_id) {
+                return self.to_device(device, mem_config, cq_id);
+            },
             py::arg("device").noconvert(),
-            py::arg("mem_config").noconvert() = MemoryConfig{},
+            py::arg("mem_config").noconvert() = std::nullopt,
             py::arg("cq_id") = ttnn::DefaultQueueId,
             py::keep_alive<0, 2>(),
             R"doc(
@@ -963,7 +963,7 @@ void pytensor_module(py::module& m_tensor) {
 
             Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
 
-            If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
+            If ``arg1`` is not supplied, memory config from the source tensor will be used.
 
             +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
             | Argument  | Description                                     | Data type                  | Valid range           | Required |
@@ -1638,6 +1638,16 @@ void pytensor_module(py::module& m_tensor) {
                 .. code-block:: python
 
                     py_list = tt_tensor.to_list()
+            )doc")
+        .def(
+            "tensor_topology",
+            [](const Tensor& self) { return self.tensor_topology(); },
+            R"doc(
+                Get the topology of the tensor.
+
+                .. code-block:: python
+
+                    topology = tt_tensor.tensor_topology()
             )doc")
         .def_property(
             "tensor_id",

@@ -21,7 +21,7 @@
 #define NOC_CMD_BUF_OFFSET_BIT 11
 #define NOC_INSTANCE_OFFSET 0x00010000
 #define NOC_INSTANCE_OFFSET_BIT 16
-#define NOC_CMD_BUF_INSTANCE_OFFSET(noc, buf) ((buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT))
+#define NOC_CMD_BUF_INSTANCE_OFFSET(noc, buf) (((buf) << NOC_CMD_BUF_OFFSET_BIT) + ((noc) << NOC_INSTANCE_OFFSET_BIT))
 
 ////
 // NIU master IF control registers:
@@ -283,7 +283,7 @@
 
 ///
 
-#define NOC_DATA_WIDTH 512 + 3
+#define NOC_DATA_WIDTH (512 + 3)
 #define NOC_PAYLOAD_WIDTH 512
 #define NOC_WORD_BYTES (NOC_PAYLOAD_WIDTH / 8)
 #define NOC_MAX_BURST_WORDS 256

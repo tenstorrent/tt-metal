@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_fabric {
@@ -23,9 +24,11 @@ enum class FabricConfig : uint32_t {
     CUSTOM = 11
 };
 
+// tensix extension for fabric routers, used to build connections between worker - fabric router, upstream fabric router
+// - downstream fabric router.
 enum class FabricTensixConfig : uint32_t {
-    DISABLED = 0,
-    MUX = 1,
+    DISABLED = 0,  // not using tensix extension
+    MUX = 1,       // using mux kernel as tensix extension
 };
 
 enum class FabricReliabilityMode : uint32_t {

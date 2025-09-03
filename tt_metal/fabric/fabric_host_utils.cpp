@@ -12,7 +12,7 @@
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <tt-metalium/metal_soc_descriptor.h>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/erisc_datamover_builder.hpp>
+#include "erisc_datamover_builder.hpp"
 #include <set>
 #include <vector>
 #include <algorithm>
@@ -366,6 +366,29 @@ std::pair<std::unordered_map<chip_id_t, std::vector<chip_id_t>>, chip_id_t> sort
     return {adjacency_map, min_eth_chip->first};
 }
 
+std::pair<std::unordered_map<chip_id_t, std::vector<chip_id_t>>, chip_id_t> sort_adjacency_map_by_ubb_id(
+    const IntraMeshAdjacencyMap& topology_info) {
+    auto adjacency_map = topology_info.adjacency_map;
+    chip_id_t first_chip = 0;
+    for (auto& [chip_id, neighbors] : adjacency_map) {
+        auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
+        if (ubb_id.tray_id == 1 && ubb_id.asic_id == 1) {
+            first_chip = chip_id;
+            break;
+        }
+    }
+
+    for (auto& [chip_id, neighbors] : adjacency_map) {
+        std::sort(neighbors.begin(), neighbors.end(), [&](chip_id_t a, chip_id_t b) {
+            auto ubb_id_a = tt::tt_fabric::get_ubb_id(a);
+            auto ubb_id_b = tt::tt_fabric::get_ubb_id(b);
+            return ubb_id_a.tray_id < ubb_id_b.tray_id ||
+                   (ubb_id_a.tray_id == ubb_id_b.tray_id && ubb_id_a.asic_id < ubb_id_b.asic_id);
+        });
+    }
+    return {adjacency_map, first_chip};
+}
+
 std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(
     const IntraMeshAdjacencyMap& topology_info,
     std::optional<std::function<std::pair<AdjacencyMap, chip_id_t>(const IntraMeshAdjacencyMap&)>> graph_sorter) {
@@ -386,6 +409,17 @@ std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(
             // User provided a sorting function. This is primarily done for testing.
             std::tie(adj_map, first_chip) = graph_sorter.value()(topology_info);
         }
+    } else if (cluster.get_board_type(0) == BoardType::UBB) {
+        if (!graph_sorter.has_value()) {
+            // Default behavior: sort adjacency map by Ethernet coordinates
+            std::tie(adj_map, first_chip) = sort_adjacency_map_by_ubb_id(topology_info);
+        } else {
+            // User provided a sorting function. This is primarily done for testing.
+            std::tie(adj_map, first_chip) = graph_sorter.value()(topology_info);
+        }
+    } else if (topology_info.ns_size == 1 && topology_info.ew_size == 1) {
+        // Single chip mesh
+        first_chip = 0;
     } else {
         first_chip = std::min_element(topology_info.adjacency_map.begin(), topology_info.adjacency_map.end())->first;
     }

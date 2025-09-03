@@ -36,7 +36,6 @@ static const char* TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 // Set this var to change the cache dir.
 static const char* TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 // Used for demonstration purposes and will be removed in the future.
-static const char* TT_METAL_VISIBLE_DEVICES_ENV_VAR = "TT_METAL_VISIBLE_DEVICES";
 // Env variable to override the core grid configuration
 static const char* TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
 
@@ -60,21 +59,6 @@ RunTimeOptions::RunTimeOptions() {
         this->kernel_dir = std::string(kernel_dir_str) + "/";
     }
     this->system_kernel_dir = "/usr/share/tenstorrent/kernels/";
-
-    const char* visible_devices_str = std::getenv(TT_METAL_VISIBLE_DEVICES_ENV_VAR);
-    if (visible_devices_str != nullptr) {
-        this->is_visible_devices_env_var_set = true;
-        std::string devices_string(visible_devices_str);
-        size_t pos = 0;
-        while ((pos = devices_string.find(',')) != std::string::npos) {
-            std::string device_str = devices_string.substr(0, pos);
-            this->visible_devices.push_back(std::stoi(device_str));
-            devices_string.erase(0, pos + 1);
-        }
-        if (!devices_string.empty()) {
-            this->visible_devices.push_back(std::stoi(devices_string));
-        }
-    }
 
     const char* custom_fabric_mesh_graph_desc_path_str = std::getenv("TT_MESH_GRAPH_DESC_PATH");
     if (custom_fabric_mesh_graph_desc_path_str != nullptr) {
@@ -219,8 +203,15 @@ RunTimeOptions::RunTimeOptions() {
     }
 
     if (std::getenv("TT_METAL_SIMULATOR")) {
-        this->simulator_enabled = true;
         this->simulator_path = std::getenv("TT_METAL_SIMULATOR");
+        this->runtime_target_device_ = tt::TargetDevice::Simulator;
+    }
+
+    // Enable mock cluster if TT_METAL_MOCK is set to a descriptor path
+    // This is used for initializing UMD without any hardware using a mock cluster descriptor
+    if (const char* mock_path = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH")) {
+        this->mock_cluster_desc_path = std::string(mock_path);
+        this->runtime_target_device_ = tt::TargetDevice::Mock;
     }
 
     if (auto str = getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
@@ -331,7 +322,8 @@ void RunTimeOptions::ParseWatcherEnv() {
         watcher_pause_str,
         watcher_ring_buffer_str,
         watcher_stack_usage_str,
-        watcher_dispatch_str};
+        watcher_dispatch_str,
+        watcher_eth_link_status_str};
     for (const std::string& feature : all_features) {
         std::string env_var("TT_METAL_WATCHER_DISABLE_");
         env_var += feature;

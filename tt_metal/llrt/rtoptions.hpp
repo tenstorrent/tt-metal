@@ -19,6 +19,7 @@
 
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
+#include "tt_target_device.hpp"
 #include <umd/device/types/xy_pair.h>
 
 enum class CoreType;
@@ -110,9 +111,6 @@ class RunTimeOptions {
     bool is_core_grid_override_todeprecate_env_var_set = false;
     std::string core_grid_override_todeprecate;
 
-    bool is_visible_devices_env_var_set = false;
-    std::vector<uint32_t> visible_devices;
-
     bool is_custom_fabric_mesh_graph_desc_path_set = false;
     std::string custom_fabric_mesh_graph_desc_path;
 
@@ -166,7 +164,6 @@ class RunTimeOptions {
 
     bool skip_deleting_built_cache = false;
 
-    bool simulator_enabled = false;
     std::filesystem::path simulator_path = "";
 
     bool erisc_iram_enabled = false;
@@ -206,100 +203,101 @@ class RunTimeOptions {
     // Enable fabric performance telemetry
     bool enable_fabric_telemetry = false;
 
+    // Mock cluster initialization using a provided cluster descriptor
+    std::string mock_cluster_desc_path = "";
+
+    // Consolidated target device selection
+    TargetDevice runtime_target_device_ = TargetDevice::Silicon;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
     RunTimeOptions& operator=(const RunTimeOptions&) = delete;
 
-    inline bool is_root_dir_specified() const { return this->is_root_dir_env_var_set; }
+    bool is_root_dir_specified() const { return this->is_root_dir_env_var_set; }
     const std::string& get_root_dir() const;
 
-    inline bool is_cache_dir_specified() const { return this->is_cache_dir_env_var_set; }
+    bool is_cache_dir_specified() const { return this->is_cache_dir_env_var_set; }
     const std::string& get_cache_dir() const;
 
-    inline bool is_kernel_dir_specified() const { return this->is_kernel_dir_env_var_set; }
+    bool is_kernel_dir_specified() const { return this->is_kernel_dir_env_var_set; }
     const std::string& get_kernel_dir() const;
     // Location where kernels are installed via package manager.
     const std::string& get_system_kernel_dir() const;
 
-    inline bool is_core_grid_override_todeprecate() const {
-        return this->is_core_grid_override_todeprecate_env_var_set;
-    }
+    bool is_core_grid_override_todeprecate() const { return this->is_core_grid_override_todeprecate_env_var_set; }
     const std::string& get_core_grid_override_todeprecate() const;
 
-    inline bool is_visible_devices_specified() const { return this->is_visible_devices_env_var_set; }
-    inline const std::vector<uint32_t>& get_visible_devices() const { return this->visible_devices; }
-
-    inline bool get_build_map_enabled() const { return build_map_enabled; }
+    bool get_build_map_enabled() const { return build_map_enabled; }
 
     // Info from watcher environment variables, setters included so that user
     // can override with a SW call.
-    inline bool get_watcher_enabled() const { return watcher_settings.enabled; }
-    inline void set_watcher_enabled(bool enabled) { watcher_settings.enabled = enabled; }
-    inline int get_watcher_interval() const { return watcher_settings.interval_ms; }
-    inline void set_watcher_interval(int interval_ms) { watcher_settings.interval_ms = interval_ms; }
-    inline int get_watcher_dump_all() const { return watcher_settings.dump_all; }
-    inline void set_watcher_dump_all(bool dump_all) { watcher_settings.dump_all = dump_all; }
-    inline int get_watcher_append() const { return watcher_settings.append; }
-    inline void set_watcher_append(bool append) { watcher_settings.append = append; }
-    inline int get_watcher_auto_unpause() const { return watcher_settings.auto_unpause; }
-    inline void set_watcher_auto_unpause(bool auto_unpause) { watcher_settings.auto_unpause = auto_unpause; }
-    inline int get_watcher_noinline() const { return watcher_settings.noinline; }
-    inline void set_watcher_noinline(bool noinline) { watcher_settings.noinline = noinline; }
-    inline int get_watcher_phys_coords() const { return watcher_settings.phys_coords; }
-    inline void set_watcher_phys_coords(bool phys_coords) { watcher_settings.phys_coords = phys_coords; }
-    inline bool get_watcher_text_start() const { return watcher_settings.text_start; }
-    inline void set_watcher_text_start(bool text_start) { watcher_settings.text_start = text_start; }
-    inline bool get_watcher_skip_logging() const { return watcher_settings.skip_logging; }
-    inline void set_watcher_skip_logging(bool skip_logging) { watcher_settings.skip_logging = skip_logging; }
-    inline bool get_watcher_noc_sanitize_linked_transaction() const {
+    bool get_watcher_enabled() const { return watcher_settings.enabled; }
+    void set_watcher_enabled(bool enabled) { watcher_settings.enabled = enabled; }
+    int get_watcher_interval() const { return watcher_settings.interval_ms; }
+    void set_watcher_interval(int interval_ms) { watcher_settings.interval_ms = interval_ms; }
+    int get_watcher_dump_all() const { return watcher_settings.dump_all; }
+    void set_watcher_dump_all(bool dump_all) { watcher_settings.dump_all = dump_all; }
+    int get_watcher_append() const { return watcher_settings.append; }
+    void set_watcher_append(bool append) { watcher_settings.append = append; }
+    int get_watcher_auto_unpause() const { return watcher_settings.auto_unpause; }
+    void set_watcher_auto_unpause(bool auto_unpause) { watcher_settings.auto_unpause = auto_unpause; }
+    int get_watcher_noinline() const { return watcher_settings.noinline; }
+    void set_watcher_noinline(bool noinline) { watcher_settings.noinline = noinline; }
+    int get_watcher_phys_coords() const { return watcher_settings.phys_coords; }
+    void set_watcher_phys_coords(bool phys_coords) { watcher_settings.phys_coords = phys_coords; }
+    bool get_watcher_text_start() const { return watcher_settings.text_start; }
+    void set_watcher_text_start(bool text_start) { watcher_settings.text_start = text_start; }
+    bool get_watcher_skip_logging() const { return watcher_settings.skip_logging; }
+    void set_watcher_skip_logging(bool skip_logging) { watcher_settings.skip_logging = skip_logging; }
+    bool get_watcher_noc_sanitize_linked_transaction() const {
         return watcher_settings.noc_sanitize_linked_transaction;
     }
-    inline void set_watcher_noc_sanitize_linked_transaction(bool enabled) {
+    void set_watcher_noc_sanitize_linked_transaction(bool enabled) {
         watcher_settings.noc_sanitize_linked_transaction = enabled;
     }
-    inline const std::set<std::string>& get_watcher_disabled_features() const { return watcher_disabled_features; }
-    inline bool watcher_status_disabled() const { return watcher_feature_disabled(watcher_waypoint_str); }
-    inline bool watcher_noc_sanitize_disabled() const { return watcher_feature_disabled(watcher_noc_sanitize_str); }
-    inline bool watcher_assert_disabled() const { return watcher_feature_disabled(watcher_assert_str); }
-    inline bool watcher_pause_disabled() const { return watcher_feature_disabled(watcher_pause_str); }
-    inline bool watcher_ring_buffer_disabled() const { return watcher_feature_disabled(watcher_ring_buffer_str); }
-    inline bool watcher_stack_usage_disabled() const { return watcher_feature_disabled(watcher_stack_usage_str); }
-    inline bool watcher_dispatch_disabled() const { return watcher_feature_disabled(watcher_dispatch_str); }
+    const std::set<std::string>& get_watcher_disabled_features() const { return watcher_disabled_features; }
+    bool watcher_status_disabled() const { return watcher_feature_disabled(watcher_waypoint_str); }
+    bool watcher_noc_sanitize_disabled() const { return watcher_feature_disabled(watcher_noc_sanitize_str); }
+    bool watcher_assert_disabled() const { return watcher_feature_disabled(watcher_assert_str); }
+    bool watcher_pause_disabled() const { return watcher_feature_disabled(watcher_pause_str); }
+    bool watcher_ring_buffer_disabled() const { return watcher_feature_disabled(watcher_ring_buffer_str); }
+    bool watcher_stack_usage_disabled() const { return watcher_feature_disabled(watcher_stack_usage_str); }
+    bool watcher_dispatch_disabled() const { return watcher_feature_disabled(watcher_dispatch_str); }
+    bool watcher_eth_link_status_disabled() const { return watcher_feature_disabled(watcher_eth_link_status_str); }
 
     // Info from inspector environment variables, setters included so that user
     // can override with a SW call.
-    inline const std::filesystem::path& get_inspector_log_path() const { return inspector_settings.log_path; }
-    inline bool get_inspector_enabled() const { return inspector_settings.enabled; }
-    inline void set_inspector_enabled(bool enabled) { inspector_settings.enabled = enabled; }
-    inline bool get_inspector_initialization_is_important() const { return inspector_settings.initialization_is_important; }
-    inline void set_inspector_initialization_is_important(bool important) { inspector_settings.initialization_is_important = important; }
-    inline bool get_inspector_warn_on_write_exceptions() const { return inspector_settings.warn_on_write_exceptions; }
-    inline void set_inspector_warn_on_write_exceptions(bool warn) { inspector_settings.warn_on_write_exceptions = warn; }
+    const std::filesystem::path& get_inspector_log_path() const { return inspector_settings.log_path; }
+    bool get_inspector_enabled() const { return inspector_settings.enabled; }
+    void set_inspector_enabled(bool enabled) { inspector_settings.enabled = enabled; }
+    bool get_inspector_initialization_is_important() const { return inspector_settings.initialization_is_important; }
+    void set_inspector_initialization_is_important(bool important) {
+        inspector_settings.initialization_is_important = important;
+    }
+    bool get_inspector_warn_on_write_exceptions() const { return inspector_settings.warn_on_write_exceptions; }
+    void set_inspector_warn_on_write_exceptions(bool warn) { inspector_settings.warn_on_write_exceptions = warn; }
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
-    inline bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
-    inline void set_feature_enabled(RunTimeDebugFeatures feature, bool enabled) {
-        feature_targets[feature].enabled = enabled;
-    }
+    bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
+    void set_feature_enabled(RunTimeDebugFeatures feature, bool enabled) { feature_targets[feature].enabled = enabled; }
     // Note: dprint cores are logical
-    inline const std::map<CoreType, std::vector<CoreCoord>>& get_feature_cores(RunTimeDebugFeatures feature) const {
+    const std::map<CoreType, std::vector<CoreCoord>>& get_feature_cores(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].cores;
     }
-    inline void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<CoreCoord>> cores) {
+    void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<CoreCoord>> cores) {
         feature_targets[feature].cores = cores;
     }
     // An alternative to setting cores by range, a flag to enable all.
-    inline void set_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type, int all_cores) {
+    void set_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type, int all_cores) {
         feature_targets[feature].all_cores[core_type] = all_cores;
     }
-    inline int get_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type) const {
+    int get_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type) const {
         return feature_targets[feature].all_cores.at(core_type);
     }
     // Note: core range is inclusive
-    inline void set_feature_core_range(
-        RunTimeDebugFeatures feature, CoreCoord start, CoreCoord end, CoreType core_type) {
+    void set_feature_core_range(RunTimeDebugFeatures feature, CoreCoord start, CoreCoord end, CoreType core_type) {
         feature_targets[feature].cores[core_type] = std::vector<CoreCoord>();
         for (uint32_t x = start.x; x <= end.x; x++) {
             for (uint32_t y = start.y; y <= end.y; y++) {
@@ -307,54 +305,50 @@ public:
             }
         }
     }
-    inline const std::vector<int>& get_feature_chip_ids(RunTimeDebugFeatures feature) const {
+    const std::vector<int>& get_feature_chip_ids(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].chip_ids;
     }
-    inline void set_feature_chip_ids(RunTimeDebugFeatures feature, std::vector<int> chip_ids) {
+    void set_feature_chip_ids(RunTimeDebugFeatures feature, std::vector<int> chip_ids) {
         feature_targets[feature].chip_ids = chip_ids;
     }
     // An alternative to setting cores by range, a flag to enable all.
-    inline void set_feature_all_chips(RunTimeDebugFeatures feature, bool all_chips) {
+    void set_feature_all_chips(RunTimeDebugFeatures feature, bool all_chips) {
         feature_targets[feature].all_chips = all_chips;
     }
-    inline bool get_feature_all_chips(RunTimeDebugFeatures feature) const { return feature_targets[feature].all_chips; }
-    inline uint32_t get_feature_riscv_mask(RunTimeDebugFeatures feature) const {
-        return feature_targets[feature].riscv_mask;
-    }
-    inline void set_feature_riscv_mask(RunTimeDebugFeatures feature, uint32_t riscv_mask) {
+    bool get_feature_all_chips(RunTimeDebugFeatures feature) const { return feature_targets[feature].all_chips; }
+    uint32_t get_feature_riscv_mask(RunTimeDebugFeatures feature) const { return feature_targets[feature].riscv_mask; }
+    void set_feature_riscv_mask(RunTimeDebugFeatures feature, uint32_t riscv_mask) {
         feature_targets[feature].riscv_mask = riscv_mask;
     }
-    inline std::string get_feature_file_name(RunTimeDebugFeatures feature) const {
-        return feature_targets[feature].file_name;
-    }
-    inline void set_feature_file_name(RunTimeDebugFeatures feature, std::string file_name) {
+    std::string get_feature_file_name(RunTimeDebugFeatures feature) const { return feature_targets[feature].file_name; }
+    void set_feature_file_name(RunTimeDebugFeatures feature, std::string file_name) {
         feature_targets[feature].file_name = file_name;
     }
-    inline bool get_feature_one_file_per_risc(RunTimeDebugFeatures feature) const {
+    bool get_feature_one_file_per_risc(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].one_file_per_risc;
     }
-    inline void set_feature_one_file_per_risc(RunTimeDebugFeatures feature, bool one_file_per_risc) {
+    void set_feature_one_file_per_risc(RunTimeDebugFeatures feature, bool one_file_per_risc) {
         feature_targets[feature].one_file_per_risc = one_file_per_risc;
     }
-    inline bool get_feature_prepend_device_core_risc(RunTimeDebugFeatures feature) const {
+    bool get_feature_prepend_device_core_risc(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].prepend_device_core_risc;
     }
-    inline void set_feature_prepend_device_core_risc(RunTimeDebugFeatures feature, bool prepend_device_core_risc) {
+    void set_feature_prepend_device_core_risc(RunTimeDebugFeatures feature, bool prepend_device_core_risc) {
         feature_targets[feature].prepend_device_core_risc = prepend_device_core_risc;
     }
-    inline TargetSelection get_feature_targets(RunTimeDebugFeatures feature) const { return feature_targets[feature]; }
-    inline void set_feature_targets(RunTimeDebugFeatures feature, TargetSelection targets) {
+    TargetSelection get_feature_targets(RunTimeDebugFeatures feature) const { return feature_targets[feature]; }
+    void set_feature_targets(RunTimeDebugFeatures feature, TargetSelection targets) {
         feature_targets[feature] = targets;
     }
 
-    inline bool get_record_noc_transfers() const { return record_noc_transfer_data; }
-    inline void set_record_noc_transfers(bool val) { record_noc_transfer_data = val; }
+    bool get_record_noc_transfers() const { return record_noc_transfer_data; }
+    void set_record_noc_transfers(bool val) { record_noc_transfer_data = val; }
 
-    inline bool get_validate_kernel_binaries() const { return validate_kernel_binaries; }
-    inline void set_validate_kernel_binaries(bool val) { validate_kernel_binaries = val; }
+    bool get_validate_kernel_binaries() const { return validate_kernel_binaries; }
+    void set_validate_kernel_binaries(bool val) { validate_kernel_binaries = val; }
 
     // Returns the string representation for hash computation.
-    inline std::string get_feature_hash_string(RunTimeDebugFeatures feature) const {
+    std::string get_feature_hash_string(RunTimeDebugFeatures feature) const {
         switch (feature) {
             case RunTimeDebugFeatureDprint: {
                 std::string hash_str = std::to_string(get_feature_enabled(feature));
@@ -373,7 +367,7 @@ public:
             default: return "";
         }
     }
-    inline std::string get_compile_hash_string() const {
+    std::string get_compile_hash_string() const {
         std::string compile_hash_str =
             fmt::format("{}_{}_{}", get_watcher_enabled(), get_kernels_early_return(), get_erisc_iram_enabled());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
@@ -389,103 +383,108 @@ public:
     // the gtest (and can't catch an exception from the server thread in main thread), but by
     // default we should throw so that the user can see the exception as soon as it happens.
     bool get_test_mode_enabled() const { return test_mode_enabled; }
-    inline void set_test_mode_enabled(bool enable) { test_mode_enabled = enable; }
+    void set_test_mode_enabled(bool enable) { test_mode_enabled = enable; }
 
-    inline bool get_profiler_enabled() const { return profiler_enabled; }
-    inline bool get_profiler_do_dispatch_cores() const { return profile_dispatch_cores; }
-    inline bool get_profiler_sync_enabled() const { return profiler_sync_enabled; }
-    inline bool get_profiler_trace_only() const { return profiler_trace_profiler; }
-    inline bool get_profiler_tracy_mid_run_push() const { return profiler_mid_run_tracy_push; }
-    inline bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
-    inline bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
-    inline std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
+    bool get_profiler_enabled() const { return profiler_enabled; }
+    bool get_profiler_do_dispatch_cores() const { return profile_dispatch_cores; }
+    bool get_profiler_sync_enabled() const { return profiler_sync_enabled; }
+    bool get_profiler_trace_only() const { return profiler_trace_profiler; }
+    bool get_profiler_tracy_mid_run_push() const { return profiler_mid_run_tracy_push; }
+    bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
+    bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
+    std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
 
-    inline void set_kernels_nullified(bool v) { null_kernels = v; }
-    inline bool get_kernels_nullified() const { return null_kernels; }
+    void set_kernels_nullified(bool v) { null_kernels = v; }
+    bool get_kernels_nullified() const { return null_kernels; }
 
-    inline void set_kernels_early_return(bool v) { kernels_early_return = v; }
-    inline bool get_kernels_early_return() const { return kernels_early_return; }
+    void set_kernels_early_return(bool v) { kernels_early_return = v; }
+    bool get_kernels_early_return() const { return kernels_early_return; }
 
-    inline bool get_clear_l1() const { return clear_l1; }
-    inline void set_clear_l1(bool clear) { clear_l1 = clear; }
+    bool get_clear_l1() const { return clear_l1; }
+    void set_clear_l1(bool clear) { clear_l1 = clear; }
 
-    inline bool get_clear_dram() const { return clear_dram; }
-    inline void set_clear_dram(bool clear) { clear_dram = clear; }
+    bool get_clear_dram() const { return clear_dram; }
+    void set_clear_dram(bool clear) { clear_dram = clear; }
 
-    inline bool get_skip_loading_fw() const { return skip_loading_fw; }
-    inline bool get_skip_reset_cores_on_init() const { return skip_reset_cores_on_init; }
+    bool get_skip_loading_fw() const { return skip_loading_fw; }
+    bool get_skip_reset_cores_on_init() const { return skip_reset_cores_on_init; }
 
     // Whether to compile with -g to include DWARF debug info in the binary.
-    inline bool get_riscv_debug_info_enabled() const { return riscv_debug_info_enabled; }
-    inline void set_riscv_debug_info_enabled(bool enable) { riscv_debug_info_enabled = enable; }
+    bool get_riscv_debug_info_enabled() const { return riscv_debug_info_enabled; }
+    void set_riscv_debug_info_enabled(bool enable) { riscv_debug_info_enabled = enable; }
 
-    inline unsigned get_num_hw_cqs() const { return num_hw_cqs; }
-    inline void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
+    unsigned get_num_hw_cqs() const { return num_hw_cqs; }
+    void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
 
-    inline uint32_t get_watcher_debug_delay() const { return watcher_debug_delay; }
-    inline void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }
+    uint32_t get_watcher_debug_delay() const { return watcher_debug_delay; }
+    void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }
 
-    inline bool get_dispatch_data_collection_enabled() const { return enable_dispatch_data_collection; }
-    inline void set_dispatch_data_collection_enabled(bool enable) { enable_dispatch_data_collection = enable; }
+    bool get_dispatch_data_collection_enabled() const { return enable_dispatch_data_collection; }
+    void set_dispatch_data_collection_enabled(bool enable) { enable_dispatch_data_collection = enable; }
 
-    inline bool get_hw_cache_invalidation_enabled() const { return this->enable_hw_cache_invalidation; }
+    bool get_hw_cache_invalidation_enabled() const { return this->enable_hw_cache_invalidation; }
 
-    inline bool get_relaxed_memory_ordering_disabled() const { return this->disable_relaxed_memory_ordering; }
-    inline bool get_gathering_enabled() const { return this->enable_gathering; }
+    bool get_relaxed_memory_ordering_disabled() const { return this->disable_relaxed_memory_ordering; }
+    bool get_gathering_enabled() const { return this->enable_gathering; }
 
     tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 
-    inline bool get_skip_deleting_built_cache() const { return skip_deleting_built_cache; }
+    bool get_skip_deleting_built_cache() const { return skip_deleting_built_cache; }
 
-    inline bool get_simulator_enabled() const { return simulator_enabled; }
-    inline const std::filesystem::path& get_simulator_path() const { return simulator_path; }
+    bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
+    const std::filesystem::path& get_simulator_path() const { return simulator_path; }
 
-    inline bool get_erisc_iram_enabled() const {
+    bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size
         return erisc_iram_enabled && !get_watcher_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint);
     }
-    inline bool get_erisc_iram_env_var_enabled() const {
+    bool get_erisc_iram_env_var_enabled() const {
         return erisc_iram_enabled_env_var.has_value() && erisc_iram_enabled_env_var.value();
     }
-    inline bool get_erisc_iram_env_var_disabled() const {
+    bool get_erisc_iram_env_var_disabled() const {
         return erisc_iram_enabled_env_var.has_value() && !erisc_iram_enabled_env_var.value();
     }
-    inline bool get_fast_dispatch() const { return fast_dispatch; }
+    bool get_fast_dispatch() const { return fast_dispatch; }
 
     // Temporary API until all multi-device workloads are ported to run on fabric.
     // It's currently not possible to enable Erisc IRAM by default for all legacy CCL
     // workloads. In those workloads, erisc kernels are loaded every CCL op; the binary
     // copy to IRAM can noticeably degrade legacy CCL op performance in those cases.
-    inline void set_erisc_iram_enabled(bool enable) { erisc_iram_enabled = enable; }
+    void set_erisc_iram_enabled(bool enable) { erisc_iram_enabled = enable; }
 
-    inline bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
+    bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 
-    inline uint32_t get_arc_debug_buffer_size() { return arc_debug_buffer_size; }
-    inline void set_arc_debug_buffer_size(uint32_t size) { arc_debug_buffer_size = size; }
+    uint32_t get_arc_debug_buffer_size() { return arc_debug_buffer_size; }
+    void set_arc_debug_buffer_size(uint32_t size) { arc_debug_buffer_size = size; }
 
-    inline bool get_disable_dma_ops() const { return disable_dma_ops; }
-    inline void set_disable_dma_ops(bool disable) { disable_dma_ops = disable; }
+    bool get_disable_dma_ops() const { return disable_dma_ops; }
+    void set_disable_dma_ops(bool disable) { disable_dma_ops = disable; }
 
-    inline bool get_force_context_reinit() const { return force_context_reinit; }
+    bool get_force_context_reinit() const { return force_context_reinit; }
 
     // Feature flag to specify if fabric is enabled in 2-erisc mode or not.
     // if true, then the fabric router is parallelized across two eriscs in the Ethernet core
-    inline bool get_is_fabric_2_erisc_mode_enabled() const { return enable_2_erisc_mode_with_fabric; }
+    bool get_is_fabric_2_erisc_mode_enabled() const { return enable_2_erisc_mode_with_fabric; }
 
-    inline bool is_custom_fabric_mesh_graph_desc_path_specified() const {
-        return is_custom_fabric_mesh_graph_desc_path_set;
-    }
-    inline std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
+    bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
+    std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
 
-    inline bool get_log_kernels_compilation_commands() const { return log_kernels_compilation_commands; }
+    bool get_log_kernels_compilation_commands() const { return log_kernels_compilation_commands; }
 
     // If true, the fabric (routers) will collect coarse grain telemetry data in software. This flag's state does not
     // affect the ability to capture Ethernet Subsystem register-read-based telemetry data.
     // This BW telemetry is coarse grain and records the total time that the reouter has unsent and inflight packets.
     //
     // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
-    inline bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
-    inline void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
+    bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
+    void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
+
+    // Mock cluster accessors
+    bool get_mock_enabled() const { return runtime_target_device_ == TargetDevice::Mock; }
+    const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
+
+    // Target device accessor
+    inline TargetDevice get_target_device() const { return runtime_target_device_; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.
@@ -509,6 +508,7 @@ private:
     const std::string watcher_ring_buffer_str = "RING_BUFFER";
     const std::string watcher_stack_usage_str = "STACK_USAGE";
     const std::string watcher_dispatch_str = "DISPATCH";
+    const std::string watcher_eth_link_status_str = "ETH_LINK_STATUS";
     std::set<std::string> watcher_disabled_features;
     bool watcher_feature_disabled(const std::string& name) const {
         return watcher_disabled_features.find(name) != watcher_disabled_features.end();

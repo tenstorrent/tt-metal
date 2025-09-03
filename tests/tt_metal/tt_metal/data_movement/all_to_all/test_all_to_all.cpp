@@ -16,7 +16,7 @@ using namespace test_utils;
 
 namespace unit_tests::dm::all_to_all {
 
-constexpr uint32_t START_ID = 60;
+constexpr uint32_t START_ID = 300;
 
 // Test Config (i.e. test parameters)
 struct AllToAllConfig {
@@ -229,7 +229,7 @@ void directed_ideal_test(
     // Test config
     unit_tests::dm::all_to_all::AllToAllConfig test_config = {
 
-        .test_id = unit_tests::dm::all_to_all::START_ID + test_case_id,
+        .test_id = test_case_id,
 
         .mst_logical_start_coord = mst_start_coord,
         .sub_logical_start_coord = sub_start_coord,
@@ -279,7 +279,7 @@ void packet_sizes_test(
             // Test config
             unit_tests::dm::all_to_all::AllToAllConfig test_config = {
 
-                .test_id = unit_tests::dm::all_to_all::START_ID + test_case_id,
+                .test_id = test_case_id,
 
                 .mst_logical_start_coord = mst_start_coord,
                 .sub_logical_start_coord = sub_start_coord,
@@ -417,7 +417,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllDirectedIdeal) {
     CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
     CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
 
-    unit_tests::dm::all_to_all::packet_sizes_test(
+    unit_tests::dm::all_to_all::directed_ideal_test(
         mesh_device, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
 }
 
@@ -436,7 +436,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllPacketSizes) {
     CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
     CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
 
-    unit_tests::dm::all_to_all::directed_ideal_test(
+    unit_tests::dm::all_to_all::packet_sizes_test(
         mesh_device, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
 }
 

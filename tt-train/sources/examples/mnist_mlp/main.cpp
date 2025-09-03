@@ -123,7 +123,6 @@ float evaluate(DataLoader &test_dataloader, Model &model, size_t num_targets) {
     model_to_eval(model);
     float num_correct = 0;
     float num_samples = 0;
-    auto *device = &ttml::autograd::ctx().get_device();
     for (const auto &[data, target] : test_dataloader) {
         auto output = run_model(model, data);
         auto output_xtensor = ttml::core::to_xtensor(output->get_value(), ttml::core::IdentityComposer{})[0];

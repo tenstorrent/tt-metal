@@ -9,11 +9,9 @@ def mesh_scatter(
     tensor: ttnn.Tensor,
     mesh_shape: tuple | ttnn.MeshShape,
     scatter_idx: tuple[int | None, int | None],
-    semaphores: tuple[object | None, object | None],
 ) -> None:
     from_row_scatter_idx, from_col_scatter_idx = scatter_idx
     num_mesh_rows, num_mesh_cols = mesh_shape
-    per_col_semaphore, per_row_semaphore = semaphores
 
     assert (
         from_row_scatter_idx is None or 0 <= from_row_scatter_idx < num_mesh_rows
@@ -21,12 +19,6 @@ def mesh_scatter(
     assert (
         from_col_scatter_idx is None or 0 <= from_col_scatter_idx < num_mesh_cols
     ), f"Scatter column index must be within [{0}, {num_mesh_cols})"
-    assert (
-        from_row_scatter_idx is None or per_col_semaphore is not None
-    ), "Semaphore for row scatter must be provided if row scatter index is specified"
-    assert (
-        from_col_scatter_idx is None or per_row_semaphore is not None
-    ), "Semaphore for column scatter must be provided if column scatter index is specified"
 
     old_memory_config = tensor.memory_config()
     old_tensor = tensor
@@ -50,7 +42,6 @@ def mesh_scatter(
                 ttnn.MeshCoordinate(to_row_scatter_idx, column_scatter_idx),
                 ttnn.MeshCoordinate(from_row_scatter_idx, column_scatter_idx),
                 ttnn.Topology.Linear,
-                per_col_semaphore,
                 optional_output_tensor=tensor,
             )
 
@@ -62,10 +53,9 @@ def mesh_scatter(
         for row_scatter_idx in range(num_mesh_rows):
             ttnn.point_to_point(
                 tensor,
-                ttnn.MeshCoordinate(to_col_scatter_idx, row_scatter_idx),
-                ttnn.MeshCoordinate(from_col_scatter_idx, row_scatter_idx),
+                ttnn.MeshCoordinate(row_scatter_idx, to_col_scatter_idx),
+                ttnn.MeshCoordinate(row_scatter_idx, from_col_scatter_idx),
                 ttnn.Topology.Linear,
-                per_row_semaphore,
                 optional_output_tensor=tensor,
             )
 

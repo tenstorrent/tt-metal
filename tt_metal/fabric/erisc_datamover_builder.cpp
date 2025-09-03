@@ -8,8 +8,8 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
-#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include "erisc_datamover_builder.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
@@ -109,6 +109,68 @@ static void configure_risc_settings(
         }
     } else {
         TT_THROW("Unsupported architecture for RISC configuration: {}", enchantum::to_string(arch));
+    }
+}
+
+static uint32_t get_worker_connected_sender_channel(const eth_chan_directions direction, Topology topology) {
+    const bool is_2D_routing = FabricContext::is_2D_topology(topology);
+    return is_2D_routing ? direction : 0;
+}
+
+static uint32_t get_vc1_connected_sender_channel(Topology topology) {
+    if (topology == tt::tt_fabric::Topology::Ring) {
+        return FabricEriscDatamoverConfig::num_sender_channels_1d_ring - 1;  // channel 2 (last of 3)
+    } else if (topology == tt::tt_fabric::Topology::Torus) {
+        return FabricEriscDatamoverConfig::num_sender_channels_2d_torus - 1;  // channel 4 (last of 5)
+    }
+    return 0;
+}
+
+static uint32_t get_worker_or_vc1_connected_sender_channel(const eth_chan_directions direction, Topology topology) {
+    uint32_t target_channel = get_worker_connected_sender_channel(direction, topology);
+    // if without vc1, return worker channel, otherwise return vc1 channel
+    if (topology == tt::tt_fabric::Topology::Ring) {
+        return FabricEriscDatamoverConfig::num_sender_channels_1d_ring - 1;  // channel 2 (last of 3)
+    } else if (topology == tt::tt_fabric::Topology::Torus) {
+        return FabricEriscDatamoverConfig::num_sender_channels_2d_torus - 1;  // channel 4 (last of 5)
+    }
+    return target_channel;  // Default to target_channel for Linear/Mesh
+}
+
+// for fabric with tensix extension, for linear/mesh topology, only one sender channel is used, and all
+// other sender channels are makred as skipped. For ring/torus topology, one extra vc1 sender channel will
+// also be used.
+static void update_sender_channel_servicing(
+    tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
+    std::vector<FabricRiscConfig>& risc_configs,
+    eth_chan_directions direction,
+    Topology topology) {
+    switch (fabric_tensix_config) {
+        case tt::tt_fabric::FabricTensixConfig::MUX: break;
+        default: TT_FATAL(false, "Error, invalid fabric_tensix_config: {}", static_cast<int>(fabric_tensix_config));
+    }
+
+    // Determine which channel corresponds to the current direction
+    uint32_t target_channel = get_worker_connected_sender_channel(direction, topology);
+
+    // For ring/torus topologies, determine VC1 channel (last channel) and service it
+    uint32_t vc1_target_channel = get_worker_or_vc1_connected_sender_channel(direction, topology);
+
+    auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+    if (arch == tt::ARCH::WORMHOLE_B0) {
+        for (auto& risc_config : risc_configs) {
+            risc_config.reset_sender_channel_serviced();
+            // Set the channel corresponding to the current direction and VC1 channel to true
+            for (size_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+                risc_config.set_sender_channel_serviced(i, i == target_channel || i == vc1_target_channel);
+            }
+        }
+    } else if (arch == tt::ARCH::BLACKHOLE) {
+        risc_configs[0].reset_sender_channel_serviced();
+        // Set the channel corresponding to the current direction and VC1 channel to true
+        for (size_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+            risc_configs[0].set_sender_channel_serviced(i, i == target_channel || i == vc1_target_channel);
+        }
     }
 }
 
@@ -290,7 +352,15 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     std::array<size_t, num_sender_channels>& num_sender_buffer_slots,
     std::array<size_t, num_sender_channels>& num_remote_sender_buffer_slots,
     std::array<size_t, num_receiver_channels>& num_receiver_buffer_slots,
-    std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots) {
+    std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots,
+    eth_chan_directions direction) {
+    // fabric with tensix extension uses different buffer slots options, since only one or two sender channels are
+    // used by fabric router, while other sender channels are skipped and have 0 buffer slots.
+    static const std::vector<std::vector<std::pair<size_t, size_t>>> default_with_tensix_buffer_slot_options = {
+        {{16, 16}, {8, 16}, {8, 8}},  // WORMHOLE_B0: {sender_slots, receiver_slots}
+        {{16, 16}, {8, 16}, {8, 8}}   // BLACKHOLE: {sender_slots, receiver_slots}
+    };
+
     static const std::vector<std::vector<std::pair<size_t, size_t>>> ring_buffer_slot_options = {
         {{8, 8}, {4, 8}}, {{8, 8}, {4, 8}}};
 
@@ -394,6 +464,36 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         arch_index = 1;
     } else {
         TT_THROW("Unsupported architecture: {}", enchantum::to_string(arch));
+    }
+
+    switch (options.fabric_tensix_config) {
+        case tt::tt_fabric::FabricTensixConfig::MUX: {
+            uint32_t num_sender_channels = this->num_sender_channels_with_tensix_config;
+            if (topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Torus) {
+                // extra sender channel for vc1
+                num_sender_channels = this->num_sender_channels_with_tensix_config_deadlock_avoidance;
+            }
+            uint32_t target_channel = get_worker_connected_sender_channel(direction, topology);
+            uint32_t vc1_target_channel = get_worker_or_vc1_connected_sender_channel(direction, topology);
+            size_t default_num_sender_buffer_slots;
+            size_t default_num_receiver_buffer_slots;
+            // get the default buffer slots
+            get_optimal_num_slots(
+                default_with_tensix_buffer_slot_options[arch_index],
+                num_sender_channels,
+                this->num_used_receiver_channels,
+                default_num_sender_buffer_slots,
+                default_num_receiver_buffer_slots);
+            // set default buffer slots.
+            num_sender_buffer_slots[target_channel] = default_num_sender_buffer_slots;
+            num_sender_buffer_slots[vc1_target_channel] = default_num_sender_buffer_slots;
+            num_remote_sender_buffer_slots[target_channel] = default_num_sender_buffer_slots;
+            num_remote_sender_buffer_slots[vc1_target_channel] = default_num_sender_buffer_slots;
+            num_receiver_buffer_slots.fill(default_num_receiver_buffer_slots);
+            num_remote_receiver_buffer_slots.fill(default_num_receiver_buffer_slots);
+            return;
+        }
+        default: break;
     }
 
     if (topology == Topology::Ring) {
@@ -594,6 +694,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     this->sender_txq_id = 0;
     this->receiver_txq_id = 0;
 
+    // Update sender channel servicing based on fabric tensix configuration
+    if (options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        // Use default direction (EAST) for the constructor case since direction isn't available here
+        update_sender_channel_servicing(options.fabric_tensix_config, this->risc_configs, options.direction, topology);
+    }
+
     const bool is_2D_routing = FabricContext::is_2D_topology(topology);
 
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
@@ -679,6 +785,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     bool is_dateline = options.edm_type == FabricEriscDatamoverType::Dateline;
     bool is_dateline_upstream = options.edm_type == FabricEriscDatamoverType::DatelineUpstream;
     bool is_dateline_upstream_adj_dev = options.edm_type == FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
+    bool has_tensix_extension = options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED;
 
     configure_buffer_slots_helper(
         topology,
@@ -686,7 +793,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         num_sender_buffer_slots,
         num_remote_sender_buffer_slots,
         num_receiver_buffer_slots,
-        num_remote_receiver_buffer_slots);
+        num_remote_receiver_buffer_slots,
+        options.direction);
 
     log_trace(
         tt::LogOp,
@@ -765,9 +873,18 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     log_trace(tt::LogOp, "Available channel buffering space: {}", this->available_channel_buffering_space);
 
     auto skip_current_sender_channel = [&](uint32_t idx) -> bool {
+        // for dateline connection, skip the last sender channel check (2 for 1d, 4 for 2d)
+        // for dateline upstream, skip the sender channel 1 check (just for 1d)
+        // for dateline upstream adajcent, skip the sender channel 2 check (just for 1d)
+        // for fabric with tensix extension, only check the vc1 sender channel and worker channel, other
+        // channels are skipped
+        bool is_2D_routing = FabricContext::is_2D_topology(topology);
+        uint32_t target_channel = get_worker_connected_sender_channel(options.direction, topology);
+        uint32_t vc1_target_channel = get_worker_or_vc1_connected_sender_channel(options.direction, topology);
         return (idx == get_dateline_sender_channel_skip_idx(is_2D_routing) && is_dateline) ||
                (idx == this->dateline_upstream_sender_channel_skip_idx && is_dateline_upstream) ||
-               (idx == this->dateline_upstream_adjcent_sender_channel_skip_idx && is_dateline_upstream_adj_dev);
+               (idx == this->dateline_upstream_adjcent_sender_channel_skip_idx && is_dateline_upstream_adj_dev) ||
+               (idx != target_channel && idx != vc1_target_channel && has_tensix_extension);
     };
 
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
@@ -906,7 +1023,6 @@ void append_worker_to_fabric_edm_sender_rt_args(
     connection_info.edm_noc_y = connection.edm_noc_y;
     connection_info.edm_buffer_base_addr = connection.edm_buffer_base_addr;
     connection_info.num_buffers_per_channel = connection.num_buffers_per_channel;
-    connection_info.edm_l1_sem_addr = connection.edm_l1_sem_addr;
     connection_info.edm_connection_handshake_addr = connection.edm_connection_handshake_addr;
     connection_info.edm_worker_location_info_addr = connection.edm_worker_location_info_addr;
     connection_info.buffer_size_bytes = connection.buffer_size_bytes;
@@ -976,7 +1092,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     const FabricEriscDatamoverConfig& config,
     eth_chan_directions direction,
     bool build_in_worker_connection_mode,
-    FabricEriscDatamoverType fabric_edm_type) :
+    FabricEriscDatamoverType fabric_edm_type,
+    bool has_tensix_extension) :
     my_eth_core_logical(my_eth_core_logical),
     my_eth_channel(my_eth_core_logical.y),
     my_noc_x(my_noc_x),
@@ -1013,7 +1130,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     edm_status_ptr(config.edm_status_address),
     build_in_worker_connection_mode(build_in_worker_connection_mode),
     fabric_edm_type(fabric_edm_type),
-    dateline_connection(fabric_edm_type == tt::tt_fabric::FabricEriscDatamoverType::Dateline) {
+    dateline_connection(fabric_edm_type == tt::tt_fabric::FabricEriscDatamoverType::Dateline),
+    has_tensix_extension(has_tensix_extension) {
     std::fill(
         sender_channel_connection_liveness_check_disable_array.begin(),
         sender_channel_connection_liveness_check_disable_array.end(),
@@ -1081,11 +1199,17 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     auto local_physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(this->local_fabric_node_id);
     auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(local_physical_chip_id);
 
-    size_t sender_channel_num_buffers = this->sender_channels_num_buffers[0];
+    const auto topology =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_topology();
+    auto sender_channel_to_check = get_worker_connected_sender_channel(direction, topology);
+    size_t sender_channel_num_buffers = this->sender_channels_num_buffers[sender_channel_to_check];
     size_t receiver_channel_num_buffers =
         this->dateline_connection ? this->receiver_channels_num_buffers[1] : this->receiver_channels_num_buffers[0];
 
-    TT_FATAL(sender_channel_num_buffers > 0, "Sender channel num buffers must be greater than 0");
+    TT_FATAL(
+        sender_channel_num_buffers > 0,
+        "Sender channel on direction {} num buffers must be greater than 0",
+        sender_channel_to_check);
     TT_FATAL(receiver_channel_num_buffers > 0, "Receiver channel num buffers must be greater than 0");
 
     const auto& fabric_context = control_plane.get_fabric_context();
@@ -1093,6 +1217,11 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     const auto& stream_ids = StreamRegAssignments::get_all_stream_ids();
     auto ct_args = std::vector<uint32_t>(stream_ids.begin(), stream_ids.end());
     ct_args.push_back(0xFFEE0001);
+
+    // when have dateline vc (vc1) and with tensix exntension enabled, need to send vc1 to downstream fabric router
+    // instead of downstream tensix exntension.
+    bool vc1_has_different_downstream_dest =
+        fabric_context.need_deadlock_avoidance_support(this->direction) && this->has_tensix_extension;
 
     const std::vector<uint32_t> main_args = {
         num_sender_channels,
@@ -1109,6 +1238,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,
+        vc1_has_different_downstream_dest,
 
         config.skip_receiver_channel_1_connection,
         config.skip_sender_channel_1_connection,
@@ -1204,7 +1334,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     // insert the sender channel num buffers
     // Index updated to account for 23 stream ID arguments + 1 marker at the beginning
-    const size_t sender_channel_num_buffers_idx = 37;  // 13 + 23 + 1
+    const size_t sender_channel_num_buffers_idx = 38;  // 14 + 23 + 1
     ct_args.insert(
         ct_args.begin() + sender_channel_num_buffers_idx,
         this->sender_channels_num_buffers.begin(),
@@ -1313,7 +1443,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         this->downstream_edm_vcs_buffer_base_address[1].value_or(0),
         this->downstream_edm_vcs_noc_x[1].value_or(0),
         this->downstream_edm_vcs_noc_y[1].value_or(0),
-        this->downstream_edm_vcs_semaphore_address[1].value_or(-1),
         this->downstream_edm_vcs_worker_registration_address[1].value_or(0),
         this->downstream_edm_vcs_worker_location_info_address[1].value_or(0),
         this->receiver_channels_local_buffer_index_address[0],  // extend the following 3 for 2D. need 3 each for 2D.
@@ -1322,16 +1451,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         this->downstream_edm_vcs_buffer_base_address[2].value_or(0),
         this->downstream_edm_vcs_noc_x[2].value_or(0),
         this->downstream_edm_vcs_noc_y[2].value_or(0),
-        this->downstream_edm_vcs_semaphore_address[2].value_or(-1),
         this->downstream_edm_vcs_worker_registration_address[2].value_or(0),
         this->downstream_edm_vcs_worker_location_info_address[2].value_or(0),
         this->receiver_channels_local_buffer_index_address[1],
-        // this is the receiver channel's local sem for flow controlling with downstream fabric sender
-        this->receiver_channels_downstream_flow_control_semaphore_id[0].value_or(-1),
-        this->receiver_channels_downstream_flow_control_semaphore_id[1].value_or(-1),
-        this->receiver_channels_downstream_flow_control_semaphore_id[2].value_or(-1),
-        this->receiver_channels_downstream_flow_control_semaphore_id[3].value_or(-1),
-        this->receiver_channels_downstream_flow_control_semaphore_id[4].value_or(-1),
+
         this->receiver_channels_downstream_teardown_semaphore_id[0].value_or(-1),
         this->receiver_channels_downstream_teardown_semaphore_id[1].value_or(-1),
         this->receiver_channels_downstream_teardown_semaphore_id[2].value_or(-1),
@@ -1353,7 +1476,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     const FabricEriscDatamoverConfig& config,
     bool build_in_worker_connection_mode,
     FabricEriscDatamoverType fabric_edm_type,
-    eth_chan_directions direction) {
+    eth_chan_directions direction,
+    bool has_tensix_extension) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     return FabricEriscDatamoverBuilder::build(
         device,
@@ -1363,7 +1487,9 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         control_plane.get_fabric_node_id_from_physical_chip_id(peer_physical_chip_id),
         config,
         build_in_worker_connection_mode,
-        fabric_edm_type);
+        fabric_edm_type,
+        direction,
+        has_tensix_extension);
 }
 
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
@@ -1375,7 +1501,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     const FabricEriscDatamoverConfig& config,
     bool build_in_worker_connection_mode,
     FabricEriscDatamoverType fabric_edm_type,
-    eth_chan_directions direction) {
+    eth_chan_directions direction,
+    bool has_tensix_extension) {
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_buffer_index_semaphore_id{};
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_flow_control_semaphore_id{};
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_connection_semaphore_id{};
@@ -1441,7 +1568,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         config,
         direction,
         build_in_worker_connection_mode,
-        fabric_edm_type);
+        fabric_edm_type,
+        has_tensix_extension);
 }
 
 SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_channel() const {
@@ -1473,18 +1601,26 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
         TT_THROW("Invalid VC");
     }
 
-    // for all edm types except for dateline upstream will have non zero buffer slots for channel 1,
-    // for dateline upstream channel 1 is removed and we need to use channel 2.
-    static constexpr std::size_t none_zero_buffer_slot_idx = 1;
-    static constexpr std::size_t dateline_upstream_none_zero_idx = 2;
-
     size_t sender_channels_num_buffer = 0;
-    switch (this->fabric_edm_type) {
-        case FabricEriscDatamoverType::DatelineUpstream:
-            sender_channels_num_buffer = this->sender_channels_num_buffers[dateline_upstream_none_zero_idx];
-            break;
-        default: sender_channels_num_buffer = this->sender_channels_num_buffers[none_zero_buffer_slot_idx]; break;
+    if (this->has_tensix_extension) {
+        // for edm builders with has_tensix_extension set to true (non-dispatch links and enabled fabric tensix config),
+        // the vc1 sender channel should be on fabric erisc router, and we use the last sender channel for vc1
+        sender_channels_num_buffer = this->sender_channels_num_buffers[ds_edm];
+    } else {
+        // for all edm types except for dateline upstream will have non zero buffer slots for channel 1,
+        // for dateline upstream channel 1 is removed and we need to use channel 2.
+        static constexpr std::size_t none_zero_buffer_slot_idx = 1;
+        static constexpr std::size_t dateline_upstream_none_zero_idx = 2;
+
+        switch (this->fabric_edm_type) {
+            case FabricEriscDatamoverType::DatelineUpstream:
+                sender_channels_num_buffer = this->sender_channels_num_buffers[dateline_upstream_none_zero_idx];
+                break;
+            default: sender_channels_num_buffer = this->sender_channels_num_buffers[none_zero_buffer_slot_idx]; break;
+        }
     }
+
+    TT_FATAL(sender_channels_num_buffer != 0, "sender_channels_num_buffer should not be 0!");
 
     this->sender_channel_connection_liveness_check_disable_array[ds_edm] = true;
     return SenderWorkerAdapterSpec{
@@ -1500,96 +1636,118 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
         eth_chan_directions::EAST};
 }
 
-void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamoverBuilder& downstream_edm) {
+// Internal implementation for connect_to_downstream_edm
+void FabricEriscDatamoverBuilder::connect_to_downstream_edm_impl(
+    FabricDatamoverBuilder downstream_builder, FabricDatamoverBuilder vc1_edm_builder) {
     TT_FATAL(
-        !this->build_in_worker_connection_mode, "Tried to connect two EDMs to each other in worker connection mode");
-    const auto ds_noc_x = downstream_edm.get_noc_x();
-    const auto ds_noc_y = downstream_edm.get_noc_y();
-    eth_chan_directions ds_dir = downstream_edm.get_direction();
+        !this->build_in_worker_connection_mode, "Tried to connect EDM to downstream builder in worker connection mode");
 
-    log_debug(
-        tt::LogTest,
-        "EDM at x={}, y={}, Direction={} :: Connecting to downstream EDM at x={}, y={}, VC={}, Direction={}",
-        my_noc_x,
-        my_noc_y,
-        direction,
-        ds_noc_x,
-        ds_noc_y,
-        0,
-        ds_dir);
+    std::visit(
+        [this, &vc1_edm_builder](auto&& builder_ref) {
+            auto& builder = builder_ref.get();
 
-    // VC 0
-    // For 1D, downstream channel is always 1 because channel 0 is always reserved for worker connections
+            const auto ds_noc_x = builder.get_noc_x();
+            const auto ds_noc_y = builder.get_noc_y();
+            eth_chan_directions ds_dir = builder.get_direction();
+
+            log_debug(
+                tt::LogTest,
+                "EDM at x={}, y={}, Direction={}, FabricNodeId={} :: Connecting to downstream EDM at x={}, y={}, "
+                "Direction={}",
+                my_noc_x,
+                my_noc_y,
+                direction,
+                local_fabric_node_id,
+                ds_noc_x,
+                ds_noc_y,
+                ds_dir);
+
+            const auto& fabric_context =
+                tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+            const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
+
+            // Setup VC0 connection
+            constexpr uint32_t ds_vc0_index = 1;
+            auto ds_vc0_send_chan = get_downstream_edm_sender_channel(is_2D_routing, this->direction);
+            setup_downstream_vc_connection(builder, ds_vc0_index, ds_vc0_send_chan, false);
+
+            if (!fabric_context.need_deadlock_avoidance_support(this->direction)) {
+                return;
+            }
+
+            // for vc1, need to connect using the edm builder not tensix builder.
+            if (is_2D_routing) {
+                // for 2D routing we can only connect VC1 if the downstream is on the same axis
+                bool connect_vc1 =
+                    (this->direction == eth_chan_directions::EAST && ds_dir == eth_chan_directions::WEST) ||
+                    (this->direction == eth_chan_directions::WEST && ds_dir == eth_chan_directions::EAST) ||
+                    (this->direction == eth_chan_directions::NORTH && ds_dir == eth_chan_directions::SOUTH) ||
+                    (this->direction == eth_chan_directions::SOUTH && ds_dir == eth_chan_directions::NORTH);
+                if (!connect_vc1) {
+                    return;
+                }
+            }
+
+            // Setup VC1 connection if needed
+            constexpr uint32_t ds_index = 2;
+            auto vc1_send_chan = get_sender_channel_count(is_2D_routing) - 1;
+            std::visit(
+                [this, ds_index, vc1_send_chan](auto&& vc1_builder_ref) {
+                    auto& vc1_builder = vc1_builder_ref.get();
+                    setup_downstream_vc_connection(vc1_builder, ds_index, vc1_send_chan, true);
+                },
+                vc1_edm_builder);
+        },
+        downstream_builder);
+}
+
+void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricDatamoverBuilder downstream_builder) {
+    connect_to_downstream_edm_impl(downstream_builder, downstream_builder);
+}
+
+void FabricEriscDatamoverBuilder::connect_to_downstream_edm(
+    FabricDatamoverBuilder downstream_builder, FabricDatamoverBuilder vc1_edm_builder) {
+    connect_to_downstream_edm_impl(downstream_builder, vc1_edm_builder);
+}
+
+template <typename BuilderType>
+void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
+    BuilderType& downstream_builder, uint32_t vc_idx, uint32_t channel_id, bool is_vc1) {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
-    auto ds_edm_send_chan = get_downstream_edm_sender_channel(is_2D_routing, this->direction);
-    auto adapter_spec = downstream_edm.build_connection_to_fabric_channel(ds_edm_send_chan);
+    const auto ds_noc_x = downstream_builder.get_noc_x();
+    const auto ds_noc_y = downstream_builder.get_noc_y();
+    eth_chan_directions ds_dir = downstream_builder.get_direction();
+
+    auto adapter_spec = downstream_builder.build_connection_to_fabric_channel(channel_id);
 
     if (is_2D_routing) {
-        uint32_t val = this->downstream_edm_vcs_noc_x[1].value_or(0);
-        val |= (ds_noc_x << (ds_dir * 8));
-        this->downstream_edm_vcs_noc_x[1] = val;
+        // TODO: unify vc0 and vc1?
+        if (is_vc1) {
+            this->downstream_edm_vcs_noc_x[vc_idx] = ds_noc_x;
+            this->downstream_edm_vcs_noc_y[vc_idx] = ds_noc_y;
+        } else {
+            uint32_t val = this->downstream_edm_vcs_noc_x[vc_idx].value_or(0);
+            val |= (ds_noc_x << (ds_dir * 8));
+            this->downstream_edm_vcs_noc_x[vc_idx] = val;
 
-        val = this->downstream_edm_vcs_noc_y[1].value_or(0);
-        val |= (ds_noc_y << (ds_dir * 8));
-        this->downstream_edm_vcs_noc_y[1] = val;
+            val = this->downstream_edm_vcs_noc_y[vc_idx].value_or(0);
+            val |= (ds_noc_y << (ds_dir * 8));
+            this->downstream_edm_vcs_noc_y[vc_idx] = val;
 
-        this->downstream_edms_connected |= 0x1 << ds_dir;
+            this->downstream_edms_connected |= 0x1 << ds_dir;
+        }
     } else {
-        this->downstream_edm_vcs_noc_x[1] = ds_noc_x;
-        this->downstream_edm_vcs_noc_y[1] = ds_noc_y;
-        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[1] = adapter_spec.buffer_index_semaphore_id;
+        this->downstream_edm_vcs_noc_x[vc_idx] = ds_noc_x;
+        this->downstream_edm_vcs_noc_y[vc_idx] = ds_noc_y;
+        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[vc_idx] = adapter_spec.buffer_index_semaphore_id;
         this->downstream_edms_connected = 1;
     }
 
-    this->downstream_edm_vcs_buffer_base_address[1] = adapter_spec.edm_buffer_base_addr;
-    this->downstream_edm_vcs_semaphore_address[1] = adapter_spec.edm_l1_sem_addr;
-    this->downstream_edm_vcs_worker_registration_address[1] = adapter_spec.edm_connection_handshake_addr;
-    this->downstream_edm_vcs_worker_location_info_address[1] = adapter_spec.edm_worker_location_info_addr;
-    // all downstream buffer slots are equal currently
-    this->downstream_sender_channels_num_buffers.fill(adapter_spec.num_buffers_per_channel);
-
-    // VC 1
-    if (!fabric_context.need_deadlock_avoidance_support(this->direction)) {
-        // VC1 connection not needed
-        return;
-    }
-
-    if (is_2D_routing) {
-        // for 2D routing we can only connect VC1 if the downstream is on the same axis
-        bool connect_vc1 = (this->direction == eth_chan_directions::EAST && ds_dir == eth_chan_directions::WEST) ||
-                           (this->direction == eth_chan_directions::WEST && ds_dir == eth_chan_directions::EAST) ||
-                           (this->direction == eth_chan_directions::NORTH && ds_dir == eth_chan_directions::SOUTH) ||
-                           (this->direction == eth_chan_directions::SOUTH && ds_dir == eth_chan_directions::NORTH);
-        if (!connect_vc1) {
-            return;
-        }
-    }
-
-    // Indexing from the back -- grabbing the last channel as it is the designated VC1 channel
-    ds_edm_send_chan = get_sender_channel_count(is_2D_routing) - 1;
-    adapter_spec = downstream_edm.build_connection_to_fabric_channel(ds_edm_send_chan);
-
-    log_debug(
-        tt::LogTest,
-        "EDM at x={}, y={}, Direction={} :: Connecting to downstream EDM at x={}, y={}, VC={}, Direction={}",
-        my_noc_x,
-        my_noc_y,
-        direction,
-        ds_noc_x,
-        ds_noc_y,
-        1,
-        ds_dir);
-
-    this->downstream_edm_vcs_noc_x[2] = ds_noc_x;
-    this->downstream_edm_vcs_noc_y[2] = ds_noc_y;
-    this->downstream_edm_vcs_buffer_base_address[2] = adapter_spec.edm_buffer_base_addr;
-    this->downstream_edm_vcs_semaphore_address[2] = adapter_spec.edm_l1_sem_addr;
-    this->downstream_edm_vcs_worker_registration_address[2] = adapter_spec.edm_connection_handshake_addr;
-    this->downstream_edm_vcs_worker_location_info_address[2] = adapter_spec.edm_worker_location_info_addr;
-    if (!is_2D_routing) {
-        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[2] = adapter_spec.buffer_index_semaphore_id;
-    }
+    this->downstream_edm_vcs_buffer_base_address[vc_idx] = adapter_spec.edm_buffer_base_addr;
+    this->downstream_edm_vcs_worker_registration_address[vc_idx] = adapter_spec.edm_connection_handshake_addr;
+    this->downstream_edm_vcs_worker_location_info_address[vc_idx] = adapter_spec.edm_worker_location_info_addr;
+    this->downstream_sender_channels_num_buffers[vc_idx - 1] = adapter_spec.num_buffers_per_channel;
 }
 
 eth_chan_directions FabricEriscDatamoverBuilder::get_direction() const { return this->direction; }

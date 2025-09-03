@@ -17,6 +17,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
 #include "llrt.hpp"
 #include <tt_stl/span.hpp>
@@ -26,6 +27,11 @@
 #include "umd/device/types/xy_pair.h"
 
 using namespace tt::tt_metal;
+
+class MeshDeviceFixtureWithL1Small : public MeshDeviceFixture {
+public:
+    MeshDeviceFixtureWithL1Small() : MeshDeviceFixture(24 * 1024) {}
+};
 
 namespace basic_tests::l1::sharded {
 
@@ -79,7 +85,8 @@ namespace local_test_functions {
 /// @return
 template <typename T>
 std::pair<std::shared_ptr<Buffer>, std::vector<uint32_t>> l1_buffer_write_wait(
-    IDevice* device, const L1Config<T>& test_config) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device, const L1Config<T>& test_config) {
+    auto device = mesh_device->get_devices()[0];
     auto buffer = test_config.sharded ? CreateBuffer(tt::tt_metal::ShardedBufferConfig{
                                             .device = device,
                                             .size = test_config.size_bytes,
@@ -103,7 +110,8 @@ std::pair<std::shared_ptr<Buffer>, std::vector<uint32_t>> l1_buffer_write_wait(
 }
 
 template <typename T>
-bool l1_buffer_read(IDevice* device, const L1Config<T>& test_config, const auto& write_info) {
+bool l1_buffer_read(
+    std::shared_ptr<distributed::MeshDevice> mesh_device, const L1Config<T>& test_config, const auto& write_info) {
     auto buffer = write_info.first;
     auto input = write_info.second;
     auto output = std::vector<uint32_t>(input.size());
@@ -130,14 +138,14 @@ bool l1_buffer_read(IDevice* device, const L1Config<T>& test_config, const auto&
 }
 
 template <typename T>
-bool l1_buffer_read_write(IDevice* device, const L1Config<T>& test_config) {
-    auto write_info = l1_buffer_write_wait(device, test_config);
-    return l1_buffer_read(device, test_config, write_info);
+bool l1_buffer_read_write(std::shared_ptr<distributed::MeshDevice> mesh_device, const L1Config<T>& test_config) {
+    auto write_info = l1_buffer_write_wait(mesh_device, test_config);
+    return l1_buffer_read(mesh_device, test_config, write_info);
 }
 
 }  // end namespace local_test_functions
 
-TEST_F(DeviceFixture, TestInterleavedReadWrite) {
+TEST_F(MeshDeviceFixture, TestInterleavedReadWrite) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         L1Config test_config(*this);
         test_config.buffer_layout = TensorMemoryLayout::INTERLEAVED;
@@ -146,14 +154,14 @@ TEST_F(DeviceFixture, TestInterleavedReadWrite) {
     }
 }
 
-TEST_F(DeviceFixture, TestHeightShardReadWrite) {
+TEST_F(MeshDeviceFixture, TestHeightShardReadWrite) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         L1Config test_config(*this);
         EXPECT_TRUE(local_test_functions::l1_buffer_read_write(this->devices_.at(id), test_config));
     }
 }
 
-TEST_F(DeviceFixtureWithL1Small, TestHeightShardReadWrite) {
+TEST_F(MeshDeviceFixtureWithL1Small, TestHeightShardReadWrite) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         L1Config test_config(*this);
         test_config.buffer_type = BufferType::L1;
@@ -166,7 +174,7 @@ TEST_F(DeviceFixtureWithL1Small, TestHeightShardReadWrite) {
     }
 }
 
-TEST_F(DeviceFixture, TestWidthShardReadWrite) {
+TEST_F(MeshDeviceFixture, TestWidthShardReadWrite) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         L1Config test_config(*this);
         test_config.buffer_layout = TensorMemoryLayout::WIDTH_SHARDED;
@@ -174,7 +182,7 @@ TEST_F(DeviceFixture, TestWidthShardReadWrite) {
     }
 }
 
-TEST_F(DeviceFixtureWithL1Small, TestWidthShardReadWrite) {
+TEST_F(MeshDeviceFixtureWithL1Small, TestWidthShardReadWrite) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         L1Config test_config(*this);
         test_config.buffer_layout = TensorMemoryLayout::WIDTH_SHARDED;
@@ -188,7 +196,7 @@ TEST_F(DeviceFixtureWithL1Small, TestWidthShardReadWrite) {
     }
 }
 
-TEST_F(DeviceFixture, TestUnorderedHeightShardReadWrite) {
+TEST_F(MeshDeviceFixture, TestUnorderedHeightShardReadWrite) {
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
         GTEST_SKIP() << fmt::format("Skipping {} because it is not supported in simulator", __func__);
     }
@@ -210,12 +218,13 @@ TEST_F(DeviceFixture, TestUnorderedHeightShardReadWrite) {
         {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
         {(uint32_t)cores.size(), 1});
     for (unsigned int id = 0; id < num_devices_; id++) {
-        auto device = this->devices_.at(id);
+        auto mesh_device = this->devices_.at(id);
         std::vector<CoreCoord> physical_cores;
         physical_cores.reserve(cores.size());
         for (const auto& core : cores) {
-            physical_cores.push_back(device->worker_core_from_logical_core(core));
+            physical_cores.push_back(mesh_device->worker_core_from_logical_core(core));
         }
+        auto device = mesh_device->get_devices()[0];
         uint32_t page_size = tt::constants::TILE_HW * sizeof(uint32_t);
         uint32_t total_size = cores.size() * page_size;
         auto buffer = CreateBuffer(tt::tt_metal::ShardedBufferConfig{
@@ -230,7 +239,8 @@ TEST_F(DeviceFixture, TestUnorderedHeightShardReadWrite) {
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
         auto input_it = input.begin();
         for (const auto& physical_core : physical_cores) {
-            auto readback = tt::llrt::read_hex_vec_from_core(device->id(), physical_core, buffer->address(), page_size);
+            auto readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                device->id(), physical_core, buffer->address(), page_size);
             EXPECT_TRUE(std::equal(input_it, input_it + tt::constants::TILE_HW, readback.begin()));
             input_it += tt::constants::TILE_HW;
         }

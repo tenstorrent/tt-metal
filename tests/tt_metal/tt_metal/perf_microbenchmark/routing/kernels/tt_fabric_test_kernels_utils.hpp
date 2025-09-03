@@ -7,7 +7,7 @@
 #include <array>
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -375,12 +375,10 @@ struct NocUnicastScatterWriteFields {
 };
 
 template <typename T>
-void setup_2d_unicast_route(
-    uint32_t packet_header_address, eth_chan_directions outgoing_direction, const ChipUnicastFields2D& unicast_fields) {
+void setup_2d_unicast_route(uint32_t packet_header_address, const ChipUnicastFields2D& unicast_fields) {
     // Template constraint: T must be MeshPacketHeader or LowLatencyMeshPacketHeader
     fabric_set_unicast_route(
         (T*)packet_header_address,
-        outgoing_direction,
         unicast_fields.src_device_id,
         unicast_fields.dst_device_id,
         unicast_fields.dst_mesh_id,
@@ -438,12 +436,10 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, true, USE_DYNAMIC_ROUTING
         volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
         WorkerToFabricEdmSender* fabric_connection_handle) {
         const auto unicast_fields = ChipUnicastFields2D::build_from_args(arg_idx);
-        const auto outgoing_direction = (eth_chan_directions)fabric_connection_handle->direction;
         if constexpr (USE_DYNAMIC_ROUTING) {
-            setup_2d_unicast_route<MeshPacketHeader>(packet_header_address, outgoing_direction, unicast_fields);
+            setup_2d_unicast_route<MeshPacketHeader>(packet_header_address, unicast_fields);
         } else {
-            setup_2d_unicast_route<LowLatencyMeshPacketHeader>(
-                packet_header_address, outgoing_direction, unicast_fields);
+            setup_2d_unicast_route<LowLatencyMeshPacketHeader>(packet_header_address, unicast_fields);
         }
     }
 };

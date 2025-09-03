@@ -41,7 +41,7 @@ void MAIN {
         copy_tile(cb_pre_in3, 0, 2);  // Copy to dst reg 2
 
         where_tile_init();
-        WHERE_LLK(0, 1, 2);
+        WHERE_LLK(0, 1, 2, 0);
 
         tile_regs_commit();
         tile_regs_wait();
