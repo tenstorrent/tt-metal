@@ -1430,4 +1430,9 @@ void MetalContext::erisc_send_exit_signal(ChipId device_id, CoreCoord virtual_co
     }
 };
 
+bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
+    CoreCoord logical_grid_size = cluster_->get_soc_desc(0).get_grid_size(core_type);
+    return (logical_grid_size.x >= coord.x) && (logical_grid_size.y >= coord.y);
+}
+
 }  // namespace tt::tt_metal
