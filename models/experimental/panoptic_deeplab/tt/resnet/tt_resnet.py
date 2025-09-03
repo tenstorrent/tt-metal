@@ -64,23 +64,6 @@ class TtResNet(nn.Module):
         self.res4 = nn.ModuleList()
         for i in range(6):
             block_state = {k.replace(f"res4.{i}.", ""): v for k, v in state_dict.items() if k.startswith(f"res4.{i}.")}
-
-            # Add zero bias to all conv operations in res4 for comparison mode debugging
-            conv_names = ["conv1", "conv2", "conv3"]
-            if i == 0:  # First block has shortcut
-                conv_names.append("shortcut")
-
-            for conv_name in conv_names:
-                conv_state = {
-                    k.replace(f"{conv_name}.", ""): v for k, v in block_state.items() if k.startswith(f"{conv_name}.")
-                }
-                if "weight" in conv_state and "bias" not in conv_state:
-                    # Add zero bias with same shape as output channels
-                    out_channels = conv_state["weight"].shape[0]
-                    block_state[f"{conv_name}.bias"] = torch.zeros(
-                        out_channels, dtype=conv_state["weight"].dtype, device=conv_state["weight"].device
-                    )
-
             has_shortcut = i == 0  # First block has shortcut
             stride = 2 if i == 0 else 1  # First block uses stride=2, others use stride=1
             dilation = 1  # res4 uses dilation=1 for all blocks
