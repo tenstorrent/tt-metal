@@ -1,10 +1,9 @@
 name: Package and release
 on:
+  push:
+      branches:
+        - 'stable'
   workflow_dispatch:
-  schedule:
-    # Create rc every day at EOD of PST Mon-Fri + night of Sunday to kick off
-    # releases for beginning of work week
-    - cron: "0 0 * * *"
 
 permissions:
   actions: read
@@ -16,6 +15,7 @@ permissions:
   checks: write
 
 
+
 # Some explanation:
 # is-release-candidate is always true, unless the workflow is manually dispatched on a tag
 # should-create-release is used to avoid creating a duplicate release
@@ -23,12 +23,39 @@ permissions:
 # if we are promoting a release candidate, don't rerun the tests
 
 jobs:
+  release-precheck:
+    runs-on: ubuntu-latest
+    outputs:
+      is-release-candidate: ${{ steps.get-is-release-candidate.outputs.is-release-candidate }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Get is-release-candidate
+        id: get-is-release-candidate
+        run: |
+          # A workflow dispatch on a tag is considered a release run for us.
+          isReleaseCandidate=${{ !(github.ref_type == 'tag' && github.event_name == 'workflow_dispatch') }}
+          echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
+      - name: Get should-create-release
+        id: get-should-create-release
+        run: |
+          # Run once to check for errors
+          ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }}
+          shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }})
+          if [ "$shouldCreateRelease" != "true" ]; then
+            echo "should-create-release is false, no release needed. Exiting workflow."
+            exit 1
+          fi
+          echo "should-create-release is true, proceeding with release workflow."
   create-tag:
+    needs: release-precheck
     uses: ./.github/workflows/release-verify-or-create-tag.yaml
     with:
       fetch_depth: 0
       bump_each_commit: false
-      tag_type: dev
+      tag_type: ${{ needs.release-precheck.outputs.is-release-candidate && 'rc' }}
 
   regression-testing:
     needs: create-tag
@@ -85,3 +112,99 @@ jobs:
         with:
           name: release-notes
           path: RELEASE_NOTES.txt
+  # Candidate for breaking up
+  create-and-upload-draft-release:
+    needs: [create-tag, create-release-notes, regression-testing]
+    # May accidentally create two releases without restricting to 1 job
+    concurrency: create_upload_draft_release
+    runs-on: ubuntu-latest
+    if: github.ref != 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Create archive with submodules
+        uses: qmonnet/git-archive-all-action@791fb850881cf58b1d1fcc9b06c01940080bba0a
+        with:
+          output-files: tt-metalium.tar.gz
+      - name: Create VERSION
+        run: echo ${{ needs.create-tag.outputs.version }} > VERSION
+      - name : Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+      - name : Download changelog
+        uses: actions/download-artifact@v4
+        with:
+          name: changelog
+      - name: Release
+        # A major release has not been tagged yet, so we need to do this to avoid
+        # Node 16 deprecation warning message
+        uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
+        with:
+          tag_name: ${{ needs.create-tag.outputs.version }}
+          name: ${{ needs.create-tag.outputs.version }}
+          draft: false
+          prerelease: true
+          body_path: RELEASE_NOTES.txt
+          files: |
+            VERSION
+            CHANGELOG.txt
+            README.md
+            INSTALLING.md
+            models/docs/MODEL_UPDATES.md
+            tt-metalium.tar.gz
+          fail_on_unmatched_files: true
+  create-docker-release-image:
+    needs: [
+      regression-testing,
+      create-tag,
+      create-and-upload-draft-release
+    ]
+    uses: ./.github/workflows/publish-release-image.yaml
+    secrets: inherit
+    if: github.ref != 'refs/heads/main'
+    with:
+      version: ${{ needs.create-tag.outputs.version }}
+      tag-latest:  ${{ needs.release-precheck.outputs.is-release-candidate != 'true' }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  release-docs:
+    needs: [
+      regression-testing,
+      release-precheck,
+      create-tag,
+      create-and-upload-draft-release
+    ]
+    if: ${{ needs.release-precheck.outputs.is-release-candidate !='true' }}
+    uses: ./.github/workflows/docs-latest-public.yaml
+    with:
+      version: ${{ needs.create-tag.outputs.version }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+    secrets: inherit
+  publish-to-pypi:
+    name: >-
+      Publish Python 🐍 distribution 📦 to PyPI
+    needs: [
+      regression-testing,
+      release-precheck,
+      create-tag,
+      create-and-upload-draft-release
+    ]
+    runs-on: ubuntu-latest
+    if: github.ref != 'refs/heads/main'
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ttnn/
+    permissions:
+      id-token: write  # IMPORTANT: mandatory for trusted publishing
+    steps:
+    - name: Download all the dists
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+        path: dist/
+    - name: Publish distribution 📦 to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
