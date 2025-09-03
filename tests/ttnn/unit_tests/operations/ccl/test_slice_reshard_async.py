@@ -68,7 +68,7 @@ def run_slice_reshard_impl(
     for i in range(num_iters):
         input_tensor = torch.rand(input_shape).bfloat16()
         input_tensor_sliced = input_tensor[output_offset : output_offset + output_shape, :, :, :]
-        sr_output_tensor_goldens_list.append(np_output_tensor)
+        sr_output_tensor_goldens_list.append(input_tensor_sliced)
 
         input_tensor_mesh = ttnn.from_torch(
             input_tensor,
@@ -160,7 +160,7 @@ def run_slice_reshard_impl(
     "num_devices, input_shape, dim, layout, input_dtype, output_offset, output_shape",
     [
         (8, [96, 120, 212, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 88),
-        #        (8, [176, 240, 424, 256], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 1, 168),
+        (8, [176, 240, 424, 256], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 1, 168),
     ],
     ids=[
         "mochi_vae_1",

@@ -24,6 +24,7 @@
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async_pybind.hpp"
+#include "ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async_pybind.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -46,6 +47,7 @@ void py_module(pybind11::module& module) {
     ccl::py_bind_send_async(module);
     ccl::py_bind_recv_async(module);
     ccl::py_bind_neighbor_pad_async(module);
+    ccl::py_bind_slice_reshard_async(module);
 }
 
 }  // namespace ttnn::operations::experimental::ccl
