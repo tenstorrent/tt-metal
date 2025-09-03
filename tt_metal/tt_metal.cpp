@@ -919,10 +919,16 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                 const auto& kernel = detail::GetKernel(program, optional_id.value());
                                 const auto& rt_args = kernel->runtime_args(logical_core);
 
+                                // rta_offset on all processors running this kernel are the same.
+                                // just pick one processor and get the offsets.
+                                auto processor_index = hal.get_processor_index(
+                                    hal.get_programmable_core_type(index),
+                                    kernel->get_kernel_processor_class(),
+                                    kernel->get_kernel_processor_type(0));
                                 if (rt_args.size() > 0) {
                                     auto rt_args_addr =
                                         kernel_config_base +
-                                        kg->launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset;
+                                        kg->launch_msg.kernel_config.rta_offset[processor_index].rta_offset;
                                     log_trace(
                                         tt::LogMetal,
                                         "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: "
@@ -941,7 +947,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                 if (common_rt_args.size() > 0) {
                                     auto common_rt_args_addr =
                                         kernel_config_base +
-                                        kg->launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset;
+                                        kg->launch_msg.kernel_config.rta_offset[processor_index].crta_offset;
                                     log_trace(
                                         tt::LogMetal,
                                         "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: "

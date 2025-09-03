@@ -125,7 +125,7 @@ int main() {
 
             flush_erisc_icache();
 
-            firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+            firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, PROCESSOR_INDEX);
 
             enum dispatch_core_processor_masks enables =
                 (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
