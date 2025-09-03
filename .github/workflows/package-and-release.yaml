@@ -65,14 +65,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Echo create-tag version output
-        run: echo "create-tag.outputs = ${{ needs.create-tag.outputs }}"
+        run: echo "create-tag.outputs = ${{ fromJson(needs.create-tag.outputs) }}"
 
   debug-regression-testing-output:
     needs: regression-testing
     runs-on: ubuntu-latest
     steps:
       - name: Echo regression-testing wheel-artifact-name output
-        run: echo "regression-testing.outputs = ${{ needs.regression-testing.outputs }}"
+        run: echo "regression-testing.outputs = ${{ fromJson(steps.regression-testing.outputs) }}"
 
   create-changelog:
     needs: [create-tag, regression-testing]
