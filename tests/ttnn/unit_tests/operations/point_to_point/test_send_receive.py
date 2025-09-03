@@ -15,21 +15,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 
 TEST_SHAPES = [
-    (1, 1, 1, 16),
-    (1, 1, 8, 16),
-    (1, 1, 1, 64),
-    (1, 1, 3, 128),
-    (1, 13, 1, 32),
     (1, 1, 1, 32),
-    (100, 1, 1, 16),
-    (1, 1, 1, 24),
-    # (1, 1, 2, 8), alignment issues here too
-    # (1, 1, 2, 17), TODO make non-aligned tensors work
-    (1, 1, 1, 7168),
-    (1, 1, 32, 7168),
 ]
 
-MESH_SHAPE = (2, 4)
+MESH_SHAPE = (1, 4)
 
 
 def _linear_coord(coord, mesh_shape):

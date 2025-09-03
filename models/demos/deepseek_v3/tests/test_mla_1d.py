@@ -88,6 +88,7 @@ def get_cache_on_host(tt_cache: ttnn.Tensor, row_idx: int, mesh_device: ttnn.Mes
     "module_path",
     ["model.layers.0.self_attn"],
 )
+@pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
 def test_forward_pass(
     mode,
     seq_len,

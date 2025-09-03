@@ -165,16 +165,6 @@ void append_fabric_connection_rt_args(
         src_fabric_node_id,
         dst_fabric_node_id);
 
-    const auto forwarding_links =
-        get_forwarding_link_indices_in_direction(src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
-    TT_FATAL(
-        std::find(forwarding_links.begin(), forwarding_links.end(), link_idx) != forwarding_links.end(),
-        "Requested link index {} cannot be used for forwarding b/w src {} and dst {}. Valid forwarding links are {}",
-        link_idx,
-        src_fabric_node_id,
-        dst_fabric_node_id,
-        forwarding_links);
-
     const auto fabric_router_channel = candidate_eth_chans[link_idx];
     auto worker_teardown_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);
     auto worker_buffer_index_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);

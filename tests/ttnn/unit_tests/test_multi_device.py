@@ -776,7 +776,8 @@ def test_fabric_with_submeshes(t3k_mesh_device):
     submeshes = t3k_mesh_device.create_submeshes(ttnn.MeshShape(1, 4))
 
 
-@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 8), id="8x8_grid")], indirect=True)
+# @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_multihost_sanity(mesh_device):
     torch.manual_seed(0)
 

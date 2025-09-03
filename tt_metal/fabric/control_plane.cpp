@@ -1173,7 +1173,7 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(chip_id_t ph
 }
 
 chip_id_t ControlPlane::get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
-    TT_ASSERT(logical_mesh_chip_id_to_physical_chip_id_mapping_.contains(fabric_node_id));
+    TT_FATAL(logical_mesh_chip_id_to_physical_chip_id_mapping_.contains(fabric_node_id), "fail");
     return logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
 }
 
