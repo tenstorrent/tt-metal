@@ -815,16 +815,17 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     runs-on: tt-ubuntu-2204-large-stable
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Print first three levels from starting directory
-        run: |
-          find . -maxdepth 3 -type d | sort -V
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Download all sweep results
         uses: actions/download-artifact@v4
         with:
           pattern: sweeps-results*
-          path: tests/sweep_framework/results_export
+          path: /work/tests/sweep_framework/results_export
           merge-multiple: true
       - name: Homogenize sweep results
         run: |
@@ -833,7 +834,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sweeps-run-result
-          path: tests/sweep_framework/results_export/oprun_*.json
+          path: /work/tests/sweep_framework/results_export/oprun_*.json
           retention-days: 7
       - name: Upload sweep results to SFTP server
         if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs.upload_results }}
