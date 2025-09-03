@@ -30,9 +30,17 @@ uint32_t ARCTelemetryReader::read_value(tt::umd::TelemetryTag tag) const {
     // For Wormhole architecture, translate telemetry tags to wormhole-specific equivalents
     if (get_arch() == tt::ARCH::WORMHOLE_B0) {
         tt::umd::wormhole::TelemetryTag wormhole_tag = translate_to_wormhole_tag(tag);
+        if (!telemetry_reader_->is_entry_available(wormhole_tag)) {
+            log_error(tt::LogAlways, "Cannot read telemetry value: entry {} not available for chip {}", static_cast<unsigned>(wormhole_tag), id);
+            return 0;
+        }
         return telemetry_reader_->read_entry(static_cast<uint8_t>(wormhole_tag));
     }
 
+    if (!telemetry_reader_->is_entry_available(tag)) {
+        log_error(tt::LogAlways, "Cannot read telemetry value: entry {} not available for chip {}", static_cast<unsigned>(tag), id);
+        return 0;
+    }
     return telemetry_reader_->read_entry(tag);
 }
 
