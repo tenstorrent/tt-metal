@@ -63,8 +63,6 @@ protected:
     }
 };
 
-class CommandQueueEventFixture : public CommandQueueFixture {};
-
 class CommandQueueBufferFixture : public CommandQueueFixture {};
 
 class CommandQueueProgramFixture : public CommandQueueFixture {};
@@ -121,6 +119,8 @@ protected:
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
 };
+
+class UnitMeshCQEventFixture : public UnitMeshCQFixture {};
 
 class UnitMeshCQProgramFixture : public UnitMeshCQFixture {};
 
