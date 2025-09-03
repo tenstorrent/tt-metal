@@ -48,11 +48,7 @@ jobs:
               ./build/test/ttnn/unit_tests_ttnn_ccl_ops
           - name: dispatch
             cmd: |
-              if [ "${{ inputs.NIGHTLY }}" = "true" ]; then
-                TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch
-              else
-                TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="*-*NIGHTLY_*"
-              fi
+              TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch $GTEST_FILTER
           - name: dispatch multicmd queue
             cmd: |
               TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQ*Fixture.*
@@ -75,11 +71,7 @@ jobs:
             cmd: "./build/test/ttnn/unit_tests_ttnn_accessor"
           - name: data movement
             cmd: |
-              if [ "${{ inputs.NIGHTLY }}" = "true" ]; then
-                ./build/test/tt_metal/unit_tests_data_movement
-              else
-                ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*-*NIGHTLY_*"
-              fi
+              ./build/test/tt_metal/unit_tests_data_movement $GTEST_FILTER
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image }}
@@ -119,6 +111,11 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
             mkdir -p generated/test_reports
+            if [ "${{ inputs.NIGHTLY }}" = "true" ]; then
+              GTEST_FILTER=""
+            else
+              GTEST_FILTER='--gtest_filter=*-*NIGHTLY_*'
+            fi
             ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
