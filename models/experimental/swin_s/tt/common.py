@@ -83,3 +83,21 @@ class Conv:
         del _out_height, _out_width
 
         return output_tensor
+
+
+def preprocess_linear_weight(weight, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
+    weight = weight.T.contiguous()
+    weight = ttnn.from_torch(weight, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+    return weight
+
+
+def preprocess_linear_bias(bias, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
+    bias = bias.reshape((1, -1))
+    bias = ttnn.from_torch(bias, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+    return bias
+
+
+def preprocess_layernorm_parameter(parameter, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
+    parameter = parameter.reshape((1, -1))
+    parameter = ttnn.from_torch(parameter, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+    return parameter

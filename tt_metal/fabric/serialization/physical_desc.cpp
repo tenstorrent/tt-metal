@@ -4,7 +4,7 @@
 
 #include <vector>
 #include "tt_metal/fabric/serialization/physical_desc.hpp"
-#include "physical_desc_generated.h"
+#include "flatbuffers/physical_desc_generated.h"
 
 namespace tt::tt_metal {
 
@@ -30,7 +30,7 @@ std::vector<uint8_t> serialize_physical_descriptor_to_bytes(
         auto asic_desc = tt::tt_metal::flatbuffer::CreateAsicDescriptor(
             builder,
             *(descriptor.tray_id),
-            *(descriptor.n_id),
+            *(descriptor.asic_location),
             descriptor.board_type,
             *(descriptor.unique_id),
             builder.CreateString(descriptor.host_name));
@@ -161,7 +161,7 @@ tt_metal::PhysicalSystemDescriptor deserialize_physical_descriptor_from_bytes(co
         for (auto fb_asic_desc : *fb_desc->asic_descriptors()) {
             tt_metal::ASICDescriptor desc;
             desc.tray_id = TrayID{fb_asic_desc->descriptor()->tray_id()};
-            desc.n_id = NID{fb_asic_desc->descriptor()->n_id()};
+            desc.asic_location = ASICLocation{fb_asic_desc->descriptor()->asic_location()};
             desc.board_type = static_cast<BoardType>(fb_asic_desc->descriptor()->board_type());
             desc.unique_id = AsicID{fb_asic_desc->descriptor()->unique_id()};
             desc.host_name = fb_asic_desc->descriptor()->host_name()->str();

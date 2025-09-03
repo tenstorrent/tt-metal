@@ -19,8 +19,7 @@ using namespace tt::tt_metal;
 
 namespace {
 void RunOneTest(WatcherFixture* fixture, IDevice* device, unsigned free) {
-    static const char *const names[] =
-        {"brisc", "ncrisc", "trisc0", "trisc1", "trisc2", "aerisc", "ierisc"};
+    static const char* const names[] = {"brisc", "ncrisc", "trisc0", "trisc1", "trisc2", "aerisc", "ierisc"};
     const std::string path = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_stack.cpp";
     auto msg = [&](std::vector<std::string> &msgs, const char *cpu, unsigned free) {
         if (msgs.empty()) {

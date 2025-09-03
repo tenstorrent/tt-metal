@@ -69,7 +69,7 @@ FORCE_INLINE uint64_t get_noc_address(const AddrGenType& d, const uint32_t id, u
 static constexpr uint32_t max_fabric_addrgen_payload_size = 4532;
 
 FORCE_INLINE void validate_max_payload_size(uint32_t payload_size) {
-    ASSERT((payload_size > max_fabric_addrgen_payload_size));
+    ASSERT((payload_size <= max_fabric_addrgen_payload_size));
     if ((payload_size > max_fabric_addrgen_payload_size)) {
         WAYPOINT("HUNG");
         // hang to prompt investigation
