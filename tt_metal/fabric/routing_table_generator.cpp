@@ -22,7 +22,8 @@ auto fmt::formatter<tt::tt_fabric::FabricNodeId>::format(
 
 namespace tt::tt_fabric {
 
-FabricNodeId::FabricNodeId(MeshId mesh_id, std::uint32_t chip_id) : mesh_id(mesh_id), chip_id(chip_id) {}
+FabricNodeId::FabricNodeId(MeshId mesh_id_val, std::uint32_t chip_id_val) :
+    mesh_id(mesh_id_val), chip_id(chip_id_val) {}
 
 bool operator==(const FabricNodeId& lhs, const FabricNodeId& rhs) {
     return lhs.mesh_id == rhs.mesh_id && lhs.chip_id == rhs.chip_id;
