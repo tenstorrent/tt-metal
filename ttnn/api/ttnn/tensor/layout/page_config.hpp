@@ -4,14 +4,14 @@
 
 #pragma once
 
-#include <array>
 #include <optional>
 
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/tile.hpp>
 
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/alignment.hpp"
+#include "ttnn/tensor/memory_config/memory_config.hpp"
+#include "ttnn/tensor/layout/layout.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace tt::tt_metal {

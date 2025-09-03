@@ -16,7 +16,6 @@
 #include <tt_stl/small_vector.hpp>
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 

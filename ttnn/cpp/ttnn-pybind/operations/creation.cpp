@@ -16,7 +16,6 @@
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn-pybind/types.hpp"
 #include "ttnn/operations/creation.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::creation {

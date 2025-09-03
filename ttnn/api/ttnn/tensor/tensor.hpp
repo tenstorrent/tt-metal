@@ -29,6 +29,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/optional_reference.hpp>
+#include "ttnn/tensor/memory_config/memory_config.hpp"
+#include "ttnn/tensor/layout/layout.hpp"
 #include "types.hpp"
 
 namespace tt {
