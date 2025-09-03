@@ -154,6 +154,7 @@ jobs:
             models/docs/MODEL_UPDATES.md
             tt-metalium.tar.gz
           fail_on_unmatched_files: true
+
   create-docker-release-image:
     needs: [
       regression-testing,
@@ -168,21 +169,22 @@ jobs:
       version: ${{ needs.create-tag.outputs.version }}
       tag-latest:  ${{ needs.release-precheck.outputs.is-release-candidate != 'true' }}
       wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
-  release-docs:
-    needs: [
-      regression-testing,
-      release-precheck,
-      create-tag,
-      create-and-upload-draft-release
-    ]
-    if: ${{ needs.release-precheck.outputs.is-release-candidate !='true' }}
-    uses: ./.github/workflows/docs-latest-public.yaml
-    with:
-      version: ${{ needs.create-tag.outputs.version }}
-      docker-image: ${{ needs.regression-testing.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.regression-testing.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
-    secrets: inherit
+
+  # release-docs:
+  #   needs: [
+  #     regression-testing,
+  #     release-precheck,
+  #     create-tag,
+  #     create-and-upload-draft-release
+  #   ]
+  #   if: ${{ needs.release-precheck.outputs.is-release-candidate !='true' }}
+  #   uses: ./.github/workflows/docs-latest-public.yaml
+  #   with:
+  #     version: ${{ needs.create-tag.outputs.version }}
+  #     docker-image: ${{ needs.regression-testing.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.regression-testing.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
+  #   secrets: inherit
 
   # publish-to-pypi:
   #   name: >-
