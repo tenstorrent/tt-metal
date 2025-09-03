@@ -21,7 +21,7 @@ jobs:
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       volumes:
-        - /work
+        - ${{ github.workspace }}/docker-job:/work
     defaults:
       run:
         shell: bash
@@ -57,7 +57,7 @@ jobs:
         with:
           repository: tenstorrent/ttsim
           ref: ad55f44869ee1c30cae78ea0ff67eea502ee0350
-          path: ttsim
+          path: docker-job/ttsim
           token: ${{ secrets.WILDER_PAT }}
 
       - name: Build ttsim
