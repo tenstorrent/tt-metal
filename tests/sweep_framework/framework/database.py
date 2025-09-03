@@ -12,6 +12,7 @@ import datetime as dt
 import json
 from contextlib import contextmanager
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
+import hashlib
 
 try:
     import psycopg2
@@ -241,6 +242,13 @@ def generate_error_signature(exception_message):
         return None
     # Take the first line of the exception as the signature, capped at 255 chars
     return exception_message.splitlines()[0][:255]
+
+
+def generate_error_hash(error_message):
+    """Generate SHA-256 hash of error message for grouping and URL filtering."""
+    if not error_message:
+        return None
+    return hashlib.sha256(error_message.encode("utf-8")).hexdigest()
 
 
 def map_test_status_to_run_status(statuses):

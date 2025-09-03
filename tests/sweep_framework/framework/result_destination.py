@@ -15,6 +15,7 @@ from framework.database import (
     push_run,
     update_run,
     generate_error_signature,
+    generate_error_hash,
     map_test_status_to_run_status,
 )
 from framework.serialize import serialize, serialize_structured
@@ -113,6 +114,7 @@ class PostgresResultDestination(ResultDestination):
                     testcase_name = f"{sweep_name}_{header_info[i].get('vector_id', 'unknown')}"
                     exception_text = result.get("exception", None)
                     error_sig = generate_error_signature(exception_text)
+                    error_hash = generate_error_hash(exception_text)  # Add this line
 
                     testcase_values = (
                         test_id,
@@ -406,6 +408,7 @@ class FileResultDestination(ResultDestination):
                 success=is_success,
                 skipped=is_skipped,
                 error_message=raw.get("exception", None),
+                error_hash=generate_error_hash(raw.get("exception", None)),
                 config=None,
                 frontend="ttnn.op",
                 model_name="n/a",
