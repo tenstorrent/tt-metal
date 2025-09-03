@@ -189,8 +189,9 @@ BankManager::BankManager(
 uint32_t BankManager::num_banks() const { return bank_id_to_bank_offset_.size(); }
 
 DeviceAddr BankManager::bank_size() const {
-    TT_ASSERT(bool(allocators_[0]), "Allocator not initialized!");
-    DeviceAddr max_size_bytes_u64 = allocators_[0]->max_size_bytes();
+    const auto* alloc0 = this->get_allocator_for_state(StateDependencies::StateId{0});
+    TT_ASSERT(bool(alloc0), "Allocator not initialized!");
+    DeviceAddr max_size_bytes_u64 = alloc0->max_size_bytes();
     if (max_size_bytes_u64 > std::numeric_limits<DeviceAddr>::max()) {
         TT_THROW("Bank size {} overflows DeviceAddr", max_size_bytes_u64);
     }
@@ -211,12 +212,17 @@ void BankManager::validate_bank_id(uint32_t bank_id) const {
         bank_id_to_bank_offset_.size());
 }
 
-void BankManager::assert_valid_state(BankManager::StateDependencies::StateId state) const {
+allocator::Algorithm* BankManager::get_allocator_for_state(BankManager::StateDependencies::StateId state) {
     TT_FATAL(
         state.value < state_dependencies_.num_states(),
         "Invalid state {} (num_states={})",
         state.value,
         state_dependencies_.num_states());
+    return allocators_[state.value] ? allocators_[state.value].get() : nullptr;
+}
+
+const allocator::Algorithm* BankManager::get_allocator_for_state(BankManager::StateDependencies::StateId state) const {
+    return const_cast<BankManager*>(this)->get_allocator_for_state(state);
 }
 
 uint64_t BankManager::allocate_buffer(
@@ -226,9 +232,8 @@ uint64_t BankManager::allocate_buffer(
     const CoreRangeSet& compute_grid,
     std::optional<uint32_t> num_shards,
     BankManager::StateDependencies::StateId state) {
-    this->assert_valid_state(state);
-    TT_ASSERT(bool(allocators_[state.value]), "Allocator not initialized!");
-    auto* alloc = allocators_[state.value].get();
+    auto* alloc = this->get_allocator_for_state(state);
+    TT_ASSERT(bool(alloc), "Allocator not initialized!");
 
     uint32_t num_banks = this->num_banks();
     bool is_sharded = false;
@@ -292,7 +297,8 @@ uint64_t BankManager::allocate_buffer(
 
     // Neighbor state ranges
     for (const auto dep_state : neighbors) {
-        auto* dep_alloc = allocators_[dep_state.value].get();
+        auto* dep_alloc = this->get_allocator_for_state(dep_state);
+        TT_ASSERT(bool(dep_alloc), "Allocator not initialized!");
         all_free.push_back(clamp_ranges(dep_alloc->available_addresses(size_per_bank)));
     }
 
@@ -374,8 +380,9 @@ uint64_t BankManager::allocate_buffer(
 }
 
 void BankManager::deallocate_buffer(DeviceAddr address, BankManager::StateDependencies::StateId state) {
-    this->assert_valid_state(state);
-    allocators_[state.value]->deallocate(address);
+    auto* alloc = this->get_allocator_for_state(state);
+    TT_ASSERT(bool(alloc), "Allocator not initialized!");
+    alloc->deallocate(address);
     allocated_buffers_[state.value].erase(address);
 }
 
@@ -415,11 +422,11 @@ BankManager&& BankManager::operator=(BankManager&& that) noexcept {
 
 std::optional<DeviceAddr> BankManager::lowest_occupied_address(
     uint32_t bank_id, BankManager::StateDependencies::StateId state) const {
-    this->assert_valid_state(state);
-    if (not allocators_[state.value]) {
+    const auto* alloc = this->get_allocator_for_state(state);
+    if (alloc == nullptr) {
         return std::nullopt;
     }
-    auto lowest_address = allocators_[state.value]->lowest_occupied_address();
+    auto lowest_address = alloc->lowest_occupied_address();
     if (not lowest_address.has_value()) {
         return lowest_address;
     }
@@ -428,21 +435,21 @@ std::optional<DeviceAddr> BankManager::lowest_occupied_address(
 }
 
 Statistics BankManager::get_statistics(BankManager::StateDependencies::StateId state) const {
-    this->assert_valid_state(state);
-    return allocators_[state.value] ? allocators_[state.value]->get_statistics() : Statistics();
+    const auto* alloc = this->get_allocator_for_state(state);
+    return alloc ? alloc->get_statistics() : Statistics();
 }
 
 void BankManager::dump_blocks(std::ofstream& out, BankManager::StateDependencies::StateId state) const {
-    this->assert_valid_state(state);
-    if (allocators_[state.value]) {
-        allocators_[state.value]->dump_blocks(out);
+    const auto* alloc = this->get_allocator_for_state(state);
+    if (alloc) {
+        alloc->dump_blocks(out);
     }
 }
 
 MemoryBlockTable BankManager::get_memory_block_table(BankManager::StateDependencies::StateId state) const {
-    this->assert_valid_state(state);
-    if (allocators_[state.value]) {
-        return allocators_[state.value]->get_memory_block_table();
+    const auto* alloc = this->get_allocator_for_state(state);
+    if (alloc) {
+        return alloc->get_memory_block_table();
     }
 
     log_warning(tt::LogAlways, "allocator is not initialized, cannot get block table for memory");
@@ -450,16 +457,16 @@ MemoryBlockTable BankManager::get_memory_block_table(BankManager::StateDependenc
 }
 
 void BankManager::shrink_size(DeviceAddr shrink_size, bool bottom_up, BankManager::StateDependencies::StateId state) {
-    this->assert_valid_state(state);
-    if (allocators_[state.value]) {
-        allocators_[state.value]->shrink_size(shrink_size, bottom_up);
+    auto* alloc = this->get_allocator_for_state(state);
+    if (alloc) {
+        alloc->shrink_size(shrink_size, bottom_up);
     }
 }
 
 void BankManager::reset_size(BankManager::StateDependencies::StateId state) {
-    this->assert_valid_state(state);
-    if (allocators_[state.value]) {
-        allocators_[state.value]->reset_size();
+    auto* alloc = this->get_allocator_for_state(state);
+    if (alloc) {
+        alloc->reset_size();
     }
 }
 

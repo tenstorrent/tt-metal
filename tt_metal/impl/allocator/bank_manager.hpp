@@ -131,7 +131,8 @@ private:
     void init_allocators_across_states(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset);
 
     // State-dependent methods
-    void assert_valid_state(StateDependencies::StateId state) const;
+    allocator::Algorithm* get_allocator_for_state(StateDependencies::StateId state);
+    const allocator::Algorithm* get_allocator_for_state(StateDependencies::StateId state) const;
 };
 
 }  // namespace tt_metal
