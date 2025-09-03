@@ -546,12 +546,11 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
 @pytest.fixture(scope="function")
 def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
     # Generic blackhole configuration
-    # This creates a snake pattern on 2D meshes to appear as a long line or
-    # donut shaped ring in rackbox
-    # Not compatible with blackhole galaxy
+    # This configures an [m,n] blackhole mesh device to appear as a [1,m*n] line or ring
+    # Implements wraparound in rackboxes
     import ttnn
 
-    if ttnn.get_num_devices() not in [1, 2, 4, 8]:
+    if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
         pytest.skip()
 
     request.node.pci_ids = ttnn.get_pcie_device_ids()
