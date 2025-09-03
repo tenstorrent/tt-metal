@@ -13,13 +13,13 @@
 namespace tensor_accessor {
 
 /**
- * Iterator over all pages in a tensor.
+ * Iterator over all pages in a sharded tensor.
  * The iterator is initialized with a start_page_id and can be incremented by one page at a time,
  * or by a given number of pages. It efficiently computes NOC addresses by maintaining page
  * coordinates and minimizing divisions through incremental updates.
  */
 template <typename Accessor>
-class PagesAddressIterator {
+class PagesAddressIteratorSharded {
 public:
     using iterator_category = std::forward_iterator_tag;
     using value_type = Page;
@@ -28,7 +28,7 @@ public:
     using pointer = const Page*;
 
     // Constructor that initializes the iterator at a starting position
-    PagesAddressIterator(const Accessor& accessor, uint32_t start_page_id = 0, uint8_t noc = noc_index) :
+    PagesAddressIteratorSharded(const Accessor& accessor, uint32_t start_page_id = 0, uint8_t noc = noc_index) :
         accessor(accessor), current_page_id(start_page_id), noc(noc) {
         if (current_page_id < accessor.dspec().tensor_volume()) {
             // Initialize coordinates and state from page_id
@@ -44,7 +44,7 @@ public:
     pointer operator->() const { return &current_page; }
 
     // Arithmetic operators
-    PagesAddressIterator& operator++() {
+    PagesAddressIteratorSharded& operator++() {
         if (current_page_id >= accessor.dspec().tensor_volume()) {
             return *this;  // End iterator
         }
@@ -61,13 +61,13 @@ public:
         return *this;
     }
 
-    PagesAddressIterator operator++(int) {
-        PagesAddressIterator tmp = *this;
+    PagesAddressIteratorSharded operator++(int) {
+        PagesAddressIteratorSharded tmp = *this;
         ++(*this);
         return tmp;
     }
 
-    PagesAddressIterator& operator+=(difference_type steps) {
+    PagesAddressIteratorSharded& operator+=(difference_type steps) {
         ASSERT(steps >= 0);
         if (current_page_id >= accessor.dspec().tensor_volume()) {
             return *this;  // End iterator
@@ -85,8 +85,8 @@ public:
         return *this;
     }
 
-    PagesAddressIterator operator+(difference_type steps) const {
-        PagesAddressIterator tmp = *this;
+    PagesAddressIteratorSharded operator+(difference_type steps) const {
+        PagesAddressIteratorSharded tmp = *this;
         tmp += steps;
         return tmp;
     }
@@ -98,17 +98,17 @@ public:
     }
 
     // Comparison operators
-    bool operator==(const PagesAddressIterator& other) const { return current_page_id == other.current_page_id; }
+    bool operator==(const PagesAddressIteratorSharded& other) const { return current_page_id == other.current_page_id; }
 
-    bool operator!=(const PagesAddressIterator& other) const { return !(*this == other); }
+    bool operator!=(const PagesAddressIteratorSharded& other) const { return !(*this == other); }
 
-    bool operator<(const PagesAddressIterator& other) const { return current_page_id < other.current_page_id; }
+    bool operator<(const PagesAddressIteratorSharded& other) const { return current_page_id < other.current_page_id; }
 
-    bool operator>(const PagesAddressIterator& other) const { return other < *this; }
+    bool operator>(const PagesAddressIteratorSharded& other) const { return other < *this; }
 
-    bool operator<=(const PagesAddressIterator& other) const { return *this < other || *this == other; }
+    bool operator<=(const PagesAddressIteratorSharded& other) const { return *this < other || *this == other; }
 
-    bool operator>=(const PagesAddressIterator& other) const { return !(*this < other); }
+    bool operator>=(const PagesAddressIteratorSharded& other) const { return !(*this < other); }
 
 private:
     const Accessor& accessor;
@@ -255,20 +255,162 @@ private:
 };
 
 /**
+ * Iterator over all pages in an interleaved tensor.
+ * The iterator is initialized with a start_page_id and can be incremented by one page at a time,
+ * or by a given number of pages. It uses a simpler implementation that just calls
+ * accessor.get_noc_addr for each page without complex optimizations.
+ */
+template <typename Accessor>
+class PagesAddressIteratorInterleaved {
+public:
+    using iterator_category = std::forward_iterator_tag;
+    using value_type = Page;
+    using difference_type = std::ptrdiff_t;
+    using reference = const Page&;
+    using pointer = const Page*;
+
+    // Constructor that initializes the iterator at a starting position
+    PagesAddressIteratorInterleaved(const Accessor& accessor, uint32_t start_page_id = 0, uint8_t noc = noc_index) :
+        accessor(accessor), current_page_id(start_page_id), noc(noc), tensor_volume(0) {
+        update_current_page();
+    }
+
+    // Constructor for end iterator with known tensor volume
+    PagesAddressIteratorInterleaved(
+        const Accessor& accessor, uint32_t start_page_id, uint32_t tensor_vol, uint8_t noc) :
+        accessor(accessor), current_page_id(start_page_id), noc(noc), tensor_volume(tensor_vol) {
+        // This constructor is used for creating end iterators
+    }
+
+    // Getters
+    uint32_t page_id() const { return current_page_id; }
+
+    reference operator*() const { return current_page; }
+    pointer operator->() const { return &current_page; }
+
+    // Arithmetic operators
+    PagesAddressIteratorInterleaved& operator++() {
+        if (tensor_volume > 0 && current_page_id >= tensor_volume) {
+            return *this;  // End iterator
+        }
+
+        current_page_id++;
+        if (tensor_volume > 0 && current_page_id >= tensor_volume) {
+            current_page_id = tensor_volume;
+            return *this;
+        }
+
+        update_current_page();
+        return *this;
+    }
+
+    PagesAddressIteratorInterleaved operator++(int) {
+        PagesAddressIteratorInterleaved tmp = *this;
+        ++(*this);
+        return tmp;
+    }
+
+    PagesAddressIteratorInterleaved& operator+=(difference_type steps) {
+        ASSERT(steps >= 0);
+        if (tensor_volume > 0 && current_page_id >= tensor_volume) {
+            return *this;  // End iterator
+        }
+
+        current_page_id += steps;
+        if (tensor_volume > 0 && current_page_id >= tensor_volume) {
+            current_page_id = tensor_volume;
+            return *this;
+        }
+
+        update_current_page();
+        return *this;
+    }
+
+    PagesAddressIteratorInterleaved operator+(difference_type steps) const {
+        PagesAddressIteratorInterleaved tmp = *this;
+        tmp += steps;
+        return tmp;
+    }
+
+    const Page& operator[](difference_type n) const {
+        auto temp = *this;
+        temp += n;
+        return *temp;
+    }
+
+    // Comparison operators
+    bool operator==(const PagesAddressIteratorInterleaved& other) const {
+        return current_page_id == other.current_page_id;
+    }
+
+    bool operator!=(const PagesAddressIteratorInterleaved& other) const { return !(*this == other); }
+
+    bool operator<(const PagesAddressIteratorInterleaved& other) const {
+        return current_page_id < other.current_page_id;
+    }
+
+    bool operator>(const PagesAddressIteratorInterleaved& other) const { return other < *this; }
+
+    bool operator<=(const PagesAddressIteratorInterleaved& other) const { return *this < other || *this == other; }
+
+    bool operator>=(const PagesAddressIteratorInterleaved& other) const { return !(*this < other); }
+
+private:
+    const Accessor& accessor;
+    uint32_t current_page_id = 0;   // current page id
+    uint64_t current_noc_addr = 0;  // current NOC address for this page
+    uint8_t noc = noc_index;
+    uint32_t tensor_volume = 0;  // tensor volume, 0 means unknown
+    mutable Page current_page{0, 0, 0};
+
+    void update_current_page() {
+        current_noc_addr = accessor.get_noc_addr(current_page_id, 0, noc);
+        current_page = Page(current_noc_addr, current_page_id, current_page_id);  // For interleaved, shard_id = page_id
+    }
+};
+
+/**
  * Proxy for PagesAddressIterator, to enable range-based for loop over all pages in a tensor.
+ * Automatically selects the appropriate iterator type based on whether the accessor is interleaved.
  */
 template <typename Accessor>
 class Pages {
 public:
-    using iterator = PagesAddressIterator<Accessor>;
-    using const_iterator = PagesAddressIterator<Accessor>;
+    // Select iterator type based on accessor properties
+    using iterator = std::conditional_t<
+        Accessor::DSpec::is_interleaved,
+        PagesAddressIteratorInterleaved<Accessor>,
+        PagesAddressIteratorSharded<Accessor>>;
+    using const_iterator = iterator;
 
+    // Constructor for sharded accessors (tensor volume known from dspec)
+    template <typename A = Accessor, std::enable_if_t<!A::DSpec::is_interleaved, int> = 0>
     Pages(const Accessor& accessor, uint32_t start_page_id = 0, uint8_t noc = noc_index) :
-        accessor_(accessor), start_page_id_(start_page_id), noc_(noc) {}
+        accessor_(accessor),
+        start_page_id_(start_page_id),
+        tensor_volume_(accessor.dspec().tensor_volume()),
+        noc_(noc) {}
 
-    iterator begin() const { return PagesAddressIterator<Accessor>(accessor_, start_page_id_, noc_); }
+    // Constructor for interleaved accessors (tensor volume must be provided)
+    template <typename A = Accessor, std::enable_if_t<A::DSpec::is_interleaved, int> = 0>
+    Pages(const Accessor& accessor, uint32_t tensor_volume, uint32_t start_page_id = 0, uint8_t noc = noc_index) :
+        accessor_(accessor), start_page_id_(start_page_id), tensor_volume_(tensor_volume), noc_(noc) {}
 
-    iterator end() const { return PagesAddressIterator<Accessor>(accessor_, accessor_.dspec().tensor_volume(), noc_); }
+    iterator begin() const {
+        if constexpr (Accessor::DSpec::is_interleaved) {
+            return PagesAddressIteratorInterleaved<Accessor>(accessor_, start_page_id_, noc_);
+        } else {
+            return PagesAddressIteratorSharded<Accessor>(accessor_, start_page_id_, noc_);
+        }
+    }
+
+    iterator end() const {
+        if constexpr (Accessor::DSpec::is_interleaved) {
+            return PagesAddressIteratorInterleaved<Accessor>(accessor_, tensor_volume_, tensor_volume_, noc_);
+        } else {
+            return PagesAddressIteratorSharded<Accessor>(accessor_, tensor_volume_, noc_);
+        }
+    }
 
     const_iterator cbegin() const { return begin(); }
     const_iterator cend() const { return end(); }
@@ -276,6 +418,7 @@ public:
 private:
     const Accessor& accessor_;
     uint32_t start_page_id_;
+    uint32_t tensor_volume_;
     uint8_t noc_;
 };
 

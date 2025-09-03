@@ -273,7 +273,8 @@ public:
     const uint32_t page_size = 0;
 
     friend class tensor_accessor::ShardPagesAddressIterator<TensorAccessor>;
-    friend class tensor_accessor::PagesAddressIterator<TensorAccessor>;
+    friend class tensor_accessor::PagesAddressIteratorSharded<TensorAccessor>;
+    friend class tensor_accessor::PagesAddressIteratorInterleaved<TensorAccessor>;
 };
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -342,11 +343,10 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     }
 
     // Returns a proxy for pages iterator (iterates over all pages in the tensor)
-    tensor_accessor::Pages<TensorAccessor> pages(uint32_t start_page_id = 0, uint8_t noc = noc_index) const {
-        static_assert(
-            tensor_accessor::detail::always_false_v<TensorAccessor>,
-            "TensorAccessor::pages is not supported by the interleaved tensor accessor");
-        return {};
+    // For interleaved tensors, tensor_volume must be provided since the accessor doesn't know it
+    tensor_accessor::Pages<TensorAccessor> pages(
+        uint32_t tensor_volume, uint32_t start_page_id = 0, uint8_t noc = noc_index) const {
+        return tensor_accessor::Pages<TensorAccessor>(*this, tensor_volume, start_page_id, noc);
     }
 };
 #endif
