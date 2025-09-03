@@ -9,62 +9,10 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-class DownsampleBasicBlock:
-    def __init__(self, device, parameters, conv_pt, inplanes, planes, stride=1):
-        params_conv1_a = parameters.conv1
-        params_conv1_a.weight = parameters.conv1.weight[: inplanes // 2, :, :, :]
-        conv_pt_conv1_a = conv_pt.conv1
-        conv_pt_conv1_a.in_channels = inplanes // 2
-        params_conv1_b = parameters.conv1
-        params_conv1_b.weight = parameters.conv1.weight[inplanes // 2 :, :, :, :]
-        conv_pt_conv1_b = conv_pt.conv1
-        conv_pt_conv1_b.in_channels = inplanes - inplanes // 2
-        self.conv1_a = Conv(
-            parameters.conv1, conv_pt.conv1, stride=stride, padding=0, output_layout=ttnn.ROW_MAJOR_LAYOUT
-        )
-        self.conv1_b = Conv(parameters.conv2, conv_pt.conv2, output_layout=ttnn.ROW_MAJOR_LAYOUT)
-
-        self.bn1 = GroupNorm(parameters.bn1, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat8_b)
-        self.conv2 = Conv(parameters.conv2, conv_pt.conv2, output_layout=ttnn.ROW_MAJOR_LAYOUT)
-        self.bn2 = GroupNorm(parameters.bn2, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat8_b)
-
-    def forward(self, device, x, gn_shard="HS"):
-        out, out_h, out_w = self.conv1(device, x)
-        print(f"FORWARD X Input shape: {x.shape}, dtype: {x.dtype}, layout: {x.layout}")
-        out = ttnn.move(out)
-        out = self.bn1(device, out, out_h, out_w, shard=gn_shard)
-        print(f"BN1 output shape: {out.shape}")
-        out = ttnn.relu(out)
-        out, out_h, out_w = self.conv2(device, out)
-
-        print(f"Conv2 output shape: {out.shape}")
-        # print(f"conv2 output dtype: {out.dtype} layout: {out.layout} shard layout: {out.memory_config}")
-        out = ttnn.move(out)
-        out = self.bn2(device, out, out_h, out_w, shard=gn_shard)
-        print(f"BN2 output shape: {out.shape}")
-
-        if self.downsample is not None:
-            print(f"Downsample output shape: {x.shape} self.downsample: {self.downsample}")
-            print(
-                f"Input to downsample conv shape: {x.shape}, dtype: {x.dtype}, layout: {x.layout} memory config: {x.memory_config()}"
-            )
-            x, out_h_ds, out_w_ds = self.downsample_conv(device, x)
-            print(f"Downsample conv output shape: {x.shape}, out_h: {out_h}, out_w: {out_w}")
-            print(f"downsample conv output dtype: {x.dtype} layout: {x.layout} shard layout: {x.memory_config()}")
-            x = self.downsample_bn(device, x, out_h_ds, out_w_ds, shard=gn_shard)
-        else:
-            print(f"reshape x shape: {x.shape} self.downsample: {self.downsample}")
-            # x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
-
-
 class TTBasicBlock:
     expansion = 1
 
     def __init__(self, device, parameters, conv_pt, inplanes, planes, stride=1, scale=1, is_sliced=False):
-        # super().__init__()
-        # print("------------BOJANJE TTBasicBlock------------")
-        # print(f"TTBasicBlock: {parameters=},\n {conv_pt=},\n {inplanes=},\n {planes=},\n {channels=},\n {cell_size=},\n {grid_height=},\n {stride=}")
-        # chanell_slice)
         self.is_sliced = is_sliced
         print(f"TTBasicBlock: {inplanes=},\n {planes=},\n {stride=},\n {is_sliced=}")
         self.conv1 = Conv(
@@ -126,63 +74,16 @@ class TTBasicBlock:
 
         if self.downsample is not None:
             print(f"Downsample output shape: {x.shape} self.downsample: {self.downsample}")
-            print(
-                f"Input to downsample conv shape: {x.shape}, dtype: {x.dtype}, layout: {x.layout} memory config: {x.memory_config()}"
-            )
+            # print(
+            #     f"Input to downsample conv shape: {x.shape}, dtype: {x.dtype}, layout: {x.layout} memory config: {x.memory_config()}"
+            # )
             x, out_h_ds, out_w_ds = self.downsample_conv(device, x)
-            print(f"Downsample conv output shape: {x.shape}, out_h: {out_h}, out_w: {out_w}")
-            print(f"downsample conv output dtype: {x.dtype} layout: {x.layout} shard layout: {x.memory_config()}")
+            # print(f"Downsample conv output shape: {x.shape}, out_h: {out_h}, out_w: {out_w}")
+            # print(f"downsample conv output dtype: {x.dtype} layout: {x.layout} shard layout: {x.memory_config()}")
             x = self.downsample_bn(device, x, out_h_ds, out_w_ds, shard=gn_shard)
         else:
             print(f"reshape x shape: {x.shape} self.downsample: {self.downsample}")
             # x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
-
-        # print(f"{out.shape=}, {x.shape=}")
-        # print(f"memory config: {out.memory_config=},\n {x.memory_config=}")
-        # nt("--------------------------------------------------")
-
-        #         print(f"X shape: {x.shape}, OUT shape: {out.shape}")
-        #         if out.is_sharded() and out.memory_config().memory_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-        # #             # Reshardujte tensor u HEIGHT_SHARDED
-        #             # Create height-sharded memory config
-        #             height_sharded_config = ttnn.create_sharded_memory_config(
-        #                 shape=[out.shape[2]//20, out.shape[3]],  # e.g., [12, 128] for 8 cores
-        #                 core_grid=ttnn.CoreGrid(y=4, x=5),
-        #                 strategy=ttnn.ShardStrategy.HEIGHT,
-        #                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        #                 )
-        #             out_hs = ttnn.to_memory_config(out, height_sharded_config)
-        #             print(f"Resharded output tensor {out.shape} to HEIGHT_SHARDED with config: {height_sharded_config}")
-        #         if x.is_sharded() and x.memory_config().memory_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-        #             # Reshardujte tensor u HEIGHT_SHARDED
-        #             # Create height-sharded memory config
-        #             height_sharded_config = ttnn.create_sharded_memory_config(
-        #                 shape=[x.shape[2]//20, x.shape[3]],  # e.g., [12, 128] for 8 cores
-        #                 core_grid=ttnn.CoreGrid(y=4, x=5),
-        #                 strategy=ttnn.ShardStrategy.HEIGHT,
-        #                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        #             )
-        #             x_hs = ttnn.to_memory_config(x, height_sharded_config)
-        #             print(f"Resharded input tensor {x.shape} to HEIGHT_SHARDED with config: {height_sharded_config}")
-
-        #             print(f"Resharding output tensor {out.shape} to HEIGHT_SHARDED"
-        #             print(f"Resharding output tensor {out.shape} to HEIGHT_SHARDED"
-        #             height_sharded_config = ttnn.create_sharded_memory_config(
-        #             shard_shape=[, tensor_width],  # Height will be divided across cores
-        #             core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(19, 0))}),  # 20 cores in a line
-        #             strategy=ttnn.ShardStrategy.HEIGHT,
-        #             orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        #             use_height_and_width_as_shard_shape=True
-        # )
-        #             out = ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
-        #         if x.is_sharded() and x.memory_config().memory_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-        #         #     # Reshardujte tensor u HEIGHT_SHARDED
-        #         #     height_sharded_config = ttnn.MemoryConfig(
-        #         #     memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        #         #     buffer_type=x.memory_config().buffer_type
-        #         #     )
-        #         #     x = ttnn.to_memory_config(x, height_sharded_config)
-        #             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
 
         # out_tt = ttnn.add(out, x, use_legasy=False)
         if gn_shard == "HS":

@@ -44,7 +44,7 @@ def test_tt_basicblock(device, n, in_ch, out_ch, h, w, stride, sharding, ch_slic
     print(f"{params2=}")
     print("-----------------------------------------")
     block = TTBasicBlock(
-        device, params, params.conv_args, inplanes=in_ch, planes=out_ch, stride=stride, ch_slice=ch_slice
+        device, params, params.conv_args, inplanes=in_ch, planes=out_ch, stride=stride, is_sliced=ch_slice
     )
 
     n, c, h, w = input_tensor.shape
@@ -55,11 +55,11 @@ def test_tt_basicblock(device, n, in_ch, out_ch, h, w, stride, sharding, ch_slic
     ttnn_x1 = ttnn_x[:, :, :, : in_ch // 2]
     ttnn_x2 = ttnn_x[:, :, :, in_ch // 2 :]
     block1 = TTBasicBlock(
-        device, params1, params1.conv_args, inplanes=in_ch, planes=out_ch, stride=stride, ch_slice=True
+        device, params1, params1.conv_args, inplanes=in_ch, planes=out_ch, stride=stride, is_sliced=True
     )
     ttnn_out_1 = block1.forward(device, ttnn_x1, gn_shard=sharding)
     block2 = TTBasicBlock(
-        device, params2, params2.conv_args, inplanes=in_ch, planes=out_ch, stride=stride, ch_slice=True
+        device, params2, params2.conv_args, inplanes=in_ch, planes=out_ch, stride=stride, is_sliced=True
     )
 
     ttnn_out_2 = block2.forward(device, ttnn_x2, gn_shard=sharding)

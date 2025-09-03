@@ -11,6 +11,15 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters
 
 
+def pretty_print_torch(tensor, tensor_name):
+    print(f"{tensor_name} - shape: {tensor.shape}, dtype: {tensor.dtype}")
+
+
+def pretty_print_ttnn(tensor, tensor_name):
+    print(f"{tensor_name} - shape: {tensor.shape}, dtype: {tensor.dtype}")
+    print(f"{tensor_name} layout: {tensor.layout}, memory_config: {tensor.memory_config()}")
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 12 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     "cell_size",
@@ -25,8 +34,8 @@ def test_oftnet(device, grid_height, cell_size):
 
     torch.manual_seed(42)
 
-    # input_tensor = torch.rand((1, 3, 384, 1280))
-    input_tensor = torch.load("models/experimental/oft/tests/images/resized_test_image_batched.pt")
+    input_tensor = torch.rand((1, 3, 384, 1280))
+    # input_tensor = torch.load("models/experimental/oft/tests/images/resized_test_image_batched.pt")
     print(f"Input tensor shape: {input_tensor.shape}, dtype: {input_tensor.dtype}")
     # calib = torch.rand((1, 3, 4))
     calib = torch.tensor(
@@ -64,11 +73,10 @@ def test_oftnet(device, grid_height, cell_size):
     # print(f"Grid shape: {grid.shape}, dtype: {grid.dtype}")
     mean = torch.tensor([0.485, 0.456, 0.406])  # .view(1, 1, 3)
     std = torch.tensor([0.229, 0.224, 0.225])  # .view(1, 1, 3)
-
-    mean = ttnn.from_torch(
+    ttnn_mean = ttnn.from_torch(
         mean, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    std = ttnn.from_torch(
+    ttnn_std = ttnn.from_torch(
         std, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
@@ -88,8 +96,8 @@ def test_oftnet(device, grid_height, cell_size):
         parameters.conv_args,
         TTBasicBlock,
         [2, 2, 2, 2],
-        mean,
-        std,
+        ttnn_mean,
+        ttnn_std,
         features=input_tensor,
         calib=calib,
         grid=grid,
@@ -106,7 +114,15 @@ def test_oftnet(device, grid_height, cell_size):
     tt_ang_offsets = ttnn.to_torch(tt_ang_offsets)
 
     scores, pos_offsets, dim_offsets, ang_offsets = torch_module(input_tensor, calib, grid)
-    # n, c, h, w = feats8.shape
+
+    # pretty_print_torch(tt_scores, "TTNN Scores")
+    # pretty_print_torch(tt_pos_offsets, "TTNN Pos Offsets")
+    # pretty_print_torch(tt_dim_offsets, "TTNN Dim Offsets")
+    # pretty_print_torch(tt_ang_offsets, "TTNN Ang Offsets")
+    # pretty_print_torch(scores, "Torch Scores")
+    # pretty_print_torch(pos_offsets, "Torch Pos Offsets")
+    # pretty_print_torch(dim_offsets, "Torch Dim Offsets")
+    # pretty_print_torch(ang_offsets, "Torch Ang Offsets")
 
     passing, pcc = check_with_pcc(tt_scores, scores, 0.99)
     print(f"Scores: Passing: {passing}, PCC: {pcc}")

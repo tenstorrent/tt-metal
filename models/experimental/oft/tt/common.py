@@ -2,12 +2,15 @@ import ttnn
 import math
 
 
+def pretty_print_ttnn(tensor, tensor_name):
+    print(f"{tensor_name}: {tensor.shape}")
+    print(f"{tensor_name} dtype: {tensor.dtype}")
+    print(f"{tensor_name} layout: {tensor.layout}")
+    print(f"{tensor_name} memory_config: {tensor.memory_config()}")
+
+
 def _nearest_32_per_core(x, core):
     return math.ceil(x / core / 32) * 32 * core
-
-
-def _nearest_32(x):
-    return math.ceil(x / 32) * 32
 
 
 class Conv:
@@ -252,6 +255,7 @@ class GroupNormDRAM:
     def __call__(self, device, input_tensor, H, W, shard="HS", num_splits=1):
         compute_grid = device.compute_with_storage_grid_size()
         grid_x, grid_y = compute_grid.x, compute_grid.y
+        print(f"DRAM {grid_x=}, {grid_y=}, {shard=}, {num_splits=} {self.is_sliced=}")
         if num_splits > 4:
             grid_y = 2
         grid_size = ttnn.CoreGrid(y=grid_y, x=grid_x)
@@ -297,6 +301,7 @@ class GroupNormDRAM:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # groupnorm
+        print(f"DRAM {grid_size=}")
         output_tensor = ttnn.group_norm(
             input_tensor_tilized,
             num_groups=self.num_groups,
