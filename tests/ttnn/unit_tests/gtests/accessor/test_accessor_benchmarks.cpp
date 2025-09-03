@@ -92,7 +92,9 @@ void benchmark_args_combinations_single_core(
     const auto input_shard_view = input_mesh_buffer->get_device_buffer(mesh_coordinate);
     const auto local_device = input_shard_view->device();
 
-    tt::tt_metal::detail::SetDeviceProfilerDir(res_path + "/" + params.test_name);
+    auto profiler_dir = res_path + "/" + params.test_name;
+    tt::tt_metal::detail::SetDeviceProfilerDir(profiler_dir);
+    log_info(tt::LogTest, "Setting profiler dir to: {}", profiler_dir);
     tt::tt_metal::detail::FreshProfilerDeviceLog();
     for (const auto& arg_config : args_combinations) {
         auto args_bitmask = arg_config.raw();

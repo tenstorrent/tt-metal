@@ -102,6 +102,7 @@ def impl_test(gtest_filter, res_dir, args_configs=None):
 
     ENV = os.environ.copy()
     ENV["TT_METAL_DEVICE_PROFILER"] = "1"
+    ENV["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
     BASE = Path(ENV["TT_METAL_HOME"])
 
     binary_path = Path(BASE / "build" / "test" / "ttnn" / "unit_tests_ttnn_accessor")
