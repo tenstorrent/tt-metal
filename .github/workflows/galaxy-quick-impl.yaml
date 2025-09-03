@@ -1,8 +1,6 @@
 name: "zzz Galaxy Quick tests"
 
 on:
-  push:
-    branches: ["roseli/0-remove-4u-quick-tests"]
   workflow_call:
     inputs:
       docker-image:
