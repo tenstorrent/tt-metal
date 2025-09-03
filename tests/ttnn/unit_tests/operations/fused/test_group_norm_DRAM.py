@@ -3,18 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
 import torch
-import ttnn
+
 from loguru import logger
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+import ttnn
+
+from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
+from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
-        (1, 32, 1, 32, 1, 1, 1, 1),  # test case
         (8, 768, 1, 512, 32, 2, 8, 8),  # base case
         (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
         (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
@@ -72,10 +75,7 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x)
 
     # torch input tensor
-    # Create a tensor where each N has a unique value, but all elements within that N are the same.
-    # This is flexible for any N, C, H, W.
-    # Print total N*num_groups
-    logger.warning(f"Total N*num_groups: {N*num_groups}")
+    # Create a tensor where each group has a unique value, but all elements within that group are the same.
     per_n_tensors = []
     for n in range(N * num_groups):
         random_mean = torch.randn(1).item()  # add a random mean
@@ -118,7 +118,7 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     )
 
     # groupnorm
-    num_itr = 1  # second iteration to help catch potential runtime args issue.
+    num_itr = 2  # second iteration to help catch potential runtime args issue.
     for _ in range(num_itr):
         output_tensor = ttnn.group_norm(
             input_tensor_tilized,
@@ -138,13 +138,6 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    # Print each value in output_tensor and torch_output_tensor
-    # for i in range(output_tensor.shape[0]):
-    #     for j in range(output_tensor.shape[1]):
-    #         for k in range(output_tensor.shape[2]):
-    #             for l in range(output_tensor.shape[3]):
-    #                 match = torch.isclose(output_tensor[i, j, k, l], torch_output_tensor[i, j, k, l], atol=1e-3, rtol=1e-3)
-    #                 logger.warning(f"Output tensor[{i}, {j}, {k}, {l}]: {output_tensor[i, j, k, l]}, Torch output tensor[{i}, {j}, {k}, {l}]: {torch_output_tensor[i, j, k, l]}, Match: {match}")
     torch.set_printoptions(profile="full")
     with open("tensor_output.txt", "w") as f:
         f.write(str(output_tensor))
