@@ -1595,7 +1595,7 @@ void RunTest2DMCastConnAPI(
     for (uint32_t i = 0; i < rx_physical_device_ids.size(); i++) {
         log_info(tt::LogTest, "Checking Status of Rx on physical device {}", rx_physical_device_ids[i]);
 
-        auto receiver_device = fixture->get_device(rx_physical_device_ids[i]);
+        const auto& receiver_device = fixture->get_device(rx_physical_device_ids[i]);
         std::vector<uint32_t> recv_status;
 
         tt_metal::detail::ReadFromDeviceL1(
