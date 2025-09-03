@@ -26,6 +26,11 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
+      NIGHTLY:
+        required: false
+        default: false
+        type: boolean
+        description: "Run nightly-only tests"
 
 jobs:
   cpp-unit-tests-slow-dispatch:
@@ -46,9 +51,15 @@ jobs:
             cmd: ./build/test/tt_metal/unit_tests_data_movement
           - name: debug_tools and device and dispatch
             cmd: |
-              ./build/test/tt_metal/unit_tests_debug_tools
-              ./build/test/tt_metal/unit_tests_device
-              ./build/test/tt_metal/unit_tests_dispatch
+              if [ "${{ inputs.NIGHTLY }}" = "true" ]; then
+                ./build/test/tt_metal/unit_tests_debug_tools
+                ./build/test/tt_metal/unit_tests_device
+                ./build/test/tt_metal/unit_tests_dispatch
+              else
+                ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="*-*NIGHTLY_*"
+                ./build/test/tt_metal/unit_tests_device --gtest_filter="*-*NIGHTLY_*"
+                ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="*-*NIGHTLY_*"
+              fi
           - name: llk
             cmd: ./build/test/tt_metal/unit_tests_llk
           - name: FD2
