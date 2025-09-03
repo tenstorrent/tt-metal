@@ -35,7 +35,7 @@ class TtCSPRepBiFPANNeck:
             activation="relu",
         )
         self.Bifusion1 = TtBiFusion(device, parameters.Bifusion1, model_params.Bifusion1)
-        self.Rep_p3 = TtBepC3(device, parameters.Rep_p3, model_params.Rep_p3, n=12)
+        self.Rep_p3 = TtBepC3(device, parameters.Rep_p3, model_params.Rep_p3, n=12, reshape=False)
 
         self.downsample2 = Yolov6l_Conv2D(
             device=device,
@@ -43,7 +43,7 @@ class TtCSPRepBiFPANNeck:
             conv_pth=parameters.downsample2.block.conv,
             activation="relu",
         )
-        self.Rep_n3 = TtBepC3(device, parameters.Rep_n3, model_params.Rep_n3, n=12)
+        self.Rep_n3 = TtBepC3(device, parameters.Rep_n3, model_params.Rep_n3, n=12, reshape=False)
 
         self.downsample1 = Yolov6l_Conv2D(
             device=device,
@@ -52,7 +52,12 @@ class TtCSPRepBiFPANNeck:
             activation="relu",
         )
         self.Rep_n4 = TtBepC3(
-            device, parameters.Rep_n4, model_params.Rep_n4, n=12, shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            device,
+            parameters.Rep_n4,
+            model_params.Rep_n4,
+            n=12,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            reshape=False,
         )
 
     def __call__(self, input_list):
@@ -80,10 +85,10 @@ class TtCSPRepBiFPANNeck:
             use_height_and_width_as_shard_shape=True,
         )
         p_concat_layer1 = ttnn.concat([down_feat1, fpn_out1], dim=-1, memory_config=output_sharded_memory_config)
-        pan_out1 = self.Rep_n3(p_concat_layer1)
-        pan_out_1 = ttnn.clone(pan_out1)
+        pan_out_1 = self.Rep_n3(p_concat_layer1)
+        # pan_out_1 = ttnn.clone(pan_out1)
 
-        down_feat0 = self.downsample1(pan_out1)
+        down_feat0 = self.downsample1(pan_out_1)
 
         output_sharded_memory_config = ttnn.create_sharded_memory_config(
             [
