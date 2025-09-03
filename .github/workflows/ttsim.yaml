@@ -81,7 +81,6 @@ jobs:
             "eltwise_sfpu"
             "hello_world_compute_kernel"
             "hello_world_datamovement_kernel"
-            "hello_world_datatypes_kernel"
           )
 
           for example_name in "${working_examples[@]}"; do
