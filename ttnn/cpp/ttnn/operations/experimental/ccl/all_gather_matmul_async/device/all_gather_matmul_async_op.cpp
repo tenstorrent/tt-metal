@@ -109,9 +109,30 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherMatmulAsync::create_
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
+    auto mesh_device = input_tensors[0].device();
+    auto sub_device_id = this->all_gather_async_struct.sub_device_id;
+
+    auto subdevice = sub_device_id.has_value() ? *sub_device_id : mesh_device->get_sub_device_ids().at(0);
+    const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice);
+    auto subdevices = {subdevice};
+
+    GlobalSemaphore barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+
+    std::vector<ttnn::GlobalSemaphore> op_semaphores;
+    if (this->all_gather_async_struct.do_sync) {
+        op_semaphores = {
+            ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0),
+            ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0)};
+        tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
+    } else {
+        op_semaphores = this->all_gather_async_struct.semaphore.value();
+    }
+
     return ttnn::ccl::create_mesh_workload_from_programs(
         tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
-            return create_program_at(coord, input_tensors, optional_input_tensors, output_tensors);
+            return create_program_at(
+                coord, input_tensors, optional_input_tensors, output_tensors, op_semaphores, barrier_semaphore);
         });
 }
 
@@ -119,7 +140,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmulAsync::create_progr
     const ttnn::MeshCoordinate& mesh_coord,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
+    std::vector<Tensor>& output_tensors,
+    const std::vector<GlobalSemaphore>& op_semaphores,
+    const GlobalSemaphore& barrier_semaphore) const {
     auto mesh_device = input_tensors[0].device();
     ::ttnn::ccl::get_device_sender_receiver_config(
         mesh_device->get_device(mesh_coord),
@@ -165,9 +188,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmulAsync::create_progr
         this->all_gather_async_struct.ring_size,
         device_index,
         this->all_gather_async_struct.topology,
-        this->all_gather_async_struct.semaphore,
-        this->all_gather_async_struct.barrier_semaphore,
-        this->all_gather_async_struct.using_persistent_buffers,
+        op_semaphores,
+        barrier_semaphore,
+        this->all_gather_async_struct.do_sync,
         this->all_gather_async_struct.sub_device_id,
         this->all_gather_async_struct.chunks_per_sync,
         this->all_gather_async_struct.num_workers_per_link,
@@ -203,8 +226,8 @@ tt::tt_metal::operation::Hash AllGatherMatmulAsync::compute_program_hash(
                   shard_builder::HalProgrammableCoreType::TENSIX, this->all_gather_async_struct.sub_device_id.value())
             : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         this->all_gather_async_struct.cluster_axis,
-        this->all_gather_async_struct.barrier_semaphore.has_value(),
-        this->all_gather_async_struct.using_persistent_buffers,
+        this->all_gather_async_struct.semaphore.has_value(),
+        this->all_gather_async_struct.do_sync,
         this->all_gather_async_struct.chunks_per_sync,
         this->all_gather_async_struct.num_workers_per_link,
         this->all_gather_async_struct.num_buffers_per_channel,
@@ -224,13 +247,13 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const uint32_t dim,
-    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const CoreCoord all_gather_core_grid_offset,
+    const std::optional<std::vector<GlobalSemaphore>>& multi_device_global_semaphore,
+    bool do_sync,
     const std::optional<const Tensor>& bias,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config_ag,
     const ttnn::ccl::Topology topology,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     const std::optional<MemoryConfig>& memory_config_mm,
     const bool transpose_a,
@@ -256,8 +279,6 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         optional_input_tensors.push_back(std::nullopt);
     }
 
-    bool using_persistent_buffers = persistent_output_buffer.has_value();
-
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_buffer};
 
     /* AllGather setup */
@@ -269,12 +290,11 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         memory_config_ag.value_or(input_tensor.memory_config()),
         topology,
         multi_device_global_semaphore,
+        do_sync,
         sub_device_id,
         /*cluster_axis=*/std::nullopt,
         false,
         false,
-        barrier_semaphore,
-        using_persistent_buffers,
         chunks_per_sync,
         num_workers_per_link,
         num_buffers_per_channel);

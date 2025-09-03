@@ -110,6 +110,5 @@ def test_reduce_scatter_async_training_shapes(
         enable_trace=enable_trace,
         num_iters=num_iters,
         ones_tensor=ones_tensor,
-        use_barrier=True,
-        use_persistent_buffers=False,
+        do_sync=True,
     )
