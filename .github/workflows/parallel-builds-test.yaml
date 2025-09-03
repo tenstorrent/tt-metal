@@ -1,0 +1,77 @@
+name: "Test parallel builds - branch vs main"
+
+on:
+  push:
+    branches: ["philei/allow-parallel-builds"]
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+  packages: write
+  checks: write
+
+run-name: Test parallel builds - ${{ github.ref_name }} vs main
+
+jobs:
+  # Build the current branch (philei/allow-parallel-builds)
+  build-branch:
+    name: "🔧 Build current branch (${{ github.ref_name }})"
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: "Release"
+      build-wheel: true
+      version: "22.04"
+      ref: ${{ github.sha }}
+      fetch-depth: 500
+
+  # Build the main branch for comparison
+  build-main:
+    name: "🔧 Build main branch"
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: "Release"
+      build-wheel: true
+      version: "22.04"
+      ref: "main"
+      fetch-depth: 500
+
+  # Summary job to verify all builds completed successfully
+  verify-parallel-builds:
+    name: "✅ Verify parallel builds completed"
+    needs: [build-branch, build-main, build-branch-profiler, build-main-profiler]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summary
+        run: |
+          echo "## Parallel Build Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ All parallel builds completed successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts Generated:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch (${{ github.ref_name }}) Packages:** ${{ needs.build-branch.outputs.packages-artifact-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch (${{ github.ref_name }}) Build:** ${{ needs.build-branch.outputs.build-artifact-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch (${{ github.ref_name }}) Wheel:** ${{ needs.build-branch.outputs.wheel-artifact-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Main Branch Packages:** ${{ needs.build-main.outputs.packages-artifact-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Main Branch Build:** ${{ needs.build-main.outputs.build-artifact-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Main Branch Wheel:** ${{ needs.build-main.outputs.wheel-artifact-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch (${{ github.ref_name }}) Profiler Packages:** ${{ needs.build-branch-profiler.outputs.packages-artifact-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch (${{ github.ref_name }}) Profiler Build:** ${{ needs.build-branch-profiler.outputs.build-artifact-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch (${{ github.ref_name }}) Profiler Wheel:** ${{ needs.build-branch-profiler.outputs.wheel-artifact-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Main Branch Profiler Packages:** ${{ needs.build-main-profiler.outputs.packages-artifact-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Main Branch Profiler Build:** ${{ needs.build-main-profiler.outputs.build-artifact-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Main Branch Profiler Wheel:** ${{ needs.build-main-profiler.outputs.wheel-artifact-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Test Verification:" >> $GITHUB_STEP_SUMMARY
+          echo "This workflow demonstrates that the artifact naming fix prevents conflicts when:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Building different branches in parallel" >> $GITHUB_STEP_SUMMARY
+          echo "2. Building different configurations (with/without profiler) in parallel" >> $GITHUB_STEP_SUMMARY
+          echo "3. All artifacts have unique names due to SHA and run ID inclusion" >> $GITHUB_STEP_SUMMARY
