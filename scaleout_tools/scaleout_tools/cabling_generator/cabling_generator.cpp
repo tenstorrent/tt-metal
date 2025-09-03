@@ -7,12 +7,243 @@
 #include <algorithm>
 #include <enchantum/enchantum.hpp>
 #include <fstream>
+#include <google/protobuf/text_format.h>
 
 #include <scaleout_tools/connector/connector.hpp>
-#include "factory_system_descriptor.pb.h"
-#include "deployment.pb.h"
+
+// Add protobuf includes
+#include "protobuf/cluster_config.pb.h"
+#include "protobuf/deployment.pb.h"
+#include "protobuf/factory_system_descriptor.pb.h"
+#include "protobuf/pod_config.pb.h"
 
 namespace tt::scaleout_tools {
+
+// Helper to load protobuf descriptors
+template <typename Descriptor>
+Descriptor load_descriptor_from_textproto(const std::string& file_path) {
+    std::ifstream file(file_path);
+    if (!file.is_open()) {
+        throw std::runtime_error("Failed to open file: " + file_path);
+    }
+
+    std::string file_content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    file.close();
+
+    Descriptor descriptor;
+    if (!google::protobuf::TextFormat::ParseFromString(file_content, &descriptor)) {
+        throw std::runtime_error("Failed to parse textproto file: " + file_path);
+    }
+    return descriptor;
+}
+
+// Find pod descriptor by name - search inline first, then fallback to file
+tt::scaleout_tools::cabling_generator::proto::PodDescriptor find_pod_descriptor(
+    const std::string& pod_descriptor_name,
+    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor) {
+    // First, search in inline pod descriptors
+    auto it = cluster_descriptor.pod_descriptors().find(pod_descriptor_name);
+    if (it != cluster_descriptor.pod_descriptors().end()) {
+        return it->second;
+    }
+
+    // Fallback: load from file
+    // TODO: This should be converted to factory functions
+    return load_descriptor_from_textproto<tt::scaleout_tools::cabling_generator::proto::PodDescriptor>(
+        "scaleout_tools/scaleout_tools/cabling_descriptor/instances/" + pod_descriptor_name + ".textproto");
+}
+
+// Build pod from descriptor with port connections and validation
+Pod build_pod(
+    const std::string& pod_descriptor_name,
+    HostId host_id,
+    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
+    std::unordered_map<std::string, Pod>& pod_templates,
+    std::unordered_map<std::string, Board>& board_templates) {
+    const std::string& pod_type = pod_descriptor_name;
+    auto it = pod_templates.find(pod_type);
+    if (it != pod_templates.end()) {
+        Pod pod = it->second;  // Copy template
+        pod.host_id = host_id;
+        return pod;
+    }
+
+    // Build new pod template (with host_id=0)
+    Pod template_pod;
+
+    auto pod_descriptor = find_pod_descriptor(pod_descriptor_name, cluster_descriptor);
+
+    // Create boards with internal connections marked (using cached boards)
+    for (const auto& board_item : pod_descriptor.boards().board()) {
+        TrayId tray_id = TrayId(board_item.tray_id());
+        const std::string& board_type = board_item.board_type();
+
+        // Check cache first
+        auto board_it = board_templates.find(board_type);
+        if (board_it != board_templates.end()) {
+            template_pod.boards.emplace(tray_id, board_it->second);
+        } else {
+            // Create new board and cache it
+            Board board = create_board(board_type);
+            board_templates.emplace(board_type, board);
+            template_pod.boards.emplace(tray_id, board);
+        }
+    }
+
+    // Add inter-board connections and validate/mark ports
+    for (const auto& [port_type_str, port_connections] : pod_descriptor.port_type_connections()) {
+        auto port_type = enchantum::cast<PortType>(port_type_str, ttsl::ascii_caseless_comp);
+        if (!port_type.has_value()) {
+            throw std::runtime_error("Invalid port type: " + port_type_str);
+        }
+
+        for (const auto& conn : port_connections.connections()) {
+            TrayId board_a_id = TrayId(conn.port_a().tray_id());
+            PortId port_a_id = PortId(conn.port_a().port_id());
+            TrayId board_b_id = TrayId(conn.port_b().tray_id());
+            PortId port_b_id = PortId(conn.port_b().port_id());
+
+            // Validate and mark ports as used
+            auto& board_a = template_pod.boards.at(board_a_id);
+            auto& board_b = template_pod.boards.at(board_b_id);
+
+            const auto& available_a = board_a.get_available_port_ids(*port_type);
+            const auto& available_b = board_b.get_available_port_ids(*port_type);
+
+            if (std::find(available_a.begin(), available_a.end(), port_a_id) == available_a.end()) {
+                throw std::runtime_error(
+                    port_type_str + " Port " + std::to_string(*port_a_id) + " not available on board " +
+                    std::to_string(*board_a_id) + " in pod " + pod_descriptor_name);
+            }
+            if (std::find(available_b.begin(), available_b.end(), port_b_id) == available_b.end()) {
+                throw std::runtime_error(
+                    port_type_str + " Port " + std::to_string(*port_b_id) + " not available on board " +
+                    std::to_string(*board_b_id) + " in pod " + pod_descriptor_name);
+            }
+
+            board_a.mark_port_used(*port_type, port_a_id);
+            board_b.mark_port_used(*port_type, port_b_id);
+
+            // Store connection
+            template_pod.inter_board_connections[*port_type].emplace_back(
+                std::make_pair(board_a_id, port_a_id), std::make_pair(board_b_id, port_b_id));
+        }
+    }
+
+    // Cache the template
+    pod_templates[pod_type] = template_pod;
+
+    // Create instance with actual host_id
+    Pod pod = template_pod;
+    pod.host_id = host_id;
+    return pod;
+}
+
+// Build resolved graph instance from template and concrete host mappings
+std::shared_ptr<ResolvedGraphInstance> build_graph_instance(
+    const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
+    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
+    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
+    const std::string& instance_name,
+    std::unordered_map<std::string, Pod>& pod_templates,
+    std::unordered_map<std::string, Board>& board_templates) {
+    auto resolved = std::make_shared<ResolvedGraphInstance>();
+    resolved->template_name = graph_instance.template_name();
+    resolved->instance_name = instance_name;
+
+    // Get the template definition
+    const auto& template_def = cluster_descriptor.graph_templates().at(graph_instance.template_name());
+
+    // Build children based on template + instance mapping
+    for (const auto& child_def : template_def.children()) {
+        const std::string& child_name = child_def.name();
+        const auto& child_mapping = graph_instance.child_mappings().at(child_name);
+
+        if (child_def.has_pod_ref()) {
+            // Leaf node - create pod
+            if (child_mapping.mapping_case() != tt::scaleout_tools::cabling_generator::proto::ChildMapping::kHostId) {
+                throw std::runtime_error("Pod child must have host_id mapping: " + child_name);
+            }
+
+            HostId host_id = HostId(child_mapping.host_id());
+            const std::string& pod_descriptor_name = child_def.pod_ref().pod_descriptor();
+
+            // Validate deployment pod type if specified
+            if (*host_id < deployment_descriptor.hosts().size()) {
+                const auto& deployment_host = deployment_descriptor.hosts()[*host_id];
+                if (!deployment_host.pod_type().empty() && deployment_host.pod_type() != pod_descriptor_name) {
+                    throw std::runtime_error(
+                        "Pod type mismatch for host " + deployment_host.host() + " (host_id " +
+                        std::to_string(*host_id) + "): " + "deployment specifies '" + deployment_host.pod_type() +
+                        "' " + "but cluster configuration expects '" + pod_descriptor_name + "'");
+                }
+            } else {
+                throw std::runtime_error("Host ID " + std::to_string(*host_id) + " not found in deployment");
+            }
+
+            // Find pod descriptor and build pod inside build_pod
+            resolved->pods[child_name] = build_pod(pod_descriptor_name, host_id, cluster_descriptor, pod_templates, board_templates);
+
+        } else if (child_def.has_graph_ref()) {
+            // Non-leaf node - recursively build subgraph
+            if (child_mapping.mapping_case() !=
+                tt::scaleout_tools::cabling_generator::proto::ChildMapping::kSubInstance) {
+                throw std::runtime_error("Graph child must have sub_instance mapping: " + child_name);
+            }
+
+            resolved->subgraphs[child_name] = build_graph_instance(
+                child_mapping.sub_instance(), cluster_descriptor, deployment_descriptor, child_name, pod_templates, board_templates);
+        }
+    }
+
+    // Process internal connections within this graph instance
+    for (const auto& [port_type_str, port_connections] : template_def.internal_connections()) {
+        auto port_type = enchantum::cast<PortType>(port_type_str, ttsl::ascii_caseless_comp);
+        if (!port_type.has_value()) {
+            throw std::runtime_error("Invalid port type: " + port_type_str);
+        }
+
+        for (const auto& conn : port_connections.connections()) {
+            std::vector<std::string> path_a(conn.port_a().path().begin(), conn.port_a().path().end());
+            TrayId board_a_id = TrayId(conn.port_a().tray_id());
+            PortId port_a_id = PortId(conn.port_a().port_id());
+
+            std::vector<std::string> path_b(conn.port_b().path().begin(), conn.port_b().path().end());
+            TrayId board_b_id = TrayId(conn.port_b().tray_id());
+            PortId port_b_id = PortId(conn.port_b().port_id());
+
+            // Validate and mark ports as used for direct pod connections
+            if (path_a.size() == 1 && path_b.size() == 1 && resolved->pods.count(path_a[0]) &&
+                resolved->pods.count(path_b[0])) {
+                auto& board_a = resolved->pods.at(path_a[0]).boards.at(board_a_id);
+                auto& board_b = resolved->pods.at(path_b[0]).boards.at(board_b_id);
+
+                const auto& available_a = board_a.get_available_port_ids(*port_type);
+                const auto& available_b = board_b.get_available_port_ids(*port_type);
+
+                if (std::find(available_a.begin(), available_a.end(), port_a_id) == available_a.end()) {
+                    throw std::runtime_error(
+                        port_type_str + " Port " + std::to_string(*port_a_id) + " not available on board " +
+                        std::to_string(*board_a_id) + " in pod " + path_a[0]);
+                }
+                if (std::find(available_b.begin(), available_b.end(), port_b_id) == available_b.end()) {
+                    throw std::runtime_error(
+                        port_type_str + " Port " + std::to_string(*port_b_id) + " not available on board " +
+                        std::to_string(*board_b_id) + " in pod " + path_b[0]);
+                }
+
+                board_a.mark_port_used(*port_type, port_a_id);
+                board_b.mark_port_used(*port_type, port_b_id);
+            }
+
+            // Store connection
+            resolved->internal_connections[*port_type].emplace_back(
+                std::make_tuple(path_a, board_a_id, port_a_id), std::make_tuple(path_b, board_b_id, port_b_id));
+        }
+    }
+
+    return resolved;
+}
 
 // Constructor
 CablingGenerator::CablingGenerator(
@@ -37,7 +268,11 @@ CablingGenerator::CablingGenerator(
     }
 
     // Build cluster with all connections and port validation
-    build_cluster_from_descriptor(cluster_descriptor, deployment_descriptor);
+    root_instance_ =
+        build_graph_instance(cluster_descriptor.root_instance(), cluster_descriptor, deployment_descriptor, "", pod_templates_, board_templates_);
+
+    // Validate host_id uniqueness across all pods
+    validate_host_id_uniqueness();
 
     // Populate the boards_by_host_tray_ map
     populate_boards_by_host_tray();
@@ -115,222 +350,6 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
 
     output_file << output_string;
     output_file.close();
-}
-
-// Find pod descriptor by name - search inline first, then fallback to file
-tt::scaleout_tools::cabling_generator::proto::PodDescriptor CablingGenerator::find_pod_descriptor(
-    const std::string& pod_descriptor_name,
-    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor) {
-    // First, search in inline pod descriptors
-    auto it = cluster_descriptor.pod_descriptors().find(pod_descriptor_name);
-    if (it != cluster_descriptor.pod_descriptors().end()) {
-        return it->second;
-    }
-
-    // Fallback: load from file
-    // TODO: This should be converted to factory functions
-    return load_descriptor_from_textproto<tt::scaleout_tools::cabling_generator::proto::PodDescriptor>(
-        "scaleout_tools/scaleout_tools/cabling_descriptor/instances/" + pod_descriptor_name + ".textproto");
-}
-
-// Build pod from descriptor with port connections and validation
-Pod CablingGenerator::build_pod(
-    const std::string& pod_descriptor_name,
-    HostId host_id,
-    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor) {
-    const std::string& pod_type = pod_descriptor_name;
-    auto it = pod_templates_.find(pod_type);
-    if (it != pod_templates_.end()) {
-        Pod pod = it->second;  // Copy template
-        pod.host_id = host_id;
-        return pod;
-    }
-
-    // Build new pod template (with host_id=0)
-    Pod template_pod;
-
-    auto pod_descriptor = find_pod_descriptor(pod_descriptor_name, cluster_descriptor);
-
-    // Create boards with internal connections marked (using cached boards)
-    for (const auto& board_item : pod_descriptor.boards().board()) {
-        TrayId tray_id = TrayId(board_item.tray_id());
-        const std::string& board_type = board_item.board_type();
-
-        // Check cache first
-        auto board_it = board_templates_.find(board_type);
-        if (board_it != board_templates_.end()) {
-            template_pod.boards.emplace(tray_id, board_it->second);
-        } else {
-            // Create new board and cache it
-            Board board = create_board(board_type);
-            board_templates_.emplace(board_type, board);
-            template_pod.boards.emplace(tray_id, board);
-        }
-    }
-
-    // Add inter-board connections and validate/mark ports
-    for (const auto& [port_type_str, port_connections] : pod_descriptor.port_type_connections()) {
-        auto port_type = enchantum::cast<PortType>(port_type_str, ttsl::ascii_caseless_comp);
-        if (!port_type.has_value()) {
-            throw std::runtime_error("Invalid port type: " + port_type_str);
-        }
-
-        for (const auto& conn : port_connections.connections()) {
-            TrayId board_a_id = TrayId(conn.port_a().tray_id());
-            PortId port_a_id = PortId(conn.port_a().port_id());
-            TrayId board_b_id = TrayId(conn.port_b().tray_id());
-            PortId port_b_id = PortId(conn.port_b().port_id());
-
-            // Validate and mark ports as used
-            auto& board_a = template_pod.boards.at(board_a_id);
-            auto& board_b = template_pod.boards.at(board_b_id);
-
-            const auto& available_a = board_a.get_available_port_ids(*port_type);
-            const auto& available_b = board_b.get_available_port_ids(*port_type);
-
-            if (std::find(available_a.begin(), available_a.end(), port_a_id) == available_a.end()) {
-                throw std::runtime_error(
-                    port_type_str + " Port " + std::to_string(*port_a_id) + " not available on board " +
-                    std::to_string(*board_a_id) + " in pod " + pod_descriptor_name);
-            }
-            if (std::find(available_b.begin(), available_b.end(), port_b_id) == available_b.end()) {
-                throw std::runtime_error(
-                    port_type_str + " Port " + std::to_string(*port_b_id) + " not available on board " +
-                    std::to_string(*board_b_id) + " in pod " + pod_descriptor_name);
-            }
-
-            board_a.mark_port_used(*port_type, port_a_id);
-            board_b.mark_port_used(*port_type, port_b_id);
-
-            // Store connection
-            template_pod.inter_board_connections[*port_type].emplace_back(
-                std::make_pair(board_a_id, port_a_id), std::make_pair(board_b_id, port_b_id));
-        }
-    }
-
-    // Cache the template
-    pod_templates_[pod_type] = template_pod;
-
-    // Create instance with actual host_id
-    Pod pod = template_pod;
-    pod.host_id = host_id;
-    return pod;
-}
-
-// Build resolved graph instance from template and concrete host mappings
-std::shared_ptr<ResolvedGraphInstance> CablingGenerator::build_graph_instance(
-    const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
-    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
-    const std::string& instance_name) {
-    auto resolved = std::make_shared<ResolvedGraphInstance>();
-    resolved->template_name = graph_instance.template_name();
-    resolved->instance_name = instance_name;
-
-    // Get the template definition
-    const auto& template_def = cluster_descriptor.graph_templates().at(graph_instance.template_name());
-
-    // Build children based on template + instance mapping
-    for (const auto& child_def : template_def.children()) {
-        const std::string& child_name = child_def.name();
-        const auto& child_mapping = graph_instance.child_mappings().at(child_name);
-
-        if (child_def.has_pod_ref()) {
-            // Leaf node - create pod
-            if (child_mapping.mapping_case() != tt::scaleout_tools::cabling_generator::proto::ChildMapping::kHostId) {
-                throw std::runtime_error("Pod child must have host_id mapping: " + child_name);
-            }
-
-            HostId host_id = HostId(child_mapping.host_id());
-            const std::string& pod_descriptor_name = child_def.pod_ref().pod_descriptor();
-
-            // Validate deployment pod type if specified
-            if (*host_id < deployment_descriptor.hosts().size()) {
-                const auto& deployment_host = deployment_descriptor.hosts()[*host_id];
-                if (!deployment_host.pod_type().empty() && deployment_host.pod_type() != pod_descriptor_name) {
-                    throw std::runtime_error(
-                        "Pod type mismatch for host " + deployment_host.host() + " (host_id " +
-                        std::to_string(*host_id) + "): " + "deployment specifies '" + deployment_host.pod_type() +
-                        "' " + "but cluster configuration expects '" + pod_descriptor_name + "'");
-                }
-            } else {
-                throw std::runtime_error("Host ID " + std::to_string(*host_id) + " not found in deployment");
-            }
-
-            // Find pod descriptor and build pod inside build_pod
-            resolved->pods[child_name] = build_pod(pod_descriptor_name, host_id, cluster_descriptor);
-
-        } else if (child_def.has_graph_ref()) {
-            // Non-leaf node - recursively build subgraph
-            if (child_mapping.mapping_case() !=
-                tt::scaleout_tools::cabling_generator::proto::ChildMapping::kSubInstance) {
-                throw std::runtime_error("Graph child must have sub_instance mapping: " + child_name);
-            }
-
-            resolved->subgraphs[child_name] = build_graph_instance(
-                child_mapping.sub_instance(), cluster_descriptor, deployment_descriptor, child_name);
-        }
-    }
-
-    // Process internal connections within this graph instance
-    for (const auto& [port_type_str, port_connections] : template_def.internal_connections()) {
-        auto port_type = enchantum::cast<PortType>(port_type_str, ttsl::ascii_caseless_comp);
-        if (!port_type.has_value()) {
-            throw std::runtime_error("Invalid port type: " + port_type_str);
-        }
-
-        for (const auto& conn : port_connections.connections()) {
-            std::vector<std::string> path_a(conn.port_a().path().begin(), conn.port_a().path().end());
-            TrayId board_a_id = TrayId(conn.port_a().tray_id());
-            PortId port_a_id = PortId(conn.port_a().port_id());
-
-            std::vector<std::string> path_b(conn.port_b().path().begin(), conn.port_b().path().end());
-            TrayId board_b_id = TrayId(conn.port_b().tray_id());
-            PortId port_b_id = PortId(conn.port_b().port_id());
-
-            // Validate and mark ports as used for direct pod connections
-            if (path_a.size() == 1 && path_b.size() == 1 && resolved->pods.count(path_a[0]) &&
-                resolved->pods.count(path_b[0])) {
-                auto& board_a = resolved->pods.at(path_a[0]).boards.at(board_a_id);
-                auto& board_b = resolved->pods.at(path_b[0]).boards.at(board_b_id);
-
-                const auto& available_a = board_a.get_available_port_ids(*port_type);
-                const auto& available_b = board_b.get_available_port_ids(*port_type);
-
-                if (std::find(available_a.begin(), available_a.end(), port_a_id) == available_a.end()) {
-                    throw std::runtime_error(
-                        port_type_str + " Port " + std::to_string(*port_a_id) + " not available on board " +
-                        std::to_string(*board_a_id) + " in pod " + path_a[0]);
-                }
-                if (std::find(available_b.begin(), available_b.end(), port_b_id) == available_b.end()) {
-                    throw std::runtime_error(
-                        port_type_str + " Port " + std::to_string(*port_b_id) + " not available on board " +
-                        std::to_string(*board_b_id) + " in pod " + path_b[0]);
-                }
-
-                board_a.mark_port_used(*port_type, port_a_id);
-                board_b.mark_port_used(*port_type, port_b_id);
-            }
-
-            // Store connection
-            resolved->internal_connections[*port_type].emplace_back(
-                std::make_tuple(path_a, board_a_id, port_a_id), std::make_tuple(path_b, board_b_id, port_b_id));
-        }
-    }
-
-    return resolved;
-}
-
-// Build cluster from descriptor with port connections and validation
-void CablingGenerator::build_cluster_from_descriptor(
-    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor) {
-    // Build the root instance
-    root_instance_ =
-        build_graph_instance(cluster_descriptor.root_instance(), cluster_descriptor, deployment_descriptor);
-
-    // Validate host_id uniqueness across all pods
-    validate_host_id_uniqueness();
 }
 
 // Validate that each host_id is assigned to exactly one pod

@@ -1,21 +1,18 @@
 project(scaleout_tools)
 
-find_package(Protobuf REQUIRED)
-
-# Protobuf schemas
+include(protobuf)
 set(PROTO_SCHEMAS
-    scaleout_tools/factory_system_descriptor/schemas/factory_system_descriptor.proto
-    scaleout_tools/cabling_descriptor/schemas/pod_config.proto
-    scaleout_tools/cabling_descriptor/schemas/cluster_config.proto
-    scaleout_tools/deployment_descriptor/schemas/deployment.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/scaleout_tools/factory_system_descriptor/schemas/factory_system_descriptor.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/scaleout_tools/cabling_descriptor/schemas/pod_config.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/scaleout_tools/cabling_descriptor/schemas/cluster_config.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/scaleout_tools/deployment_descriptor/schemas/deployment.proto
 )
 
-# Generate protobuf sources
-protobuf_generate_cpp(
-    PROTO_SRCS
-    PROTO_HDRS
-    ${PROTO_SCHEMAS}
-)
+set(GENERATED_PROTO_SRCS)
+foreach(PROTO_FILE ${PROTO_SCHEMAS})
+    GENERATE_PROTO_FILES(${PROTO_FILE} OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
+    list(APPEND GENERATED_PROTO_SRCS ${PROTO_SRCS})
+endforeach()
 
 # Library target
 add_library(scaleout_tools OBJECT)
@@ -37,16 +34,14 @@ target_sources(
         scaleout_tools/cabling_generator/cabling_generator.cpp
         scaleout_tools/connector/connector.cpp
         scaleout_tools/factory_system_descriptor/utils.cpp
-        ${PROTO_SRCS}
-        ${PROTO_HDRS}
+        ${GENERATED_PROTO_SRCS}
 )
 
 target_include_directories(
     scaleout_tools
-    PUBLIC
+    PRIVATE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}> # Protobuf headers
-        $<INSTALL_INTERFACE:include>
 )
 
 target_link_libraries(
@@ -55,9 +50,9 @@ target_link_libraries(
         TT::STL
         umd::device
         enchantum::enchantum
-        ${Protobuf_LIBRARIES}
     PRIVATE
         $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>
+        protobuf::libprotobuf
 )
 
 target_compile_features(scaleout_tools PUBLIC cxx_std_20)
