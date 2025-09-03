@@ -815,6 +815,11 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     runs-on: tt-ubuntu-2204-large-stable
     steps:
+      - name: Checkout repository for actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/actions
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
@@ -838,18 +843,10 @@ jobs:
           retention-days: 7
       - name: Upload sweep results to SFTP server
         if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs.upload_results }}
-        run: |
-          # Generate SSH key file
-          echo "${{ secrets.SFTP_CICD_WRITER_KEY }}" > /work/id_key
-          chmod 600 /work/id_key
-
-          # Upload oprun files via SFTP
-          cd /work
-          sftp -oStrictHostKeyChecking=no -i id_key ml-kernel-op-test-writer@s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com <<EOF
-          put tests/sweep_framework/results_export/oprun_*
-          ls -hal
-          bye
-          EOF
-
-          # Clean up key file
-          rm -f /work/id_key
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/optest_batchfile.txt
+          username: ml-kernel-op-test-writer
+          hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
+          path: /work
