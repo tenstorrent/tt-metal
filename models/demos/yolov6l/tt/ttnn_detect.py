@@ -163,13 +163,14 @@ class TtDetect:
         reg_output_2 = ttnn.reshape(
             reg_output_2, (reg_output_0.shape[0], 4, 17, reg_output_2.shape[2] * reg_output_2.shape[3])
         )
+        reg_output_0 = ttnn.to_layout(reg_output_0, ttnn.TILE_LAYOUT)
+        reg_output_1 = ttnn.to_layout(reg_output_1, ttnn.TILE_LAYOUT)
+        reg_output_2 = ttnn.to_layout(reg_output_2, ttnn.TILE_LAYOUT)
+
         reg_output_0 = ttnn.permute(reg_output_0, (0, 2, 1, 3))
         reg_output_1 = ttnn.permute(reg_output_1, (0, 2, 1, 3))
         reg_output_2 = ttnn.permute(reg_output_2, (0, 2, 1, 3))
 
-        reg_output_0 = ttnn.to_layout(reg_output_0, ttnn.TILE_LAYOUT)
-        reg_output_1 = ttnn.to_layout(reg_output_1, ttnn.TILE_LAYOUT)
-        reg_output_2 = ttnn.to_layout(reg_output_2, ttnn.TILE_LAYOUT)
         reg_output_0 = ttnn.softmax(reg_output_0, 1)
         reg_output_1 = ttnn.softmax(reg_output_1, 1)
         reg_output_2 = ttnn.softmax(reg_output_2, 1)
