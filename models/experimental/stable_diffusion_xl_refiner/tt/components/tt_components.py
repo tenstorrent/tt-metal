@@ -69,7 +69,7 @@ class TransformerBlockLayerNorm:
             hidden_states,
             weight=self.norm_weights,
             bias=self.norm_bias,
-            eps=self.eps,
+            epsilon=self.eps,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return hidden_states

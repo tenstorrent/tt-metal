@@ -14,12 +14,16 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "input_shape, encoder_shape, attn_id, down_block_id, num_attn_heads",
+    "input_shape, encoder_shape, down_block_id, attn_id, num_attn_heads",
     [
         ((1, 4096, 768), None, 1, 1, 12),
-        ((1, 4096, 768), (1, 77, 1280), 2, 1, 12),
-        ((1, 256, 1536), None, 1, 2, 24),
-        ((1, 256, 1536), (1, 77, 1280), 2, 2, 24),
+        ((1, 4096, 768), (1, 77, 1280), 1, 2, 12),
+        ((1, 1024, 1536), None, 2, 1, 24),
+        ((1, 1024, 1536), (1, 77, 1280), 2, 2, 24),
+        # Missing MidBlock CrossAttention tests
+        # [(1, 256, 1536), (1, 77, 1280)]
+        # [(1, 256, 1536)]
+        # but these test cases pass if used instead of (1, 1024, 1536)
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
@@ -27,8 +31,8 @@ def test_attention(
     device,
     input_shape,
     encoder_shape,
-    attn_id,
     down_block_id,
+    attn_id,
     num_attn_heads,
     is_ci_env,
 ):
@@ -51,7 +55,7 @@ def test_attention(
         device,
         state_dict,
         f"down_blocks.{down_block_id}.attentions.0.transformer_blocks.0.attn{attn_id}",
-        heads=num_attn_heads,
+        num_attn_heads,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_encoder_tensor = (
@@ -78,7 +82,7 @@ def test_attention(
         if encoder_shape is not None
         else None
     )
-    ttnn_output_tensor = tt_attention.forward(ttnn_input_tensor, None, ttnn_encoder_tensor)
+    ttnn_output_tensor = tt_attention.forward(ttnn_input_tensor, ttnn_encoder_tensor)
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
 
     del unet, tt_attention

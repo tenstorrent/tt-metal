@@ -87,7 +87,7 @@ resnet_configs = {
         norm1_out_blocks=3,
         norm1_grid=(4, 4),
         conv1_split_in=2,
-        norm2_out_blocks=3,
+        norm2_out_blocks=3,  # Will be sharded so norm2_out_blocks and norm2_grid don't matter but can be used if we want to revert to DRAM group norm
         norm2_grid=(4, 4),
         use_conv_shortcut=True,
     ),
