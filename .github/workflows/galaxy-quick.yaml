@@ -1,4 +1,4 @@
-name: "Galaxy Quick"
+name: "(Galaxy) Quick"
 
 on:
   workflow_dispatch:
