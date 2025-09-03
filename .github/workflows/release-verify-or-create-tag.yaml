@@ -32,7 +32,7 @@ jobs:
       checks: write
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.get-version-number.outputs.version }}
+      version: ${{ steps.get-tag-version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
