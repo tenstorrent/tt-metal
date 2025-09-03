@@ -628,6 +628,36 @@ class TtImagePoolingAttn:
         ]
         x = concat(x, dim=1, use_sharded_concat=False)
         q = ttnn.clone(text)
+        grid_size = (8, 8)
+        shard_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
+                )
+            }
+        )
+        mem_config = ttnn.create_sharded_memory_config_(
+            ttnn.Shape([96, 512]),
+            shard_grid,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            tile_layout=True,
+        )
+        compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        layernorm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            subblock_w=1,
+            block_h=3,
+            block_w=1,
+            inplace=True,
+        )
+        q = ttnn.to_memory_config(q, mem_config)
         for index, module in enumerate(self.query):
             if module == ttnn.linear:
                 q = module(
@@ -641,7 +671,9 @@ class TtImagePoolingAttn:
                     q,
                     weight=self.parameters["query"][index]["weight"],
                     bias=self.parameters["query"][index]["bias"],
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+                    compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
+                    program_config=layernorm_program_config,
                 )
 
         k = ttnn.clone(x)
