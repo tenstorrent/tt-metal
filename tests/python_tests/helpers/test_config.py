@@ -103,6 +103,15 @@ def generate_build_header(
     if profiler_build == ProfilerBuild.Yes:
         header_content.append("#define LLK_PROFILER")
 
+    loop_factor = test_config.get("loop_factor", 1)
+
+    if profiler_build == ProfilerBuild.No and loop_factor != 1:
+        raise ValueError(
+            "test_config['loop_factor'] should only be used when profiler is enabled"
+        )
+
+    header_content.append(f"constexpr int LOOP_FACTOR = {loop_factor};")
+
     if boot_mode == BootMode.BRISC:
         header_content.append("#define LLK_BOOT_MODE_BRISC")
     elif boot_mode == BootMode.TRISC:
