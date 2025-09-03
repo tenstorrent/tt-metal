@@ -1167,7 +1167,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor& a,
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "reader_unary_transpose_hc_sharded_rm.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_defines));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     tt::tt_metal::KernelHandle writer_kernel_id{};
     if (is_special_case) {

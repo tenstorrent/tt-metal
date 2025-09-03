@@ -417,13 +417,13 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         program,
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp",
         core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, defines));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
 
     auto writer_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_writer.cpp",
         core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, defines));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
 
     auto compute_kernels_id = CreateKernel(
         program,

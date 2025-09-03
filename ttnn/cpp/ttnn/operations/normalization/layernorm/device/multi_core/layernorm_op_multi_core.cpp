@@ -329,7 +329,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         program,
         reader_kernel_path,
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_defines));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     auto writer_kernels_id = CreateKernel(
         program,

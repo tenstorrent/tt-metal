@@ -160,7 +160,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
         program,
         "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_defines));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
@@ -169,7 +169,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
               "writer_unary_sharded_blocks_interleaved_start_id.cpp"
             : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_device_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_defines));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
     bool fp32_dest_acc_en = dst_cb_data_format == tt::DataFormat::UInt32 ||
                             dst_cb_data_format == tt::DataFormat::Int32 ||

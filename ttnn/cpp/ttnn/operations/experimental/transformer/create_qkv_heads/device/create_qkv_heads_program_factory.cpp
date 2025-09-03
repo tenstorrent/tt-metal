@@ -141,7 +141,7 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
         "ttnn/cpp/ttnn/operations/experimental/transformer/create_qkv_heads/device/kernels/"
         "reader_create_qkv_heads_sharded.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_defines));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     if (transpose_k) {
         std::vector<uint32_t> compute_args = {

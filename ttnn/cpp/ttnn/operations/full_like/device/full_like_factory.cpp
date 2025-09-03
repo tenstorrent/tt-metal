@@ -100,7 +100,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
         program,
         "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_defines));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
     uint32_t tiles_offset = 0;
     for (uint32_t i = 0; i < num_cores; i++) {

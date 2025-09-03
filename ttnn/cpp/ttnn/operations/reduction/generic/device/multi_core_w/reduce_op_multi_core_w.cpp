@@ -85,13 +85,13 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
         "reader_unary_reduce_universal_start_id.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reduce_defines));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reduce_defines));
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_universal_start_id.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, reduce_defines));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, reduce_defines));
 
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         num_rows_per_core_group_1,  // Ht

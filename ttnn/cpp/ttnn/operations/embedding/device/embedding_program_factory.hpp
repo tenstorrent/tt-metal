@@ -235,7 +235,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         program,
         "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, {}, embedding_defines));
+        tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
     if (num_blocks_per_core_group_1 > 0) {
         std::vector<uint32_t> compute_args_1 = {
@@ -509,7 +509,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
         program,
         "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, {}, embedding_defines));
+        tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
     // Tilized writer
     KernelHandle writer_kernel_id = 0;
@@ -721,7 +721,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
         program,
         "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embedding_ind_tilized.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, {}, embedding_defines));
+        tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)output_page_size};
     TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);

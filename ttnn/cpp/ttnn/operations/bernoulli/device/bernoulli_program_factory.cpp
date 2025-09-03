@@ -89,7 +89,7 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
     KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program, reader_file_path, all_cores, ReaderDataMovementConfig(reader_compile_time_args));
     KernelHandle writer_kernel_id = tt_metal::CreateKernel(
-        program, writer_file_path, all_cores, WriterDataMovementConfig(writer_compile_time_args, {}, writer_defines));
+        program, writer_file_path, all_cores, WriterDataMovementConfig(writer_compile_time_args, writer_defines));
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
     KernelHandle compute_kernel_id = CreateKernel(

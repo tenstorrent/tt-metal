@@ -700,7 +700,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         program,
         get_kernel_file_path(writer_kernel, is_sfpu_op),
         all_device_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, std::move(writer_defines)));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, std::move(writer_defines)));
 
     // COMPUTE KERNEL
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
@@ -760,7 +760,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         program,
         get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op),
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, std::move(reader_defines)));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, std::move(reader_defines)));
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);

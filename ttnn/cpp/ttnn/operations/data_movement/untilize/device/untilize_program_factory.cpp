@@ -1072,7 +1072,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_multi_core.cpp",
         compute_core_range,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_compute_defines));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_compute_defines));
 
     // Compute kernel file
     std::string compute_kernel;
@@ -1396,7 +1396,7 @@ operation::ProgramWithCallbacks untilize_single_core(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "reader_unary_start_id.cpp",
         core,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_compute_defines));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_compute_defines));
 
     // Writer compile-time args
     std::vector<uint32_t> writer_compile_time_args = {
@@ -1421,7 +1421,7 @@ operation::ProgramWithCallbacks untilize_single_core(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_single_core.cpp",
         core,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_compute_defines));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_compute_defines));
 
     // Compute file path
     std::map<std::string, std::string> compute_kernel_defines;

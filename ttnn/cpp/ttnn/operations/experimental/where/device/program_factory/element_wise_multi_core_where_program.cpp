@@ -86,7 +86,7 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
         program,
         "ttnn/cpp/ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_reader_kernel.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_vec, {}, reader_defines));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_vec, reader_defines));
 
     tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -98,7 +98,7 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
         program,
         "ttnn/cpp/ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_writer_kernel.cpp",
         all_device_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_vec, {}, writer_defines));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_vec, writer_defines));
 
     /* Use the add_tiles operation in the compute kernel */
     KernelHandle compute_kernel_id = CreateKernel(

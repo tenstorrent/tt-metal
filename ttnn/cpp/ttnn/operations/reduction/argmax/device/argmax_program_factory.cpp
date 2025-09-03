@@ -157,7 +157,7 @@ operation::ProgramWithCallbacks argmax_single_core(
         program,
         "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, kernel_defines));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 
     const auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
 

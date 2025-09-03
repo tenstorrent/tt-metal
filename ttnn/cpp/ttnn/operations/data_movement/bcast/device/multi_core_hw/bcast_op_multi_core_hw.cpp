@@ -132,7 +132,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
         "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/"
         "reader_bcast_hw_interleaved_partitioned.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_defines));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     std::map<std::string, std::string> writer_defines;
     if (output_sharded) {
@@ -142,7 +142,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_device_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_defines));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
     auto bcast_kernel_id = tt_metal::CreateKernel(
         program,

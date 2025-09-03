@@ -169,7 +169,7 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
         program,
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_interleaved.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, kernel_defines));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
 
     // Compute kernel (only for tiled layout)
     tt::tt_metal::KernelHandle compute_kernel_group1_id = 0;

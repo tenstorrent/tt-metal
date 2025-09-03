@@ -33,6 +33,13 @@ struct DataMovementConfig {
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0;  // For data transfer kernels: NCRISC & BRISC
     NOC noc = NOC::RISCV_0_default;
     NOC_MODE noc_mode = NOC_MODE::DM_DEDICATED_NOC;
+    std::vector<uint32_t> compile_args;
+    // Will cause CompileProgram to emit a file hlk_defines_generated.h
+    // Each unique combination of defines will produce a unique compiled instantiation
+    // This file is then automatically included in the generated compiled kernel files
+    std::map<std::string, std::string> defines;
+    // Set the compiler and linker optimization level
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
     // Both compile_args and named_compile_args contain compile time arguments
     // The former is accessed by index, the latter by name
     // Can be used in new/existing kernels by explicitly defining them in the config
@@ -40,30 +47,23 @@ struct DataMovementConfig {
     //     std::unordered_map<std::string, uint32_t> named_compile_args = {{"arg1", 5}, {"arg2", 7}};
     //     CreateKernel(program, "kernel.cpp", core, DataMovementConfig{.compile_args = compile_args,
     //     .named_compile_args = named_compile_args})
-    std::vector<uint32_t> compile_args;
     std::unordered_map<std::string, uint32_t> named_compile_args;
-    // Will cause CompileProgram to emit a file hlk_defines_generated.h
-    // Each unique combination of defines will produce a unique compiled instantiation
-    // This file is then automatically included in the generated compiled kernel files
-    std::map<std::string, std::string> defines;
-    // Set the compiler and linker optimization level
-    KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
 };
 
 struct ReaderDataMovementConfig : public DataMovementConfig {
     ReaderDataMovementConfig(
         std::vector<uint32_t> compile_args = {},
-        std::unordered_map<std::string, uint32_t> named_compile_time_args = {},
         std::map<std::string, std::string> defines = {},
-        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2);
+        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2,
+        std::unordered_map<std::string, uint32_t> named_compile_args = {});
 };
 
 struct WriterDataMovementConfig : public DataMovementConfig {
     WriterDataMovementConfig(
         std::vector<uint32_t> compile_args = {},
-        std::unordered_map<std::string, uint32_t> named_compile_time_args = {},
         std::map<std::string, std::string> defines = {},
-        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2);
+        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2,
+        std::unordered_map<std::string, uint32_t> named_compile_args = {});
 };
 
 struct ComputeConfig {
@@ -73,6 +73,13 @@ struct ComputeConfig {
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
+    std::vector<uint32_t> compile_args;
+    // Will cause CompileProgram to emit a file hlk_defines_generated.h
+    // Each unique combination of defines will produce a unique compiled instantiation
+    // This file is then automatically included in the generated compiled kernel files
+    std::map<std::string, std::string> defines;
+    // Set the compiler and linker optimization level
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
     // Both compile_args and named_compile_args contain compile time arguments
     // The former is accessed by index, the latter by name
     // Can be used in new/existing kernels by explicitly defining them in the config
@@ -80,20 +87,20 @@ struct ComputeConfig {
     //     std::unordered_map<std::string, uint32_t> named_compile_args = {{"arg1", 5}, {"arg2", 7}};
     //     CreateKernel(program, "kernel.cpp", core, ComputeConfig{.compile_args = compile_args, .named_compile_args =
     //     named_compile_args})
-    std::vector<uint32_t> compile_args;
     std::unordered_map<std::string, uint32_t> named_compile_args;
-    // Will cause CompileProgram to emit a file hlk_defines_generated.h
-    // Each unique combination of defines will produce a unique compiled instantiation
-    // This file is then automatically included in the generated compiled kernel files
-    std::map<std::string, std::string> defines;
-    // Set the compiler and linker optimization level
-    KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
 };
 
 struct EthernetConfig {
     Eth eth_mode = Eth::SENDER;
     NOC noc = NOC::NOC_0;
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0;
+    std::vector<uint32_t> compile_args;
+    // Will cause CompileProgram to emit a file hlk_defines_generated.h
+    // Each unique combination of defines will produce a unique compiled instantiation
+    // This file is then automatically included in the generated compiled kernel files
+    std::map<std::string, std::string> defines;
+    // Set the compiler and linker optimization level
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
     // Both compile_args and named_compile_args contain compile time arguments
     // The former is accessed by index, the latter by name
     // Can be used in new/existing kernels by explicitly defining them in the config
@@ -101,14 +108,7 @@ struct EthernetConfig {
     //     std::unordered_map<std::string, uint32_t> named_compile_args = {{"arg1", 5}, {"arg2", 7}};
     //     CreateKernel(program, "kernel.cpp", core, EthernetConfig{.compile_args = compile_args, .named_compile_args =
     //     named_compile_args})
-    std::vector<uint32_t> compile_args;
     std::unordered_map<std::string, uint32_t> named_compile_args;
-    // Will cause CompileProgram to emit a file hlk_defines_generated.h
-    // Each unique combination of defines will produce a unique compiled instantiation
-    // This file is then automatically included in the generated compiled kernel files
-    std::map<std::string, std::string> defines;
-    // Set the compiler and linker optimization level
-    KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
 };
 
 }  // namespace tt::tt_metal

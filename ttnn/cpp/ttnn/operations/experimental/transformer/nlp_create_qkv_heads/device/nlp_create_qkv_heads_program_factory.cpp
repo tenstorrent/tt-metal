@@ -146,13 +146,13 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
         "reader_tm_tile_layout_nlp_create_qkv_heads.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_defines));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
         "writer_tm_tile_layout_nlp_create_qkv_heads.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_defines));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
     // Create circular buffers
     uint32_t micro_block_size = 1;                 // Num tiles to read/wait for in reader and writer

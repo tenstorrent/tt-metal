@@ -105,8 +105,8 @@ TEST_F(CompileTimeArgsTest, TensixTestNamedCompileTimeArgs) {
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = compile_time_args,
-            .named_compile_args = named_compile_time_args,
-            .defines = defines});
+            .defines = defines,
+            .named_compile_args = named_compile_time_args});
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results;
@@ -139,8 +139,8 @@ TEST_F(CompileTimeArgsTest, TensixTestInvalidNamedCompileTimeArgs) {
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = compile_time_args,
-            .named_compile_args = named_compile_time_args,
-            .defines = defines});
+            .defines = defines,
+            .named_compile_args = named_compile_time_args});
 
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
 

@@ -130,7 +130,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_transpose_wh_interleaved_input_cols_partitioned_sharded.cpp",
             all_cores,
-            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_defines));
+            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
         std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, chunk_size, packed_scaler_value};
         TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
