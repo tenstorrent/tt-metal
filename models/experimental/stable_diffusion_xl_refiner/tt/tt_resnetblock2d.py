@@ -1,7 +1,7 @@
 import torch.nn as nn
 import ttnn
 from .tt_config import get_resnet_config
-from .tt_resnet_components import (
+from .components.tt_components import (
     ResNetTimeEmbedding,
     ResNetShortcutConnection,
 )
@@ -31,11 +31,11 @@ class TtResnetBlock2D(nn.Module):
 
     def _initialize_components(self, state_dict):
         # Order of layers:
-        # 1. norm_layer_1
-        # 2. conv_layer_1
+        # 1. group_norm_1
+        # 2. conv2d_1
         # 3. time_embedding
-        # 4. norm_layer_2
-        # 5. conv_layer_2
+        # 4. group_norm_2
+        # 5. conv2d_2
         # 6. shortcut (if use_conv_shortcut is True)
 
         self.weight_loader = ResNetWeightLoader(state_dict, self.module_path, self.use_conv_shortcut)
