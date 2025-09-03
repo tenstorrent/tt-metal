@@ -97,9 +97,6 @@ struct SliceReshardAsync {
     tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
-    size_t num_links, size_t num_workers_per_link, IDevice* device);
-
 tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
     const Tensor& input_tensor,
     IDevice* target_device,
