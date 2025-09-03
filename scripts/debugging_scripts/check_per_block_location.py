@@ -46,7 +46,7 @@ class PerBlockLocationCheck:
         for device in self.block_locations.get_devices():
             for block_type in block_filter:
                 for location in self.block_locations[device, block_type]:
-                    check_result = check(location, block_type)
+                    check_result = check(location)
                     if check_result is None:
                         continue
                     if isinstance(check_result, list):

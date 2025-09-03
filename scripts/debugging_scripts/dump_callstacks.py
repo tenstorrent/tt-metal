@@ -18,10 +18,10 @@ Description:
     If will also dump dispatcher data for each risc processor, including firmware path, kernel path, kernel offset, etc.
 """
 
+from dataclasses import dataclass
 from triage import ScriptConfig, TTTriageError, recurse_field, triage_field, hex_serializer, run_script
-from check_per_device import dataclass, run as get_check_per_device
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
-from block_locations_to_check import run as get_block_locations_to_check, BlockLocationsToCheck
+from check_per_block_location import run as get_check_per_block_location
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.device import Device
@@ -226,71 +226,70 @@ class DumpCallstacksData:
 
 
 def dump_callstacks(
-    device: Device,
+    location: OnChipCoordinate,
     dispatcher_data: DispatcherData,
     context: Context,
     full_callstack: bool,
     gdb_callstack: bool,
     active_cores: bool,
     port: int | None,
-    block_locations: BlockLocationsToCheck,
 ) -> list[DumpCallstacksData]:
-    blocks_to_test = ["tensix", "idle_eth"]
-    elfs_cache: dict[str, ParsedElfFile] = {}
-    result: list[DumpCallstacksData] = []
-    gdb_server: GdbServer | None = None
+    if not hasattr(dump_callstacks, "elfs_cache"):
+        dump_callstacks.elfs_cache: dict[str, ParsedElfFile] = {}
+    if not hasattr(dump_callstacks, "gdb_server"):
+        dump_callstacks.gdb_server: GdbServer | None = None
 
-    if gdb_callstack:
+    result: list[DumpCallstacksData] = []
+
+    if gdb_callstack and dump_callstacks.gdb_server is None:
         if port is None:
             raise TTTriageError("Port must be specified when using GDB callstack.")
         try:
             server = ServerSocket(port)
             server.start()
-            gdb_server = GdbServer(context, server)
-            gdb_server.start()
+            dump_callstacks.gdb_server = GdbServer(context, server)
+            dump_callstacks.gdb_server.start()
         except Exception as e:
             raise TTTriageError(f"Failed to start GDB server on port {port}. Error: {e}")
         # Get mapping form risc location and name to process id
-        process_ids = get_process_ids(gdb_server)
+        process_ids = get_process_ids(dump_callstacks.gdb_server)
 
     try:
-        for block_to_test in blocks_to_test:
-            for location in block_locations[device, block_to_test]:
-                noc_block = device.get_block(location)
+        noc_block = location._device.get_block(location)
 
-                for risc_name in noc_block.risc_names:
-                    dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
-                    if active_cores and dispatcher_core_data.go_message != "GO":
-                        continue
-                    if gdb_callstack:
-                        if risc_name == "ncrisc":
-                            # Cannot attach to NCRISC process due to lack of debug hardware so we return empty struct
-                            callstack = [CallstackEntry()]
-                        else:
-                            callstack = get_gdb_callstack(location, risc_name, dispatcher_core_data, port, process_ids)
-                        # If GDB has not recoreded PC we do that ourselves, this also provides PC for NCRISC case
-                        if len(callstack) > 0 and callstack[0].pc is None:
-                            try:
-                                callstack[0].pc = (
-                                    location._device.get_block(location).get_risc_debug(risc_name).get_pc()
-                                )
-                            except:
-                                pass
-                    else:
-                        callstack = get_callstack(location, risc_name, dispatcher_core_data, elfs_cache, full_callstack)
-                    result.append(
-                        DumpCallstacksData(
-                            location=location,
-                            risc_name=risc_name,
-                            dispatcher_core_data=dispatcher_core_data,
-                            pc=callstack[0].pc if len(callstack) > 0 else None,
-                            kernel_callstack=callstack,
-                        )
+        for risc_name in noc_block.risc_names:
+            dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+            if active_cores and dispatcher_core_data.go_message != "GO":
+                continue
+            if gdb_callstack:
+                if risc_name == "ncrisc":
+                    # Cannot attach to NCRISC process due to lack of debug hardware so we return empty struct
+                    callstack = [CallstackEntry()]
+                else:
+                    callstack = get_gdb_callstack(location, risc_name, dispatcher_core_data, port, process_ids)
+                # If GDB has not recoreded PC we do that ourselves, this also provides PC for NCRISC case
+                if len(callstack) > 0 and callstack[0].pc is None:
+                    try:
+                        callstack[0].pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                    except:
+                        pass
+            else:
+                callstack = get_callstack(
+                    location, risc_name, dispatcher_core_data, dump_callstacks.elfs_cache, full_callstack
+                )
+                result.append(
+                    DumpCallstacksData(
+                        location=location,
+                        risc_name=risc_name,
+                        dispatcher_core_data=dispatcher_core_data,
+                        pc=callstack[0].pc if len(callstack) > 0 else None,
+                        kernel_callstack=callstack,
                     )
+                )
 
-    finally:
-        if gdb_server is not None:
-            gdb_server.stop()
+    except:
+        if dump_callstacks.gdb_server is not None:
+            dump_callstacks.gdb_server.stop()
 
     return result
 
@@ -300,20 +299,20 @@ def run(args, context: Context):
     gdb_callstack = args["--gdb_callstack"]
     active_cores = args["--active_cores"]
     port = int(args["--port"]) if gdb_callstack else None
-    check_per_device = get_check_per_device(args, context)
-    block_locations_to_check = get_block_locations_to_check(args, context)
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
+    check_per_block_location = get_check_per_block_location(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
-    return check_per_device.run_check(
-        lambda device: dump_callstacks(
-            device,
+    return check_per_block_location.run_check(
+        lambda location: dump_callstacks(
+            location,
             dispatcher_data,
             context,
             full_callstack,
             gdb_callstack,
             active_cores,
             port,
-            block_locations_to_check,
-        )
+        ),
+        block_filter=BLOCK_TYPES_TO_CHECK,
     )
 
 

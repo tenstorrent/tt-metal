@@ -13,9 +13,8 @@ Description:
 
 from collections import namedtuple
 from io import BytesIO
-from check_per_device import run as get_check_per_device
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
-from block_locations_to_check import run as get_block_locations_to_check, BlockLocationsToCheck
+from check_per_block_location import run as get_check_per_block_location
 from elftools.elf.elffile import ELFFile
 from elftools.elf.relocation import RelocationSection
 from elftools.elf.sections import Section as ELFSection
@@ -29,7 +28,7 @@ from triage import ScriptConfig, log_check, run_script
 from sortedcontainers import SortedDict
 
 script_config = ScriptConfig(
-    depends=["check_per_device", "dispatcher_data", "block_locations_to_check"],
+    depends=["check_per_block_location", "dispatcher_data"],
 )
 
 
@@ -248,83 +247,84 @@ def apply_kernel_relocations(section: ELFSection) -> bytes:
     return section_stream.getvalue()
 
 
-def check_binary_integrity(device: Device, dispatcher_data: DispatcherData, block_locations: BlockLocationsToCheck):
-    elf_cache: dict[str, ELFFile] = {}
+def check_binary_integrity(location: OnChipCoordinate, dispatcher_data: DispatcherData):
+    # Caching ELF files
+    if not hasattr(check_binary_integrity, "elf_cache"):
+        check_binary_integrity.elf_cache: dict[str, ELFFile] = {}
 
     def load_elf_file(path: str) -> ELFFile:
-        if path not in elf_cache:
-            elf_cache[path] = ELFFile.load_from_path(path)
-        return elf_cache[path]
+        if path not in check_binary_integrity.elf_cache:
+            check_binary_integrity.elf_cache[path] = ELFFile.load_from_path(path)
+        return check_binary_integrity.elf_cache[path]
 
-    block_types = ["tensix", "idle_eth"]
-    for block_type in block_types:
-        for location in block_locations[device, block_type]:
-            noc_block = device.get_block(location)
+    noc_block = location._device.get_block(location)
 
-            for risc_name in noc_block.risc_names:
-                dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+    for risc_name in noc_block.risc_names:
+        dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
 
-                # Check firmware ELF binary state on the device
-                log_check(
-                    os.path.exists(dispatcher_core_data.firmware_path),
-                    f"Firmware ELF file {dispatcher_core_data.firmware_path} does not exist.",
-                )
-                if os.path.exists(dispatcher_core_data.firmware_path):
-                    elf_file = load_elf_file(dispatcher_core_data.firmware_path)
-                    sections_to_verify = [".text"]
-                    for section_name in sections_to_verify:
-                        section = elf_file.get_section_by_name(section_name)
-                        if section is None:
-                            log_check(
-                                False,
-                                f"Section {section_name} not found in ELF file {dispatcher_core_data.firmware_path}.",
-                            )
-                        else:
-                            address: int = section["sh_addr"]
-                            data: bytes = section.data()
-                            read_data = read_from_device(location, address, num_bytes=len(data))
-                            log_check(
-                                read_data == data,
-                                f"{location.to_user_str()}: Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.firmware_path}.",
-                            )
-
-                # Check kernel ELF binary state on the device
-                if dispatcher_core_data.kernel_path is not None:
+        # Check firmware ELF binary state on the device
+        log_check(
+            os.path.exists(dispatcher_core_data.firmware_path),
+            f"Firmware ELF file {dispatcher_core_data.firmware_path} does not exist.",
+        )
+        if os.path.exists(dispatcher_core_data.firmware_path):
+            elf_file = load_elf_file(dispatcher_core_data.firmware_path)
+            sections_to_verify = [".text"]
+            for section_name in sections_to_verify:
+                section = elf_file.get_section_by_name(section_name)
+                if section is None:
                     log_check(
-                        os.path.exists(dispatcher_core_data.kernel_path),
-                        f"Kernel ELF file {dispatcher_core_data.kernel_path} does not exist.",
+                        False,
+                        f"Section {section_name} not found in ELF file {dispatcher_core_data.firmware_path}.",
+                    )
+                else:
+                    address: int = section["sh_addr"]
+                    data: bytes = section.data()
+                    read_data = read_from_device(location, address, num_bytes=len(data))
+                    log_check(
+                        read_data == data,
+                        f"{location.to_user_str()}: Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.firmware_path}.",
                     )
 
-                    # We cannot read 0xFFC00000 address on wormhole as we don't have debug hardware on NCRISC (only NCRISC has private code memory at that address).
-                    if (
-                        os.path.exists(dispatcher_core_data.kernel_path)
-                        and dispatcher_core_data.kernel_offset is not None
-                        and dispatcher_core_data.kernel_offset != 0xFFC00000
-                    ):
-                        elf_file = load_elf_file(dispatcher_core_data.kernel_path)
-                        sections_to_verify = [".text"]
-                        for section_name in sections_to_verify:
-                            section = elf_file.get_section_by_name(section_name)
-                            if section is None:
-                                log_check(
-                                    False,
-                                    f"Section {section_name} not found in ELF file {dispatcher_core_data.kernel_path}.",
-                                )
-                            else:
-                                data = apply_kernel_relocations(section)
-                                address: int = dispatcher_core_data.kernel_offset
-                                read_data = read_from_device(location, address, num_bytes=len(data))
-                                log_check(
-                                    read_data == data,
-                                    f"{location.to_user_str()}: Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.kernel_path}.",
-                                )
+        # Check kernel ELF binary state on the device
+        if dispatcher_core_data.kernel_path is not None:
+            log_check(
+                os.path.exists(dispatcher_core_data.kernel_path),
+                f"Kernel ELF file {dispatcher_core_data.kernel_path} does not exist.",
+            )
+
+            # We cannot read 0xFFC00000 address on wormhole as we don't have debug hardware on NCRISC (only NCRISC has private code memory at that address).
+            if (
+                os.path.exists(dispatcher_core_data.kernel_path)
+                and dispatcher_core_data.kernel_offset is not None
+                and dispatcher_core_data.kernel_offset != 0xFFC00000
+            ):
+                elf_file = load_elf_file(dispatcher_core_data.kernel_path)
+                sections_to_verify = [".text"]
+                for section_name in sections_to_verify:
+                    section = elf_file.get_section_by_name(section_name)
+                    if section is None:
+                        log_check(
+                            False,
+                            f"Section {section_name} not found in ELF file {dispatcher_core_data.kernel_path}.",
+                        )
+                    else:
+                        data = apply_kernel_relocations(section)
+                        address: int = dispatcher_core_data.kernel_offset
+                        read_data = read_from_device(location, address, num_bytes=len(data))
+                        log_check(
+                            read_data == data,
+                            f"{location.to_user_str()}: Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.kernel_path}.",
+                        )
 
 
 def run(args, context: Context):
-    check_per_device = get_check_per_device(args, context)
+    block_types = ["tensix", "idle_eth"]
     dispatcher_data = get_dispatcher_data(args, context)
-    block_locations_to_check = get_block_locations_to_check(args, context)
-    check_per_device.run_check(lambda device: check_binary_integrity(device, dispatcher_data, block_locations_to_check))
+    check_per_block_location = get_check_per_block_location(args, context)
+    check_per_block_location.run_check(
+        lambda location: check_binary_integrity(location, dispatcher_data), block_filter=block_types
+    )
 
 
 if __name__ == "__main__":
