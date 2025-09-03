@@ -91,3 +91,26 @@ def vae_neighbor_pad(
     )
 
     return x_pad
+
+
+def vae_slice_reshard(
+    ccl_manager, x: ttnn.Tensor, cluster_axis: int = 1, dim: int = 0, output_shape: int = 88, output_offset: int = 0
+) -> ttnn.Tensor:
+    global_semaphore = ccl_manager.get_sr_ping_pong_semaphore(cluster_axis)
+    barrier_semaphore = ccl_manager.get_barrier_semaphore(cluster_axis)
+
+    ttnn.synchronize_device(x.device())
+    x_sr = ttnn.experimental.slice_reshard_async(
+        x,
+        dim=dim,
+        output_dim_shape=output_shape,
+        output_dim_offset=output_offset,
+        cluster_axis=cluster_axis,
+        final_semaphore=global_semaphore,
+        barrier_semaphore=barrier_semaphore,
+        num_links=ccl_manager.num_links,
+        mesh_device=x.device(),
+        topology=ttnn.Topology.Linear,
+    )
+
+    return x_sr
