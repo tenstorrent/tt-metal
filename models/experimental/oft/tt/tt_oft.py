@@ -19,29 +19,6 @@ def plot_tensor(x, a="x"):
     print(f"{a}'s config: {x.memory_config()}")
 
 
-def perspective(matrix, vector, device):
-    print(f"perspective matrix shape: {matrix.shape}, dtype: {matrix.dtype}")
-    print(f"perspective vector shape: {vector.shape}, dtype: {vector.dtype}")
-    vector = ttnn.unsqueeze(vector, -1)
-    print(f"perspective vector after unsqueeze shape: {vector.shape}, dtype: {vector.dtype}")
-
-    tile_mem_config = ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttnn.BufferType.L1
-    )
-    if matrix.get_layout() != ttnn.TILE_LAYOUT:
-        print(f"Converting matrix to TILE_LAYOUT")
-        matrix = ttnn.to_layout(matrix, layout=ttnn.TILE_LAYOUT)
-    if vector.get_layout() != ttnn.TILE_LAYOUT:
-        print(f"Converting vector to TILE_LAYOUT")
-        vector = ttnn.to_memory_config(vector, layout=ttnn.TILE_LAYOUT, memory_config=tile_mem_config)
-    homogenous = ttnn.matmul(matrix[..., :-1], vector)
-    homogenous += matrix[..., [-1]]
-    homogenous = ttnn.squeeze(homogenous, -1)
-    # homogenous = ttnn.to_memory_config(homogenous, memory_config=ttnn.L1_MEMORY_CONFIG)
-    homogenous = ttnn.div(homogenous[..., :-1], homogenous[..., -1:], memory_config=ttnn.L1_MEMORY_CONFIG)
-    return homogenous
-
-
 def perspective_torch(matrix, vector):
     print(f"TT: matrix shape: {matrix.shape}, dtype: {matrix.dtype}")
     print(f"TT: vector shape: {vector.shape}, dtype: {vector.dtype}")
@@ -81,26 +58,10 @@ def calculate_initialization_parameters(device, channels, cell_size, grid_height
     )
     batch, _, depth, width, _ = bbox_corners.size()
     bbox_corners = bbox_corners.flatten(2, 3)
-    # print(f"TTNN: bbox_corners shape: {bbox_corners.shape}, dtype: {bbox_corners.dtype}")
-    # print(f"TTNN: bbox_corners min: {torch.min(bbox_corners)}, max: {torch.max(bbox_corners)}")
-    # print(f"bbox_corners shape: {bbox_corners.shape}, dtype: {bbox_corners.dtype}")
-    # Compute the area of each bounding box
     area = (
         (bbox_corners[..., 2:] - bbox_corners[..., :2]).prod(dim=-1) * img_height * img_width * 0.25 + EPSILON
     ).unsqueeze(1)
-    # area = area.to(torch.bfloat16)  # Avoid division by zero
-    # step = 0.01  # or any value you want
-    # area[area == 0] += step
-    # print("Area values in (-EPSILON, EPSILON):")
-    # mask = (area > -EPSILON) & (area < EPSILON)
-    # print("broj elemenata ", torch.sum(mask))
-    # print("min element ", torch.min(area))
-    # print("max element ", torch.max(area))
-
-    # num_zeros = (area == 0).sum().item()
-    # print("Broj nula:", num_zeros)
     visible = area > EPSILON
-    # print(f"visible shape: {visible.shape}, dtype: {visible.dtype}")
 
     area = 1 / area
     area_nhwc = area.permute(0, 2, 3, 1)  # Convert to NHWC format
