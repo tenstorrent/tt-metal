@@ -53,7 +53,7 @@ jobs:
     with:
       fetch_depth: 0
       bump_each_commit: false
-      tag_type: ${{ needs.release-precheck.outputs.is-release-candidate && 'rc' }}
+      tag_type: ${{ needs.release-precheck.outputs.is-release-candidate == 'true' && 'rc' || '' }}
 
   regression-testing:
     needs: create-tag
@@ -116,7 +116,7 @@ jobs:
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: github.ref != 'refs/heads/main'
+    if: ${{ github.ref != 'refs/heads/main' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -163,7 +163,7 @@ jobs:
     ]
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
-    if: github.ref != 'refs/heads/main'
+    if: ${{ github.ref != 'refs/heads/main' }}
     with:
       version: ${{ needs.create-tag.outputs.version }}
       tag-latest:  ${{ needs.release-precheck.outputs.is-release-candidate != 'true' }}
@@ -193,7 +193,7 @@ jobs:
       create-and-upload-draft-release
     ]
     runs-on: ubuntu-latest
-    if: github.ref != 'refs/heads/main'
+    if: ${{ github.ref != 'refs/heads/main' }}
     environment:
       name: pypi
       url: https://pypi.org/project/ttnn/
