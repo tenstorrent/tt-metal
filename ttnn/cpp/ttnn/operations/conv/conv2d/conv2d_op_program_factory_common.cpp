@@ -48,7 +48,6 @@ std::vector<CBInfo> get_cb_info(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), compute_kernel_config);
 
-    log_info(tt::LogOp, "Conv Config : {}", conv_config);
     TT_FATAL(conv_config.weights_dtype.has_value(), "get_cb_info expects conv_config.weights_dtype to be already set");
     const tt::DataFormat weights_df = datatype_to_dataformat_converter(conv_config.weights_dtype.value());
     const tt::DataFormat bias_df = weights_df;
@@ -220,7 +219,6 @@ std::vector<CBInfo> get_cb_info(
         .is_globally_allocated = true,
         .data_format = conv_input_df});
 
-    log_info(tt::LogOp, "CB Info = {}", cb_info);
     TT_FATAL(cb_info.size() == num_cbs, "Expected info for {} cbs  by got {}!", num_cbs, cb_info.size());
     return cb_info;
 }
@@ -257,7 +255,7 @@ void allocate_cbs(
 
         std::tie(cb.index, cb.handle) =
             tt::tt_metal::create_cb(cb_index++, program, all_cores, cb.page_size, cb.num_pages, cb.data_format, buffer);
-        log_debug(
+        log_trace(
             tt::LogOp,
             "Allocated circular buffer {} with index {}, num pages {}, page size {}, globally allocated: {}",
             enchantum::to_string(cb.name),
