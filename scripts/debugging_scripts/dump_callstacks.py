@@ -288,8 +288,7 @@ def dump_callstacks(
                 )
 
     except:
-        if dump_callstacks.gdb_server is not None:
-            dump_callstacks.gdb_server.stop()
+        return result
 
     return result
 
@@ -302,7 +301,7 @@ def run(args, context: Context):
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     check_per_block_location = get_check_per_block_location(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
-    return check_per_block_location.run_check(
+    callstacks_data = check_per_block_location.run_check(
         lambda location: dump_callstacks(
             location,
             dispatcher_data,
@@ -314,6 +313,12 @@ def run(args, context: Context):
         ),
         block_filter=BLOCK_TYPES_TO_CHECK,
     )
+
+    # After all callstacks are dumped, stop GDB server if it was started
+    if dump_callstacks.gdb_server is not None:
+        dump_callstacks.gdb_server.stop()
+
+    return callstacks_data
 
 
 if __name__ == "__main__":
