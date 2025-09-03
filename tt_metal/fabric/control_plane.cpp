@@ -1726,7 +1726,7 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
         this->write_fabric_connections_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
         this->write_routing_tables_to_eth_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
     }
-    this->write_all_to_all_routing_fields_1D(16);
+    this->write_all_to_all_routing_fields_1D<false>(16);
 }
 
 // TODO: remove this after TG is deprecated

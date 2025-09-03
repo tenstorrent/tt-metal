@@ -62,7 +62,7 @@ inline bool compressed_routing_path_t<1, false>::decode_route_to_buffer(
 
 // Device-side compressed decoder function for 2D routing
 template <>
-inline bool compressed_routing_path_t<2, true>::decode_compressed_route_to_buffer(
+inline bool compressed_routing_path_t<2, true>::decode_route_to_buffer(
     uint16_t dst_chip_id, uint8_t* out_route_buffer) const {
     uint32_t* route_ptr = reinterpret_cast<uint32_t*>(out_route_buffer);
 
@@ -136,7 +136,7 @@ inline bool compressed_routing_path_t<2, true>::decode_compressed_route_to_buffe
 
 // Device-side compressed decoder function for 1D routing
 template <>
-inline bool compressed_routing_path_t<1, true>::decode_compressed_route_to_buffer(
+inline bool compressed_routing_path_t<1, true>::decode_route_to_buffer(
     uint16_t dst_chip_id, uint8_t* out_route_buffer) const {
     uint32_t* route_ptr = reinterpret_cast<uint32_t*>(out_route_buffer);
 
