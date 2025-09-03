@@ -28,7 +28,7 @@ jobs:
     with:
       fetch_depth: 0
       bump_each_commit: false
-      tag_type: nightly
+      tag_type: dev
 
   regression-testing:
     needs: create-tag
