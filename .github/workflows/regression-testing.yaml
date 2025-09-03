@@ -10,7 +10,7 @@
           value: ${{ jobs.build-artifact.outputs.build-artifact-name }}
         wheel-artifact-name:
           description: "Name of the published wheel artifact"
-          value: ${{ jobs.build-wheel.outputs.wheel-artifact-name }}
+          value: ${{ jobs.build-artifact.outputs.wheel-artifact-name }}
 
   permissions:
     actions: read
