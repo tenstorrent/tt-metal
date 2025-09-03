@@ -123,8 +123,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
             -e GITHUB_ACTIONS=true
-            -e HF_HOME=/mnt/MLPerf/huggingface
-            -e HF_DATASETS_CACHE=~/.cache/huggingface/datasets
+            -e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
           install_wheel: true
           run_args: |
             if [[ "${{ matrix.model-group.name }}" == "other" ]]; then

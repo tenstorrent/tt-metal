@@ -69,9 +69,7 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
-            -e HF_HOME=/mnt/MLPerf/huggingface
-            -e HF_DATASETS_CACHE=~/.cache/huggingface/datasets
-            -e HF_METRICS_CACHE=~/.cache/huggingface/metrics
+            -e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
             ${{ matrix.model == 'stable_diffusion_xl_base' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
           # TT-Transformer models have a single ci-dispatch test that contains all tests.
           # Due to host OOM issues in CI vm, we currently only run llama-1B (on TT-Transformers) in the model matrix.
@@ -151,9 +149,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
             -e WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-            -e HF_HOME=/mnt/MLPerf/huggingface
-            -e HF_DATASETS_CACHE=~/.cache/huggingface/datasets
-            -e HF_METRICS_CACHE=~/.cache/huggingface/metrics
+            -e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
           run_args: ${{ matrix.test-config.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

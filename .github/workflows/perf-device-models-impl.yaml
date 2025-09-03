@@ -44,7 +44,7 @@ jobs:
         ARCH_NAME: ${{ matrix.test-info.arch }}
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
-        HF_HOME: /mnt/MLPerf/huggingface
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G

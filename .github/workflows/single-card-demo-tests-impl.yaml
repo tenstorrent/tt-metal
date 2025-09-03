@@ -162,11 +162,7 @@ jobs:
     env:
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-      HF_HOME: /mnt/MLPerf/huggingface
-      HF_DATASETS_CACHE: ~/.cache/huggingface/datasets
-      HF_METRICS_CACHE: ~/.cache/huggingface/metrics
-      HF_DATASETS_DOWNLOADED_EVALUATE_PATH: ~/.cache/huggingface/evaluate/downloads
-      HF_MODULES_CACHE: ~/.cache/huggingface/modules
+      HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
     runs-on: >-
       ${{
         matrix.test-group.civ2-compatible == true
@@ -223,11 +219,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e ARCH_NAME=${{ inputs.arch }}
             ${{ matrix.test-group.civ2-compatible && '-e TT_GH_CI_INFRA=1' || '' }}
-            -e HF_HOME=/mnt/MLPerf/huggingface
-            -e HF_DATASETS_CACHE=~/.cache/huggingface/datasets
-            -e HF_METRICS_CACHE=~/.cache/huggingface/metrics
-            -e HF_DATASETS_DOWNLOADED_EVALUATE_PATH=~/.cache/huggingface/evaluate/downloads
-            -e HF_MODULES_CACHE=~/.cache/huggingface/modules
+            -e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
             -v /mnt/MLPerf:/mnt/MLPerf:ro
             --cap-add=ALL
             --security-opt seccomp=unconfined
