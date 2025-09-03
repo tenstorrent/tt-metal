@@ -341,17 +341,10 @@ process_mcast_in0_program_and_create_override_variables(
             (std::uint32_t)M * K,  // MtKt
             (std::uint32_t)B,      // batch
             // sparsity args
-<<<<<<< HEAD
-            (std::uint32_t)0,   // batchB
-            (std::uint32_t)0,   // sparsity_pagesize (placeholder since sparsity not used in this case)
-            (std::uint32_t)true // bcast_A
-=======
-            (std::uint32_t)0,      // batchB
-            (std::uint32_t)false,  // sparsity_is_dram
-            (std::uint32_t)0,      // sparsity_log2_of_pagesize
-            (std::uint32_t)true,   // bcast_A
-            (std::uint32_t)false   // get_batch_from_reader
->>>>>>> db0b8b6f2b (SparseMatmul: Add option for not providing nnz and reading it on the fly)
+            (std::uint32_t)0,     // batchB
+            (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
+            (std::uint32_t)true,  // bcast_A
+            (std::uint32_t)false  // get_batch_from_reader
         };
     }
     in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
@@ -3161,17 +3154,10 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)Mt * Kt,  // MtKt
         (std::uint32_t)B_A,      // batchA
         // sparsity args
-<<<<<<< HEAD
         (std::uint32_t)B_B,                               // batchB
         (std::uint32_t)B_B * (uint32_t)sizeof(uint32_t),  // sparsity_pagesize
         (std::uint32_t)!is_input_a_sparse,                // bcast_A
-=======
-        (std::uint32_t)B_B,  // batchB
-        (std::uint32_t)sparsity_is_dram,
-        (std::uint32_t)std::log2(B_B * (uint32_t)sizeof(uint32_t)),  // log2 of page size
-        (std::uint32_t)!is_input_a_sparse,                           // bcast_A
-        (std::uint32_t)!nnz.has_value(),                             // get_batch_from_reader
->>>>>>> db0b8b6f2b (SparseMatmul: Add option for not providing nnz and reading it on the fly)
+        (std::uint32_t)!nnz.has_value(),                  // get_batch_from_reader
         // fuse op args
         (std::uint32_t)false,  // fuse_op
     };
@@ -3409,7 +3395,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     auto cb_sparsity1 = tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config1);
 
     if (!nnz.has_value()) {
-        // Create circular buffers
+        // When nnz is not provided, we need to infer this at runtime based on the sparsity tensor.
+        // We create a circular buffer to pass this value to the compute kernel from the reader.
         uint32_t nnz_cb_index = tt::CBIndex::c_25;
         const auto nnz_data_format = tt::DataFormat::UInt32;
         const auto nnz_cb_size = sparsity.logical_volume() * tt::datum_size(nnz_data_format);

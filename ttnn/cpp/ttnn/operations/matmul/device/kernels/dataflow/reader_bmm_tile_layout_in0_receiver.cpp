@@ -25,7 +25,9 @@ void kernel_main() {
     // batch args
     constexpr uint32_t batch = get_compile_time_arg_val(6);
     // sparsity args
+    // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
     constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(7);
+    // Reader will use this CB to pass the number of non-zero (nnz) entries in the sparsity tensor.
     constexpr uint32_t nnz_cb_id = tt::CBIndex::c_25;
     constexpr uint32_t IGNORE_BATCH = 0x2;
 
@@ -39,6 +41,10 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < batch; ++b) {
         if constexpr (get_batch_from_reader) {
+            // This means we have unstructured sparsity.
+            // The compute kernel needs to be made aware whether this batch is valid or not.
+            // We do this by passing the value to the compute kernel via nnz_cb_id.
+            // But first, lets wait for the sparisty data to be multicast to us.
             // Set in0 semaphore value to INVALID
             noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
             // Atomic increment source core counter
@@ -54,7 +60,7 @@ void kernel_main() {
             nnz_ptr[0] = is_batch_valid;
             cb_push_back(nnz_cb_id, 1);
 
-            // If value is 0x2, then we ignore the batch
+            // Skip sending the input tensor for this batch as it is not valid.
             if (!is_batch_valid) {
                 continue;
             }
