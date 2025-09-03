@@ -839,9 +839,9 @@ void ProcessDeviceProfilerResults(
         }
 
         if (dumpDeviceProfilerDataMidRun(state)) {
-            std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
-                getSortedDeviceMarkersVector(profiler.device_markers_per_core_risc_map);
-            profiler.pushTracyDeviceResults(device_markers_vec);
+            // std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
+            //     getSortedDeviceMarkersVector(profiler.device_markers_per_core_risc_map);
+            // profiler.pushTracyDeviceResults(device_markers_vec);
             profiler.dumpDeviceResults();
             profiler.device_markers_per_core_risc_map.clear();
         }
