@@ -246,7 +246,7 @@ static FORCE_INLINE void fabric_set_mcast_route(
                 fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, 0, range[i], 0, 0);
             } break;
             case eth_chan_directions::NORTH: {
-                fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, 0, 0, range[i] 0);
+                fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, 0, 0, range[i], 0);
             } break;
             case eth_chan_directions::SOUTH: {
                 fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, 0, 0, 0, range[i]);
