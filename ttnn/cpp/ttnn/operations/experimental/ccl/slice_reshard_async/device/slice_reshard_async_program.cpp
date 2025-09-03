@@ -256,7 +256,7 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
                 page_size,                                                       // stick_size
                 stick_start_id,                                                  // stick_start_id
                 num_sticks_to_read,                                              // num_sticks_to_read
-                input_outer_dim_size,                                            // input_outer_dim_size
+                output_outer_dim_size,                                           // output_outer_dim_size
                 direction ? outer_dims_to_forward : outer_dims_to_backward,      // outer_dims_to_forward
                 outer_dims_to_keep_start,                                        // outer_dims_to_keep
                 outer_dims_to_keep_end,                                          // outer_dims_to_keep
