@@ -833,7 +833,7 @@ void bind_softplus(py::module& module, const unary_operation_t& operation) {
                * - Dtypes
                  - Layouts
                  - Ranks
-               * - BFLOAT16
+               * - BFLOAT16, BFLOAT8_B
                  - TILE
                  - 2, 3, 4
 
@@ -866,7 +866,7 @@ void bind_softplus(py::module& module, const unary_operation_t& operation) {
 }
 
 template <typename unary_operation_t>
-void bind_tanh(py::module& module, const unary_operation_t& operation) {
+void bind_tanh_like(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -880,7 +880,7 @@ void bind_tanh(py::module& module, const unary_operation_t& operation) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            accuracy (Boolean, optional): provides better accuracy for input range -3 to 3, for dtype BFLOAT16. Defaults to `False`.
+            fast_and_approximate_mode (Boolean, optional): Enables a performance-optimized approximation method. When True, the operation runs faster but may produce results with minor precision differences. Defaults to `False`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
@@ -899,29 +899,31 @@ void bind_tanh(py::module& module, const unary_operation_t& operation) {
                  - TILE
                  - 2, 3, 4
 
+            BFLOAT8_B/BFLOAT4_B is supported only for approx=True mode.
+
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor, accuracy=False)
+            >>> output = {1}(tensor, fast_and_approximate_mode=False)
         )doc",
-        ttnn::tanh.base_name(),
-        ttnn::tanh.python_fully_qualified_name());
+        operation.base_name(),
+        operation.python_fully_qualified_name());
 
     bind_registered_operation(
         module,
-        ttnn::tanh,
+        operation,
         doc,
         ttnn::pybind_overload_t{
             [](const unary_operation_t& self,
                const Tensor& input,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor,
-               bool accuracy,
-               const QueueId queue_id) { return self(queue_id, input, memory_config, output_tensor, accuracy); },
+               bool approx,
+               const QueueId queue_id) { return self(queue_id, input, memory_config, output_tensor, approx); },
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("accuracy") = false,
+            py::arg("fast_and_approximate_mode") = false,
             py::arg("queue_id") = DefaultQueueId});
 }
 
@@ -1894,7 +1896,7 @@ void py_module(py::module& module) {
         ttnn::square,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|square|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16 [0,255])doc");
     bind_unary_operation(
         module,
         ttnn::tan,
@@ -1921,12 +1923,6 @@ void py_module(py::module& module) {
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B)doc",
         "",
         R"doc(The last dimension of the input tensor must be even.)doc");
-    bind_unary_operation(
-        module,
-        ttnn::tanhshrink,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|tanhshrink|(\mathrm{{input\_tensor}}_i))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation(
         module,
         ttnn::deg2rad,
@@ -2088,7 +2084,8 @@ void py_module(py::module& module) {
 
     // Other unaries (unary chain operations)
     bind_softplus(module, ttnn::softplus);
-    bind_tanh(module, ttnn::tanh);
+    bind_tanh_like(module, ttnn::tanh);
+    bind_tanh_like(module, ttnn::tanhshrink);
     bind_sigmoid_accurate(module, ttnn::sigmoid_accurate);
     bind_sigmoid_mode_appx(module, ttnn::sigmoid);
 
