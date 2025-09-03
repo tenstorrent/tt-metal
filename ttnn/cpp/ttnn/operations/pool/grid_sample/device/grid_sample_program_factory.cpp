@@ -139,6 +139,9 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     tt::tt_metal::KernelHandle compute_kernel_group_1 = 0;
     tt::tt_metal::KernelHandle compute_kernel_group_2 = 0;
 
+    const uint32_t tmp_cb_id =
+        32;  // Unused CB for pool compute kernel for grid sample, we don't have tiled output in gridsample
+
     // Kernel for core group 1
     if (core_group_1.num_cores() > 0) {
         std::vector<uint32_t> compute_compile_time_args_1 = {
@@ -155,7 +158,9 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             dummy_cb_id,                  // 10: Scalar CB 1 (unused)
             output_cb_index,              // 11: Output CB
             one_scalar_per_core,          // 12: Scalar mode
-            in_ntiles_c                   // 13: Tiles per channel (for CB space reservation)
+            in_ntiles_c,                  // 13: Tiles per channel (for CB space reservation)
+            tmp_cb_id,                    // 14: Default tmp CB id (unused)
+            false                         // 15: is_output_tiled - always row major for grid sample
         };
 
         compute_kernel_group_1 = tt::tt_metal::CreateKernel(
@@ -186,7 +191,9 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             dummy_cb_id,                  // 10: Scalar CB 1 (unused)
             output_cb_index,              // 11: Output CB
             one_scalar_per_core,          // 12: Scalar mode
-            in_ntiles_c                   // 13: Tiles per channel (for CB space reservation)
+            in_ntiles_c,                  // 13: Tiles per channel (for CB space reservation)
+            tmp_cb_id,                    // 14: Default tmp CB id (unused)
+            false                         // 15: is_output_tiled - always row major for grid sample
         };
 
         compute_kernel_group_2 = tt::tt_metal::CreateKernel(
