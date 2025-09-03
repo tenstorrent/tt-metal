@@ -49,9 +49,8 @@ void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
         const uint32_t grid_batching_factor = grid_last_dim / num_elements_per_grid_point;
         TT_FATAL(
             grid_batching_factor > 1,
-            "batch_output_channels=True requires grid batching factor K > 1, but got K=" +
-                std::to_string(grid_batching_factor) +
-                ". Use a batched grid with multiple coordinate sets per spatial location.");
+            "batch_output_channels=True requires grid batching factor K > 1. Use a batched grid with multiple "
+            "coordinate sets per row of grid.");
     }
 
     // Data type validation
