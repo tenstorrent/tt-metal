@@ -28,6 +28,9 @@
 namespace ttnn::operations::conv {
 namespace conv2d {
 
+// Compute kernel addressing mode divides addresses with 16
+constexpr uint32_t COMPUTE_KERNEL_ADDRESS_DIVISOR = 16;
+
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     tt::tt_metal::Program& program,
     const Tensor& a,
@@ -69,7 +72,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const bool skip_weights_mcast = skip_mcast.skip_weights_mcast;
 
     const tt::DataFormat tilized_act_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    const tt::DataFormat act_df = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -553,14 +555,20 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     TT_FATAL(reader_arg_act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
 
     // reader kernel args
-    uint32_t image_width_tiles = 0, image_width_mod_tile = 0, act_cb_num_tiles_split = 0,
-             act_cb_num_tiles_split_last = 0, reuse_window_offset = 0;
+    uint32_t image_width_tiles = 0;
+    uint32_t image_width_mod_tile = 0;
+    uint32_t act_cb_num_tiles_split = 0;
+    uint32_t act_cb_num_tiles_split_last = 0;
+    uint32_t reuse_window_offset = 0;
     bool readers_process_full_image_widths = false;
 
     // compute kernel args
-    uint32_t tilized_cb_row_offset = 0, tilized_cb_second_reader_offset = 0;
+    uint32_t tilized_cb_row_offset = 0;
+    uint32_t tilized_cb_second_reader_offset = 0;
 
-    uint32_t total_remaining_tiles_to_push = 0, cores_pushing_remaining_tiles = 0, partial_core_remaining_tiles = 0;
+    uint32_t total_remaining_tiles_to_push = 0;
+    uint32_t cores_pushing_remaining_tiles = 0;
+    uint32_t partial_core_remaining_tiles = 0;
     uint32_t last_core_with_work = 0;
 
     if (enable_activation_reuse) {
@@ -572,9 +580,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
         // We rely that double buffering is turned off here
         // TODO(sjovic): avoid this assumption
-        act_cb_num_tiles_split = access_cb_info_by_name(cb_info, Conv2dCb::ACT).num_pages;
+        act_cb_num_tiles_split = get_cb_info_by_name(cb_info, Conv2dCb::ACT).num_pages;
         if (enable_split_reader) {
-            act_cb_num_tiles_split_last = access_cb_info_by_name(cb_info, Conv2dCb::ACT_SECOND_READER).num_pages;
+            act_cb_num_tiles_split_last = get_cb_info_by_name(cb_info, Conv2dCb::ACT_SECOND_READER).num_pages;
         }
 
         // Number of bytes to move the CB read pointer when passing on to the new output image row;
@@ -594,13 +602,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         // - output image width is not a multiple of the tile height, so we need to process more than one image width at
         // once
         readers_process_full_image_widths = act_block_h_nsubblocks_split % image_width_tiles == 0 &&
-                                            act_block_h_nsubblocks_split_last % image_width_tiles == 0;
-        readers_process_full_image_widths = readers_process_full_image_widths && image_width_tile_leftover == 0;
+                                            act_block_h_nsubblocks_split_last % image_width_tiles == 0 &&
+                                            image_width_tile_leftover == 0;
 
         // Compute kernel interleaves tilizing data coming from two readers so it needs to calculate the address in the
         // tilized CB
-        tilized_cb_row_offset = (tilized_act_tile_size * act_block_w_ntiles);
-        tilized_cb_second_reader_offset = (tilized_act_tile_size * act_block_h_nsubblocks_split * act_block_w_ntiles);
+        tilized_cb_row_offset = tilized_act_tile_size * act_block_w_ntiles;
+        tilized_cb_second_reader_offset = tilized_act_tile_size * act_block_h_nsubblocks_split * act_block_w_ntiles;
 
         // Last cores sometime have less work to do, but we still need to push the same number of tiles
         // to avoid blocking compute kernels; Here we compute how many cores will be pushing the remaining tiles
@@ -688,10 +696,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     if (enable_split_reader) {
         compute_defines["SPLIT_READER"] = "1";
         reader_defines["SPLIT_READER"] = "1";
-        if (conv_act_c_read_bytes > 0) {
-            writer_mcast_sender_defines["SPLIT_READER"] = "1";
-            writer_defines["SPLIT_READER"] = "1";
-        }
+        writer_mcast_sender_defines["SPLIT_READER"] = "1";
+        writer_defines["SPLIT_READER"] = "1";
     }
 
     if (packer_l1_acc_en) {
@@ -811,11 +817,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     if (enable_activation_reuse) {
         compute_kernel_args.push_back(image_width_tiles);
-        // offsets divided with 16 due to the compute kernel addressing mode
-        compute_kernel_args.push_back(reuse_window_offset / 16);
+        compute_kernel_args.push_back(reuse_window_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
         if (enable_split_reader) {
-            compute_kernel_args.push_back(tilized_cb_row_offset / 16);
-            compute_kernel_args.push_back(tilized_cb_second_reader_offset / 16);
+            compute_kernel_args.push_back(tilized_cb_row_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
+            compute_kernel_args.push_back(tilized_cb_second_reader_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
         }
     }
 
