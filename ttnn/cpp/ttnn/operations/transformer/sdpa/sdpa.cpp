@@ -9,7 +9,7 @@
 #include "device/sdpa_op.hpp"
 #include "device/joint_sdpa_op.hpp"
 #include "device/ring_joint_sdpa_op.hpp"
-#include "device/ring_sdpa_op.hpp"
+#include "device/ring_distributed_sdpa_op.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.hpp"

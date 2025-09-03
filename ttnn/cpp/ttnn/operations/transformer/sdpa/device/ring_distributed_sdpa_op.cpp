@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ring_sdpa_op.hpp"
+#include "ring_distributed_sdpa_op.hpp"
 
-#include "ring_sdpa_program_factory.hpp"
+#include "ring_distributed_sdpa_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/constants.hpp>
 
@@ -98,8 +98,8 @@ void RingDistributedScaledDotProductAttention::validate(const std::vector<Tensor
 
     // Ring-specific sequence length validation
     TT_FATAL(
-        Sq >= 2 * this->ring_size,
-        "Sequence length must be at least 2*ring_size for ring distribution. Got seq_len: {}, ring_size: {}",
+        Sq / tt::constants::TILE_WIDTH >= 2 * this->ring_size,
+        "Sequence length tiles must be at least 2*ring_size for ring distribution. Got seq_len: {}, ring_size: {}",
         Sq,
         this->ring_size);
     TT_FATAL(
@@ -121,6 +121,14 @@ void RingDistributedScaledDotProductAttention::validate(const std::vector<Tensor
         "k_chunk_size must be divisible by TILE_WIDTH. Got k_chunk_size: {}, TILE_WIDTH: {}",
         k_chunk_size,
         tt::constants::TILE_WIDTH);
+
+    TT_FATAL(
+        q_chunk_size < Sq / ring_size,
+        "q_chunk_size must be less than sequence length tiles divided by ring size. Got q_chunk_size: {}, sequence "
+        "length tiles: {}, ring size: {}",
+        q_chunk_size,
+        Sq / ring_size,
+        ring_size);
 
     // Validate padding: Only the sequence dimension may be padded
     auto validate_padding = [](const Tensor& tensor) {
@@ -185,7 +193,6 @@ operation::ProgramWithCallbacks RingDistributedScaledDotProductAttention::create
         this->ring_size,
         this->ring_id,
         scale,
-        true,  // is_causal - ring distribution is always causal
         q_chunk_size,
         k_chunk_size,
         this->compute_kernel_config,

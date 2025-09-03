@@ -379,9 +379,7 @@ void fill_vertical_tile_bfp4(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_co
 template <uint32_t cb_mask_in>
 void generate_causal_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t q_chunk, uint32_t k_chunk) {
     uint32_t mask_size_tiles = Sq_chunk_t * Sk_chunk_t;
-    DPRINT << "GEN_MASK: Before cb_reserve_back cb=" << cb_mask_in << " tiles=" << mask_size_tiles << ENDL();
     cb_reserve_back(cb_mask_in, mask_size_tiles);
-    DPRINT << "GEN_MASK: After cb_reserve_back" << ENDL();
 
     uint32_t write_ptr_base = get_write_ptr(cb_mask_in);
     uint64_t noc_write_addr_base = get_noc_addr(write_ptr_base);
@@ -421,12 +419,8 @@ void generate_causal_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t q_c
             }
         }
     }
-    DPRINT << "GEN_MASK: Before noc_async_read_barrier" << ENDL();
     noc_async_read_barrier();
-    DPRINT << "GEN_MASK: After noc_async_read_barrier" << ENDL();
-    DPRINT << "CB PUSH START: cb=" << cb_mask_in << " tiles=" << mask_size_tiles << ENDL();
     cb_push_back(cb_mask_in, mask_size_tiles);
-    DPRINT << "CB PUSH DONE: cb=" << cb_mask_in << " tiles=" << mask_size_tiles << ENDL();
 }
 
 template <uint32_t cb_mask_in>

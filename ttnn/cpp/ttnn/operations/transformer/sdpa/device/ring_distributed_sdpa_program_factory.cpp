@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ring_sdpa_program_factory.hpp"
-#include "ring_sdpa_op.hpp"
+#include "ring_distributed_sdpa_program_factory.hpp"
+#include "ring_distributed_sdpa_op.hpp"
 
 #include <optional>
 #include <string>
@@ -298,8 +298,6 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
         defines["BALANCED_Q_PARALLEL"] = "1";
     }
 
-    log_info(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
-
     auto reader_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp",
@@ -450,7 +448,6 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
             read_offset = chunk_1 * Sqt;
         } else {
             // phase 2
-            log_info(tt::LogOp, "core: getting runtime args for idx {}", i);
             batch_per_core = batch_per_core_phase_2;
             nh_per_core = nh_per_core_phase_2;
             q_per_core = q_per_core_phase_2;

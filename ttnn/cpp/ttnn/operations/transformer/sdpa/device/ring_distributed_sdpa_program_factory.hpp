@@ -18,7 +18,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_sdpa_multi_core(
     uint32_t ring_size,
     uint32_t ring_id,
     std::optional<float> scale,
-    bool is_causal,
     std::size_t q_chunk_size,
     std::size_t k_chunk_size,
     DeviceComputeKernelConfig compute_kernel_config,

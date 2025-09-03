@@ -18,6 +18,7 @@ target_sources(
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         attention_softmax/attention_softmax.cpp
         concatenate_heads/concatenate_heads.cpp
@@ -26,8 +27,8 @@ target_sources(
         sdpa/device/joint_sdpa_program_factory.cpp
         sdpa/device/ring_joint_sdpa_op.cpp
         sdpa/device/ring_joint_sdpa_program_factory.cpp
-        sdpa/device/ring_sdpa_op.cpp
-        sdpa/device/ring_sdpa_program_factory.cpp
+        sdpa/device/ring_distributed_sdpa_op.cpp
+        sdpa/device/ring_distributed_sdpa_program_factory.cpp
         sdpa/device/sdpa_op.cpp
         sdpa/device/sdpa_program_factory.cpp
         sdpa/sdpa.cpp
