@@ -5,16 +5,16 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    // Compile-time arguments - same as stateful version for direct comparison
     const uint32_t test_id = get_compile_time_arg_val(0);
     const uint32_t num_writes = get_compile_time_arg_val(1);
     const uint32_t write_value_base = get_compile_time_arg_val(2);
     const uint32_t use_posted_writes = get_compile_time_arg_val(3);
     const uint32_t same_destination = get_compile_time_arg_val(4);
-    const uint32_t dest_l1_addr = get_compile_time_arg_val(5);
-    const uint32_t addr_stride = get_compile_time_arg_val(6);
-    const uint32_t packed_receiver_coords = get_compile_time_arg_val(7);
-    const uint32_t noc_id = get_compile_time_arg_val(8);
+    const uint32_t same_value = get_compile_time_arg_val(5);
+    const uint32_t dest_l1_addr = get_compile_time_arg_val(6);
+    const uint32_t addr_stride = get_compile_time_arg_val(7);
+    const uint32_t packed_receiver_coords = get_compile_time_arg_val(8);
+    const uint32_t noc_id = get_compile_time_arg_val(9);
 
     // Extract receiver coordinates
     uint32_t receiver_x = (packed_receiver_coords >> 16) & 0xFFFF;
@@ -27,18 +27,11 @@ void kernel_main() {
             uint64_t dest_noc_addr = get_noc_addr(receiver_x, receiver_y, dest_l1_addr);
 
             for (uint32_t i = 0; i < num_writes; i++) {
+                uint32_t write_value = same_value ? write_value_base : (write_value_base + i);
                 if (use_posted_writes) {
-                    noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(  // posted=true
-                        dest_noc_addr,
-                        write_value_base + i,
-                        0xF,
-                        noc_id);
+                    noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(dest_noc_addr, write_value, 0xF, noc_id);
                 } else {
-                    noc_inline_dw_write<InlineWriteDst::DEFAULT, false>(  // posted=false
-                        dest_noc_addr,
-                        write_value_base + i,
-                        0xF,
-                        noc_id);
+                    noc_inline_dw_write<InlineWriteDst::DEFAULT, false>(dest_noc_addr, write_value, 0xF, noc_id);
                 }
             }
 
@@ -47,12 +40,11 @@ void kernel_main() {
             for (uint32_t i = 0; i < num_writes; i++) {
                 uint32_t current_local_addr = dest_l1_addr + (i * addr_stride);
                 uint64_t dest_noc_addr = get_noc_addr(receiver_x, receiver_y, current_local_addr);
+                uint32_t write_value = same_value ? write_value_base : (write_value_base + i);
                 if (use_posted_writes) {
-                    noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
-                        dest_noc_addr, write_value_base + i, 0xF, noc_id);
+                    noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(dest_noc_addr, write_value, 0xF, noc_id);
                 } else {
-                    noc_inline_dw_write<InlineWriteDst::DEFAULT, false>(
-                        dest_noc_addr, write_value_base + i, 0xF, noc_id);
+                    noc_inline_dw_write<InlineWriteDst::DEFAULT, false>(dest_noc_addr, write_value, 0xF, noc_id);
                 }
             }
         }
@@ -62,10 +54,11 @@ void kernel_main() {
     }
 
     DeviceTimestampedData("Test id", test_id);
-    DeviceTimestampedData("Stateful", 0);  // 0 = non-stateful
+    DeviceTimestampedData("Stateful", 0);
     DeviceTimestampedData("Posted writes", use_posted_writes);
     DeviceTimestampedData("Number of transactions", num_writes);
     DeviceTimestampedData("Transaction size in bytes", 32);
     DeviceTimestampedData("Same destination", same_destination);
+    DeviceTimestampedData("Same value", same_value);
     DeviceTimestampedData("NOC Index", noc_id);
 }
