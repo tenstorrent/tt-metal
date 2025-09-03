@@ -19,10 +19,10 @@ jobs:
       build-wheel: true
       version: 22.04
 
-  6u-quick-test:
+  galaxy-quick-test:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/6u-quick.yaml
+    uses: ./.github/workflows/galaxy-quick.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
