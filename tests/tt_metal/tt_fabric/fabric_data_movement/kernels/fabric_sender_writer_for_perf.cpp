@@ -67,7 +67,12 @@ void kernel_main() {
            << " rx_xy=(" << rx_noc_x << "," << rx_noc_y << ")\n";
 
     // Fabric header (2D dynamic routing): route to (dst_mesh_id, dst_dev_id)
-    auto mh = reinterpret_cast<volatile tt_l1_ptr MeshPacketHeader*>(header);
+    auto mh = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header);
+#if defined(DYNAMIC_ROUTING_ENABLED)
+    static_assert(false, "Dynamic routing is not supported");
+#else
+
+#endif
     fabric_set_unicast_route(
         mh,
         eth_chan_directions::EAST,  // ignored for dynamic routing
@@ -75,6 +80,16 @@ void kernel_main() {
         /*dst_dev_id*/ dst_dev_id,
         /*dst_mesh_id*/ dst_mesh_id,
         /*ew_dim*/ 0);
+        
+    WATCHER_RING_BUFFER_PUSH(0x55555555);
+    WATCHER_RING_BUFFER_PUSH(dst_dev_id);
+    WATCHER_RING_BUFFER_PUSH(dst_mesh_id);
+    WATCHER_RING_BUFFER_PUSH(2);
+
+    for (size_t i = 0; i < 5; i++) {
+        WATCHER_RING_BUFFER_PUSH(mh->route_buffer[i]);
+    }
+    WATCHER_RING_BUFFER_PUSH(0xc0ffee);
 
     DPRINT << "[WR] send_type(write)=" << (uint32_t)header->noc_send_type << "\n";
     dump_header_words(header, "[WR] header words after set");
