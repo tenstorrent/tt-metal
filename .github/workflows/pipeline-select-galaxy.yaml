@@ -29,7 +29,7 @@ on:
         required: true
         type: string
         default: "in-service,config-tg"
-      tg-quick:
+      6u-quick:
         required: false
         type: boolean
         default: false
@@ -71,7 +71,7 @@ jobs:
     steps:
       - name: Determine test execution
         id: logic
-        # Skip all but tg-quick if trigger-type is not manual
+        # Skip all but 6u-quick if trigger-type is not manual
         run: |
           EXTRA_TAG="${{ inputs.extra-tag }}"
           # (remove both config-tg and topology-6u) from EXTRA_TAG
@@ -91,7 +91,7 @@ jobs:
 
           case "${{ inputs.trigger_type }}" in
             "manual")
-              echo "run-quick=${{ inputs.tg-quick }}" >> $GITHUB_OUTPUT
+              echo "run-quick=${{ inputs.6u-quick }}" >> $GITHUB_OUTPUT
               echo "run-unit=${{ inputs.tg-unit }}" >> $GITHUB_OUTPUT
               echo "run-frequent=${{ inputs.tg-frequent }}" >> $GITHUB_OUTPUT
               echo "run-demo=${{ inputs.tg-demo }}" >> $GITHUB_OUTPUT
@@ -150,11 +150,11 @@ jobs:
       tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
       build-wheel: true
       version: 22.04
-  tg-quick:
+  6u-quick:
     if: ${{ needs.determine-tests.outputs.run-quick == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/tg-quick.yaml
+    uses: ./.github/workflows/6u-quick.yaml
     with:
       extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
