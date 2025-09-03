@@ -3,7 +3,7 @@ name: "Galaxy Quick"
 on:
   workflow_dispatch:
   push:
-    branches: ["main","roseli/0-remove-4u-quick-tests"]
+    branches: ["main"]
 
 permissions:
   packages: write
