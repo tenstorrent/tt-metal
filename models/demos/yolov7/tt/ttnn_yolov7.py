@@ -910,17 +910,6 @@ class ttnn_yolov7:
         conv4 = self.conv4(self.device, conv3)
 
         conv5 = self.conv5(self.device, conv4)
-        # conv5_temp = self.conv5_temp(self.device, conv4)
-
-        # conv5_flattened = ttnn.to_torch(conv5).flatten()
-        # conv5_tempflattened = ttnn.to_torch(conv5_temp).flatten()
-        # # compare the two conv5 results, find the indices where they differ
-        # diff_indices = torch.nonzero(torch.abs(conv5_flattened - conv5_tempflattened) > 1e-2).squeeze()
-        # print(f"Discrepancies found at indices: {diff_indices}")
-        # print(f"conv5 values at these indices: {conv5_flattened[diff_indices]}")
-        # print(f"conv5_temp values at these indices: {conv5_tempflattened[diff_indices]}")
-
-        # return
 
         conv6 = self.conv6(self.device, conv4)
         ttnn.deallocate(conv4)
@@ -1041,8 +1030,6 @@ class ttnn_yolov7:
         ttnn.deallocate(conv26)
         ttnn.deallocate(conv28)
 
-        # conv31 = ttnn.sharded_to_interleaved(conv31, ttnn.L1_MEMORY_CONFIG)
-        # conv31 = ttnn.to_layout(conv31, ttnn.ROW_MAJOR_LAYOUT)
         mp3 = ttnn.max_pool2d(
             input_tensor=conv31,
             batch_size=1,
@@ -1057,19 +1044,14 @@ class ttnn_yolov7:
         )
         ttnn.deallocate(conv30)
 
-        # mp3 = ttnn.sharded_to_interleaved(mp3, ttnn.L1_MEMORY_CONFIG)
-        # mp3 = ttnn.to_layout(mp3, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-        # conv31 = ttnn.to_memory_config(conv31, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         conv32 = self.conv32(self.device, mp3)
 
         conv33 = self.conv33(self.device, conv31)
-        # conv31 = ttnn.to_memory_config(conv31, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         conv34 = self.conv34(self.device, conv33)
         ttnn.deallocate(conv33)
 
         conv34 = concat(3, False, conv34, conv32)
-        # conv34 = sharded_concat([conv34, conv32])
         ttnn.deallocate(mp3)
 
         conv35 = self.conv35(self.device, conv34)
@@ -1219,7 +1201,6 @@ class ttnn_yolov7:
             stride=[2, 2],
             padding=[0, 0],
             dilation=[1, 1],
-            # memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         conv60 = self.conv60(self.device, mp4)
