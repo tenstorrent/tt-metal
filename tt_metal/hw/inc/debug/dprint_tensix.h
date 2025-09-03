@@ -188,6 +188,16 @@ inline void dprint_tensix_dest_reg_row_int32(uint16_t row) {
 #endif
 }
 
+// Helper function that prints one row from dest when dest is configured for storing uint16 values.
+// This function should be used only from dprint_tensix_dest_reg.
+inline void dprint_tensix_dest_reg_row_uint16(uint32_t data_format, uint16_t row) {
+    constexpr int ARRAY_LEN = 8;
+    uint32_t rd_data[ARRAY_LEN + 1];  // data + array type
+    row = get_dest_row_id(row, false);
+    dbg_read_dest_acc_row(row, rd_data);
+    dprint_array_with_data_type(data_format, rd_data, 8);
+}
+
 // Print the contents of tile with index tile_id within the destination register
 template <bool print_by_face = false>
 void dprint_tensix_dest_reg(int tile_id = 0) {
@@ -213,6 +223,9 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
                         break;
                     case (uint32_t)DataFormat::Int32:
                         dprint_tensix_dest_reg_row_int32(row);
+                        break;
+                    case (uint32_t)DataFormat::UInt16:
+                        dprint_tensix_dest_reg_row_uint16(data_format_reg_field_value, row);
                         break;
                     case (uint32_t)DataFormat::Float16_b:
                         dprint_tensix_dest_reg_row_float16(data_format_reg_field_value, row);
