@@ -92,15 +92,15 @@ uint64_t execute_time_and_release_trace(TraceID trace_id, MeshDevice* device) {
     try {
         std::array<uint64_t, NUM_TRACE_EXECUTIONS> durations;
 
-        for (size_t i = 0; i < NUM_TRACE_EXECUTIONS + WARMUP_TRACE_EXECUTIONS; ++i) {
+        for (size_t i = 0; i < WARMUP_TRACE_EXECUTIONS; ++i) {
+            ttnn::operations::trace::execute_trace(device, trace_id, ttnn::DefaultQueueId, /* blocking = */ true);
+        }
+
+        for (size_t i = 0; i < NUM_TRACE_EXECUTIONS; ++i) {
             auto start = std::chrono::high_resolution_clock::now();
             ttnn::operations::trace::execute_trace(device, trace_id, ttnn::DefaultQueueId, /* blocking = */ true);
             auto end = std::chrono::high_resolution_clock::now();
-
-            if (i >= WARMUP_TRACE_EXECUTIONS) {
-                durations[i - WARMUP_TRACE_EXECUTIONS] =
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
-            }
+            durations[i] = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
         }
 
         ttnn::operations::trace::release_trace(device, trace_id);
