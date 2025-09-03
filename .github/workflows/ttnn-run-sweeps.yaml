@@ -807,14 +807,19 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
     defaults:
       run:
         shell: bash
-        working-directory: /work
+        working-directory: /work # https://github.com/actions/runner/issues/878
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      - name: Print first three levels from starting directory
+        run: |
+          find . -maxdepth 3 -type d | sort -V
       - name: Download all sweep results
         uses: actions/download-artifact@v4
         with:
@@ -830,9 +835,6 @@ jobs:
           name: sweeps-run-result
           path: tests/sweep_framework/results_export/oprun_*.json
           retention-days: 7
-      - name: Print first three levels from starting directory
-        run: |
-          find . -maxdepth 3 -type d | sort
       - name: Upload sweep results to SFTP server
         if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs.upload_results }}
         uses: ./.github/actions/upload-data-via-sftp
