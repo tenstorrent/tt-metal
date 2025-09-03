@@ -8,6 +8,7 @@ from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upblock_2d_new_conv import upblock_2d
@@ -21,7 +22,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("res_hidden_states_tuple", [([2, 1280, 8, 8], [2, 1280, 8, 8], [2, 1280, 8, 8])])
 @pytest.mark.parametrize(
     "hidden_states, shard_layout, shard_end_core, shard_shape", [DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO]

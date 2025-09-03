@@ -88,7 +88,7 @@
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
 #define MEM_MAILBOX_BASE 96  // (MEM_NCRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)  // 2 nocs * 2 (B,NC)
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12656
+#define MEM_MAILBOX_SIZE 12704
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
@@ -101,7 +101,7 @@
 #define MEM_TRISC2_FIRMWARE_BASE (MEM_TRISC1_FIRMWARE_BASE + MEM_TRISC1_FIRMWARE_SIZE)
 
 #define MEM_NOC_COUNTER_SIZE 4
-#define MEM_NOC_COUNTER_L1_SIZE 5 * 2 * 2 * MEM_NOC_COUNTER_SIZE
+#define MEM_NOC_COUNTER_L1_SIZE (5 * 2 * 2 * MEM_NOC_COUNTER_SIZE)
 #define MEM_NOC_COUNTER_BASE (MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE)
 
 // Tensix routing table for fabric networking
@@ -166,7 +166,7 @@
 #define MEM_MAX_NUM_CONCURRENT_TRANSACTIONS 8
 #define MEM_ERISC_SYNC_INFO_SIZE (160 + 16 * MEM_MAX_NUM_CONCURRENT_TRANSACTIONS)
 #define MEM_ERISC_FABRIC_ROUTER_CONFIG_SIZE 2064
-#define MEM_ERISC_MAILBOX_SIZE 12624
+#define MEM_ERISC_MAILBOX_SIZE 12928
 #define MEM_ERISC_KERNEL_CONFIG_SIZE (25 * 1024)
 #define MEM_ERISC_BASE 0
 

@@ -2600,3 +2600,20 @@ def test_remainder_implicit_broadcast(device, shapes, torch_dtype, ttnn_dtype):
     output_tensor = ttnn.remainder(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+def test_small_fp32_multiply(device):
+    # Scaling with 0.01 to get realistic values that appear during training.
+    a = ttnn.from_torch(0.01 * torch.randn((1, 1, 2048), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(0.01 * torch.randn((4, 32, 2048), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
+
+    out_torch = torch.multiply(ttnn.to_torch(a), ttnn.to_torch(b))
+    # print("Torch multiply result:")
+    # print(out_torch)
+
+    out = ttnn.multiply(a, b)
+    # print("TTNN multiply result:")
+    # print(out)
+
+    # assert_allclose(out_torch, ttnn.to_torch(out))
+    assert_with_pcc(out_torch, ttnn.to_torch(out))

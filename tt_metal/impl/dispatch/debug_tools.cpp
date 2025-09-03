@@ -206,12 +206,12 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                 cq_file << fmt::format(" (num_words={})", val(cmd->set_go_signal_noc_data.num_words));
                 break;
             // These commands don't have any additional data to dump.
-            case CQ_DISPATCH_CMD_ILLEGAL: break;
-            case CQ_DISPATCH_CMD_SINK: break;
-            case CQ_DISPATCH_CMD_EXEC_BUF_END: break;
-            case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: break;
-            case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL: break;
-            case CQ_DISPATCH_CMD_TERMINATE: break;
+            case CQ_DISPATCH_CMD_ILLEGAL:
+            case CQ_DISPATCH_CMD_SINK:
+            case CQ_DISPATCH_CMD_EXEC_BUF_END:
+            case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
+            case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL:
+            case CQ_DISPATCH_CMD_TERMINATE:
             case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: break;
             default: TT_THROW("Unrecognized dispatch command: {}", cmd_id); break;
         }
@@ -230,10 +230,11 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream&
         switch (cmd_id) {
             case CQ_PREFETCH_CMD_RELAY_LINEAR:
                 iq_file << fmt::format(
-                    " (noc_xy_addr={:#010x}, addr={:#010x}, length={:#010x})",
+                    " (noc_xy_addr={:#010x}, addr={:#010x}, length={:#010x}, length_hi={:#010x})",
                     val(cmd->relay_linear.noc_xy_addr),
                     val(cmd->relay_linear.addr),
-                    val(cmd->relay_linear.length));
+                    val(cmd->relay_linear.length),
+                    val(cmd->relay_linear.length_hi));
                 break;
             case CQ_PREFETCH_CMD_RELAY_PAGED:
                 iq_file << fmt::format(
@@ -279,9 +280,9 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                 stride = cmd->debug.stride;
                 break;
             // These commands don't have any additional data to dump.
-            case CQ_PREFETCH_CMD_ILLEGAL: break;
-            case CQ_PREFETCH_CMD_STALL: break;
-            case CQ_PREFETCH_CMD_TERMINATE: break;
+            case CQ_PREFETCH_CMD_ILLEGAL:
+            case CQ_PREFETCH_CMD_STALL:
+            case CQ_PREFETCH_CMD_TERMINATE:
             default: break;
         }
     }
