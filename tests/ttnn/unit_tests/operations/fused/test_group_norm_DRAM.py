@@ -85,8 +85,8 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
         per_n_tensors.append(per_n_tensor)
 
         # Print mean and variance of data
-        logger.warning(f"Chunk {n} Mean of data: {per_n_tensor.mean()}")
-        logger.warning(f"Chunk {n} Variance of data: {per_n_tensor.var()}")
+        logger.info(f"Chunk {n} Mean of data: {per_n_tensor.mean()}")
+        logger.info(f"Chunk {n} Variance of data: {per_n_tensor.var()}")
 
     # Stack along the N dimension
     repeated_values = torch.stack(per_n_tensors, dim=0)
