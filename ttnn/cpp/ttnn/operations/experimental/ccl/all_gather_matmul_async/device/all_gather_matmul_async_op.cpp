@@ -279,8 +279,6 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         optional_input_tensors.push_back(std::nullopt);
     }
 
-    bool using_persistent_buffers = persistent_output_buffer.has_value();
-
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_buffer};
 
     /* AllGather setup */

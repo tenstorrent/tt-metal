@@ -43,7 +43,6 @@ struct AllGatherAsync {
     std::optional<uint32_t> cluster_axis;
     bool use_all_gather_async_llama_sharded;
     bool use_optimal_ccl_for_llama;
-    bool using_persistent_buffers;
     std::optional<uint32_t> chunks_per_sync;
     std::optional<uint32_t> num_workers_per_link;
     std::optional<uint32_t> num_buffers_per_channel;
