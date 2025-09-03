@@ -160,7 +160,7 @@ inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr
     return src_addr;
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool IS_ARC = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -178,9 +178,15 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_addr >> 32) & NOC_PCIE_MASK);
-    NOC_CMD_BUF_WRITE_REG(
-        noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(src_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    if constexpr (IS_ARC) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_addr >> 32));
+        // NOC_CMD_BUF_WRITE_REG(
+        //     noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(src_addr >> NOC_ADDR_COORD_SHIFT));
+    } else {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_addr >> 32) & NOC_PCIE_MASK);
+        NOC_CMD_BUF_WRITE_REG(
+            noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(src_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
@@ -436,7 +442,7 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
         uint32_t noc_rd_cmd_field =
             NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
         NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_MID, 0x0);  // get rid of this?
+        // NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_MID, 0x0);  // get rid of this?
         NOC_CMD_BUF_WRITE_REG(
             noc,
             NCRISC_RD_CMD_BUF,

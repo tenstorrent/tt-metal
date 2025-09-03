@@ -112,7 +112,6 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
     uint32_t transaction_id,
     tt::tt_fabric::EthChannelBuffer<lite_fabric::FabricLiteHeader, SENDER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]>&
         sender_buffer_channel) {
-    invalidate_l1_cache();
     const auto& header = *packet_start;
 
     lite_fabric::NocSendTypeEnum noc_send_type = header.get_base_send_type();

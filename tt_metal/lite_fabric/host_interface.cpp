@@ -4,6 +4,7 @@
 
 #include "tt_metal/lite_fabric/hw/inc/lf_dev_mem_map.hpp"
 #include "tt_metal/lite_fabric/hw/inc/host_interface.hpp"
+#include <thread>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/api/tt-metalium/hal_types.hpp"
 
@@ -231,7 +232,7 @@ void HostToFabricLiteInterface<NUM_BUFFERS, CHANNEL_BUFFER_SIZE>::read(
     header.unaligned_offset = src_noc_addr & (l1_alignment_bytes - 1);
 
     uint32_t receiver_header_address = get_next_receiver_buffer_slot_address(receiver_channel_base);
-    log_debug(
+    log_info(
         tt::LogMetal,
         "Reading data from {} {:#x} unaligned {}",
         get_mmio_eth_core().str(),
@@ -243,6 +244,8 @@ void HostToFabricLiteInterface<NUM_BUFFERS, CHANNEL_BUFFER_SIZE>::read(
     send_payload_flush_non_blocking_from_address(header, sender_channel_base);
 
     wait_for_read_event(receiver_header_address);
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
 
     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         mem_ptr, size, get_mmio_eth_core(), receiver_data_address);

@@ -178,6 +178,8 @@ int main() {
     auto structs = reinterpret_cast<volatile lite_fabric::FabricLiteMemoryMap*>(LITE_FABRIC_CONFIG_START);
     lite_fabric::object_init(structs);
     lite_fabric::routing_init(&structs->config);
+    NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
+    NOC_CMD_BUF_WRITE_REG(1 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
 
     invalidate_l1_cache();
     while (true) {

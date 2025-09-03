@@ -470,8 +470,8 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
  * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                           | False    |
  */
 // clang-format on
-FORCE_INLINE
-void noc_async_read_one_packet(
+template <bool IS_ARC = false>
+FORCE_INLINE void noc_async_read_one_packet(
     uint64_t src_noc_addr,
     uint32_t dst_local_l1_addr,
     uint32_t size,
@@ -487,7 +487,7 @@ void noc_async_read_one_packet(
 
     WAYPOINT("NAOW");
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
-    ncrisc_noc_fast_read<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
+    ncrisc_noc_fast_read<noc_mode, IS_ARC>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
     WAYPOINT("NAOD");
 }
 

@@ -629,3 +629,97 @@ TEST_P(FabricLite, ActiveEthKernelDevice0) {
     log_info(tt::LogTest, "========== Kernel done. Performing basic combo test while in metal firmware ==========");
     perform_basic_combo_test(desc, host_interface);
 }
+
+TEST_P(FabricLite, ReadActiveEth) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const uint64_t test_addr = 0x7CC70;
+    CoreCoord target_eth_core{0, 11};
+
+    auto connected_core = desc.tunnels_from_mmio[0].connected_cxy_virtual();
+
+    CoreCoord virtual_worker =
+        cluster.get_virtual_coordinate_from_logical_coordinates(1, target_eth_core, CoreType::ETH);
+    uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
+    uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)test_addr;
+
+    uint32_t read_value = 0;
+    host_interface.read(&read_value, 4, dest_noc_addr);
+    log_info(tt::LogTest, "Read {:#x} from eth address {:#x}", read_value, test_addr);
+    host_interface.read(&read_value, 4, dest_noc_addr);
+    log_info(tt::LogTest, "Read {:#x} from eth address {:#x}", read_value, test_addr);
+    host_interface.read(&read_value, 4, dest_noc_addr);
+    log_info(tt::LogTest, "Read {:#x} from eth address {:#x}", read_value, test_addr);
+    host_interface.read(&read_value, 4, dest_noc_addr);
+    log_info(tt::LogTest, "Read {:#x} from eth address {:#x}", read_value, test_addr);
+}
+
+TEST_P(FabricLite, ReadArc) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const uint64_t test_addr = 0x80030400;
+    CoreCoord target_worker{0, 0};
+    CoreCoord virtual_worker =
+        cluster.get_virtual_coordinate_from_logical_coordinates(0, target_worker, CoreType::WORKER);
+    const uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
+    uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)0x70000;
+
+    // CoreCoord virtual_worker =
+    //     cluster.get_virtual_coordinate_from_logical_coordinates(1, arc_core, CoreType::ARC);
+    // uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
+    // uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)l1_base;
+
+    // log_info(tt::LogTest, "Reading from arc address using PCIe {:#x}", test_addr);
+    uint32_t correct_value = 0;
+    // tt::tt_metal::MetalContext::instance().get_cluster().read_core(&correct_value, 4, {1, 8, 0}, test_addr);
+
+    std::vector<uint32_t> read_val;
+    read_val.resize(100);
+    // host_interface.read(read_val.data(), 16, dest_noc_addr);
+    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        read_val.data(), 16, {1, virtual_worker.x, virtual_worker.y}, dest_noc_addr);
+
+    log_info(
+        tt::LogTest,
+        "Read From Remote Worker (PCIE) {:#x} {:#x} {:#x} from arc address {:#x}. correct value {:#x}",
+        read_val[0],
+        read_val[1],
+        read_val[2],
+        dest_noc_addr,
+        correct_value);
+
+    read_val.clear();
+    read_val.resize(100);
+    tt::tt_metal::MetalContext::instance().get_cluster().read_core(read_val.data(), 16, {0, 8, 0}, test_addr);
+    log_info(
+        tt::LogTest,
+        "Read From Remote Arc (PCIE) {:#x} {:#x} {:#x} from arc address {:#x}. correct value {:#x}",
+        read_val[0],
+        read_val[1],
+        read_val[2],
+        test_addr,
+        correct_value);
+
+    read_val.clear();
+    read_val.resize(100);
+    host_interface.read(read_val.data(), 16, test_addr);
+    log_info(
+        tt::LogTest,
+        "Read From Remote Arc (Lite Fabric) {:#x} {:#x} {:#x} from arc address {:#x}. correct value {:#x}",
+        read_val[0],
+        read_val[1],
+        read_val[2],
+        test_addr,
+        correct_value);
+
+    read_val.clear();
+    read_val.resize(100);
+    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        read_val.data(), 16, {0, virtual_worker.x, virtual_worker.y}, dest_noc_addr);
+    log_info(
+        tt::LogTest,
+        "Read From Local Worker (PCIE) {:#x} {:#x} {:#x} from arc address {:#x}. correct value {:#x}",
+        read_val[0],
+        read_val[1],
+        read_val[2],
+        test_addr,
+        correct_value);
+}

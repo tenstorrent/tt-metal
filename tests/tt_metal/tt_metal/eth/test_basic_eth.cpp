@@ -5,6 +5,7 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <stddef.h>
+#include <umd/device/tt_core_coordinates.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <cstdint>
@@ -541,6 +542,21 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnBothIdleEriscs) {
             erisc0_ethernet_config,
             erisc1_ethernet_config));
     }
+}
+
+TEST_F(BlackholeSingleCardFixture, ReadArcFromKernel) {
+    std::cout << "Starting ReadArcFromKernel test" << std::endl;
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    CoreCoord worker_core{0, 0};
+    const uint64_t test_addr = 0x80030400;
+    CoreCoord virtual_worker_core =
+        cluster.get_virtual_coordinate_from_logical_coordinates(0, worker_core, CoreType::WORKER);
+
+    std::vector<uint32_t> read_val;
+    read_val.resize(100);
+    cluster.read_core(read_val.data(), 12, {0, 8, 0}, test_addr);
+    std::cout << "Read " << std::hex << read_val[0] << " " << read_val[1] << " " << read_val[2] << " from worker core"
+              << std::endl;
 }
 
 }  // namespace tt::tt_metal

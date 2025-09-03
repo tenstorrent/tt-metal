@@ -347,7 +347,6 @@ int main() {
 
     // Wait for all cores to be finished initializing before reporting initialization done.
     wait_ncrisc_trisc();
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
     // Initialize the NoCs to a safe state
     // This ensures if we send any noc txns without running a kernel setup are valid
@@ -355,6 +354,11 @@ int main() {
     uint8_t noc_mode;
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     noc_local_state_init(noc_index);
+
+    noc_async_read_one_packet<true>((uint64_t)0x80030400, 0x70000, 16, 1);
+    noc_async_read_barrier(1);
+    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
     trigger_sync_register_init();
 
