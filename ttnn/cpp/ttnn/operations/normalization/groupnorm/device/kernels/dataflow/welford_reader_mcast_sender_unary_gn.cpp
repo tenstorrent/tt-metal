@@ -289,11 +289,10 @@ void kernel_main() {
 
         for (uint32_t m = 0; m < num_groups; ++m) {
             DPRINT << "Group: " << m << " out of " << num_groups << ENDL();
-        //The following loop is for the 3 passes of input tensor required for GroupNorm
-        //First Pass: Calculates average value
-        //Second Pass: Calculates the Variance value
-        //Third Pass: Calculates final value
-        //Definition: num_read_of_input = 3
+            // The following loop is for the 2 passes of input tensor required for GroupNorm
+            // First Pass: Calculates average and variance value
+            // Second Pass: Calculates final value
+            // Definition: num_read_of_input = 2
             for (uint32_t cur_read_iteration = 0; cur_read_iteration < num_reads_of_input; ++cur_read_iteration) {
                 uint32_t out_block_start_id_offset = 0;
                 uint32_t cb_ex_external_bytes_written = 0;
