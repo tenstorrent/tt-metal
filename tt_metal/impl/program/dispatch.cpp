@@ -790,99 +790,88 @@ BatchedTransfers assemble_runtime_args_commands(
         // On ETH use unicast
         if (!use_kernel_group_crta_multicast ||
             !tt::tt_metal::MetalContext::instance().hal().get_supports_receiving_multicasts(index)) {
-            for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-                const uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
+            for (size_t kernel_index = 0; kernel_index < program.num_kernels(); kernel_index++) {
+                auto kernel_id = get_device_local_kernel_handle(kernel_index);
+                auto kernel = detail::GetKernel(program, kernel_id);
+                if (kernel->get_kernel_core_type() != core_type) {
+                    continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
+                }
+                auto dispatch_class = kernel->dispatch_class();
                 uint32_t common_size = program.get_program_config(index).crta_sizes[dispatch_class];
                 if (common_size == 0) {
                     continue;
                 }
+                uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
 
-                for (size_t kernel_index = 0; kernel_index < program.num_kernels(); kernel_index++) {
-                    auto kernel_id = get_device_local_kernel_handle(kernel_index);
-                    auto kernel = detail::GetKernel(program, kernel_id);
-                    if (kernel->get_kernel_core_type() != core_type) {
-                        continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
-                    }
-                    if (kernel->dispatch_class() != dispatch_class) {
-                        continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
-                    }
-
-                    const auto& common_rt_args = kernel->common_runtime_args();
-                    if (common_rt_args.empty()) {
-                        continue;
-                    }
-
-                    common_rt_args_data.resize(common_rt_args_data.size() + 1);
-                    common_rt_data_and_sizes.resize(common_rt_data_and_sizes.size() + 1);
-
-                    TT_ASSERT(kernel->common_runtime_args_data().size() * sizeof(uint32_t) == common_size);
-                    TT_ASSERT(common_rt_args.size() * sizeof(uint32_t) <= common_size);
-                    common_rt_data_and_sizes.back().emplace_back(
-                        kernel->common_runtime_args_data().data(),
-                        common_rt_args.size() * sizeof(uint32_t),
-                        common_size);
-                    common_rt_args_data.back().emplace_back(
-                        RtaDataPair(kernel->common_runtime_args_data(), common_rt_args));
-
-                    // Target core cannot receive multicast commands -> send unicast
-                    if (!tt::tt_metal::MetalContext::instance().hal().get_supports_receiving_multicasts(index)) {
-                        common_sub_cmds.emplace<std::vector<CQDispatchWritePackedUnicastSubCmd>>(
-                            std::vector<CQDispatchWritePackedUnicastSubCmd>());
-                        auto& unicast_sub_cmd =
-                            std::get<std::vector<CQDispatchWritePackedUnicastSubCmd>>(common_sub_cmds);
-                        unicast_sub_cmd.reserve(kernel->logical_cores().size());
-                        for (auto& core_coord : kernel->logical_cores()) {
-                            // can make a vector of unicast encodings here
-                            CoreCoord virtual_core_coords =
-                                device->virtual_core_from_logical_core(core_coord, core_type);
-                            unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                                .noc_xy_addr =
-                                    device->get_noc_unicast_encoding(constants.noc_index, virtual_core_coords)});
-                        }
-                    } else {
-                        std::vector<multicast_transfer_info> dst_noc_multicast_info =
-                            extract_dst_noc_multicast_info(device, kernel->logical_coreranges(), core_type);
-                        common_sub_cmds.emplace<std::vector<CQDispatchWritePackedMulticastSubCmd>>(
-                            std::vector<CQDispatchWritePackedMulticastSubCmd>());
-                        auto& multicast_sub_cmd =
-                            std::get<std::vector<CQDispatchWritePackedMulticastSubCmd>>(common_sub_cmds);
-                        multicast_sub_cmd.reserve(dst_noc_multicast_info.size());
-                        for (const auto& mcast_dests : dst_noc_multicast_info) {
-                            multicast_sub_cmd.emplace_back(CQDispatchWritePackedMulticastSubCmd{
-                                .noc_xy_addr = device->get_noc_multicast_encoding(
-                                    constants.noc_index, std::get<CoreRange>(mcast_dests.cores)),
-                                .num_mcast_dests = mcast_dests.num_dests});
-                        }
-                    }
-
-                    // Fill out the command for this kernel group and then reset the vectors for the next group
-                    // NOTE: Common rtas are always expected to fit in one prefetch cmd
-                    // TODO: use a linear write instead of a packed-write
-                    std::visit(
-                        [&](auto&& sub_cmds) {
-                            generate_runtime_args_cmds(
-                                program_command_sequence.runtime_args_command_sequences,
-                                program_command_sequence.rta_updates,
-                                crta_offset,
-                                sub_cmds,
-                                common_rt_data_and_sizes,
-                                common_size / sizeof(uint32_t),
-                                common_rt_args_data,
-                                constants,
-                                true,
-                                get_dispatch_write_offset(programmable_core_type));
-                            sub_cmds.clear();
-                        },
-                        common_sub_cmds);
-                    common_rt_data_and_sizes.clear();
-                    common_rt_args_data.clear();
+                const auto& common_rt_args = kernel->common_runtime_args();
+                if (common_rt_args.empty()) {
+                    continue;
                 }
 
+                common_rt_args_data.resize(1);
+                common_rt_data_and_sizes.resize(1);
+
+                TT_ASSERT(kernel->common_runtime_args_data().size() * sizeof(uint32_t) == common_size);
+                TT_ASSERT(common_rt_args.size() * sizeof(uint32_t) <= common_size);
+                common_rt_data_and_sizes.back().emplace_back(
+                    kernel->common_runtime_args_data().data(), common_rt_args.size() * sizeof(uint32_t), common_size);
+                common_rt_args_data.back().emplace_back(
+                    RtaDataPair(kernel->common_runtime_args_data(), common_rt_args));
+
+                // Target core cannot receive multicast commands -> send unicast
+                if (!tt::tt_metal::MetalContext::instance().hal().get_supports_receiving_multicasts(index)) {
+                    common_sub_cmds.emplace<std::vector<CQDispatchWritePackedUnicastSubCmd>>(
+                        std::vector<CQDispatchWritePackedUnicastSubCmd>());
+                    auto& unicast_sub_cmd = std::get<std::vector<CQDispatchWritePackedUnicastSubCmd>>(common_sub_cmds);
+                    unicast_sub_cmd.reserve(kernel->logical_cores().size());
+                    for (auto& core_coord : kernel->logical_cores()) {
+                        // can make a vector of unicast encodings here
+                        CoreCoord virtual_core_coords = device->virtual_core_from_logical_core(core_coord, core_type);
+                        unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
+                            .noc_xy_addr = device->get_noc_unicast_encoding(constants.noc_index, virtual_core_coords)});
+                    }
+                } else {
+                    std::vector<multicast_transfer_info> dst_noc_multicast_info =
+                        extract_dst_noc_multicast_info(device, kernel->logical_coreranges(), core_type);
+                    common_sub_cmds.emplace<std::vector<CQDispatchWritePackedMulticastSubCmd>>(
+                        std::vector<CQDispatchWritePackedMulticastSubCmd>());
+                    auto& multicast_sub_cmd =
+                        std::get<std::vector<CQDispatchWritePackedMulticastSubCmd>>(common_sub_cmds);
+                    multicast_sub_cmd.reserve(dst_noc_multicast_info.size());
+                    for (const auto& mcast_dests : dst_noc_multicast_info) {
+                        multicast_sub_cmd.emplace_back(CQDispatchWritePackedMulticastSubCmd{
+                            .noc_xy_addr = device->get_noc_multicast_encoding(
+                                constants.noc_index, std::get<CoreRange>(mcast_dests.cores)),
+                            .num_mcast_dests = mcast_dests.num_dests});
+                    }
+                }
+
+                // Fill out the command for this kernel group and then reset the vectors for the next group
+                // NOTE: Common rtas are always expected to fit in one prefetch cmd
+                // TODO: use a linear write instead of a packed-write
+                std::visit(
+                    [&](auto&& sub_cmds) {
+                        generate_runtime_args_cmds(
+                            program_command_sequence.runtime_args_command_sequences,
+                            program_command_sequence.rta_updates,
+                            crta_offset,
+                            sub_cmds,
+                            common_rt_data_and_sizes,
+                            common_size / sizeof(uint32_t),
+                            common_rt_args_data,
+                            constants,
+                            true,
+                            get_dispatch_write_offset(programmable_core_type));
+                        sub_cmds.clear();
+                    },
+                    common_sub_cmds);
                 for (auto& data_per_kernel : common_rt_data_and_sizes) {
                     for (auto& data_and_sizes : data_per_kernel) {
                         RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, std::get<1>(data_and_sizes));
                     }
                 }
+                common_rt_data_and_sizes.clear();
+                common_rt_args_data.clear();
             }
         }
     }
