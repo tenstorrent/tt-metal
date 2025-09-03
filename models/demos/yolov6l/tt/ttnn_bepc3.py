@@ -25,7 +25,6 @@ class TtBepC3:
             conv=model_params.cv1.block.conv,
             conv_pth=parameters.cv1.block.conv,
             shard_layout=shard_layout_cv2 if shard_layout == None else shard_layout,
-            # shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             activation="silu",
         )
         self.cv2 = Yolov6l_Conv2D(
@@ -33,7 +32,6 @@ class TtBepC3:
             conv=model_params.cv2.block.conv,
             conv_pth=parameters.cv2.block.conv,
             shard_layout=shard_layout_cv2 if shard_layout == None else shard_layout,
-            # shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             activation="silu",
         )
         self.cv3 = Yolov6l_Conv2D(
@@ -42,7 +40,6 @@ class TtBepC3:
             conv_pth=parameters.cv3.block.conv,
             activation="silu",
             shard_layout=shard_layout_cv2 if shard_layout == None else shard_layout,
-            # shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             reshape=True,
         )
         self.repblock = TtRepBlock(
@@ -64,5 +61,4 @@ class TtBepC3:
 
         concat_output = ttnn.concat([rep, conv2], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
         conv3 = self.cv3(concat_output)
-        ttnn.deallocate(concat_output)
         return conv3

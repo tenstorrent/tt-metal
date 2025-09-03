@@ -78,12 +78,10 @@ class TtCSPBepBackbone:
         outputs.append(erblock2_1)
 
         erblock3_0 = self.erblock3_0(erblock2_1)
-        # ttnn.deallocate(erblock2_1)
         erblock3_1 = self.erblock3_1(erblock3_0)
         outputs.append(erblock3_1)
 
         erblock4_0 = self.erblock4_0(erblock3_1)
-        # ttnn.deallocate(erblock3_1)
         erblock4_1 = self.erblock4_1(erblock4_0)
         ttnn.deallocate(erblock4_0)
         erblock4 = ttnn.clone(erblock4_1)
