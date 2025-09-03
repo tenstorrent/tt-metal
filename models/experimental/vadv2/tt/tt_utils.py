@@ -38,6 +38,7 @@ def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations,
         value_l_ = ttnn.to_layout(value_l_, layout=ttnn.ROW_MAJOR_LAYOUT)
         sampling_value_l_ = ttnn.grid_sample(value_l_, sampling_grid_l_)
         ttnn.deallocate(value_l_)
+        ttnn.deallocate(sampling_grid_l_)
         sampling_value_l_ = ttnn.permute(sampling_value_l_, (0, 3, 1, 2))
 
         sampling_value_list.append(sampling_value_l_)
@@ -47,22 +48,20 @@ def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations,
         attention_weights = ttnn.reshape(attention_weights, [bs * num_heads, 1, num_queries, num_levels * num_points])
 
     output = ttnn.stack(sampling_value_list, -2)
-
+    ttnn.deallocate(sampling_grids)
     output = ttnn.reshape(
         output, [output.shape[0], output.shape[1], output.shape[2], output.shape[3] * output.shape[4]]
     )
 
     output = output * attention_weights
     ttnn.reallocate(output)
+    for val in sampling_value_list:
+        ttnn.deallocate(val)
     output = ttnn.sum(output, 3)
     output = ttnn.reshape(output, [bs, num_heads * embed_dims, num_queries])
     output = ttnn.permute(output, (0, 2, 1))
 
-    for level, (H_, W_) in enumerate(value_spatial_shapes):
-        ttnn.deallocate(sampling_value_list[level])
-
     ttnn.deallocate(attention_weights)
-    ttnn.deallocate(sampling_grids)
     ttnn.deallocate(sampling_value_l_)
     ttnn.deallocate(value)
 
