@@ -28,13 +28,6 @@ void kernel_main() {
     DPRINT << "[RX] wait sem=0x" << HEX() << sem_addr << " noc=0x" << exp_hi << "_" << exp_lo << DEC()
            << " expect=" << expected_value << " core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ")\n";
 
-    /* Debug spam: prove prints are flowing from this BR core */
-    for (uint32_t i = 0; i < 1000; ++i) {
-        if ((i & 0x3F) == 0) {
-            DPRINT << "[RX] alive i=" << i << "\n";
-        }
-    }
-
     noc_semaphore_wait(sem_ptr, expected_value);
     DPRINT << "[RX] done; sem >= " << expected_value << "\n";
 }

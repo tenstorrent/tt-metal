@@ -60,19 +60,6 @@ void run_unicast_test_bw_chips(
     uint32_t num_hops,
     bool use_dram_dst = false);
 
-TEST_F(Fabric2DFixture, UnicastRaw_Skeleton) { RunTestUnicastRaw(this); }
-
-TEST_F(Fabric2DFixture, UnicastConn_Skeleton) { RunTestUnicastConnAPI(this, /*num_connections=*/1); }
-
-TEST_F(Fabric2DFixture, UnicastConn_Timed_Skeleton) {
-    auto t0 = std::chrono::high_resolution_clock::now();
-    RunTestUnicastConnAPI(this, /*num_connections=*/1);
-    auto t1 = std::chrono::high_resolution_clock::now();
-
-    double sec = std::chrono::duration<double>(t1 - t0).count();
-    // std::cout << "[UnicastConn_Timed_Skeleton] wall_time_s=" << sec << "\n";
-}
-
 struct PerfParams {
     uint32_t mesh_id = 0;       // mesh to use
     chip_id_t src_chip = 0;     // logical chip id in that mesh
@@ -132,9 +119,7 @@ static inline void RunUnicastConnWithParams(BaseFabricFixture* fixture, const Pe
     std::cout << "[alloc] src_phys=" << src_phys << " dst_phys=" << dst_phys << " bytes=" << p.tensor_bytes
               << std::endl;
 
-    // run_unicast_test_bw_chips(fixture, src_phys, dst_phys, p.num_hops, p.use_dram_dst);
-
-    // ---------- Build a tiny receiver-only program xw----------
+    // ---------- Build a receiver progrma ----------
     tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram();
 
     // create a global semaphore on the dst device
@@ -159,7 +144,7 @@ static inline void RunUnicastConnWithParams(BaseFabricFixture* fixture, const Pe
     tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
 
     // A small CB on the sender (2 pages capacity, 1-page page_size)
-    const uint32_t NUM_PAGES = 1;  // <-- one page
+    const uint32_t NUM_PAGES = 1;
     const uint32_t CB_ID = tt::CBIndex::c_0;
     auto cb_cfg = tt::tt_metal::CircularBufferConfig(2 * p.page_size, {{CB_ID, tt::DataFormat::Float16}})
                       .set_page_size(CB_ID, p.page_size);
@@ -193,7 +178,7 @@ static inline void RunUnicastConnWithParams(BaseFabricFixture* fixture, const Pe
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = {NUM_PAGES, p.page_size}});
 
-    // Writer runtime args (must match the writer kernel’s RT layout)
+    // Writer runtime args
     std::vector<uint32_t> writer_rt = {
         (uint32_t)dst_buf->address(),        // 0: dst_base (receiver L1 offset)
         (uint32_t)(p.use_dram_dst ? 1 : 0),  // 1: dst_is_dram (we set false above)
@@ -255,9 +240,9 @@ TEST_F(Fabric2DFixture, UnicastConn_CodeControlled) {
     p.src_chip = 0;
     p.dst_chip = 1;
     p.num_hops = 1;
-    p.use_dram_dst = false;        // <-- land in L1 (simpler)
-    p.page_size = 4096;            // one page
-    p.tensor_bytes = p.page_size;  // send exactly one page
+    p.use_dram_dst = false;
+    p.page_size = 4096;
+    p.tensor_bytes = p.page_size;
 
     RunUnicastConnWithParams(this, p);
 }

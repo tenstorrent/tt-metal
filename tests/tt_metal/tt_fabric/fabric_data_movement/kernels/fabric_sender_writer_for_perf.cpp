@@ -8,25 +8,11 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "tt_metal/fabric/hw/inc/noc_addr.h"  // InterleavedAddrGen, safe_get_noc_addr
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "debug/dprint.h"
 
 using namespace tt;
 using namespace tt::tt_fabric;
-
-// >>> ADD: quick hexdump of the first words of the header as a last resort
-static inline void dump_header_words(const volatile tt_l1_ptr PACKET_HEADER_TYPE* h, const char* tag) {
-    const volatile tt_l1_ptr uint32_t* w = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(h);
-    DPRINT << "[WR] header w[0..15] ="
-           << " " << (uint32_t)w[0] << " " << (uint32_t)w[1] << " " << (uint32_t)w[2] << " " << (uint32_t)w[3] << " "
-           << (uint32_t)w[4] << " " << (uint32_t)w[5] << " " << (uint32_t)w[6] << " " << (uint32_t)w[7] << " "
-           << (uint32_t)w[8] << " " << (uint32_t)w[9] << " " << (uint32_t)w[10] << " " << (uint32_t)w[11] << " "
-           << (uint32_t)w[12] << " " << (uint32_t)w[13] << " " << (uint32_t)w[14] << " " << (uint32_t)w[15] << " "
-           << (uint32_t)w[16] << " " << (uint32_t)w[17] << " " << (uint32_t)w[18] << " " << (uint32_t)w[19] << " "
-           << (uint32_t)w[20] << " " << (uint32_t)w[21] << " " << (uint32_t)w[22] << " " << (uint32_t)w[23] << " "
-           << (uint32_t)w[24] << " " << (uint32_t)w[25] << " " << (uint32_t)w[26] << " " << (uint32_t)w[27] << " "
-           << (uint32_t)w[28] << " " << (uint32_t)w[29] << " " << (uint32_t)w[30] << " " << (uint32_t)w[31] << "\n";
-}
 
 // CT args:
 //   0: TOTAL_PAGES
@@ -40,7 +26,6 @@ static inline void dump_header_words(const volatile tt_l1_ptr PACKET_HEADER_TYPE
 //   4: rx_noc_x       (u32)  // receiver worker XY
 //   5: rx_noc_y       (u32)
 //   6: sem_l1_addr    (u32)  // receiver L1 semaphore address
-//   [then]: append_fabric_connection_rt_args(...)
 
 void kernel_main() {
     constexpr uint32_t TOTAL_PAGES = get_compile_time_arg_val(0);
@@ -80,7 +65,7 @@ void kernel_main() {
         /*dst_dev_id*/ dst_dev_id,
         /*dst_mesh_id*/ dst_mesh_id,
         /*ew_dim*/ 0);
-        
+
     WATCHER_RING_BUFFER_PUSH(0x55555555);
     WATCHER_RING_BUFFER_PUSH(dst_dev_id);
     WATCHER_RING_BUFFER_PUSH(dst_mesh_id);
@@ -92,7 +77,6 @@ void kernel_main() {
     WATCHER_RING_BUFFER_PUSH(0xc0ffee);
 
     DPRINT << "[WR] send_type(write)=" << (uint32_t)header->noc_send_type << "\n";
-    dump_header_words(header, "[WR] header words after set");
 
     sender.open<true>();
 
@@ -149,7 +133,6 @@ void kernel_main() {
         DPRINT << "[WR] sem-inc dst noc_hi=0x" << HEX() << sem_hi << " noc_lo=0x" << sem_lo << DEC() << " rx_xy=("
                << rx_noc_x << "," << rx_noc_y << ")\n";
         DPRINT << "[WR] send_type(seminc)=" << (uint32_t)header->noc_send_type << "\n";
-        dump_header_words(header, "[WR] header words before sem-inc send");
 
         sender.wait_for_empty_write_slot();
         sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
