@@ -6,6 +6,7 @@ import pytest
 import ttnn
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
 from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
@@ -82,7 +83,7 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [8])
 def test_rs_row_nightly(
-    p150_mesh_device,
+    bh_1d_mesh_device,
     num_devices,
     num_links,
     rs_input_shape,
@@ -98,14 +99,9 @@ def test_rs_row_nightly(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    if (2 == num_devices) and (rs_topology == ttnn.Topology.Ring):
-        pytest.skip("Ring configuration requires more than 2 devices")
-    if (p150_mesh_device.shape[0] != num_devices) and (rs_topology == ttnn.Topology.Ring):
-        pytest.skip("Ring configuration requires the entire row or column so it loops around")
-    if p150_mesh_device.shape[0] < num_devices:
-        pytest.skip("Test requires more devices than are available on this platform")
-    submesh_device = p150_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
+    validate_test(num_devices, rs_topology, bh_1d_mesh_device.shape, cluster_axis)
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     run_reduce_scatter_impl(
         submesh_device,
         num_devices,
