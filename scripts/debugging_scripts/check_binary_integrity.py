@@ -22,7 +22,7 @@ from elftools.elf.segments import Segment as ELFSegment
 from elftools.elf.relocation import Relocation as ELFRelocation
 import os
 from ttexalens.context import Context
-from ttexalens.device import Device, OnChipCoordinate
+from ttexalens.device import OnChipCoordinate
 from ttexalens.tt_exalens_lib import read_from_device
 from triage import ScriptConfig, log_check, run_script
 from sortedcontainers import SortedDict
@@ -319,11 +319,11 @@ def check_binary_integrity(location: OnChipCoordinate, dispatcher_data: Dispatch
 
 
 def run(args, context: Context):
-    block_types = ["tensix", "idle_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     dispatcher_data = get_dispatcher_data(args, context)
     check_per_block_location = get_check_per_block_location(args, context)
     check_per_block_location.run_check(
-        lambda location: check_binary_integrity(location, dispatcher_data), block_filter=block_types
+        lambda location: check_binary_integrity(location, dispatcher_data), block_filter=BLOCK_TYPES_TO_CHECK
     )
 
 

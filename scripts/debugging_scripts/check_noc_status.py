@@ -40,15 +40,12 @@ def check_noc_status(
     and stores them in dictionary creating summary of checking process
     """
 
-    # Risc cores of same type have the same firmware so we cache it by risc name
+    # Caching firmware ELF file since it is the same for all brisc cores
     if not hasattr(check_noc_status, "fw_elf_cache"):
-        check_noc_status.fw_elf_cache: dict[str, ELFFile] = {}
-
-    if risc_name not in check_noc_status.fw_elf_cache:
         fw_elf_path = dispatcher_data.get_core_data(location, risc_name).firmware_path
-        check_noc_status.fw_elf_cache[risc_name] = parse_elf(fw_elf_path, context)
+        check_noc_status.fw_elf_cache = parse_elf(fw_elf_path, context)
 
-    fw_elf = check_noc_status.fw_elf_cache[risc_name]
+    fw_elf = check_noc_status.fw_elf_cache
 
     message = f"Device {location._device._id} at {location.to_user_str()}\n"
     passed = True
