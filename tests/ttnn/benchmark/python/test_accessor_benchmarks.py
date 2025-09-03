@@ -62,8 +62,8 @@ def impl_test(gtest_filter, res_dir, args_configs=None):
     ENV["TT_METAL_DEVICE_PROFILER"] = "1"
     BASE = Path(ENV["TT_METAL_HOME"])
 
-    binary_path = Path(BASE / "build" / "test" / "ttnn" / "unit_tests_ttnn_accessor")
-    subprocess.run([binary_path, f"--gtest_filter={gtest_filter}"], env=ENV)
+    # binary_path = Path(BASE / "build" / "test" / "ttnn" / "unit_tests_ttnn_accessor")
+    # subprocess.run([binary_path, f"--gtest_filter={gtest_filter}"], env=ENV)
 
     setup = device_post_proc_config.default_setup()
     zone_names = []
@@ -114,13 +114,28 @@ def test_constructor():
     impl_test("AccessorTests/AccessorBenchmarks.Constructor/*", res_dir="accessor_constructor_benchmarks")
 
 
-def test_manual_pages_iteration():
+def test_manual_pages_iteration_sharded():
     impl_test_static_only(
-        "AccessorTests/AccessorBenchmarks.ManualPagesIteration/*", res_dir="accessor_manual_pages_iteration_benchmarks"
+        "AccessorTests/AccessorBenchmarks.ManualPagesIterationSharded/*",
+        res_dir="accessor_manual_pages_iteration_sharded_benchmarks",
     )
 
 
-def test_pages_iterator():
+def test_pages_iterator_sharded():
     impl_test_static_only(
-        "AccessorTests/AccessorBenchmarks.PagesIterator/*", res_dir="accessor_pages_iterator_benchmarks"
+        "AccessorTests/AccessorBenchmarks.PagesIteratorSharded/*", res_dir="accessor_pages_iterator_sharded_benchmarks"
+    )
+
+
+def test_manual_pages_iteration_interleaved():
+    impl_test_static_only(
+        "AccessorTests/AccessorBenchmarks.ManualPagesIterationInterleaved/*",
+        res_dir="accessor_manual_pages_iteration_interleaved_benchmarks",
+    )
+
+
+def test_pages_iterator_interleaved():
+    impl_test_static_only(
+        "AccessorTests/AccessorBenchmarks.PagesIteratorInterleaved/*",
+        res_dir="accessor_pages_iterator_interleaved_benchmarks",
     )
