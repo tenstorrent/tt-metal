@@ -12,18 +12,35 @@ namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE, ckernel::sfpu::RelationalOp RELATIONAL_OP>
-inline void llk_math_eltwise_binary_sfpu_relational_int32_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::unused, APPROXIMATE>();
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_lt_int32_init() {
+    llk_math_eltwise_binary_sfpu_init<SfpuType::lt, APPROXIMATE>();
 }
 
-template <bool APPROXIMATE, ckernel::sfpu::RelationalOp RELATIONAL_OP>
-inline void llk_math_eltwise_binary_sfpu_relational_int32(
-    uint dst_index0, uint32_t dst_index1, int vector_mode = VectorMode::RC) {
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_lt_int32(
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_sfpu_relational_int32<APPROXIMATE, RELATIONAL_OP>,
+        ckernel::sfpu::calculate_sfpu_relational_int32<APPROXIMATE, SfpuType::lt>,
         dst_index0,
         dst_index1,
+        odst,
+        vector_mode);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_gt_int32_init() {
+    llk_math_eltwise_binary_sfpu_init<SfpuType::gt, APPROXIMATE>();
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_gt_int32(
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_sfpu_relational_int32<APPROXIMATE, SfpuType::gt>,
+        dst_index0,
+        dst_index1,
+        odst,
         vector_mode);
 }
 

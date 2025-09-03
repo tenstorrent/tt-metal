@@ -631,11 +631,12 @@ def test_binary_lt_edge_cases(device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    golden_function = ttnn.get_golden_function(ttnn.lt)
+    golden_function = ttnn.get_golden_function(ttnn.gt)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
-    output_tensor = ttnn.lt(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.gt(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
+    print(torch_output_tensor)
     print(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
