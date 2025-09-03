@@ -211,62 +211,6 @@ void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_conf
     set_routing_mode(mode);
 }
 
-void get_optimal_noc_for_edm(
-    tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder1,
-    tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder2,
-    const uint32_t num_links,
-    const tt_fabric::Topology topology) {
-    constexpr uint32_t ring_noc_selection_link_threshold = 3;
-    constexpr uint32_t line_noc_selection_link_threshold = 2;
-    bool enable_noc_selection_opt = false;
-    if (topology == tt_fabric::Topology::Ring) {
-        enable_noc_selection_opt =
-            (num_links > ring_noc_selection_link_threshold) && (edm_builder1.my_noc_y != edm_builder2.my_noc_y);
-    } else {
-        enable_noc_selection_opt =
-            (num_links > line_noc_selection_link_threshold) && (edm_builder1.my_noc_y != edm_builder2.my_noc_y);
-    }
-    log_debug(
-        tt::LogTest,
-        "Fabric MeshId {} ChipId {} edm_builder1 {} {} is connecting to edm_builder2 {} {} num links {}",
-        *(edm_builder1.local_fabric_node_id.mesh_id),
-        edm_builder1.local_fabric_node_id.chip_id,
-        edm_builder1.my_noc_x,
-        edm_builder1.my_noc_y,
-        edm_builder2.my_noc_x,
-        edm_builder2.my_noc_y,
-        num_links);
-
-    if (enable_noc_selection_opt) {
-        if (edm_builder1.my_noc_x < edm_builder2.my_noc_x) {
-            for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
-                edm_builder1.config.receiver_channel_forwarding_noc_ids[i] = 0;
-                edm_builder2.config.receiver_channel_forwarding_noc_ids[i] = 1;
-            }
-            for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
-                edm_builder1.config.receiver_channel_local_write_noc_ids[i] = 1;
-                edm_builder2.config.receiver_channel_local_write_noc_ids[i] = 1;
-            }
-            for (uint32_t i = 0; i < edm_builder1.config.num_sender_channels; i++) {
-                edm_builder1.config.sender_channel_ack_noc_ids[i] = 1;
-                edm_builder2.config.sender_channel_ack_noc_ids[i] = 0;
-            }
-        } else if (edm_builder1.my_noc_x > edm_builder2.my_noc_x) {
-            for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
-                edm_builder1.config.receiver_channel_forwarding_noc_ids[i] = 1;
-                edm_builder2.config.receiver_channel_forwarding_noc_ids[i] = 0;
-            }
-            for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
-                edm_builder1.config.receiver_channel_local_write_noc_ids[i] = 1;
-                edm_builder2.config.receiver_channel_local_write_noc_ids[i] = 1;
-            }
-            for (uint32_t i = 0; i < edm_builder1.config.num_sender_channels; i++) {
-                edm_builder1.config.sender_channel_ack_noc_ids[i] = 0;
-                edm_builder2.config.sender_channel_ack_noc_ids[i] = 1;
-            }
-        }
-    }
-}
 
 IntraMeshAdjacencyMap build_mesh_adjacency_map(
     const std::set<chip_id_t>& user_chip_ids,
