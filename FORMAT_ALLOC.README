@@ -1,0 +1,73 @@
+Allocator State ASCII Formatting Guide
+
+Purpose
+- Document a consistent, readable way to sketch allocator states in comments/tests.
+- Keep segment widths somewhat to scale and center labels for legibility.
+
+Diagram structure
+- One line per allocator, prefixed by the allocator name:
+  - "- AllocN: | <segment> | <segment> | ... |"
+- Each segment represents a contiguous region (allocated block or free space).
+- Use plain ASCII only: pipes (|) and spaces.
+
+Core rules
+- Single shared scale per diagram:
+  - All lines in the same diagram must use the same total inner width W (columns between the outermost pipes).
+  - Pick W so that labels fit and relative sizes are visible. Typical W ≈ 22–40.
+- Proportional sizing:
+  - For each segment i with size S_i, compute its width in columns as:
+    - width_i = max(round((S_i / S_total) * W), label_len + 2)
+    - Where S_total is the allocator's total capacity shown on that line.
+    - The +2 ensures at least one space of padding on each side of the label.
+- Rounding reconciliation:
+  - After rounding, if sum(width_i) ≠ W, adjust the rightmost segment (usually the trailing free) by the remainder so totals match.
+  - This keeps the extra width on the right side of the line.
+- Label placement (centering):
+  - Center the label text within its segment's interior (width_i - 2).
+  - If perfect centering is impossible (odd/even mismatch), put the extra space on the right of the label.
+  - Example: with inside width 7 for label "2K" (len=2) → left pad 2, right pad 3: "  2K   ".
+- Minimum segment width:
+  - If a segment's computed width is too small to fit its label with side padding, increase that segment's width to label_len + 2 and shrink the rightmost segment accordingly.
+- Free segments:
+  - Label as "free". For explicit de-allocations, include the freed size (e.g., "1K free"). Center using the same rules.
+- Consistency across steps:
+  - Keep W and scale consistent across all lines in a sequence so readers can visually compare changes over time.
+
+Style details
+- Sizes: use short labels like "1K", "2K", "4K" (or bytes/MB as appropriate).
+- Use lowercase "free".
+- Use spaces only for padding (no tabs).
+- Do not add additional adornments; keep to pipes and spaces.
+ - Keep spaces minimum where possible. Only align to size of others to maintain correctness between lines.
+
+Worked example (mirrors allocator test comments)
+
+Allocate 1K in allocator 0:
+```
+- Alloc0: | 1K | free |
+- Alloc1: |   free    |
+```
+
+Allocate 2K in allocator 1:
+```
+- Alloc0: | 1K |   free   |
+- Alloc1: |   2K   | free |
+```
+
+Allocate another 1K in allocator 0:
+```
+- Alloc0: | 1K | 1K | free |
+- Alloc1: |   2K    | free |
+```
+
+Allocate another 2K in allocator 1:
+```
+- Alloc0: | 1K | 1K |     free      |
+- Alloc1: |   2K    |   2K   | free |
+```
+
+Quick checklist
+- One shared W across lines in the same diagram.
+- Segment widths roughly proportional to sizes; enforce a readable minimum.
+- Center labels; if centering is not exact, extra space goes on the right.
+- Any rounding remainder for the line goes to the rightmost segment.
