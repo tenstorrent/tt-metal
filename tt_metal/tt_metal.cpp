@@ -723,10 +723,10 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
              programmable_core_type_index++) {
             CoreType core_type = hal.get_core_type(programmable_core_type_index);
             for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
-                launch_msg_t* msg =
-                    &program.impl().kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
-                go_msg_t* go_msg = &program.impl().kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
-                msg->kernel_config.host_assigned_id = program.get_runtime_id();
+                auto kernel_group = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
+                auto launch_msg = kernel_group->launch_msg.view();
+                auto go_msg = kernel_group->go_msg.view();
+                launch_msg.kernel_config().host_assigned_id() = program.get_runtime_id();
 
                 auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
@@ -737,7 +737,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                 tt::llrt::write_launch_msg_to_core(
                     device->id(),
                     physical_core,
-                    msg,
+                    launch_msg,
                     go_msg,
                     device->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
             }
@@ -856,7 +856,8 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
         CoreType core_type = hal.get_core_type(index);
         uint32_t processor_classes = hal.get_processor_classes_count(index);
         for (const auto& kg : program.impl().get_kernel_groups(index)) {
-            uint32_t kernel_config_base = kg->launch_msg.kernel_config.kernel_config_base[index];
+            auto kernel_config = kg->launch_msg.view().kernel_config();
+            uint32_t kernel_config_base = kernel_config.kernel_config_base()[index];
             for (const CoreRange& core_range : kg->core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -868,8 +869,8 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                             auto dispatch_class = kernel->dispatch_class();
 
                             if (rt_args.size() > 0) {
-                                auto rt_args_addr = kernel_config_base +
-                                                    kg->launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset;
+                                auto rt_args_addr =
+                                    kernel_config_base + kernel_config.rta_offset()[dispatch_class].rta_offset();
                                 log_trace(
                                     tt::LogMetal,
                                     "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: "
@@ -887,8 +888,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                             const auto& common_rt_args = kernel->common_runtime_args();
                             if (common_rt_args.size() > 0) {
                                 auto common_rt_args_addr =
-                                    kernel_config_base +
-                                    kg->launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset;
+                                    kernel_config_base + kernel_config.rta_offset()[dispatch_class].crta_offset();
                                 log_trace(
                                     tt::LogMetal,
                                     "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: "

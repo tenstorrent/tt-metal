@@ -417,20 +417,27 @@ KernelGroup::KernelGroup(
     uint32_t local_cb_mask,
     uint32_t min_remote_cb_start_index,
     const CoreRangeSet& new_ranges) :
-    programmable_core_type_index(programmable_core_type_index),
     core_ranges(CoreRangeSet()),
-    kernel_ids(std::move(kernel_ids)) {
+    launch_msg(MetalContext::instance()
+                   .hal()
+                   .get_dev_msgs_factory(
+                       MetalContext::instance().hal().get_programmable_core_type(programmable_core_type_index))
+                   .create<dev_msgs::launch_msg_t>()),
+    go_msg(MetalContext::instance()
+               .hal()
+               .get_dev_msgs_factory(
+                   MetalContext::instance().hal().get_programmable_core_type(programmable_core_type_index))
+               .create<dev_msgs::go_msg_t>()) {
     this->core_ranges = this->core_ranges.merge(new_ranges);
 
-    std::memset(&this->launch_msg, 0, sizeof(launch_msg_t));
-    this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DEDICATED_NOC;
+    auto kernel_config = this->launch_msg.view().kernel_config();
+    kernel_config.brisc_noc_mode() = NOC_MODE::DM_DEDICATED_NOC;
 
     // Slow dispatch uses fixed addresses for the kernel config, configured here statically
     // Fast dispatch kernel config mangement happens under the CQ and will re-program the base
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        this->launch_msg.kernel_config.kernel_config_base[index] =
-            hal.get_dev_addr(index, HalL1MemAddrType::KERNEL_CONFIG);
+        kernel_config.kernel_config_base()[index] = hal.get_dev_addr(index, HalL1MemAddrType::KERNEL_CONFIG);
     }
 
     uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
@@ -443,8 +450,8 @@ KernelGroup::KernelGroup(
             auto processor_type = kernel->get_kernel_processor_type(i);
             auto processor_index = hal.get_processor_index(
                 hal.get_programmable_core_type(programmable_core_type_index), processor_class, processor_type);
-            this->launch_msg.kernel_config.watcher_kernel_ids[processor_index] = kernel->get_watcher_kernel_id();
-            this->launch_msg.kernel_config.enables |= 1u << processor_index;
+            kernel_config.watcher_kernel_ids()[processor_index] = kernel->get_watcher_kernel_id();
+            kernel_config.enables() |= 1u << processor_index;
         }
         auto class_id = kernel->dispatch_class();
 
@@ -454,19 +461,19 @@ KernelGroup::KernelGroup(
             if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
                 noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
                 // Use brisc's noc if brisc specifies a noc
-                this->launch_msg.kernel_config.brisc_noc_id = std::get<DataMovementConfig>(kernel->config()).noc;
+                kernel_config.brisc_noc_id() = std::get<DataMovementConfig>(kernel->config()).noc;
                 // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
                 if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
-                    this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
+                    kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
                 }
             } else if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
                 noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
                 // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
                 // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
-                this->launch_msg.kernel_config.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
+                kernel_config.brisc_noc_id() = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
                 // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
                 if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
-                    this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
+                    kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
                 }
             }
         }
@@ -476,14 +483,14 @@ KernelGroup::KernelGroup(
     for (uint32_t index = 0; index < NUM_PROCESSORS_PER_CORE_TYPE; index++) {
         this->kernel_bin_sizes[index] = 0;
         this->kernel_text_offsets[index] = 0;
-        this->launch_msg.kernel_config.kernel_text_offset[index] = 0;
+        kernel_config.kernel_text_offset()[index] = 0;
     }
-    this->launch_msg.kernel_config.ncrisc_kernel_size16 = 0;
+    kernel_config.ncrisc_kernel_size16() = 0;
 
-    this->launch_msg.kernel_config.exit_erisc_kernel = false;
-    this->launch_msg.kernel_config.local_cb_mask = local_cb_mask;
-    this->launch_msg.kernel_config.min_remote_cb_start_index = min_remote_cb_start_index;
-    this->go_msg.signal = RUN_MSG_GO;
+    kernel_config.exit_erisc_kernel() = false;
+    kernel_config.local_cb_mask() = local_cb_mask;
+    kernel_config.min_remote_cb_start_index() = min_remote_cb_start_index;
+    this->go_msg.view().signal() = RUN_MSG_GO;
 }
 
 CoreType KernelGroup::get_core_type() const {
@@ -1213,10 +1220,10 @@ void detail::ProgramImpl::set_launch_msg_sem_offsets() {
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t kg_type_index = 0; kg_type_index < hal.get_programmable_core_type_count(); kg_type_index++) {
         for (auto& kg : this->get_kernel_groups(kg_type_index)) {
+            auto kernel_config = kg->launch_msg.view().kernel_config();
             for (uint32_t sem_type_index = 0; sem_type_index < hal.get_programmable_core_type_count();
                  sem_type_index++) {
-                kg->launch_msg.kernel_config.sem_offset[sem_type_index] =
-                    this->program_configs_[sem_type_index].sem_offset;
+                kernel_config.sem_offset()[sem_type_index] = this->program_configs_[sem_type_index].sem_offset;
             }
         }
     }

@@ -364,11 +364,12 @@ void Device::init_command_queue_device() {
         const auto& logical_dispatch_cores = logical_cores[index];
         CoreType core_type = hal.get_core_type(index);
         for (const CoreCoord& logical_dispatch_core : logical_dispatch_cores) {
-            launch_msg_t msg = command_queue_program.impl().kernels_on_core(logical_dispatch_core, index)->launch_msg;
-            go_msg_t go_msg = command_queue_program.impl().kernels_on_core(logical_dispatch_core, index)->go_msg;
+            auto* kernel_group = command_queue_program.impl().kernels_on_core(logical_dispatch_core, index);
+            auto msg = kernel_group->launch_msg.view();
+            auto go_msg = kernel_group->go_msg.view();
             CoreCoord virtual_core = this->virtual_core_from_logical_core(logical_dispatch_core, core_type);
             tt::llrt::write_launch_msg_to_core(
-                this->id(), virtual_core, &msg, &go_msg, this->get_dev_addr(virtual_core, HalL1MemAddrType::LAUNCH));
+                this->id(), virtual_core, msg, go_msg, this->get_dev_addr(virtual_core, HalL1MemAddrType::LAUNCH));
         }
     }
     // Set num_worker_sems and go_signal_noc_data on dispatch for the default sub device config
@@ -405,11 +406,10 @@ void Device::configure_fabric() {
          programmable_core_type_index++) {
         CoreType core_type = hal.get_core_type(programmable_core_type_index);
         for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
-            launch_msg_t* msg =
-                &fabric_program_->impl().kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
-            go_msg_t* go_msg =
-                &fabric_program_->impl().kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
-            msg->kernel_config.host_assigned_id = fabric_program_->get_runtime_id();
+            auto* kernel_group = fabric_program_->impl().kernels_on_core(logical_core, programmable_core_type_index);
+            auto msg = kernel_group->launch_msg.view();
+            auto go_msg = kernel_group->go_msg.view();
+            msg.kernel_config().host_assigned_id() = fabric_program_->get_runtime_id();
 
             auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
             tt::llrt::write_launch_msg_to_core(

@@ -1242,17 +1242,17 @@ bool MetalContext::erisc_app_still_running(chip_id_t device_id, CoreCoord virtua
 
 // Send exit_erisc_kernel to the launch message
 void MetalContext::erisc_send_exit_signal(chip_id_t device_id, CoreCoord virtual_core, bool is_idle_eth) {
-    go_msg_t go_msg{};
-    DeviceAddr launch_addr = hal_->get_dev_addr(
-        is_idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH,
-        HalL1MemAddrType::LAUNCH);
+    HalProgrammableCoreType core_type =
+        is_idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
+    DeviceAddr launch_addr = hal_->get_dev_addr(core_type, HalL1MemAddrType::LAUNCH);
 
-    std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
-    data = cluster_->read_core(device_id, virtual_core, launch_addr, sizeof(launch_msg_t));
+    auto dev_msgs_factory = hal_->get_dev_msgs_factory(core_type);
+    auto launch_msg = dev_msgs_factory.create<dev_msgs::launch_msg_t>();
+    auto go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
+    cluster_->read_core(launch_msg.data(), launch_msg.size(), {device_id, virtual_core}, launch_addr);
 
-    launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
-    launch_msg->kernel_config.exit_erisc_kernel = 1;
-    llrt::write_launch_msg_to_core(device_id, virtual_core, launch_msg, &go_msg, launch_addr, false);
+    launch_msg.view().kernel_config().exit_erisc_kernel() = 1;
+    llrt::write_launch_msg_to_core(device_id, virtual_core, launch_msg.view(), go_msg.view(), launch_addr, false);
 
     if (!is_idle_eth) {
         // Active
