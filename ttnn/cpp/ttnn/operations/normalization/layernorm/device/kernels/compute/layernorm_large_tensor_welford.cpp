@@ -19,7 +19,6 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/welford.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "layernorm_compute_utils.hpp"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/transpose_wh_dest.h"
 
@@ -198,64 +197,8 @@ void MAIN {
             cb_push_back(cb_ex2, onetile);
             tile_regs_release();
         } else {
-            // RMS: Calculate (∑x^2)/n
-            // Copy tiles in block to dst regs
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                cb_wait_front(cb_in, blk);
-
-                tile_regs_acquire();
-                copy_tile_init(cb_in);
-                for (uint32_t j = 0; j < blk; j++) {
-                    copy_tile(cb_in, j, j);
-                }
-                cb_pop_front(cb_in, blk);
-
-                if constexpr (fuse_pre_add) {
-                    // Fuse in = in + b
-                    for (uint32_t j = 0; j < blk; j++) {
-                        binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
-                        binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, j, j);
-                    }
-                }
-
-                // Square tiles in dst regs
-                square_tile_init();
-                for (uint32_t j = 0; j < blk; j++) {
-                    square_tile(j);
-                }
-
-                // Accumulate squares
-                add_binary_tile_init();
-                for (uint32_t j = 0; j < blk - 1; j++) {
-                    add_binary_tile(j, j + 1);
-                }
-
-                // Multiply by scalar to get (∑x^2)/n
-                binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_scaler);
-                binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_scaler, 0, dst0);
-
-                if (wt > 0) {
-                    // This block's result is accumulated in dst0
-                    // Copy the previous block's result to dst1 and
-                    // add to current
-                    cb_wait_front(cb_ex2, onetile);
-                    reconfig_data_format_srca(cb_ex2);
-                    copy_tile_init(cb_ex2);
-                    copy_tile(cb_ex2, 0, dst1);
-
-                    add_binary_tile_init();
-                    add_binary_tile(dst0, dst1);
-                    cb_pop_front(cb_ex2, onetile);
-                }
-                tile_regs_commit();
-            }
-
-            // Push to CB
-            tile_regs_wait();
-            cb_reserve_back(cb_ex2, onetile);
-            pack_tile(dst0, cb_ex2);
-            cb_push_back(cb_ex2, onetile);
-            tile_regs_release();
+            // RMS norm not supported for Welford's algorithm
+            return;
         }
 
         // =====================================
