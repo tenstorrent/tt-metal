@@ -148,13 +148,14 @@ template <
     std::uint32_t full_ct_dim    = block_ct_dim,
     bool diagonal                = false,
     bool narrow_row              = false,
-    std::uint32_t row_num_datums = TILE_C_DIM>
+    std::uint32_t row_num_datums = TILE_C_DIM,
+    uint32_t tile_dst_ct_offset  = 0>
 inline void _llk_pack_untilize_(
     const std::uint32_t address,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t face_r_dim      = FACE_R_DIM,
-    const std::uint32_t num_faces       = 4 /*not used*/,
-    const std::uint32_t tile_dst_offset = 0)
+    const std::uint32_t face_r_dim         = FACE_R_DIM,
+    const std::uint32_t num_faces          = 4 /*not used*/,
+    const std::uint32_t tile_dst_rt_offset = 0)
 {
     program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal, row_num_datums>(address, pack_dst_format);
 
@@ -168,7 +169,7 @@ inline void _llk_pack_untilize_(
 
         for (std::uint32_t row = 0; row < num_rows; row++)
         {
-            TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_dst_offset); // Clear tile counter
+            TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_dst_ct_offset + tile_dst_rt_offset); // Clear tile counter
             ckernel::ckernel_template::run();
             TTI_ADDRCRXY(p_setadc::PAC, 0, 0, 1, 0, 0b0010); // Read new row in the tile
             if constexpr (block_ct_dim != full_ct_dim)
