@@ -1,6 +1,6 @@
 # SFPU Eltwise Chain
 
-In this example, we build a TT-Metal program that demonstrates how to create **fused SFPU (Special Function Processing Unit) operations**, where the output of one SFPU operation is directly reused as input for the next operation. This technique enables efficient computation of complex mathematical functions by chaining multiple elementary operations without intermediate memory transfers.
+This example demonstrates how to build a TT-Metal program that chains **SFPU (Special Function Processing Unit) operations** together. By chaining operations, the output of one SFPU function becomes the direct input for the next operation, enabling efficient computation of complex mathematical functions without intermediate memory transfers. This approach keeps intermediate results in registers rather than repeatedly moving data between circular buffers in L1 memory or DRAM, significantly improving performance.
 
 You can find the full example in
 [`sfpu_eltwise_chain.cpp`](/tt_metal/programming_examples/sfpu_eltwise_chain/sfpu_eltwise_chain.cpp).
@@ -16,7 +16,11 @@ export TT_METAL_HOME=$(pwd)
 
 ## Main Program Overview
 
-This example demonstrates **SFPU operation fusion** by implementing the **softplus activation function**: `softplus(x) = log(1 + exp(x))`. Instead of computing each operation separately and storing intermediate results in memory, we chain three SFPU operations together:
+This example demonstrates **SFPU operation chaining** by implementing the **softplus activation function**: `softplus(x) = log(1 + exp(x))`.
+
+We could compute softplus by calling separate operations on the tensor: first `ttnn::exp`, storing provisional results into memory, then adding 1, storing again, and finally computing `ttnn::log`. However, each separate operation has overhead from reading and writing memory. To reduce this overhead, we merge these three operations into a single chained operation, so we only read from and write to memory once.
+
+The three chained SFPU operations are:
 
 1. **exp(x)** - Exponential function
 2. **exp(x) + 1** - Add constant (1) to the result
@@ -25,7 +29,7 @@ This example demonstrates **SFPU operation fusion** by implementing the **softpl
 The data pipeline is:
 1. Input data is read from DRAM into a circular buffer
 2. A tile of ones is created in L1 memory for the addition operation
-3. The compute kernel performs the fused SFPU operations on a single tile
+3. The compute kernel performs the chained SFPU operations on a single tile
 4. The result is written back to DRAM
 
 ---
@@ -72,6 +76,8 @@ The input data is then tilized to match the hardware's expected tiled layout fro
 ```cpp
 src_vec = tilize_nfaces(src_vec, constants::TILE_WIDTH, constants::TILE_HEIGHT);
 ```
+
+To learn more about tile layout, please refer to the [Tiles documentation](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/advanced_topics/tiles.html).
 
 ---
 
@@ -143,7 +149,7 @@ KernelHandle writer_kernel_id = CreateKernel(
     core,
     tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
 
-// Compute kernel - performs fused SFPU operations
+// Compute kernel - performs chained SFPU operations
 KernelHandle compute_kernel_id = CreateKernel(
     program,
     "sfpu_eltwise_chain/kernels/compute/compute.cpp",
@@ -199,13 +205,13 @@ for (uint32_t i = 0; i < tt::constants::TILE_HW; i++) {
 cb_push_back(ones_cb_index, one_tile);
 ```
 
-Nota additional `float_to_bfloat16` function. Since `bfloat16` is not native C++ type we obtain `uint16_t` pointer (the same size as `bfloat16`) and save converted values.
+Note additional `float_to_bfloat16` function. Since `bfloat16` is not a native C++ type we obtain a `uint16_t` pointer (the same size as `bfloat16`) and save converted values.
 
 ---
 
 ### Writer Kernel
 
-The writer kernel reads the computed result from the result circular buffer and writes it back to DRAM:
+The writer kernel reads computed values from the circular buffer and writes these results back to DRAM:
 
 ```cpp
 cb_wait_front(result_cb_index, one_tile);
@@ -217,7 +223,7 @@ cb_pop_front(result_cb_index, one_tile);
 
 ---
 
-### Compute Kernel - The SFPU Fusion Core
+### Compute Kernel - The SFPU Chaining
 
 This is the heart of the example, demonstrating **SFPU operation chaining**:
 
@@ -232,15 +238,15 @@ cb_wait_front(ones_cb_index, one_tile);
 copy_tile(src_cb_index, 0, 0);      // Input data → register 0
 copy_tile(ones_cb_index, 0, 1);     // Ones tile → register 1
 
-// Fused SFPU operations chain
+// Chained SFPU operations chain
 exp_tile_init();
-exp_tile(0);                        // register 0 = exp(input)
+exp_tile(0);                        // reads 0-th DST register; compute 'exp'; store to 0-th DST register
 
 add_binary_tile_init();
-add_binary_tile(0, 1, 0);          // register 0 = exp(input) + 1
+add_binary_tile(0, 1, 0);          // read 0-th and 1-st DST register; add both registers; store output to 0-th register
 
 log_tile_init();
-log_tile(0);                       // register 0 = log(exp(input) + 1)
+log_tile(0);                       // reads 0-th DST register; compute 'log'; store to 0-th DST register
 
 // Store result and cleanup
 tile_regs_commit();
@@ -249,7 +255,7 @@ cb_reserve_back(result_cb_index, one_tile);
 pack_tile(0, result_cb_index);
 ```
 
-### Key SFPU Fusion Concepts
+### Key SFPU Chaining Concepts
 
 1. **Register Reuse**: The output of each operation stays in the same register and becomes input for the next operation
 2. **No Intermediate Memory**: Results don't need to be stored back to circular buffers between operations
@@ -264,11 +270,11 @@ pack_tile(0, result_cb_index);
 Metalium vs Golden -- PCC = 0.999847
 ```
 
-The high Pearson Correlation Coefficient (>0.999) indicates that the SFPU fused operations produce results nearly identical to the CPU golden reference, demonstrating both the correctness and precision of the hardware implementation.
+The high Pearson Correlation Coefficient (>0.999) indicates that the SFPU chained operations produce results nearly identical to the CPU golden reference, demonstrating both the correctness and precision of the hardware implementation.
 
 ---
 
-## Benefits of SFPU Fusion
+## Benefits of SFPU Chaining
 
 1. **Memory Bandwidth Reduction**: Eliminates intermediate memory transfers
 2. **Lower Latency**: Reduces the number of memory access cycles
@@ -276,6 +282,12 @@ The high Pearson Correlation Coefficient (>0.999) indicates that the SFPU fused 
 4. **Power Efficiency**: Reduces memory I/O operations which are typically power-intensive
 
 This pattern can be extended to implement more complex mathematical functions by chaining additional SFPU operations together.
+
+### Important Notes on SFPU Precision
+
+**Precision Considerations**: The DST (Destination) registers used in SFPU operations can hold data in either BFP16 or FP32 format depending on kernel configuration settings. This precision setting affects the accuracy of chained operations, as precision loss can accumulate through the chain of computations.
+
+For detailed information about DST register precision and configuration, refer to the [Compute Engines and Dataflow documentation](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/advanced_topics/compute_engines_and_dataflow_within_tensix.html#dst-register).
 
 ---
 
