@@ -167,8 +167,8 @@ void validate_fsd_against_gsd(
     }
 
     // Convert generated connections to a comparable format
-    std::set<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>> generated_connections;
-    std::set<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>> duplicate_generated_connections;
+    std::set<std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint>> generated_connections;
+    std::set<std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint>> duplicate_generated_connections;
 
     for (const auto& connection : generated_fsd.eth_connections().connection()) {
         const auto& endpoint_a = connection.endpoint_a();
@@ -187,11 +187,11 @@ void validate_fsd_against_gsd(
         const std::string& hostname_1 = hosts[host_id_1].hostname();
         const std::string& hostname_2 = hosts[host_id_2].hostname();
 
-        PhysicalChannelConnection conn_1{hostname_1, TrayId(tray_id_1), asic_location_1, ChanId(chan_id_1)};
-        PhysicalChannelConnection conn_2{hostname_2, TrayId(tray_id_2), asic_location_2, ChanId(chan_id_2)};
+        PhysicalChannelEndpoint conn_1{hostname_1, TrayId(tray_id_1), asic_location_1, ChanId(chan_id_1)};
+        PhysicalChannelEndpoint conn_2{hostname_2, TrayId(tray_id_2), asic_location_2, ChanId(chan_id_2)};
 
         // Sort to ensure consistent ordering
-        std::pair<PhysicalChannelConnection, PhysicalChannelConnection> connection_pair_sorted;
+        std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint> connection_pair_sorted;
         if (conn_1 < conn_2) {
             connection_pair_sorted = std::make_pair(conn_1, conn_2);
         } else {
@@ -218,8 +218,8 @@ void validate_fsd_against_gsd(
     }
 
     // Convert discovered GSD connections to the same format
-    std::set<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>> discovered_connections;
-    std::set<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>> duplicate_discovered_connections;
+    std::set<PhysicalChannelConnection> discovered_connections;
+    std::set<PhysicalChannelConnection> duplicate_discovered_connections;
 
     // Process local connections if they exist
     if (has_local_eth_connections) {
@@ -241,11 +241,11 @@ void validate_fsd_against_gsd(
             uint32_t tray_id_2 = second_conn["tray_id"].as<uint32_t>();
             uint32_t asic_location_2 = second_conn["asic_location"].as<uint32_t>();
 
-            PhysicalChannelConnection conn_1{hostname_1, TrayId(tray_id_1), asic_location_1, ChanId(chan_id_1)};
-            PhysicalChannelConnection conn_2{hostname_2, TrayId(tray_id_2), asic_location_2, ChanId(chan_id_2)};
+            PhysicalChannelEndpoint conn_1{hostname_1, TrayId(tray_id_1), asic_location_1, ChanId(chan_id_1)};
+            PhysicalChannelEndpoint conn_2{hostname_2, TrayId(tray_id_2), asic_location_2, ChanId(chan_id_2)};
 
             // Sort to ensure consistent ordering
-            std::pair<PhysicalChannelConnection, PhysicalChannelConnection> connection_pair_sorted;
+            PhysicalChannelConnection connection_pair_sorted;
             if (conn_1 < conn_2) {
                 connection_pair_sorted = std::make_pair(conn_1, conn_2);
             } else {
@@ -281,11 +281,11 @@ void validate_fsd_against_gsd(
             uint32_t tray_id_2 = second_conn["tray_id"].as<uint32_t>();
             uint32_t asic_location_2 = second_conn["asic_location"].as<uint32_t>();
 
-            PhysicalChannelConnection conn_1{hostname_1, TrayId(tray_id_1), asic_location_1, ChanId(chan_id_1)};
-            PhysicalChannelConnection conn_2{hostname_2, TrayId(tray_id_2), asic_location_2, ChanId(chan_id_2)};
+            PhysicalChannelEndpoint conn_1{hostname_1, TrayId(tray_id_1), asic_location_1, ChanId(chan_id_1)};
+            PhysicalChannelEndpoint conn_2{hostname_2, TrayId(tray_id_2), asic_location_2, ChanId(chan_id_2)};
 
             // Sort to ensure consistent ordering
-            std::pair<PhysicalChannelConnection, PhysicalChannelConnection> connection_pair_sorted;
+            PhysicalChannelConnection connection_pair_sorted;
             if (conn_1 < conn_2) {
                 connection_pair_sorted = std::make_pair(conn_1, conn_2);
             } else {
@@ -313,91 +313,90 @@ void validate_fsd_against_gsd(
     }
 
     // Lambda to extract port information from channel connections (shared by both validation modes)
-    auto extract_port_info =
-        [&](const std::set<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>>& connections) {
-            std::set<std::pair<PhysicalPortConnection, PhysicalPortConnection>> port_info;
+    auto extract_port_info = [&](const std::set<PhysicalChannelConnection>& connections) {
+        std::set<std::pair<PhysicalPortEndpoint, PhysicalPortEndpoint>> port_info;
 
-            for (const auto& conn : connections) {
-                // Get board types from FSD for both connections independently
-                std::string board_type_a = "";
-                std::string board_type_b = "";
+        for (const auto& conn : connections) {
+            // Get board types from FSD for both connections independently
+            std::string board_type_a = "";
+            std::string board_type_b = "";
 
-                // Find host_id for each connection by matching hostname
-                uint32_t host_id_a = 0;
-                uint32_t host_id_b = 0;
-                for (uint32_t i = 0; i < hosts.size(); ++i) {
-                    if (hosts[i].hostname() == conn.first.hostname) {
-                        host_id_a = i;
-                    }
-                    if (hosts[i].hostname() == conn.second.hostname) {
-                        host_id_b = i;
-                    }
+            // Find host_id for each connection by matching hostname
+            uint32_t host_id_a = 0;
+            uint32_t host_id_b = 0;
+            for (uint32_t i = 0; i < hosts.size(); ++i) {
+                if (hosts[i].hostname() == conn.first.hostname) {
+                    host_id_a = i;
                 }
-
-                // Look up board types for each connection
-                for (const auto& board_location : generated_fsd.board_types().board_locations()) {
-                    if (board_location.host_id() == host_id_a && board_location.tray_id() == *conn.first.tray_id) {
-                        board_type_a = board_location.board_type();
-                    }
-                    if (board_location.host_id() == host_id_b && board_location.tray_id() == *conn.second.tray_id) {
-                        board_type_b = board_location.board_type();
-                    }
-                }
-                if (board_type_a.empty() || board_type_b.empty()) {
-                    throw std::runtime_error(
-                        "Board type not found for connection: " + conn.first.hostname + " <-> " + conn.second.hostname);
-                }
-
-                Board board_a = create_board(board_type_a);
-                Board board_b = create_board(board_type_b);
-                auto port_a = board_a.get_port_for_asic_channel({conn.first.asic_location, conn.first.channel_id});
-                auto port_b = board_b.get_port_for_asic_channel({conn.second.asic_location, conn.second.channel_id});
-
-                PhysicalPortConnection port_a_conn;
-                PhysicalPortConnection port_b_conn;
-
-                // Add deployment info for first connection if available
-                for (const auto& host : hosts) {
-                    if (host.hostname() == conn.first.hostname) {
-                        port_a_conn = PhysicalPortConnection{
-                            conn.first.hostname,
-                            host.aisle(),
-                            host.rack(),
-                            host.shelf_u(),
-                            port_a.port_type,
-                            port_a.port_id};
-                        break;
-                    }
-                }
-
-                // Add deployment info for second connection if available
-                for (const auto& host : hosts) {
-                    if (host.hostname() == conn.second.hostname) {
-                        port_b_conn = PhysicalPortConnection{
-                            conn.second.hostname,
-                            host.aisle(),
-                            host.rack(),
-                            host.shelf_u(),
-                            port_b.port_type,
-                            port_b.port_id};
-                        break;
-                    }
-                }
-
-                // Always insert in sorted order
-                if (port_a_conn < port_b_conn) {
-                    port_info.insert(std::make_pair(port_a_conn, port_b_conn));
-                } else {
-                    port_info.insert(std::make_pair(port_b_conn, port_a_conn));
+                if (hosts[i].hostname() == conn.second.hostname) {
+                    host_id_b = i;
                 }
             }
 
-            return port_info;
-        };
+            // Look up board types for each connection
+            for (const auto& board_location : generated_fsd.board_types().board_locations()) {
+                if (board_location.host_id() == host_id_a && board_location.tray_id() == *conn.first.tray_id) {
+                    board_type_a = board_location.board_type();
+                }
+                if (board_location.host_id() == host_id_b && board_location.tray_id() == *conn.second.tray_id) {
+                    board_type_b = board_location.board_type();
+                }
+            }
+            if (board_type_a.empty() || board_type_b.empty()) {
+                throw std::runtime_error(
+                    "Board type not found for connection: " + conn.first.hostname + " <-> " + conn.second.hostname);
+            }
+
+            Board board_a = create_board(board_type_a);
+            Board board_b = create_board(board_type_b);
+            auto port_a = board_a.get_port_for_asic_channel({conn.first.asic_location, conn.first.channel_id});
+            auto port_b = board_b.get_port_for_asic_channel({conn.second.asic_location, conn.second.channel_id});
+
+            PhysicalPortEndpoint port_a_conn;
+            PhysicalPortEndpoint port_b_conn;
+
+            // Add deployment info for first connection if available
+            for (const auto& host : hosts) {
+                if (host.hostname() == conn.first.hostname) {
+                    port_a_conn = PhysicalPortEndpoint{
+                        conn.first.hostname,
+                        host.aisle(),
+                        host.rack(),
+                        host.shelf_u(),
+                        port_a.port_type,
+                        port_a.port_id};
+                    break;
+                }
+            }
+
+            // Add deployment info for second connection if available
+            for (const auto& host : hosts) {
+                if (host.hostname() == conn.second.hostname) {
+                    port_b_conn = PhysicalPortEndpoint{
+                        conn.second.hostname,
+                        host.aisle(),
+                        host.rack(),
+                        host.shelf_u(),
+                        port_b.port_type,
+                        port_b.port_id};
+                    break;
+                }
+            }
+
+            // Always insert in sorted order
+            if (port_a_conn < port_b_conn) {
+                port_info.insert(std::make_pair(port_a_conn, port_b_conn));
+            } else {
+                port_info.insert(std::make_pair(port_b_conn, port_a_conn));
+            }
+        }
+
+        return port_info;
+    };
 
     // Find connections that are mismatched between FSD and GSD
-    std::set<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>> missing_in_gsd;
-    std::set<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>> extra_in_gsd;
+    std::set<PhysicalChannelConnection> missing_in_gsd;
+    std::set<PhysicalChannelConnection> extra_in_gsd;
 
     // Always find connections in GSD but not in FSD (both validation modes check this)
     for (const auto& conn : discovered_connections) {
