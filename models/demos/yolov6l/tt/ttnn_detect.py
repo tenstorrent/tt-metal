@@ -83,19 +83,16 @@ class TtDetect:
             device=device,
             conv=model_params.cls_preds[0],
             conv_pth=parameters.cls_preds[0],
-            reshape=True,
         )
         self.cls_preds_1 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cls_preds[1],
             conv_pth=parameters.cls_preds[1],
-            reshape=True,
         )
         self.cls_preds_2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cls_preds[2],
             conv_pth=parameters.cls_preds[2],
-            reshape=True,
         )
 
         self.reg_preds_0 = Yolov6l_Conv2D(
@@ -192,10 +189,13 @@ class TtDetect:
         cls_output_1 = ttnn.sigmoid_accurate(cls_output_1)
         cls_output_2 = ttnn.sigmoid_accurate(cls_output_2)
 
-        # Since self.nc=80 we have eliminated permute before reshape
-        cls_output_0 = ttnn.reshape(cls_output_0, (1, cls_output_0.shape[1] * cls_output_0.shape[2], 80))
-        cls_output_1 = ttnn.reshape(cls_output_1, (1, cls_output_1.shape[1] * cls_output_1.shape[2], 80))
-        cls_output_2 = ttnn.reshape(cls_output_2, (1, cls_output_2.shape[1] * cls_output_2.shape[2], 80))
+        cls_output_0 = ttnn.squeeze(cls_output_0, dim=0)
+        cls_output_1 = ttnn.squeeze(cls_output_1, dim=0)
+        cls_output_2 = ttnn.squeeze(cls_output_2, dim=0)
+
+        cls_output_0 = ttnn.sharded_to_interleaved(cls_output_0)
+        cls_output_1 = ttnn.sharded_to_interleaved(cls_output_1)
+        cls_output_2 = ttnn.sharded_to_interleaved(cls_output_2)
 
         reg_output_0 = ttnn.permute(reg_output_0, (0, 3, 1, 2))
         reg_output_0 = ttnn.reshape(reg_output_0, (1, 4, reg_output_0.shape[3]))
