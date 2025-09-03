@@ -26,7 +26,7 @@ class TtCSPRepBiFPANNeck:
             activation="relu",
         )
         self.Bifusion0 = TtBiFusion(device, parameters.Bifusion0, model_params.Bifusion0)
-        self.Rep_p4 = TtBepC3(device, parameters.Rep_p4, model_params.Rep_p4, n=12, reshape=False)
+        self.Rep_p4 = TtBepC3(device, parameters.Rep_p4, model_params.Rep_p4, n=12)
 
         self.reduce_layer1 = Yolov6l_Conv2D(
             device=device,
@@ -35,7 +35,7 @@ class TtCSPRepBiFPANNeck:
             activation="relu",
         )
         self.Bifusion1 = TtBiFusion(device, parameters.Bifusion1, model_params.Bifusion1)
-        self.Rep_p3 = TtBepC3(device, parameters.Rep_p3, model_params.Rep_p3, n=12, reshape=False)
+        self.Rep_p3 = TtBepC3(device, parameters.Rep_p3, model_params.Rep_p3, n=12)
 
         self.downsample2 = Yolov6l_Conv2D(
             device=device,
@@ -43,7 +43,7 @@ class TtCSPRepBiFPANNeck:
             conv_pth=parameters.downsample2.block.conv,
             activation="relu",
         )
-        self.Rep_n3 = TtBepC3(device, parameters.Rep_n3, model_params.Rep_n3, n=12, reshape=False)
+        self.Rep_n3 = TtBepC3(device, parameters.Rep_n3, model_params.Rep_n3, n=12)
 
         self.downsample1 = Yolov6l_Conv2D(
             device=device,
@@ -57,7 +57,6 @@ class TtCSPRepBiFPANNeck:
             model_params.Rep_n4,
             n=12,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            reshape=False,
         )
 
     def __call__(self, input_list):
