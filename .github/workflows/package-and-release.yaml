@@ -159,8 +159,7 @@ jobs:
     needs: [
       regression-testing,
       release-precheck,
-      create-tag,
-      create-and-upload-draft-release
+      create-tag
     ]
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
