@@ -57,6 +57,7 @@
 #include <ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads.hpp>                  // NOLINT
 #include <ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp>          // NOLINT
 #include <ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama.hpp>      // NOLINT
+#include <ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp>                     // NOLINT
 #include <ttnn/operations/full_like/full_like.hpp>                                                         // NOLINT
 #include <ttnn/operations/matmul/matmul.hpp>                                                               // NOLINT
 #include <ttnn/operations/moreh/moreh_adamw/moreh_adamw.hpp>                                               // NOLINT

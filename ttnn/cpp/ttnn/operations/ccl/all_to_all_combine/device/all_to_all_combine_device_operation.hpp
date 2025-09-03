@@ -25,12 +25,12 @@ struct AllToAllCombineDeviceOperation {
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
         const bool locally_reduced;
-        const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
         const CoreRangeSet worker_core_range_set;
-        static constexpr auto attribute_names =
-            std::forward_as_tuple("output_mem_config", "axis", "num_links", "topology", "subdevice_id");
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "output_mem_config", "axis", "num_links", "topology", "locally_reduced", "worker_core_range_set");
         auto attribute_values() const {
-            return std::forward_as_tuple(output_mem_config, axis, num_links, topology, subdevice_id);
+            return std::forward_as_tuple(
+                output_mem_config, axis, num_links, topology, locally_reduced, worker_core_range_set);
         };
     };
     struct tensor_args_t {

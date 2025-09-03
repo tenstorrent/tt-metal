@@ -45,7 +45,6 @@ def generate_cos_sin_cache(
         memory_config=model_config["COS_CACHED_WEIGHTS_MEMCFG"],
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
         cache_file_name=cos_cached_path,
-        enable_multihost_format=True,
     )
 
     sin_cached_path = tt_cache_path / f"{layer_name}.sin_cached_{model_config['SIN_CACHED_WEIGHTS_DTYPE'].name}"
@@ -58,7 +57,6 @@ def generate_cos_sin_cache(
         memory_config=model_config["SIN_CACHED_WEIGHTS_MEMCFG"],
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
         cache_file_name=sin_cached_path,
-        enable_multihost_format=True,
     )
 
     return tt_cos_cached, tt_sin_cached
@@ -169,7 +167,6 @@ class TtFalconAttention:
             mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=-1),
             cache_file_name=query_key_value_path,
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
-            enable_multihost_format=True,
         )
 
         selfout_path = tt_cache_path / f"{selfout_str}_{self.model_config['SELFOUT_MM_WEIGHTS_DTYPE'].name}"
@@ -183,7 +180,6 @@ class TtFalconAttention:
             mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=-1),
             cache_file_name=selfout_path,
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
-            enable_multihost_format=True,
         )
         self.rotary_embedding = TtFalconRotaryEmbedding(
             self.mesh_device,
@@ -224,7 +220,6 @@ class TtFalconAttention:
                 memory_config=self.model_config["DRAM_MEMCFG"],
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
                 cache_file_name=kv_cache_path,
-                enable_multihost_format=True,
             )
 
             v_cache = ttnn.as_tensor(
@@ -235,7 +230,6 @@ class TtFalconAttention:
                 memory_config=self.model_config["DRAM_MEMCFG"],
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
                 cache_file_name=kv_cache_path,
-                enable_multihost_format=True,
             )
 
             self.layer_past = (

@@ -122,7 +122,7 @@ class AllGatherAsyncConfig(OpConfigBase):
     memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
     subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
     use_optimal_ccl_for_llama: bool | None = None
-    barrier_semaphore: ttnn._ttnn.global_semaphore.global_sempahore | None = None
+    barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
 
 
 @dataclass
@@ -147,7 +147,6 @@ class PointToPointConfig(OpConfigBase):
     receiver_coord: ttnn.MeshCoordinate | None = None
     sender_coord: ttnn.MeshCoordinate | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
-    semaphore: ttnn._ttnn.global_semaphore.global_sempahore | None = None
     optional_output_tensor: ttnn.Tensor | None = None
 
 

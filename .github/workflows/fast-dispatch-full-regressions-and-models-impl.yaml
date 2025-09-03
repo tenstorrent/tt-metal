@@ -24,9 +24,8 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, ttt-llama3.2-1B, qwen25_vl-3B, resnet50, whisper, openpdn_mnist, vit, sentence_bert, yolov7, swin_s, yolov6l, swin_v2, mobilenetv2, segformer, vgg_unet, yolov10x, yolov11, yolov8s, yolov8s_world, yolov8x, yolov9c, vanilla_unet, yolov5x, efficientnetb0, vovnet, ufld_v2, yolov12x, gemma3]
+        model: [common_models, functional_unet, ttt-llama3.2-1B, qwen25_vl-3B, resnet50, whisper, openpdn_mnist, vit, sentence_bert, yolov7, swin_s, yolov6l, swin_v2, mobilenetv2, segformer, vgg_unet, yolov10x, yolov11, yolov8s, yolov8s_world, yolov8x, yolov9c, vanilla_unet, yolov5x, efficientnetb0, vovnet, ufld_v2, yolov12x, gemma-3-4b-it, ttt-mistral-7B-v0.3]
         # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
-        # ttt-mistral-7B-v0.3 issue #25861: https://github.com/tenstorrent/tt-metal/issues/25861
         include:
           - model: stable_diffusion_xl_base
             card: N150
@@ -81,6 +80,8 @@ jobs:
               pytest tests/nightly/single_card/tt_transformers -k ${{ matrix.model }}
             elif [[ "${{ matrix.model }}" == *"qwen25_vl"* ]]; then
               pytest tests/nightly/single_card/qwen25_vl -k ${{ matrix.model }}
+            elif [[ "${{ matrix.model }}" == *"gemma-3"* ]]; then
+              pytest tests/nightly/single_card/gemma3 -k ${{ matrix.model }}
             else
               pytest tests/nightly/single_card/${{ matrix.model }}
             fi

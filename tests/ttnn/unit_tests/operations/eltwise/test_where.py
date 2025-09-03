@@ -65,7 +65,13 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
 @pytest.mark.parametrize(
     "c_shape, t_shape, f_shape",
     [
-        ((1, 1, 1024, 1024), (1, 1, 1, 1024), (1, 1, 1024, 1024)),  # A, Brow, C  - legacy
+        ((1, 1, 1024, 1024), (1, 1, 1, 1024), (1, 1, 1024, 1024)),  # A, Brow, C
+        ((1, 1, 1024, 1024), (1, 1, 1024, 1024), (1, 1, 1, 1024)),  # A, B, Crow
+        ((1, 1, 1024, 1024), (1, 1, 1, 1024), (1, 1, 1, 1024)),  # A, Brow, Crow
+        ((1, 1, 1, 1024), (1, 1, 1024, 1024), (1, 1, 1, 1024)),  # Arow, B, Crow
+        ((1, 1, 1024, 1024), (1, 1024), (1024, 1024)),  # A, Brow, C
+        ((1024), (1), (1024)),
+        ((2, 2, 1024, 1024), (1, 1024), (1024, 1024)),
         # Bcast cases for dim -2
         ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # A, Bcol, C
         ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1024)),  # Acol, B, C
@@ -657,3 +663,45 @@ def test_ttnn_where_forge_nan(device):
     result = ttnn.to_torch(ttnn_result)
 
     assert torch_equal_nan(result, golden)
+
+
+# Issue: #27153
+@pytest.mark.parametrize(
+    "c_shape, t_shape, f_shape",
+    [
+        [(1, 256, 6, 6), (1,), (1,)],
+        [(1, 256, 6, 6), (1, 256, 6, 6), (1,)],
+        [(1, 512, 14, 14), (1,), (1,)],
+        [(1, 512, 14, 14), (1, 512, 14, 14), (1,)],
+        [(1, 34, 200, 224, 53), (1,), (1,)],
+        [(1, 34, 200, 224, 53), (1, 34, 200, 224, 53), (1,)],
+    ],
+)
+def test_where_int_golden_verification(c_shape, t_shape, f_shape, device):
+    torch.manual_seed(42)
+
+    # Generate random input tensors
+    condition_torch = torch.randint(0, 100, c_shape)
+
+    # True values tensor: Random float values
+    true_vals_torch = torch.randn(t_shape, dtype=torch.float32) * 10
+
+    # False values tensor: Random float values (different range for distinction)
+    false_vals_torch = torch.randn(f_shape, dtype=torch.float32) * 5 + 100
+
+    # Compute golden reference using PyTorch
+    golden_output = torch.where(condition_torch.bool(), true_vals_torch, false_vals_torch)
+
+    # Convert to ttnn tensors
+    condition_ttnn = ttnn.from_torch(condition_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    true_vals_ttnn = ttnn.from_torch(true_vals_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    false_vals_ttnn = ttnn.from_torch(false_vals_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result_ttnn = ttnn.where(condition_ttnn, true_vals_ttnn, false_vals_ttnn)
+    result_torch = ttnn.to_torch(result_ttnn)
+
+    assert torch_equal_nan(
+        result_torch, golden_output
+    ), f"Values don't match. Max difference: {torch.max(torch.abs(result_torch - golden_output))}"
