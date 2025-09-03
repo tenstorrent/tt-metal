@@ -229,7 +229,7 @@ void KernelImpl::process_compile_time_args(
 
 void KernelImpl::process_named_compile_time_args(
     const std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)> callback) const {
-    callback(this->compile_time_args_by_name());
+    callback(this->named_compile_time_args());
 }
 
 uint8_t DataMovementKernel::expected_num_binaries() const { return 1; }

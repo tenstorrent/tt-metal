@@ -93,7 +93,7 @@ public:
     bool is_on_logical_core(const CoreCoord &logical_core) const;
 
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
-    std::unordered_map<std::string, uint32_t> compile_time_args_by_name() const { return named_compile_time_args_; }
+    std::unordered_map<std::string, uint32_t> named_compile_time_args() const { return named_compile_time_args_; }
 
     std::vector<uint32_t> & runtime_args(const CoreCoord &logical_core);
     RuntimeArgsData & runtime_args_data(const CoreCoord &logical_core);
