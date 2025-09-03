@@ -17,13 +17,13 @@ class TtnnYoloV11:
     def __init__(self, device, parameters):
         self.device = device
         self.conv1 = TtnnConv(device, parameters.conv_args[0], parameters.model[0], deallocate_activation=True)
-        self.conv2 = TtnnConv(device, parameters.conv_args[1], parameters.model[1])
+        self.conv2 = TtnnConv(device, parameters.conv_args[1], parameters.model[1], deallocate_activation=True)
         self.c3k2_1 = TtnnC3k2(device, parameters.conv_args[2], parameters.model[2], is_bk_enabled=False)
-        self.conv3 = TtnnConv(device, parameters.conv_args[3], parameters.model[3])
+        self.conv3 = TtnnConv(device, parameters.conv_args[3], parameters.model[3], deallocate_activation=True)
         self.c3k2_2 = TtnnC3k2(device, parameters.conv_args[4], parameters.model[4], is_bk_enabled=True)
-        self.conv5 = TtnnConv(device, parameters.conv_args[5], parameters.model[5])
+        self.conv5 = TtnnConv(device, parameters.conv_args[5], parameters.model[5], deallocate_activation=True)
         self.c3k2_3 = TtnnC3k2(device, parameters.conv_args[6], parameters.model[6], is_bk_enabled=False)
-        self.conv6 = TtnnConv(device, parameters.conv_args[7], parameters.model[7])
+        self.conv6 = TtnnConv(device, parameters.conv_args[7], parameters.model[7], deallocate_activation=True)
         self.c3k2_4 = TtnnC3k2(device, parameters.conv_args[8], parameters.model[8], is_bk_enabled=False)
         self.sppf = TtnnSPPF(device, parameters.conv_args[9], parameters.model[9])
         self.c2psa = TtnnC2PSA(device, parameters.conv_args[10], parameters.model[10])
