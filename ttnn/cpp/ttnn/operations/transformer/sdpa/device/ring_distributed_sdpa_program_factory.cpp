@@ -16,6 +16,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -220,10 +221,14 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
         false,  //(std::uint32_t)use_provided_mask,
         false,  //(std::uint32_t)use_padded_mask,
         false,  //(uint32_t)is_chunked,
-        false,  //(uint32_t)page_table_is_dram,
         0,      // block_size_t,
         0       // page_table_stick_size
     };
+    TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(nullptr).append_to(reader_compile_time_args);  // mask tensor (not used in ring)
+    TensorAccessorArgs(nullptr).append_to(reader_compile_time_args);  // page table (not used in ring)
 
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
@@ -247,6 +252,7 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
         false,  //(std::uint32_t)use_padded_mask,
         true,   //(uint32_t)is_chunked,
     };
+    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
@@ -279,6 +285,7 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
         true,   //(uint32_t)is_chunked,
         scale_union.u,
     };
+    TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
