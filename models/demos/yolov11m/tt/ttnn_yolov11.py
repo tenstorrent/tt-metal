@@ -20,7 +20,7 @@ class TtnnYoloV11:
         self.conv2 = TtnnConv(device, parameters.conv_args[1], parameters.model[1], deallocate_activation=True)
         self.c3k2_1 = TtnnC3k2(device, parameters.conv_args[2], parameters.model[2], is_bk_enabled=False)
         self.conv3 = TtnnConv(device, parameters.conv_args[3], parameters.model[3], deallocate_activation=True)
-        self.c3k2_2 = TtnnC3k2(device, parameters.conv_args[4], parameters.model[4], is_bk_enabled=True)
+        self.c3k2_2 = TtnnC3k2(device, parameters.conv_args[4], parameters.model[4], is_bk_enabled=False)
         self.conv5 = TtnnConv(device, parameters.conv_args[5], parameters.model[5], deallocate_activation=True)
         self.c3k2_3 = TtnnC3k2(device, parameters.conv_args[6], parameters.model[6], is_bk_enabled=False)
         self.conv6 = TtnnConv(device, parameters.conv_args[7], parameters.model[7], deallocate_activation=True)
