@@ -68,7 +68,7 @@ jobs:
 
       - name: Install ttsim
         run: |
-          mkdir -p $TT_METAL_SIMULATOR
+          mkdir -p $TT_METAL_SIMULATOR_HOME
           cp /work/ttsim/src/_out/release_wh/libttsim.so $TT_METAL_SIMULATOR_HOME/
           cp $TT_METAL_HOME/tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
