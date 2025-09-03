@@ -111,99 +111,99 @@ jobs:
           name: release-notes
           path: RELEASE_NOTES.txt
   # Candidate for breaking up
-  create-and-upload-draft-release:
-    needs: [create-tag, create-release-notes, regression-testing]
-    # May accidentally create two releases without restricting to 1 job
-    concurrency: create_upload_draft_release
-    runs-on: ubuntu-latest
-    if: ${{ github.ref != 'refs/heads/main' }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Create archive with submodules
-        uses: qmonnet/git-archive-all-action@791fb850881cf58b1d1fcc9b06c01940080bba0a
-        with:
-          output-files: tt-metalium.tar.gz
-      - name: Create VERSION
-        run: echo ${{ needs.create-tag.outputs.version }} > VERSION
-      - name : Download release notes
-        uses: actions/download-artifact@v4
-        with:
-          name: release-notes
-      - name : Download changelog
-        uses: actions/download-artifact@v4
-        with:
-          name: changelog
-      - name: Release
-        # A major release has not been tagged yet, so we need to do this to avoid
-        # Node 16 deprecation warning message
-        uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
-        with:
-          tag_name: ${{ needs.create-tag.outputs.version }}
-          name: ${{ needs.create-tag.outputs.version }}
-          draft: false
-          prerelease: true
-          body_path: RELEASE_NOTES.txt
-          files: |
-            VERSION
-            CHANGELOG.txt
-            README.md
-            INSTALLING.md
-            models/docs/MODEL_UPDATES.md
-            tt-metalium.tar.gz
-          fail_on_unmatched_files: true
-  create-docker-release-image:
-    needs: [
-      regression-testing,
-      release-precheck,
-      create-tag,
-      create-and-upload-draft-release
-    ]
-    uses: ./.github/workflows/publish-release-image.yaml
-    secrets: inherit
-    if: ${{ github.ref != 'refs/heads/main' }}
-    with:
-      version: ${{ needs.create-tag.outputs.version }}
-      tag-latest:  ${{ needs.release-precheck.outputs.is-release-candidate != 'true' }}
-      wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
-  release-docs:
-    needs: [
-      regression-testing,
-      release-precheck,
-      create-tag,
-      create-and-upload-draft-release
-    ]
-    if: ${{ needs.release-precheck.outputs.is-release-candidate !='true' }}
-    uses: ./.github/workflows/docs-latest-public.yaml
-    with:
-      version: ${{ needs.create-tag.outputs.version }}
-      docker-image: ${{ needs.regression-testing.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.regression-testing.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
-    secrets: inherit
-  publish-to-pypi:
-    name: >-
-      Publish Python 🐍 distribution 📦 to PyPI
-    needs: [
-      regression-testing,
-      release-precheck,
-      create-tag,
-      create-and-upload-draft-release
-    ]
-    runs-on: ubuntu-latest
-    if: ${{ github.ref != 'refs/heads/main' }}
-    environment:
-      name: pypi
-      url: https://pypi.org/project/ttnn/
-    permissions:
-      id-token: write  # IMPORTANT: mandatory for trusted publishing
-    steps:
-    - name: Download all the dists
-      uses: actions/download-artifact@v4
-      with:
-        name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
-        path: dist/
-    - name: Publish distribution 📦 to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
+  # create-and-upload-draft-release:
+  #   needs: [create-tag, create-release-notes, regression-testing]
+  #   # May accidentally create two releases without restricting to 1 job
+  #   concurrency: create_upload_draft_release
+  #   runs-on: ubuntu-latest
+  #   if: ${{ github.ref != 'refs/heads/main' }}
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+  #       with:
+  #         submodules: recursive
+  #     - name: Create archive with submodules
+  #       uses: qmonnet/git-archive-all-action@791fb850881cf58b1d1fcc9b06c01940080bba0a
+  #       with:
+  #         output-files: tt-metalium.tar.gz
+  #     - name: Create VERSION
+  #       run: echo ${{ needs.create-tag.outputs.version }} > VERSION
+  #     - name : Download release notes
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: release-notes
+  #     - name : Download changelog
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: changelog
+  #     - name: Release
+  #       # A major release has not been tagged yet, so we need to do this to avoid
+  #       # Node 16 deprecation warning message
+  #       uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
+  #       with:
+  #         tag_name: ${{ needs.create-tag.outputs.version }}
+  #         name: ${{ needs.create-tag.outputs.version }}
+  #         draft: false
+  #         prerelease: true
+  #         body_path: RELEASE_NOTES.txt
+  #         files: |
+  #           VERSION
+  #           CHANGELOG.txt
+  #           README.md
+  #           INSTALLING.md
+  #           models/docs/MODEL_UPDATES.md
+  #           tt-metalium.tar.gz
+  #         fail_on_unmatched_files: true
+  # create-docker-release-image:
+  #   needs: [
+  #     regression-testing,
+  #     release-precheck,
+  #     create-tag,
+  #     create-and-upload-draft-release
+  #   ]
+  #   uses: ./.github/workflows/publish-release-image.yaml
+  #   secrets: inherit
+  #   if: ${{ github.ref != 'refs/heads/main' }}
+  #   with:
+  #     version: ${{ needs.create-tag.outputs.version }}
+  #     tag-latest:  ${{ needs.release-precheck.outputs.is-release-candidate != 'true' }}
+  #     wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
+  # release-docs:
+  #   needs: [
+  #     regression-testing,
+  #     release-precheck,
+  #     create-tag,
+  #     create-and-upload-draft-release
+  #   ]
+  #   if: ${{ needs.release-precheck.outputs.is-release-candidate !='true' }}
+  #   uses: ./.github/workflows/docs-latest-public.yaml
+  #   with:
+  #     version: ${{ needs.create-tag.outputs.version }}
+  #     docker-image: ${{ needs.regression-testing.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.regression-testing.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
+  #   secrets: inherit
+  # publish-to-pypi:
+  #   name: >-
+  #     Publish Python 🐍 distribution 📦 to PyPI
+  #   needs: [
+  #     regression-testing,
+  #     release-precheck,
+  #     create-tag,
+  #     create-and-upload-draft-release
+  #   ]
+  #   runs-on: ubuntu-latest
+  #   if: ${{ github.ref != 'refs/heads/main' }}
+  #   environment:
+  #     name: pypi
+  #     url: https://pypi.org/project/ttnn/
+  #   permissions:
+  #     id-token: write  # IMPORTANT: mandatory for trusted publishing
+  #   steps:
+  #   - name: Download all the dists
+  #     uses: actions/download-artifact@v4
+  #     with:
+  #       name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
+  #       path: dist/
+  #   - name: Publish distribution 📦 to PyPI
+  #     uses: pypa/gh-action-pypi-publish@release/v1
