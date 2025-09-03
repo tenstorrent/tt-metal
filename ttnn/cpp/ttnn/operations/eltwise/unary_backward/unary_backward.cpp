@@ -1279,9 +1279,8 @@ std::vector<Tensor> ExecuteUnaryBackwardCosh::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardLogiteps::invoke(
     const Tensor& grad, const Tensor& input, float eps, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    float low = NAN, high = NAN;
-    low = eps;
-    high = 1.0 - low;
+    float low = eps;
+    float high = 1.0 - low;
     Tensor grad_result = ttnn::multiply(
         grad,
         ttnn::reciprocal(ttnn::multiply(
