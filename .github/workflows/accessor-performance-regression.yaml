@@ -42,7 +42,6 @@ jobs:
       build-wheel: true
       version: ${{ inputs.version || '22.04' }}
       ref: philei/tensor-accessor-perf-regression-tests
-      skip-tt-train: false  # This ensures --build-all is used instead of selective builds
 
   generate-baseline-performance:
     name: "📊 Generate Baseline Performance Data"
@@ -86,6 +85,18 @@ jobs:
           build-artifact-name: ${{ needs.build-baseline-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-baseline-artifact.outputs.wheel-artifact-name }}
 
+      - name: 🔍 Debug Build Artifacts
+        run: |
+          echo "🔍 Checking build directory structure..."
+          ls -la /work/build/ || echo "No build directory found"
+          ls -la /work/build/test/ || echo "No test directory found"
+          ls -la /work/build/test/ttnn/ || echo "No ttnn test directory found"
+          echo "🔍 Looking for unit_tests_ttnn_accessor..."
+          find /work -name "*unit_tests_ttnn_accessor*" -type f 2>/dev/null || echo "unit_tests_ttnn_accessor not found anywhere"
+          echo "🔍 Checking environment..."
+          echo "TT_METAL_HOME=$TT_METAL_HOME"
+          echo "PYTHONPATH=$PYTHONPATH"
+
       - name: 📊 Generate Baseline Performance Data
         timeout-minutes: 15
         run: |
@@ -116,7 +127,6 @@ jobs:
       build-wheel: true
       version: ${{ inputs.version || '22.04' }}
       ref: ${{ github.event_name == 'push' && github.ref || inputs.branch || 'main' }}
-      skip-tt-train: false  # This ensures --build-all is used instead of selective builds
 
   accessor-perf-regression-tests:
     name: "📊 Accessor Performance Regression Tests"
