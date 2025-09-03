@@ -11,6 +11,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "assert.hpp"
@@ -33,14 +34,20 @@ using namespace tt::tt_metal;
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 static void RunTest(
-    WatcherFixture* fixture,
-    IDevice* device,
+    MeshWatcherFixture* fixture,
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
     HalProgrammableCoreType programmable_core_type,
     HalProcessorClassType processor_class,
     int processor_id,
     debug_assert_type_t assert_type = DebugAssertTripped) {
     // Set up program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     // Depending on riscv type, choose one core to run the test on (since the test hangs the board).
     CoreCoord logical_core, virtual_core;
@@ -79,7 +86,7 @@ static void RunTest(
                     switch (processor_id) {
                         case 0:
                             assert_kernel = CreateKernel(
-                                program,
+                                program_,
                                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                                 logical_core,
                                 DataMovementConfig{
@@ -89,7 +96,7 @@ static void RunTest(
                             break;
                         case 1:
                             assert_kernel = CreateKernel(
-                                program,
+                                program_,
                                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                                 logical_core,
                                 DataMovementConfig{
@@ -103,7 +110,7 @@ static void RunTest(
                 case HalProcessorClassType::COMPUTE:
                     TT_ASSERT(0 <= processor_id && processor_id < 3);
                     assert_kernel = CreateKernel(
-                        program,
+                        program_,
                         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                         logical_core,
                         ComputeConfig{.defines = {{fmt::format("TRISC{}", processor_id), "1"}}});
@@ -113,25 +120,18 @@ static void RunTest(
             break;
         case HalProgrammableCoreType::ACTIVE_ETH:
             assert_kernel = CreateKernel(
-                program,
+                program_,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                 logical_core,
-                EthernetConfig{
-                    .noc = tt_metal::NOC::NOC_0
-                }
-            );
+                EthernetConfig{.noc = tt_metal::NOC::NOC_0});
             risc = "erisc";
             break;
         case HalProgrammableCoreType::IDLE_ETH:
             assert_kernel = CreateKernel(
-                program,
+                program_,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                 logical_core,
-                EthernetConfig{
-                    .eth_mode = Eth::IDLE,
-                    .noc = tt_metal::NOC::NOC_0
-                }
-            );
+                EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
             risc = "erisc";
             break;
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported programmable core type");
@@ -139,20 +139,20 @@ static void RunTest(
 
     // Write runtime args that should not trip an assert.
     const std::vector<uint32_t> safe_args = {3, 4, static_cast<uint32_t>(assert_type)};
-    SetRuntimeArgs(program, assert_kernel, logical_core, safe_args);
+    SetRuntimeArgs(program_, assert_kernel, logical_core, safe_args);
 
     // Run the kernel, don't expect an issue here.
     log_info(LogTest, "Running args that shouldn't assert...");
-    fixture->RunProgram(device, program, true);
+    fixture->RunProgram(mesh_device, workload, true);
     log_info(LogTest, "Args did not assert!");
 
     // Write runtime args that should trip an assert.
     const std::vector<uint32_t> unsafe_args = {3, 3, static_cast<uint32_t>(assert_type)};
-    SetRuntimeArgs(program, assert_kernel, logical_core, unsafe_args);
+    SetRuntimeArgs(program_, assert_kernel, logical_core, unsafe_args);
 
     // Run the kernel, expect an exit due to the assert.
     log_info(LogTest, "Running args that should assert...");
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(mesh_device, workload);
 
     // We should be able to find the expected watcher error in the log as well,
     // expected error message depends on the risc we're running on and the assert type.
@@ -217,7 +217,7 @@ struct WatcherTestParams {
     debug_assert_type_t assert_type = DebugAssertTripped;
 };
 
-class WatcherAssertTest : public WatcherFixture, public ::testing::WithParamInterface<WatcherTestParams> {};
+class WatcherAssertTest : public MeshWatcherFixture, public ::testing::WithParamInterface<WatcherTestParams> {};
 
 TEST_P(WatcherAssertTest, TestWatcherAssert) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
@@ -232,8 +232,8 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
         GTEST_SKIP();
     }
     this->RunTestOnDevice(
-        [&params](WatcherFixture* fixture, IDevice* device) {
-            RunTest(fixture, device, params.core_type, params.processor_class, params.processor_id, params.assert_type);
+        [&params](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            RunTest(fixture, mesh_device, params.core_type, params.processor_class, params.processor_id, params.assert_type);
         },
         this->devices_[0]);
 }
