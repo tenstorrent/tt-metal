@@ -19,12 +19,10 @@ class CCL1D:
         self.gather_sems = []
         self.from_sems = []
         self.to_sems = []
-        self.point_to_point_sems = []
         for _ in range(len(list(mesh_device.shape))):
             self.gather_sems.append([])
             self.from_sems.append([])
             self.to_sems.append([])
-            self.point_to_point_sems.append([])
             for _ in range(2):
                 self.gather_sems[-1].append(
                     [
@@ -34,9 +32,6 @@ class CCL1D:
                 )  # use two semaphores to use minimal version of all_gather_async
                 self.from_sems[-1].append(ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0))
                 self.to_sems[-1].append(ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0))
-                self.point_to_point_sems[-1].append(
-                    ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0)
-                )
 
         self.sem_cnt = [0, 0]
 
@@ -85,11 +80,3 @@ class CCL1D:
         buffer = None
 
         return buffer
-
-    def get_point_to_point_sem(self, axis):
-        """
-        Get a semaphore for the given axis.
-        """
-        sem = self.point_to_point_sems[axis][self.sem_cnt[axis]]
-        self.sem_cnt[axis] = (self.sem_cnt[axis] + 1) % 2
-        return sem

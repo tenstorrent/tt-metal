@@ -23,6 +23,28 @@ curl -fsSL https://github.com/tenstorrent/tt-installer/releases/latest/download/
 chmod +x install.sh
 ./install.sh --no-install-podman --no-install-metalium-container
 ```
+
+> [!WARNING]
+> TT-Installer automatically installs all latest versions. Galaxy Wormhole 4U and Blackhole systems require the following versions:
+> | Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
+> |----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
+> | Galaxy (Wormhole 4U) | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.10.1.0                          | v2.2.3 or lower       | v1.1.3, `mesh` config          |
+> | Blackhole            | Ubuntu 22.04    | 3.10     | v2.1.0 or above    | fw_pack-18.7.0.fwbundle (v18.7.0)          | v3.0.20 or above      | N/A                            |
+
+- If required, add the following flags for specifying dependencies versions:
+
+> [!NOTE]
+> The following dependencies versions are examples. Install the versions above depending on your device.
+
+```
+./install.sh \
+  --smi-version=v3.0.17 \
+  --fw-version=18.3.0 \
+  --kmd-version=1.34 \
+  --no-install-podman \
+  --no-install-metalium-container
+```
+
 - For more information visit Tenstorrent's [TT-Installer GitHub repository](https://github.com/tenstorrent/tt-installer).
 
 #### Option 2: Manual Installation
