@@ -53,8 +53,11 @@ class StatsCollector:
                 analysis_key = self.riscv_to_analysis_event[risc]["analysis"]
 
                 if analysis_key in core_analysis:
+                    for run in core_analysis[analysis_key]["series"]:
+                        run["core"] = core
                     dm_stats[risc]["analysis"]["stats"][core] = core_analysis[analysis_key]["stats"]
                     dm_stats[risc]["analysis"]["series"].extend(core_analysis[analysis_key]["series"])
+                    breakpoint()
 
         # Gather test attributes
 
@@ -147,6 +150,7 @@ class StatsCollector:
 
                 grouped_durations[run_host_id].append(duration)
                 grouped_bandwidths[run_host_id].append(bandwidth)
+                breakpoint()
 
             agg = {}
             for run_host_id, durations in grouped_durations.items():
@@ -189,3 +193,27 @@ class StatsCollector:
 
             result[riscv] = agg
         return result
+
+    def gather_bw_per_core(self, num_transactions=None, transaction_size=None, risc=None, test_id=None):
+        dm_stats, _ = self.gather_analysis_stats()
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) < 2:
+        print("Usage: python stats_collector.py <path_to_log_csv>")
+        sys.exit(1)
+
+    file_path = sys.argv[1]
+    collector = StatsCollector(file_path, test_id_to_name={}, test_type_attributes={}, verbose=True)
+    dm_stats, aggregate_stats = collector.gather_analysis_stats()
+    for riscv, stats in aggregate_stats.items():
+        print(f"RISC-V Processor: {riscv}")
+        for run_host_id, data in stats.items():
+            print(f"  Run Host ID: {run_host_id}")
+            print(f"    Duration (cycles): {data['duration_cycles']}")
+            print(f"    Bandwidth (bytes/cycle): {data['bandwidth']}")
+            print(f"    Attributes: {data['attributes']}")
+            print(f"    All Durations: {data['all_durations']}")
+            print(f"    All Bandwidths: {data['all_bandwidths']}")
