@@ -24,7 +24,6 @@ permissions:
 
 jobs:
   create-tag:
-
     uses: ./.github/workflows/release-verify-or-create-tag.yaml
     with:
       fetch_depth: 0
