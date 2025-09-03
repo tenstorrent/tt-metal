@@ -88,7 +88,8 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
             if (!scalars.empty()) {
                 scalars.back().end = i;
             }
-            scalars.push_back({i, bfloat16(value).to_packed(), i});
+            // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
+            scalars.push_back({i, bfloat16::truncate(value).to_packed(), i});
             first_scalar = false;
         }
         last_pool_area = static_cast<uint32_t>(pool_area);
@@ -487,7 +488,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id_1,              // 10
         out_cb_id,                      // 11
         one_scalar_per_core,
-        num_of_pages_to_reserve_back};          // 12
+        num_of_pages_to_reserve_back};  // 12
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,

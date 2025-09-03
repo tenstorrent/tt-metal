@@ -13,11 +13,19 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
+    bcast/device/kernels/*
+    concat/device/kernels/*
     common/kernels/*
+    copy/device/kernels/*
     move/device/kernels/*
     permute/device/kernels/*
+    repeat/device/device/*
+    reshape_view/device/device/*
     sharded/device/kernels/*
+    slice/device/kernels/*
+    tilize_with_val_padding/device/kernels/*
     transpose/device/kernels/*
+    untilize/device/kernels/*
 )
 target_sources(
     ttnn_op_data_movement
@@ -26,12 +34,23 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
-            sharded/reshard/device/reshard_op.hpp
-            sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
-            sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp
+            bcast/bcast.hpp
+            bcast/bcast_types.hpp
+            concat/concat.hpp
             copy/device/copy_device_operation.hpp
+            permute/permute.hpp
+            repeat/repeat.hpp
             reshape_view/reshape.hpp
             reshape_view/reshape_common.hpp
+            sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
+            sharded/reshard/device/reshard_op.hpp
+            sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp
+            slice/slice.hpp
+            tilize_with_val_padding/tilize_with_val_padding.hpp
+            tilize_with_val_padding/tilize_with_val_padding_common.hpp
+            tilize_with_val_padding/device/tilize_with_val_padding_op.hpp
+            transpose/transpose.hpp
+            untilize/untilize.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}

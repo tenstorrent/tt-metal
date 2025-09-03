@@ -9,21 +9,27 @@ from loguru import logger
 
 import ttnn
 from models.utility_functions import run_for_wormhole_b0
-from models.experimental.efficientnetb0.demo.demo_utils import get_data_loader, get_batch
+from models.demos.utils.common_demo_utils import get_data_loader, get_batch, load_imagenet_dataset, get_mesh_mappers
 from models.experimental.efficientnetb0.runner.performant_runner import EfficientNetb0PerformantRunner
 from models.experimental.efficientnetb0.common import load_torch_model, EFFICIENTNETB0_L1_SMALL_SIZE
-from models.demos.utils.common_demo_utils import get_mesh_mappers
 
 
 def run_demo(
-    model_type, source, device, reset_seeds, batch_size_per_device, imagenet_label_dict, model_location_generator=None
+    model_type,
+    source,
+    device,
+    reset_seeds,
+    batch_size_per_device,
+    imagenet_label_dict,
+    model_location_generator=None,
+    resolution=224,
 ):
     logger.info("ImageNet-1k validation Dataset")
-    input_loc = str(model_location_generator("ImageNet_data"))
+    input_loc = load_imagenet_dataset(model_location_generator)
     num_devices = device.get_num_devices()
     batch_size = batch_size_per_device * num_devices
     data_loader = get_data_loader(input_loc, batch_size, 1)
-    input_tensor, labels = get_batch(data_loader)
+    input_tensor, labels = get_batch(data_loader, resolution=resolution)
 
     if model_type == "torch_model":
         torch_model = load_torch_model(model_location_generator)
@@ -38,7 +44,7 @@ def run_demo(
             ttnn.bfloat16,
             ttnn.bfloat16,
             model_location_generator=model_location_generator,
-            resolution=(224, 224),
+            resolution=(resolution, resolution),
             mesh_mapper=inputs_mesh_mapper,
             weights_mesh_mapper=weights_mesh_mapper,
             mesh_composer=outputs_mesh_composer,

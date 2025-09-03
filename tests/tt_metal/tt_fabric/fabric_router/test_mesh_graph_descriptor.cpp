@@ -29,7 +29,7 @@ TEST(MeshGraphDescriptorTests, ParsesFromTextProtoString) {
           express_connections: { src: 1 dst: 2 }
         }
 
-        top_level_instance: { mesh: { mesh_descriptor: "M0" id: 0 } }
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 
     EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
