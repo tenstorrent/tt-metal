@@ -59,7 +59,9 @@ struct AllGatherMatmulAsync {
         const ttnn::MeshCoordinate& mesh_coordinate,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor>& output_tensors) const;
+        std::vector<Tensor>& output_tensors,
+        const std::vector<GlobalSemaphore>& op_semaphores,
+        const GlobalSemaphore& barrier_semaphore) const;
     tt::tt_metal::operation::Hash compute_program_hash(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
@@ -96,8 +98,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
     uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
+    const GlobalSemaphore& barrier_semaphore,
+    bool do_sync,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
@@ -120,13 +122,13 @@ std::vector<Tensor> all_gather_matmul_async(
     const Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     uint32_t dim,
-    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     CoreCoord all_gather_core_grid_offset,
+    const std::optional<std::vector<GlobalSemaphore>>& multi_device_global_semaphore = std::nullopt,
+    bool do_sync = false,
     const std::optional<const Tensor>& bias = std::nullopt,
     uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config_ag = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     const std::optional<MemoryConfig>& memory_config_mm = std::nullopt,
     bool transpose_a = false,
