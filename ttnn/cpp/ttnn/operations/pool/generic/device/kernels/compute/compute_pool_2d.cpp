@@ -182,9 +182,7 @@ void MAIN {
                 }
             } else {
                 if constexpr (pack_untilize_reinit) {
-                    tensix_sync();
-                    pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
-                    tensix_sync();
+                    PACK((llk_pack_untilize_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces)));
                 }
 
                 pack_reconfig_data_format(out_cb_id);
@@ -195,9 +193,7 @@ void MAIN {
                     out_idx_cb_id, 1, 0, num_out_sticks, output_faces);
 
                 if constexpr (pack_untilize_reinit) {
-                    tensix_sync();
                     pack_untilize_uninit(out_cb_id);
-                    tensix_sync();
                 }
             }
             cb_push_back(out_cb_id, output_faces);
