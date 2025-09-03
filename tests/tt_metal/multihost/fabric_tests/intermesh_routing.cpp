@@ -174,7 +174,7 @@ TEST_F(IntermeshNanoExabox1x8FabricFixture, RandomizedIntermeshUnicastBwd) {
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     constexpr uint32_t num_iterations = 100;
-    std::vector<uint32_t> all_ranks = {0, 1, 2, 3, 4, 5, 6, 7};
+    std::vector<uint32_t> all_ranks = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
     for (uint32_t sender_rank = 0; sender_rank < *(distributed_context->size()); sender_rank++) {
         if (*(distributed_context->rank()) == sender_rank) {
             std::vector<uint32_t> recv_node_ranks;

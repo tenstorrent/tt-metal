@@ -234,6 +234,14 @@ class NanoExabox1x8FabricFixture : public Fixture {
             get_eth_coords_for_1x8_t3k(),
             get_eth_coords_for_1x8_t3k(),
             get_eth_coords_for_1x8_t3k(),
+            get_eth_coords_for_1x8_t3k(),
+            get_eth_coords_for_1x8_t3k(),
+            get_eth_coords_for_1x8_t3k(),
+            get_eth_coords_for_1x8_t3k(),
+            get_eth_coords_for_1x8_t3k(),
+            get_eth_coords_for_1x8_t3k(),
+            get_eth_coords_for_1x8_t3k(),
+            get_eth_coords_for_1x8_t3k(),
             get_eth_coords_for_1x8_t3k()};
     }
 };
