@@ -80,7 +80,7 @@ def test_perf_e2e_yolov4(device, batch_size, act_dtype, weight_dtype, resolution
 @pytest.mark.parametrize(
     "batch_size, model_name, expected_perf",
     [
-        (1, "yolov4", 99.9),
+        (1, "yolov4", 102),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
