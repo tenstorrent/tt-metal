@@ -30,7 +30,8 @@ jobs:
       CC: gcc-12
       CXX: g++-12
       TT_METAL_HOME: /usr/libexec/tt-metalium
-      TT_METAL_SIMULATOR: /work/sim
+      TT_METAL_SIMULATOR_HOME: /work/sim
+      TT_METAL_SIMULATOR: /work/sim/libttsim.so
       TT_METAL_SLOW_DISPATCH_MODE: 1
     steps:
 
@@ -63,13 +64,13 @@ jobs:
       - name: Build ttsim
         run: |
           cd /work/ttsim/src
-          ../scripts/make.py _out/release_wh/ttsim
+          ../scripts/make.py _out/release_wh/libttsim.so
 
       - name: Install ttsim
         run: |
           mkdir -p $TT_METAL_SIMULATOR
-          cp /work/ttsim/src/_out/release_wh/ttsim $TT_METAL_SIMULATOR/run.sh
-          cp $TT_METAL_HOME/tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml $TT_METAL_SIMULATOR/soc_descriptor.yaml
+          cp /work/ttsim/src/_out/release_wh/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          cp $TT_METAL_HOME/tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Build Metal Examples
         timeout-minutes: 5
