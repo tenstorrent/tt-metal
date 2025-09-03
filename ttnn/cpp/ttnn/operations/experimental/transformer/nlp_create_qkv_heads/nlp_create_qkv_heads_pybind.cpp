@@ -25,10 +25,8 @@ void bind_nlp_create_qkv_heads_template(pybind11::module& module, const transfor
                const std::optional<uint32_t> num_kv_heads,
                const bool transpose_k_heads,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<std::vector<std::optional<ttnn::Tensor>>>& optional_output_tensors,
-               QueueId queue_id) {
+               std::optional<std::vector<std::optional<ttnn::Tensor>>>& optional_output_tensors) {
                 return self(
-                    queue_id,
                     input_tensor_q,
                     input_tensor_kv,
                     num_heads,
@@ -44,8 +42,7 @@ void bind_nlp_create_qkv_heads_template(pybind11::module& module, const transfor
             pybind11::arg("num_kv_heads").noconvert() = std::nullopt,
             pybind11::arg("transpose_k_heads").noconvert() = true,
             pybind11::arg("memory_config").noconvert() = std::nullopt,
-            pybind11::arg("output_tensors").noconvert() = std::nullopt,
-            pybind11::arg("queue_id") = DefaultQueueId});
+            pybind11::arg("output_tensors").noconvert() = std::nullopt});
 };
 
 void bind_nlp_create_qkv_heads(pybind11::module& module) {

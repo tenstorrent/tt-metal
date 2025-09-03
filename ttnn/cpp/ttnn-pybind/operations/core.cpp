@@ -14,12 +14,13 @@
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::core {
 
 void py_module_types(py::module& module) {
-    py::enum_<ttnn::operations::compute_throttle_utils::ThrottleLevel>(module, "ThrottleLevel", R"doc(
+    py::enum_<compute_throttle_utils::ThrottleLevel>(module, "ThrottleLevel", R"doc(
         Enum for controlling compute throttling.
 
         Higher levels insert NOP instructions to reduce compute throughput:
@@ -31,12 +32,12 @@ void py_module_types(py::module& module) {
 
         Used to prevent di/dt (power supply current) issues on large core counts.
     )doc")
-        .value("NO_THROTTLE", ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
-        .value("LEVEL_1", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_1)
-        .value("LEVEL_2", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_2)
-        .value("LEVEL_3", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_3)
-        .value("LEVEL_4", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_4)
-        .value("LEVEL_5", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_5);
+        .value("NO_THROTTLE", compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
+        .value("LEVEL_1", compute_throttle_utils::ThrottleLevel::LEVEL_1)
+        .value("LEVEL_2", compute_throttle_utils::ThrottleLevel::LEVEL_2)
+        .value("LEVEL_3", compute_throttle_utils::ThrottleLevel::LEVEL_3)
+        .value("LEVEL_4", compute_throttle_utils::ThrottleLevel::LEVEL_4)
+        .value("LEVEL_5", compute_throttle_utils::ThrottleLevel::LEVEL_5);
 
     py::class_<DeviceComputeKernelConfig>(module, "DeviceComputeKernelConfig");
 
@@ -60,7 +61,7 @@ void py_module_types(py::module& module) {
             py::arg("fp32_dest_acc_en") = false,
             py::arg("packer_l1_acc") = false,
             py::arg("dst_full_sync_en") = false,
-            py::arg("throttle_level") = ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
+            py::arg("throttle_level") = compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
         .def_readwrite("math_fidelity", &WormholeComputeKernelConfig::math_fidelity)
         .def_readwrite("math_approx_mode", &WormholeComputeKernelConfig::math_approx_mode)
         .def_readwrite("fp32_dest_acc_en", &WormholeComputeKernelConfig::fp32_dest_acc_en)
@@ -86,12 +87,11 @@ void py_module(py::module& module) {
 
     module.def(
         "to_device",
-        py::overload_cast<const ttnn::Tensor&, MeshDevice*, const std::optional<MemoryConfig>&, QueueId>(
+        py::overload_cast<const ttnn::Tensor&, MeshDevice*, const std::optional<MemoryConfig>&>(
             &ttnn::operations::core::to_device),
         py::arg("tensor"),
         py::arg("device"),
         py::arg("memory_config") = std::nullopt,
-        py::arg("cq_id") = ttnn::DefaultQueueId,
         R"doc(
             Copy tensor from host to device.
 
@@ -99,7 +99,6 @@ void py_module(py::module& module) {
                 tensor (ttnn.Tensor): The tensor to be copied from host to device.
                 device (ttnn.Device | ttnn.MeshDevice): The target device where the tensor will be copied.
                 memory_config (ttnn.MemoryConfig, optional): The memory configuration to use. Defaults to `None`.
-                cq_id (int, optional): The command queue ID to use. Defaults to `0`.
 
             Returns:
                 ttnn.Tensor: The device tensor copy.
@@ -116,17 +115,12 @@ void py_module(py::module& module) {
         &ttnn::operations::core::from_device,
         py::arg("tensor"),
         py::arg("blocking") = true,
-        py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId,
         R"doc(
             Copy tensor from device to host.
 
             Args:
                 tensor (ttnn.Tensor): the tensor to be copied from device to host.
                 blocking (bool, optional): whether the operation should be blocked until the copy is complete. Defaults to `True`.
-
-            Keyword args:
-                cq_id (int, optional): the command queue ID to use. Defaults to `0`.
 
             Returns:
                 ttnn.Tensor: the host tensor copy.

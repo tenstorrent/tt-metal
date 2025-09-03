@@ -21,13 +21,13 @@ void bind_nlp_concat_heads_boltz(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor,
-               QueueId queue_id) { return self(queue_id, input_tensor, memory_config, optional_output_tensor); },
+               std::optional<ttnn::Tensor> optional_output_tensor) {
+                return self(input_tensor, memory_config, optional_output_tensor);
+            },
             py::arg("input_tensor").noconvert(),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("output_tensor") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::transformer::detail

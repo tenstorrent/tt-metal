@@ -39,17 +39,14 @@ void bind_concatenate_heads(py::module& module) {
                const ttnn::Tensor& input_tensor,
                const CoreCoord& compute_with_storage_grid_size,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor,
-               QueueId queue_id) {
-                return self(
-                    queue_id, input_tensor, compute_with_storage_grid_size, memory_config, optional_output_tensor);
+               std::optional<ttnn::Tensor> optional_output_tensor) {
+                return self(input_tensor, compute_with_storage_grid_size, memory_config, optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("compute_with_storage_grid_size").noconvert(),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("output_tensor") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::transformer::detail

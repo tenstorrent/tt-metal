@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/run_operation.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 #include "device/transpose_op.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -81,7 +80,6 @@ ttnn::Tensor transpose_nd(
 }  // namespace detail
 
 ttnn::Tensor ExecuteTranspose::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const int64_t& dim1,
     const int64_t& dim2,
@@ -149,7 +147,7 @@ ttnn::Tensor ExecuteTranspose::invoke(
 
 ttnn::Tensor ExecuteTranspose::invoke(
     const ttnn::Tensor& input_tensor, const int64_t& dim1, const int64_t& dim2, const std::optional<float>& pad_value) {
-    return invoke(DefaultQueueId, input_tensor, dim1, dim2, std::nullopt, pad_value);
+    return invoke(input_tensor, dim1, dim2, std::nullopt, pad_value);
 }
 
 }  // namespace ttnn::operations::data_movement

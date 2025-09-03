@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/queue_id.hpp"
-
 #include <tt-metalium/constants.hpp>
 
 #include "all_to_all_dispatch.hpp"
@@ -18,7 +16,6 @@
 namespace ttnn::operations::ccl {
 
 std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_mapping_tensor,

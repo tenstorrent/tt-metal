@@ -278,6 +278,7 @@ from ttnn.core import (
     dump_stack_trace_on_segfault,
     num_cores_to_corerangeset,
     num_cores_to_corerangeset_in_subcoregrids,
+    get_current_command_queue_id_for_thread,
 )
 
 import ttnn.reflection
@@ -285,6 +286,7 @@ import ttnn.database
 
 from ttnn.decorators import (
     attach_golden_function,
+    command_queue,
     create_module_if_not_exists,
     dump_operations,
     get_golden_function,

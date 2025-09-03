@@ -25,12 +25,9 @@ ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor);
 ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, int rank);
 
 ttnn::Tensor to_device(
-    const ttnn::Tensor& tensor,
-    MeshDevice* mesh_device,
-    const std::optional<MemoryConfig>& memory_config,
-    ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+    const ttnn::Tensor& tensor, MeshDevice* mesh_device, const std::optional<MemoryConfig>& memory_config);
 
-ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking = true);
 
 void deallocate(Tensor& tensor, bool force = true);
 
