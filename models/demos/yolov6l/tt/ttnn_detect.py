@@ -167,17 +167,13 @@ class TtDetect:
         reg_output_1 = ttnn.to_layout(reg_output_1, ttnn.TILE_LAYOUT)
         reg_output_2 = ttnn.to_layout(reg_output_2, ttnn.TILE_LAYOUT)
 
-        reg_output_0 = ttnn.permute(reg_output_0, (0, 2, 1, 3))
-        reg_output_1 = ttnn.permute(reg_output_1, (0, 2, 1, 3))
-        reg_output_2 = ttnn.permute(reg_output_2, (0, 2, 1, 3))
+        reg_output_0 = ttnn.permute(reg_output_0, (0, 1, 3, 2))
+        reg_output_1 = ttnn.permute(reg_output_1, (0, 1, 3, 2))
+        reg_output_2 = ttnn.permute(reg_output_2, (0, 1, 3, 2))
 
-        reg_output_0 = ttnn.softmax(reg_output_0, 1)
-        reg_output_1 = ttnn.softmax(reg_output_1, 1)
-        reg_output_2 = ttnn.softmax(reg_output_2, 1)
-
-        reg_output_0 = ttnn.permute(reg_output_0, (0, 2, 3, 1))
-        reg_output_1 = ttnn.permute(reg_output_1, (0, 2, 3, 1))
-        reg_output_2 = ttnn.permute(reg_output_2, (0, 2, 3, 1))
+        reg_output_0 = ttnn.softmax(reg_output_0, -1)
+        reg_output_1 = ttnn.softmax(reg_output_1, -1)
+        reg_output_2 = ttnn.softmax(reg_output_2, -1)
 
         reg_output_0 = self.proj_conv(reg_output_0)
         reg_output_1 = self.proj_conv(reg_output_1)
