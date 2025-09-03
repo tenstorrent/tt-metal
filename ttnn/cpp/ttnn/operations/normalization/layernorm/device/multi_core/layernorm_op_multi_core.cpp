@@ -1256,6 +1256,14 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         float32_reduction,
         legacy_rsqrt,
         num_blocks_second_stage};
+
+    if (use_welford) {
+        all_to_all_except_top_compute_compile_time_args.push_back(static_cast<uint32_t>(rms_norm));
+        all_to_all_except_top_compute_compile_time_args.push_back(static_cast<uint32_t>(b.has_value()));
+        not_all_to_all_compute_compile_time_args.push_back(static_cast<uint32_t>(rms_norm));
+        not_all_to_all_compute_compile_time_args.push_back(static_cast<uint32_t>(b.has_value()));
+    }
+
     // compute kernel
     std::string compute_kernel_file;
     if (is_pre_all_gather) {
@@ -1268,7 +1276,10 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             "layernorm_sharded_post_allgather.cpp";
     } else {
         compute_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp";
+            use_welford
+                ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
+                  "layernorm_sharded_welford.cpp"
+                : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp";
     }
     KernelHandle compute_kernels_id = -1;
     auto compute_kernels_id_all_to_all = CreateKernel(
