@@ -90,7 +90,6 @@ auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
 template <typename TraceID>
 uint64_t execute_time_and_release_trace(TraceID trace_id, MeshDevice* device) {
     try {
-        uint64_t duration = 0;
         std::array<uint64_t, NUM_TRACE_EXECUTIONS> durations;
 
         for (size_t i = 0; i < NUM_TRACE_EXECUTIONS + WARMUP_TRACE_EXECUTIONS; ++i) {
