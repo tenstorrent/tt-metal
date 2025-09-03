@@ -1350,31 +1350,6 @@ void SetRuntimeArgs(
     }
 }
 
-// void SetRuntimeArgs(
-//     IDevice* device,
-//     const std::shared_ptr<Kernel>& kernel,
-//     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-//     const std::shared_ptr<RuntimeArgs>& runtime_args) {
-//     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-//     detail::DispatchStateCheck(tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
-//     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgs, device, kernel, core_spec, runtime_args);
-//     SetRuntimeArgsImpl(kernel, core_spec, std::move(runtime_args), false);
-// }
-
-// void SetRuntimeArgs(
-//     IDevice* device,
-//     const std::shared_ptr<Kernel>& kernel,
-//     const std::vector<CoreCoord>& core_spec,
-//     const std::vector<std::shared_ptr<RuntimeArgs>>& runtime_args) {
-//     TT_FATAL(
-//         core_spec.size() == runtime_args.size(),
-//         "Mismatch between number of cores {} and number of runtime args {} getting updated",
-//         core_spec.size(),
-//         runtime_args.size());
-//     detail::DispatchStateCheck(tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
-//     SetRuntimeArgsImpl(kernel, core_spec, runtime_args, false);
-// }
-
 void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args) {
     ZoneScoped;
     if (runtime_args.size() != 0) {
