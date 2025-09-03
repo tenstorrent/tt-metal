@@ -153,7 +153,7 @@ void kernel_main() {
     uint32_t extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
     uint32_t out_block_hw_last = out_block_hw_normal;
-    const uint32_t num_reads_of_input = 3;
+    const uint32_t num_reads_of_input = 2;
     if constexpr(block_h % num_out_blocks != 0) {
         extra_out_block = true;
         num_out_blocks_padded++;
@@ -189,28 +189,26 @@ void kernel_main() {
                         out_block_hw_actual = out_block_hw_normal;
                     }
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
-                    if (cur_read_iteration == 0 || cur_read_iteration == 2) {
-                        const uint32_t src0_tile_bytes = get_tile_size(cb_in0);
-                        const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
-                        uint32_t l1_write_addr;
-                        l1_write_addr = get_write_ptr(cb_in0);
-                        cb_reserve_back(cb_in0, out_block_hw_normal);
-                        for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
-                            for (uint32_t nt = 0; nt < block_w; nt++) {
-                                noc_async_read_tile(
-                                    start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_b_offset +
-                                        index_g_offset,
-                                    src_a,
-                                    l1_write_addr);
-                                l1_write_addr += src0_tile_bytes;
-                                noc_async_read_barrier();
-                            }
+                    const uint32_t src0_tile_bytes = get_tile_size(cb_in0);
+                    const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
+                    uint32_t l1_write_addr;
+                    l1_write_addr = get_write_ptr(cb_in0);
+                    cb_reserve_back(cb_in0, out_block_hw_normal);
+                    for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
+                        for (uint32_t nt = 0; nt < block_w; nt++) {
+                            noc_async_read_tile(
+                                start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_b_offset +
+                                    index_g_offset,
+                                src_a,
+                                l1_write_addr);
+                            l1_write_addr += src0_tile_bytes;
+                            noc_async_read_barrier();
                         }
-                        cb_push_back(cb_in0, out_block_hw_normal);
-                        DPRINT << "input sent for iteration: " << cur_read_iteration << " out_block_index: " << out_block_index << " out of " << num_out_blocks_padded << ENDL();
                     }
+                    cb_push_back(cb_in0, out_block_hw_normal);
+                    DPRINT << "input sent for iteration: " << cur_read_iteration << " out_block_index: " << out_block_index << " out of " << num_out_blocks_padded << ENDL();
 #endif
-                    if (cur_read_iteration == 2) {
+                    if (cur_read_iteration == 1) {
                         const auto dst_a = TensorAccessor(out_args, out_addr, single_tile_size_bytes);
 
                         // add or copy with previous output results
