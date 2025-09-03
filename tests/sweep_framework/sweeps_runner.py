@@ -272,7 +272,9 @@ def get_github_pipeline_id() -> Optional[int]:
     Prefer GitHub Actions run id if present; otherwise fall back to generic CI_PIPELINE_ID.
     Returns an int when available, otherwise None.
     """
-    run_id = os.getenv("GITHUB_RUN_ID") or os.getenv("CI_PIPELINE_ID")
+    run_id = os.getenv("GITHUB_RUN_NUMBER")
+    # we use GITHUB_RUN_NUMBER because it is human readable on GH.
+    # alternative: os.getenv("GITHUB_RUN_ID") or os.getenv("CI_PIPELINE_ID")
     if not run_id:
         return None
     try:
