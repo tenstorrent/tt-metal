@@ -88,9 +88,9 @@ public:
         StateDependencies::StateId state = StateDependencies::StateId{0});
 
     void deallocate_buffer(DeviceAddr address, StateDependencies::StateId state = StateDependencies::StateId{0});
-    void deallocate_all(StateDependencies::StateId state = StateDependencies::StateId{0});
+    void deallocate_all();
 
-    void clear(StateDependencies::StateId state = StateDependencies::StateId{0});
+    void clear();
 
     std::optional<DeviceAddr> lowest_occupied_address(
         uint32_t bank_id, StateDependencies::StateId state = StateDependencies::StateId{0}) const;

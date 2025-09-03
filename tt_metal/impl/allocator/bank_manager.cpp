@@ -379,25 +379,25 @@ void BankManager::deallocate_buffer(DeviceAddr address, BankManager::StateDepend
     allocated_buffers_[state.value].erase(address);
 }
 
-void BankManager::deallocate_all(BankManager::StateDependencies::StateId state) {
-    this->assert_valid_state(state);
-    for (DeviceAddr addr : allocated_buffers_[state.value]) {
-        this->deallocate_buffer(addr, state);
+void BankManager::deallocate_all() {
+    for (const auto state : state_dependencies_.states()) {
+        for (DeviceAddr addr : allocated_buffers_[state.value]) {
+            this->deallocate_buffer(addr, state);
+        }
     }
 }
 
-void BankManager::clear(BankManager::StateDependencies::StateId state) {
-    this->assert_valid_state(state);
-    if (allocators_[state.value]) {
-        allocators_[state.value]->clear();
-        allocated_buffers_[state.value].clear();
+void BankManager::clear() {
+    for (const auto state : state_dependencies_.states()) {
+        if (allocators_[state.value]) {
+            allocators_[state.value]->clear();
+            allocated_buffers_[state.value].clear();
+        }
     }
 }
 
 BankManager::~BankManager() {
-    for (const auto state : state_dependencies_.states()) {
-        this->deallocate_all(state);
-    }
+    this->deallocate_all();
     allocators_.clear();
     bank_id_to_bank_offset_.clear();
 }
