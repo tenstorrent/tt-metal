@@ -124,14 +124,16 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
     uint32_t outer_dims_from_forward = std::max((int32_t)global_output_outer_dim_end - forward_device_start + 1, 0);
     uint32_t outer_dims_to_keep_start =
         std::max((int32_t)global_output_outer_dim_start - (int32_t)global_input_outer_dim_start, 0);
-    uint32_t outer_dims_to_keep_end = std::min(outer_dims_to_keep_start + output_outer_dim_size, input_outer_dim_size);
+    uint32_t outer_dims_to_keep_end = std::min(
+        outer_dims_to_keep_start - outer_dims_from_backward + output_outer_dim_size - 1, global_input_outer_dim_end);
     int32_t backward_device_output_end =
-        std::max((int32_t)global_output_outer_dim_start - 1, (int32_t)output_dim_offset);
+        std::max((int32_t)global_output_outer_dim_start - 1, (int32_t)output_dim_offset - 1);
     uint32_t outer_dims_to_backward =
-        std::max(backward_device_output_end - (int32_t)global_input_outer_dim_start + 1, 0);
+        is_first_device ? 0 : std::max(backward_device_output_end - (int32_t)global_input_outer_dim_start + 1, 0);
     int32_t forward_device_output_start =
         std::min(global_output_outer_dim_end + 1, output_outer_dim_size * ring_size - 1);
-    uint32_t outer_dims_to_forward = std::min((int32_t)global_input_outer_dim_end - forward_device_output_start + 1, 0);
+    uint32_t outer_dims_to_forward =
+        is_last_device ? 0 : std::max((int32_t)global_input_outer_dim_end - forward_device_output_start + 1, 0);
 
     /****TODO BARRIER SEMAPHORE****/
     // auto [unicast_forward_args, unicast_backward_args] =
