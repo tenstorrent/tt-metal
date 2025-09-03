@@ -442,12 +442,11 @@ Board create_board(const std::string& board_name) {
         case BoardType::P300: return P300();
         case BoardType::P150: return P150();
         case BoardType::N150: return N150();
+        // TODO: Uncomment this once BH_UBB is finalized and has an enum value in BoardType
         // case BoardType::BH_UBB:
         //     return BH_UBB();
         default: throw std::runtime_error("Unknown board type: " + board_name);
     }
-
-    throw std::runtime_error("Unknown board type: " + board_name);
 }
 
 }  // namespace tt::scaleout_tools

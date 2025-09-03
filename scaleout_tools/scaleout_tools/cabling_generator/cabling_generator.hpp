@@ -8,11 +8,7 @@
 #include <string>
 #include <utility>
 
-#include <tt_stl/caseless_comparison.hpp>
-#include <tt_stl/reflection.hpp>
-#include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
-#include <enchantum/enchantum.hpp>
 #include <scaleout_tools/board/board.hpp>
 
 namespace tt::scaleout_tools {
@@ -65,17 +61,8 @@ struct PhysicalPortConnection {
 };
 
 // Overload operator<< for readable test output
-inline std::ostream& operator<<(std::ostream& os, const PhysicalChannelConnection& conn) {
-    os << "PhysicalChannelConnection{hostname='" << conn.hostname << "', tray_id=" << *conn.tray_id
-       << ", asic_location=" << conn.asic_location << ", channel_id=" << *conn.channel_id << "}";
-    return os;
-}
-inline std::ostream& operator<<(std::ostream& os, const PhysicalPortConnection& conn) {
-    os << "PhysicalPortConnection{hostname='" << conn.hostname << "', aisle='" << conn.aisle << "', rack=" << conn.rack
-       << ", shelf_u=" << conn.shelf_u << ", port_type=" << enchantum::to_string(conn.port_type)
-       << ", port_id=" << *conn.port_id << "}";
-    return os;
-}
+std::ostream& operator<<(std::ostream& os, const PhysicalChannelConnection& conn);
+std::ostream& operator<<(std::ostream& os, const PhysicalPortConnection& conn);
 
 using LogicalChipConnectionPair = std::pair<LogicalChipConnection, LogicalChipConnection>;
 
@@ -126,10 +113,6 @@ private:
         const std::string& path_prefix,
         std::unordered_map<HostId, std::string>& host_to_pod_path);
 
-    // Simple path resolution for connection processing
-    std::pair<Pod&, HostId> resolve_pod_from_path(
-        ttsl::Span<const std::string> path, std::shared_ptr<ResolvedGraphInstance> graph = nullptr);
-
     // Utility function to generate logical chip connections from cluster hierarchy
     void generate_logical_chip_connections();
 
@@ -154,27 +137,12 @@ private:
 // Hash specializations
 namespace std {
 template <>
-struct hash<tt::scaleout_tools::LogicalChipConnection> {
-    std::size_t operator()(const tt::scaleout_tools::LogicalChipConnection& conn) const {
-        return tt::stl::hash::hash_objects_with_default_seed(
-            *conn.host_id, conn.tray_id, conn.asic_channel.asic_location, conn.asic_channel.channel_id);
-    }
-};
+struct hash<tt::scaleout_tools::LogicalChipConnection>;
 
 template <>
-struct hash<tt::scaleout_tools::PhysicalChannelConnection> {
-    std::size_t operator()(const tt::scaleout_tools::PhysicalChannelConnection& conn) const {
-        return tt::stl::hash::hash_objects_with_default_seed(
-            conn.hostname, *conn.tray_id, conn.asic_location, conn.channel_id);
-    }
-};
+struct hash<tt::scaleout_tools::PhysicalChannelConnection>;
 
 template <>
-struct hash<tt::scaleout_tools::PhysicalPortConnection> {
-    std::size_t operator()(const tt::scaleout_tools::PhysicalPortConnection& conn) const {
-        return tt::stl::hash::hash_objects_with_default_seed(
-            conn.hostname, conn.aisle, conn.rack, conn.shelf_u, conn.port_type, *conn.port_id);
-    }
-};
+struct hash<tt::scaleout_tools::PhysicalPortConnection>;
 
 }  // namespace std
