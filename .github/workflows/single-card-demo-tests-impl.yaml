@@ -170,6 +170,7 @@ jobs:
       HF_DATASETS_CACHE: ~/.cache/huggingface/datasets
       HF_METRICS_CACHE: ~/.cache/huggingface/metrics
       HF_DATASETS_DOWNLOADED_EVALUATE_PATH: ~/.cache/huggingface/evaluate/downloads
+      HF_MODULES_CACHE: ~/.cache/huggingface/modules
     runs-on: >-
       ${{
         matrix.test-group.civ2-compatible == true
@@ -230,6 +231,7 @@ jobs:
             -e HF_DATASETS_CACHE=~/.cache/huggingface/datasets
             -e HF_METRICS_CACHE=~/.cache/huggingface/metrics
             -e HF_DATASETS_DOWNLOADED_EVALUATE_PATH=~/.cache/huggingface/evaluate/downloads
+            -e HF_MODULES_CACHE=~/.cache/huggingface/modules
             -v /mnt/MLPerf:/mnt/MLPerf:ro
             --cap-add=ALL
             --security-opt seccomp=unconfined
