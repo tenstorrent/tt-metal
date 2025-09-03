@@ -44,7 +44,10 @@ class Plotter:
             # For virtual channels tests, use two plots (1x2 grid) for NOC 0 and NOC 1
             config["nrows_per_figure"] = 1
             config["ncols_per_figure"] = 2
-
+        if "Direct Write" in test_name:
+            # For direct write tests, use one plot (1x1 grid)
+            config["nrows_per_figure"] = 1
+            config["ncols_per_figure"] = 1
         return config
 
     def plot_dm_stats(self):
@@ -360,7 +363,7 @@ class Plotter:
     def plot_bandwidth_direct_write_address_patern(self, ax, data):
         x_key = "num_transactions"
         y_key = "bandwidth"
-        series_keys = ["stateful", "same_dest"]
+        series_keys = ["stateful", "same_dest", "same_value"]
 
         title = "Number of Transactions vs Bandwidth"
         xlabel = "Number of Transactions"
@@ -372,7 +375,7 @@ class Plotter:
             x_key=x_key,
             y_key=y_key,
             series_keys=series_keys,
-            label_format=lambda combo, keys: f"{'Stateful' if combo[0] else 'Non-stateful'}, {'Same destinations' if combo[1] else 'Different destinations'}",
+            label_format=lambda combo, keys: f"{'Stateful' if combo[0] else 'Non-stateful'}, {'Same destinations' if combo[1] else 'Different destinations'}, {'Same value' if combo[2] else 'Different values'}",
             title=title,
             xlabel=xlabel,
             ylabel=ylabel,

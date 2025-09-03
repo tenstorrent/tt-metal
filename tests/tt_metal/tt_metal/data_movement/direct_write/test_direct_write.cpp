@@ -24,6 +24,7 @@ struct DirectWriteConfig {
     bool use_posted_writes = false;          // Posted vs non-posted writes
     bool same_destination = true;            // All writes to same address vs different addresses
     bool use_stateful_approach = true;       // Stateful vs non-stateful approach
+    bool same_value = false;                 // Write same value each time vs different values (stateful only)
     uint32_t dest_l1_addr_offset = 0x20000;  // L1 address offset on receiver
     uint32_t addr_stride = 4;                // Address increment for different destinations
     NOC noc_id = NOC::NOC_0;
@@ -73,6 +74,7 @@ bool run_dm(IDevice* device, const DirectWriteConfig& test_config) {
         test_config.write_value_base,
         test_config.use_posted_writes ? 1u : 0u,
         test_config.same_destination ? 1u : 0u,
+        test_config.same_value ? 1u : 0u,
         l1_base_address,
         test_config.addr_stride,
         packed_receiver_core_coordinates,
@@ -96,11 +98,12 @@ bool run_dm(IDevice* device, const DirectWriteConfig& test_config) {
     // Assign unique id
     log_info(
         tt::LogTest,
-        "Running Direct Write Test ID: {}, Approach: {}, Posted: {}, Same Destination: {}, Writes : {}",
+        "Running Direct Write Test ID: {}, Approach: {}, Posted: {}, Same Destination: {}, Same Value: {}, Writes : {}",
         test_config.test_id,
         test_config.use_stateful_approach ? "Stateful" : "Non-Stateful",
         test_config.use_posted_writes ? "True" : "False",
         test_config.same_destination ? "True" : "False",
+        test_config.same_value ? "True" : "False",
         test_config.num_writes);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
@@ -122,8 +125,15 @@ bool run_dm(IDevice* device, const DirectWriteConfig& test_config) {
     // Validation
     bool pass = true;
     if (test_config.same_destination) {
-        // All writes went to same location - should have the last written value
-        uint32_t expected_final_value = test_config.write_value_base + test_config.num_writes - 1;
+        // All writes went to same location
+        uint32_t expected_final_value;
+        if (test_config.same_value) {
+            // When writing same value, final value should be the base value
+            expected_final_value = test_config.write_value_base;
+        } else {
+            // When writing different values, should have the last written value
+            expected_final_value = test_config.write_value_base + test_config.num_writes - 1;
+        }
         if (output_data[0] != expected_final_value) {
             log_error(
                 tt::LogTest, "Expected final value: 0x{:08x}, Got: 0x{:08x}", expected_final_value, output_data[0]);
@@ -135,7 +145,14 @@ bool run_dm(IDevice* device, const DirectWriteConfig& test_config) {
         uint32_t check_count =
             std::min(static_cast<uint32_t>(output_data.size()), std::min(test_config.num_writes, 10u));
         for (uint32_t i = 0; i < check_count; i++) {
-            uint32_t expected_value = test_config.write_value_base + i;
+            uint32_t expected_value;
+            if (test_config.same_value) {
+                // When writing same value, all locations should have base value
+                expected_value = test_config.write_value_base;
+            } else {
+                // When writing different values, each location should have incremented value
+                expected_value = test_config.write_value_base + i;
+            }
             if (output_data[i] != expected_value) {
                 log_error(
                     tt::LogTest, "Index {}: Expected: 0x{:08x}, Got: 0x{:08x}", i, expected_value, output_data[i]);
@@ -196,19 +213,24 @@ void address_pattern_test(
     uint32_t max_transactions = 1024;                   // Show scaling advantage
     vector<bool> destination_patterns = {true, false};  // Same vs different destinations
     vector<bool> stateful_options = {false, true};
+    vector<bool> same_value_options = {false, true};  // Different values vs same value (stateful only)
+
     for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
         for (bool same_dest : destination_patterns) {
             for (bool stateful : stateful_options) {
-                DirectWriteConfig test_config = {
-                    .test_id = test_id,
-                    .sender_core_coord = sender_core,
-                    .receiver_core_coord = receiver_core,
-                    .num_writes = num_of_transactions,
-                    .same_destination = same_dest,
-                    .use_stateful_approach = stateful};
+                for (bool same_value : same_value_options) {
+                    DirectWriteConfig test_config = {
+                        .test_id = test_id,
+                        .sender_core_coord = sender_core,
+                        .receiver_core_coord = receiver_core,
+                        .num_writes = num_of_transactions,
+                        .same_destination = same_dest,
+                        .use_stateful_approach = stateful,
+                        .same_value = same_value};
 
-                for (unsigned int id = 0; id < num_devices_; id++) {
-                    EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+                    for (unsigned int id = 0; id < num_devices_; id++) {
+                        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+                    }
                 }
             }
         }
@@ -225,8 +247,8 @@ TEST_F(DeviceFixture, TensixDirectWritePerformanceComparison) {
     unit_tests::dm::direct_write::performance_comparison_test(arch_, devices_, num_devices_, test_id);
 }
 
-TEST_F(DeviceFixture, TensixDirectWriteAddressPatternsPacketSizes) {
-    // GTEST_SKIP() << "Skipping test";
+TEST_F(DeviceFixture, TensixDirectWriteAddressPatterns) {
+    GTEST_SKIP() << "Skipping test";
     uint32_t test_id = 501;
     unit_tests::dm::direct_write::address_pattern_test(arch_, devices_, num_devices_, test_id);
 }

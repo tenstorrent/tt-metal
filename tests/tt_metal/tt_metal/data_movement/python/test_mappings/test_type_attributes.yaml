@@ -12,5 +12,6 @@ direct_write:
   attributes:
     "Posted writes": "posted"
     "Same destination": "same_dest"
+    "Same value": "same_value"
     "NOC Index": "noc_index"
     "Stateful": "stateful"
