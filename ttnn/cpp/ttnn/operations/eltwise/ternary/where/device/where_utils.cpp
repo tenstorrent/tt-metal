@@ -189,9 +189,13 @@ WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const 
         return WhereBroadcastType::NONE;
     }
 
-    // Check for outer broadcast (all dimensions match)
+    // Check for outer broadcast (all dimensions match) - TTS only supports this when ranks are equal
     if ((predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-2] == true_shape[-2])) {
-        return WhereBroadcastType::OUTER_BCAST;
+        if (predicate_shape.rank() == true_shape.rank()) {
+            return WhereBroadcastType::OUTER_BCAST;
+        } else {
+            return WhereBroadcastType::INVALID_BCAST;
+        }
     }
 
     bool same_width = (predicate_shape[-1] == true_shape[-1]);
@@ -233,13 +237,73 @@ WhereBroadcastType get_broadcast_type(
         return WhereBroadcastType::NONE;
     }
 
-    if ((predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]) &&
-        (predicate_shape[-2] == true_shape[-2]) && (predicate_shape[-2] == false_shape[-2])) {
-        return WhereBroadcastType::OUTER_BCAST;
+    // Check for OUTER_BCAST: only for TTT variant since TTS doesn't have OUTER_BCAST kernel support
+    if (!false_shape.empty()) {
+        // For TTT variant: shapes can be broadcasted to match predicate
+        bool can_broadcast = true;
+
+        // Check if true_shape can be broadcasted to predicate_shape
+        if (true_shape.rank() > predicate_shape.rank()) {
+            can_broadcast = false;  // Cannot broadcast to smaller rank
+        } else {
+            // Check from the end: dimensions must either match or be 1 in the smaller tensor
+            for (int i = 0; i < true_shape.rank(); ++i) {
+                int pred_dim = predicate_shape[predicate_shape.rank() - 1 - i];
+                int true_dim = true_shape[true_shape.rank() - 1 - i];
+                if (true_dim != 1 && true_dim != pred_dim) {
+                    can_broadcast = false;
+                    break;
+                }
+            }
+        }
+
+        // Check if false_shape can be broadcasted
+        if (false_shape.rank() > predicate_shape.rank()) {
+            can_broadcast = false;
+        } else {
+            for (int i = 0; i < false_shape.rank(); ++i) {
+                int pred_dim = predicate_shape[predicate_shape.rank() - 1 - i];
+                int false_dim = false_shape[false_shape.rank() - 1 - i];
+                if (false_dim != 1 && false_dim != pred_dim) {
+                    can_broadcast = false;
+                    break;
+                }
+            }
+        }
+
+        // For OUTER_BCAST, the last two dimensions (height and width) must match exactly
+        // OUTER_BCAST should only be used for broadcasting in outer dimensions (-5, -4, -3)
+        if (can_broadcast) {
+            const bool height_matches =
+                (predicate_shape[-2] == true_shape[-2]) && (predicate_shape[-2] == false_shape[-2]);
+            const bool width_matches =
+                (predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]);
+
+            if (height_matches && width_matches) {
+                return WhereBroadcastType::OUTER_BCAST;
+            }
+        }
     }
 
-    bool same_width = (predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]);
-    bool same_height = (predicate_shape[-2] == true_shape[-2]) && (predicate_shape[-2] == false_shape[-2]);
+    bool same_width =
+        (predicate_shape[-1] == true_shape[-1]) && (false_shape.empty() || predicate_shape[-1] == false_shape[-1]);
+    bool same_height =
+        (predicate_shape[-2] == true_shape[-2]) && (false_shape.empty() || predicate_shape[-2] == false_shape[-2]);
+
+    // For TTS cases where ranks differ but dimensions match, use NO_BCAST
+    // This allows the operation to work with the existing NO_BCAST kernel
+    // which was working before our COL_BCAST changes
+    bool same_rank = (predicate_shape.rank() == true_shape.rank()) &&
+                     (false_shape.empty() || predicate_shape.rank() == false_shape.rank());
+
+    // If ranks differ but last 2 dimensions match, let it fall through to NO_BCAST
+    // This preserves the original working behavior for TTS cases
+    if (!same_rank && same_width && same_height) {
+        // Don't classify as COL_BCAST, let it use NO_BCAST kernel which was working
+        // The NO_BCAST kernel handles the actual broadcasting at runtime
+        // Return early to avoid INVALID_BCAST
+        return WhereBroadcastType::NONE;
+    }
 
     // Multi-dimensional ROW and COL broadcast is not supported for now
     if (!same_height && !same_width) {
@@ -249,11 +313,11 @@ WhereBroadcastType get_broadcast_type(
     // Get last dimension sizes
     auto pred_w = predicate_shape[-1];
     auto true_w = true_shape[-1];
-    auto false_w = false_shape[-1];
+    auto false_w = false_shape.empty() ? 1 : false_shape[-1];  // Default to 1 for scalar
 
     auto pred_h = predicate_shape[-2];  // height (second-to-last dimension)
     auto true_h = true_shape[-2];
-    auto false_h = false_shape[-2];
+    auto false_h = false_shape.empty() ? 1 : false_shape[-2];  // Default to 1 for scalar
 
     if (!same_height) {
         // Check for row broadcast patterns first (height dimension differs)

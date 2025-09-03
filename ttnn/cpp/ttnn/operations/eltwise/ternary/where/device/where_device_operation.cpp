@@ -68,6 +68,7 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
     if (args.where_variant == WhereVariant::TTT) {
         auto& true_shape = value_true_tensor.value().logical_shape();
         auto& false_shape = value_false_tensor.value().logical_shape();
+
         if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::NONE ||
             broadcast_type == ttnn::operations::ternary::WhereBroadcastType::OUTER_BCAST) {
             const bool is_W_same = (predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]);
@@ -81,7 +82,30 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
                 true_shape,
                 false_shape);
         }
-        // If broadcast_type is not NONE, then shapes are broadcast-compatible, validation passes
+        // For COL_BCAST and ROW_BCAST cases, validate that the broadcast is valid
+        else if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::COL_BCAST) {
+            // For COL_BCAST, width can differ but height must match
+            const bool is_H_same = (predicate_shape[-2] == true_shape[-2]) && (predicate_shape[-2] == false_shape[-2]);
+            TT_FATAL(
+                is_H_same,
+                "Where TTT COL_BCAST operation requires H to match. "
+                "Predicate: {}, True_tensor: {}, False_tensor: {}",
+                predicate_shape,
+                true_shape,
+                false_shape);
+        } else if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::ROW_BCAST) {
+            // For ROW_BCAST, height can differ but width must match
+            const bool is_W_same = (predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]);
+            TT_FATAL(
+                is_W_same,
+                "Where TTT ROW_BCAST operation requires W to match. "
+                "Predicate: {}, True_tensor: {}, False_tensor: {}",
+                predicate_shape,
+                true_shape,
+                false_shape);
+        }
+        // If broadcast_type is not NONE/OUTER_BCAST/COL_BCAST/ROW_BCAST, then shapes are broadcast-compatible,
+        // validation passes
     } else if (args.where_variant == WhereVariant::TTS) {
         // For TTS, validate broadcast compatibility instead of requiring exact shape match
         auto broadcast_type = args.broadcast_type;

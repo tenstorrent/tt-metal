@@ -606,6 +606,12 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
 
             pred_is_bcast = (pred_w == 1 && true_w > 1);
             true_is_bcast = (true_w == 1 && pred_w > 1);
+
+            // Check for multi-dimensional broadcasting: if ranks differ, true tensor needs broadcasting
+            if (pred_shape.rank() != true_shape.rank()) {
+                true_is_bcast = true;
+            }
+
             false_is_bcast = false;  // False is scalar for TTS
         } else {
             // TTT case
@@ -617,6 +623,27 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             pred_is_bcast = (pred_w == 1 && (true_w > 1 || false_w > 1));
             true_is_bcast = (true_w == 1 && (pred_w > 1 || false_w > 1));
             false_is_bcast = (false_w == 1 && (pred_w > 1 || true_w > 1));
+        }
+    } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
+        // Determine which tensor is actually broadcast based on logical shapes (not padded)
+        auto pred_shape = predicate_tensor.logical_shape();
+        auto true_shape = value_true_tensor.value().logical_shape();
+
+        if (variant == WhereVariant::TTT) {
+            // TTT case - check height dimension (second-to-last)
+            auto false_shape = value_false_tensor.value().logical_shape();
+            auto pred_h = pred_shape[pred_shape.rank() - 2];
+            auto true_h = true_shape[true_shape.rank() - 2];
+            auto false_h = false_shape[false_shape.rank() - 2];
+
+            pred_is_bcast = (pred_h == 1 && (true_h > 1 || false_h > 1));
+            true_is_bcast = (true_h == 1 && (pred_h > 1 || false_h > 1));
+            false_is_bcast = (false_h == 1 && (pred_h > 1 || true_h > 1));
+        } else {
+            // TTS case - not currently supported for row broadcast
+            pred_is_bcast = false;
+            true_is_bcast = false;
+            false_is_bcast = false;
         }
     }
 
