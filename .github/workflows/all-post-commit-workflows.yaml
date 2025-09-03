@@ -11,7 +11,7 @@ on:
         required: false
         default: "22.04"
         type: string
-      NIGHTLY:
+      nightly:
         required: false
         default: false
         type: boolean
@@ -92,7 +92,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      NIGHTLY: ${{ inputs.NIGHTLY }}
+      nightly: ${{ inputs.nightly }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
     needs: build-artifact
@@ -181,7 +181,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      NIGHTLY: ${{ inputs.NIGHTLY }}
+      nightly: ${{ inputs.nightly }}
   tt-train-cpp-unit-tests:
     needs: build-artifact
     secrets: inherit

@@ -26,7 +26,7 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
-      NIGHTLY:
+      nightly:
         required: false
         default: false
         type: boolean
@@ -96,7 +96,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           mkdir -p generated/test_reports
-          if [ "${{ inputs.NIGHTLY }}" = "true" ]; then
+          if [ "${{ inputs.nightly }}" = "true" ]; then
             GTEST_FILTER=""
           else
             GTEST_FILTER='--gtest_filter=*-*NIGHTLY_*'
