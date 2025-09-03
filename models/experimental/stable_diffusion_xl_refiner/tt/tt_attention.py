@@ -12,19 +12,11 @@ class TtAttention(LightweightModule):
         state_dict,
         module_path,
         heads: int,
-        query_dim: int,
-        out_dim: int = None,
     ):
         super().__init__()
         self.device = device
 
         self.heads = heads
-
-        self.inner_dim = out_dim
-        self.inner_kv_dim = self.inner_dim
-        self.query_dim = query_dim
-        self.out_dim = out_dim if out_dim is not None else query_dim
-        self.head_dim = self.out_dim // self.heads
 
         q_weights = state_dict[f"{module_path}.to_q.weight"].unsqueeze(0).unsqueeze(0)
         k_weights = state_dict[f"{module_path}.to_k.weight"].unsqueeze(0).unsqueeze(0)
@@ -74,7 +66,7 @@ class TtAttention(LightweightModule):
                 self.tt_qkv_weights,
                 dtype=ttnn.bfloat16,
             )
-            qkv_fused = ttnn.sharded_to_interleaved(qkv_fused, ttnn.L1_MEMORY_CONFIG)
+            qkv_fused = ttnn.sharded_to_interleaved(qkv_fused, ttnn.DRAM_MEMORY_CONFIG)
 
             (
                 q_heads,
@@ -88,17 +80,17 @@ class TtAttention(LightweightModule):
             q_heads = ttnn.matmul(
                 hidden_states,
                 self.tt_q_weights,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             k_heads = ttnn.matmul(
                 encoder_hidden_states,
                 self.tt_k_weights,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             v_heads = ttnn.matmul(
                 encoder_hidden_states,
                 self.tt_v_weights,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
             q_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -132,7 +124,7 @@ class TtAttention(LightweightModule):
             is_causal=False,
             attn_mask=attention_mask,
         )
-        hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
+        hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         hidden_states = ttnn.linear(
             hidden_states,
