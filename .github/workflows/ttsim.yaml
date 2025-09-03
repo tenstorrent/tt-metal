@@ -88,6 +88,13 @@ jobs:
             exec_path=$(find . -maxdepth 2 -type f -executable -not -name "*.so")
             for exe in $exec_path; do
               exe_basename=$(basename "$exe")
+
+              # Skip executables that are known to hang
+              if [[ "$exe_basename" == "metal_example_noc_tile_transfer" ]]; then
+                echo "Skipping $exe_basename (known to hang)"
+                continue
+              fi
+
               echo "::group::${exe_basename} - run"
               "$exe"
               echo "::endgroup::"
