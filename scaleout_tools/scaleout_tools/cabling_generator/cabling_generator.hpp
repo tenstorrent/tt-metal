@@ -79,7 +79,7 @@ struct ResolvedGraphInstance {
     std::string template_name;
     std::string instance_name;
     std::unordered_map<std::string, Node> nodes;  // Direct node children (by name)
-    std::unordered_map<std::string, std::shared_ptr<ResolvedGraphInstance>> subgraphs;  // Nested graph children
+    std::unordered_map<std::string, std::unique_ptr<ResolvedGraphInstance>> subgraphs;  // Nested graph children
 
     // All connections within this graph instance
     std::unordered_map<
@@ -109,24 +109,24 @@ private:
 
     // Recursively collect all host_id assignments with their node paths
     void collect_host_assignments(
-        std::shared_ptr<ResolvedGraphInstance> graph,
+        const std::unique_ptr<ResolvedGraphInstance>& graph,
         const std::string& path_prefix,
         std::unordered_map<HostId, std::string>& host_to_node_path);
 
     // Utility function to generate logical chip connections from cluster hierarchy
     void generate_logical_chip_connections();
 
-    void generate_connections_from_resolved_graph(std::shared_ptr<ResolvedGraphInstance> graph);
+    void generate_connections_from_resolved_graph(const std::unique_ptr<ResolvedGraphInstance>& graph);
 
     void populate_boards_by_host_tray();
 
-    void populate_boards_from_resolved_graph(std::shared_ptr<ResolvedGraphInstance> graph);
+    void populate_boards_from_resolved_graph(const std::unique_ptr<ResolvedGraphInstance>& graph);
 
     // Caches for optimization
     std::unordered_map<std::string, Board> board_templates_;
     std::unordered_map<std::string, Node> node_templates_;  // Templates with host_id=0
 
-    std::shared_ptr<ResolvedGraphInstance> root_instance_;
+    std::unique_ptr<ResolvedGraphInstance> root_instance_;
     std::unordered_map<std::pair<HostId, TrayId>, const Board*, HostTrayHasher> boards_by_host_tray_;
     std::vector<LogicalChipConnectionPair> chip_connections_;
     std::vector<Host> deployment_hosts_;

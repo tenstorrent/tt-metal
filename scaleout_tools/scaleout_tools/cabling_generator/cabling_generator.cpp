@@ -143,14 +143,14 @@ Node build_node(
 }
 
 // Build resolved graph instance from template and concrete host mappings
-std::shared_ptr<ResolvedGraphInstance> build_graph_instance(
+std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
     const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
     const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
     const std::string& instance_name,
     std::unordered_map<std::string, Node>& node_templates,
     std::unordered_map<std::string, Board>& board_templates) {
-    auto resolved = std::make_shared<ResolvedGraphInstance>();
+    auto resolved = std::make_unique<ResolvedGraphInstance>();
     resolved->template_name = graph_instance.template_name();
     resolved->instance_name = instance_name;
 
@@ -256,7 +256,7 @@ std::shared_ptr<ResolvedGraphInstance> build_graph_instance(
 
 // Simple path resolution for connection processing
 std::pair<Node&, HostId> resolve_node_from_path(
-    ttsl::Span<const std::string> path, std::shared_ptr<ResolvedGraphInstance> graph) {
+    ttsl::Span<const std::string> path, const std::unique_ptr<ResolvedGraphInstance>& graph) {
     if (!graph) {
         throw std::runtime_error("Graph not set");
     }
@@ -405,7 +405,7 @@ void CablingGenerator::validate_host_id_uniqueness() {
 
 // Recursively collect all host_id assignments with their node paths
 void CablingGenerator::collect_host_assignments(
-    std::shared_ptr<ResolvedGraphInstance> graph,
+    const std::unique_ptr<ResolvedGraphInstance>& graph,
     const std::string& path_prefix,
     std::unordered_map<HostId, std::string>& host_to_node_path) {
     // Check direct nodes in this graph
@@ -437,7 +437,7 @@ void CablingGenerator::generate_logical_chip_connections() {
     }
 }
 
-void CablingGenerator::generate_connections_from_resolved_graph(std::shared_ptr<ResolvedGraphInstance> graph) {
+void CablingGenerator::generate_connections_from_resolved_graph(const std::unique_ptr<ResolvedGraphInstance>& graph) {
     // Lambda to create connections between two ports
     auto create_port_connection = [&](PortType port_type,
                                       const Board& start_board,
@@ -550,7 +550,7 @@ void CablingGenerator::populate_boards_by_host_tray() {
     }
 }
 
-void CablingGenerator::populate_boards_from_resolved_graph(std::shared_ptr<ResolvedGraphInstance> graph) {
+void CablingGenerator::populate_boards_from_resolved_graph(const std::unique_ptr<ResolvedGraphInstance>& graph) {
     // Add boards from direct nodes
     for (auto& [node_name, node] : graph->nodes) {
         for (auto& [tray_id, board] : node.boards) {
