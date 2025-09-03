@@ -1562,8 +1562,8 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr) {
     // This ensures that a previous cmd using the scratch buf has finished
     noc_async_writes_flushed();
 
-    volatile CQPrefetchCmd tt_l1_ptr* cmd =
-        (volatile CQPrefetchCmd tt_l1_ptr*)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
+    volatile CQPrefetchCmdLarge tt_l1_ptr* cmd =
+        (volatile CQPrefetchCmdLarge tt_l1_ptr*)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
     uint32_t noc_xy_addr = cmd->relay_linear_h.noc_xy_addr;
     uint64_t read_addr = cmd->relay_linear_h.addr;
     uint32_t length = cmd->relay_linear_h.length;

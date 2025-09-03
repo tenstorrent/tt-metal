@@ -101,7 +101,6 @@ struct CQPrefetchRelayLinearHCmd {
     uint32_t noc_xy_addr;
     uint64_t addr;
     uint32_t length;  // Length must be <= min(scratch_db_size, max command size) - sizeof(CQPrefetchHToPrefetchDHeader)
-    uint8_t pad[32-20];
 } __attribute__((packed));
 
 constexpr uint32_t CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK = 0xff;
@@ -185,7 +184,6 @@ struct CQPrefetchRelayRingbufferSubCmd {
 struct CQPrefetchCmd {
     CQPrefetchBaseCmd base;
     union {
-        CQPrefetchRelayLinearHCmd relay_linear_h;
         CQPrefetchRelayPagedCmd relay_paged;
         CQPrefetchRelayPagedPackedCmd relay_paged_packed;
         CQPrefetchRelayInlineCmd relay_inline;
@@ -201,6 +199,7 @@ struct CQPrefetchCmd {
 struct CQPrefetchCmdLarge {
     CQPrefetchBaseCmd base;
     union {
+        CQPrefetchRelayLinearHCmd relay_linear_h;
         CQPrefetchRelayLinearCmd relay_linear;
         uint8_t padding[32-sizeof(CQPrefetchBaseCmd)];
     } __attribute__((packed));

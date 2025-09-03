@@ -1635,7 +1635,7 @@ void gen_relay_linear_h_test(
             auto prior_end = prefetch_cmds.size();
 
             // Create the relay linear H command
-            CQPrefetchCmd cmd{};
+            CQPrefetchCmdLarge cmd{};
             cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR_H;
 
             // Set up the source NOC address - we'll read from DRAM where data is initialized
