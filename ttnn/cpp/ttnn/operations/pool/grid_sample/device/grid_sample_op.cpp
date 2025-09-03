@@ -4,7 +4,6 @@
 
 #include "grid_sample_op.hpp"
 
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/constants.hpp>
 

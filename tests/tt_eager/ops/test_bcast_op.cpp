@@ -24,7 +24,6 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
