@@ -99,140 +99,6 @@ using DataLoader = ttml::datasets::DataLoader<
     std::function<BatchType(std::vector<DatasetSample> &&samples)>,
     BatchType>;
 
-uint32_t sample(std::span<const float> log_softmax) {
-    auto probabilities_vector = std::vector<float>(log_softmax.size());
-    std::transform(log_softmax.begin(), log_softmax.end(), probabilities_vector.begin(), [](float value) {
-        return std::exp(value);
-    });
-    auto distribution = std::discrete_distribution<uint32_t>(probabilities_vector.begin(), probabilities_vector.end());
-    return distribution(ttml::autograd::ctx().get_generator());
-}
-
-inline void apply_repetition_penalty(
-    std::vector<float> &logits, const std::vector<uint32_t> &history, float repetition_penalty) {
-    if (repetition_penalty <= 1.0F) {
-        return;  // no penalty
-    }
-    for (auto token_id : history) {
-        float &val = logits[token_id];
-        if (val > 0.0F) {
-            val /= repetition_penalty;
-        } else {
-            val *= repetition_penalty;
-        }
-    }
-}
-
-inline void top_k_filter(std::vector<float> &logits, int top_k) {
-    if (top_k <= 0 || static_cast<size_t>(top_k) >= logits.size()) {
-        return;
-    }
-    std::vector<float> copy = logits;
-    std::nth_element(copy.begin(), copy.end() - top_k, copy.end());
-    float cutoff = *(copy.end() - top_k);
-
-    for (auto &val : logits) {
-        if (val < cutoff) {
-            val = -std::numeric_limits<float>::infinity();
-        }
-    }
-}
-
-inline void top_p_filter(std::vector<float> &logits, float top_p) {
-    if (top_p <= 0.0F || top_p >= 1.0F) {
-        return;  // no filtering
-    }
-
-    std::vector<float> probs(logits.size());
-    for (size_t i = 0; i < logits.size(); i++) {
-        probs[i] = std::exp(logits[i]);
-    }
-    float sum = 0.0F;
-    for (auto x : probs) {
-        sum += x;
-    }
-    // argsort
-    std::vector<size_t> indices(logits.size());
-    for (size_t i = 0; i < indices.size(); ++i) {
-        indices[i] = i;
-    }
-    std::sort(indices.begin(), indices.end(), [&](size_t a, size_t b) {
-        return probs[a] > probs[b];  // descending by prob
-    });
-    // smallest set of tokens whose sum >= top_p
-    float cum_prob = 0.0F;
-    size_t cutoff_idx = 0;
-    for (size_t rank = 0; rank < indices.size(); ++rank) {
-        auto idx = indices[rank];
-        cum_prob += probs[idx] / sum;
-        if (cum_prob > top_p) {
-            cutoff_idx = rank;
-            break;
-        }
-    }
-    for (size_t rank = cutoff_idx + 1; rank < indices.size(); ++rank) {
-        auto idx = indices[rank];
-        logits[idx] = -std::numeric_limits<float>::infinity();
-    }
-}
-
-inline uint32_t sample_with_strategy(
-    std::span<float> logits_span,
-    const std::vector<uint32_t> &history,
-    float temperature,
-    float repetition_penalty,
-    int top_k,
-    float top_p) {
-    std::vector<float> logits(logits_span.begin(), logits_span.end());
-    size_t vocab_size = logits.size();
-
-    apply_repetition_penalty(logits, history, repetition_penalty);
-
-    if (temperature > 0.0F && std::fabs(temperature - 1.0F) > 1e-6f) {
-        for (auto &val : logits) {
-            val /= temperature;
-        }
-    }
-    auto max_it = std::max_element(logits.begin(), logits.end());
-    float max_val = (max_it != logits.end()) ? *max_it : 0.0F;
-    for (auto &val : logits) {
-        val -= max_val;
-    }
-
-    // 4) top-k filter
-    top_k_filter(logits, top_k);
-
-    // 5) top-p (nucleus) filter
-    top_p_filter(logits, top_p);
-
-    // 6) Convert to probabilities + sample
-    //    Recompute stable exponent after filtering
-    float sum_exp = 0.0F;
-    for (auto val : logits) {
-        if (val > -std::numeric_limits<float>::infinity()) {
-            sum_exp += std::exp(val);
-        }
-    }
-
-    auto &rng = ttml::autograd::ctx().get_generator();
-    std::uniform_real_distribution<float> dist(0.0F, 1.0F);
-
-    float r = dist(rng);
-    float cum = 0.0F;
-    for (size_t i = 0; i < vocab_size; ++i) {
-        if (logits[i] == -std::numeric_limits<float>::infinity()) {
-            continue;
-        }
-        float p = std::exp(logits[i]) / sum_exp;
-        cum += p;
-        if (r <= cum) {
-            return static_cast<uint32_t>(i);
-        }
-    }
-    // Fallback
-    return static_cast<uint32_t>(vocab_size - 1);
-}
-
 template <typename Tokenizer>
 void generate(
     Model &model,
@@ -330,53 +196,37 @@ void generate(
         auto logits_span = std::span<float>(logits_ptr, original_vocab_size);
         auto logits_vector = std::vector<float>(logits_span.begin(), logits_span.end());
 
-        // uint32_t next_token_id = sample_with_strategy(
-        // logits_span, // logits_span
-        // prompt_tokens,  // history
-        //     temperature,
-        //     repetition_penalty,
-        //     top_k,
-        //     top_p);
+        std::copy(logits_ptr, logits_ptr + original_vocab_size, padded_logits_vector.begin());
+        float pad = -1e8;
+        std::fill(padded_logits_vector.begin() + original_vocab_size, padded_logits_vector.end(), pad);
+        auto input_idx_vector = std::vector<uint32_t>(padded_logits_vector.size());
+        std::iota(input_idx_vector.begin(), input_idx_vector.end(), 0);
 
-        // std::copy(logits_ptr, logits_ptr + original_vocab_size, padded_logits_vector.begin());
-        // float pad = -1e8;
-        // std::fill(padded_logits_vector.begin() + original_vocab_size, padded_logits_vector.end(), pad);
-        // auto input_idx_vector = std::vector<uint32_t>(padded_logits_vector.size());
-        // std::iota(input_idx_vector.begin(), input_idx_vector.end(), 0);
+        auto logits_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+            padded_logits_vector, ttnn::Shape({1, 1, 1, 256}), device);
 
-        // auto logits_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
-        //     padded_logits_vector, ttnn::Shape({1, 1, 1, 256}), device);
+        auto idx_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+            input_idx_vector, ttnn::Shape({1, 1, 1, 256}), device, ttnn::Layout::ROW_MAJOR);
+        auto repeats = ttnn::Shape({32, 1, 1, 1});
+        logits_tensor = ttnn::repeat(logits_tensor, repeats);
+        idx_tensor = ttnn::repeat(idx_tensor, repeats);
 
-        // auto idx_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-        //     input_idx_vector, ttnn::Shape({1, 1, 1, 256}), device, ttnn::Layout::ROW_MAJOR);
-        // auto repeats = ttnn::Shape({32, 1, 1, 1});
-        // logits_tensor = ttnn::repeat(logits_tensor, repeats);
-        // idx_tensor = ttnn::repeat(idx_tensor, repeats);
+        auto top_k_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+            std::vector<uint32_t>(32, top_k), ttnn::Shape({32}), device, ttnn::Layout::ROW_MAJOR);
+        auto top_p_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+            std::vector<float>(32, top_p), ttnn::Shape({32}), device, ttnn::Layout::ROW_MAJOR);
+        auto temp_tensor = ttml::core::from_vector(
+            std::vector<float>(32, temperature), ttnn::Shape({32}), device, ttnn::Layout::ROW_MAJOR);
 
-        // auto top_k_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-        //     std::vector<uint32_t>(32, top_k), ttnn::Shape({32}), device, ttnn::Layout::ROW_MAJOR);
-        // auto top_p_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
-        //     std::vector<float>(32, top_p), ttnn::Shape({32}), device, ttnn::Layout::ROW_MAJOR);
-        // auto temp_tensor = ttml::core::from_vector(
-        //     std::vector<float>(32, temperature), ttnn::Shape({32}), device, ttnn::Layout::ROW_MAJOR);
+        auto next_token_tensor = ttnn::sampling(
+            logits_tensor, idx_tensor, top_k_tensor, top_p_tensor, temp_tensor
 
-        // auto next_token_tensor = ttnn::sampling(
-        //     logits_tensor, idx_tensor, top_k_tensor, top_p_tensor, temp_tensor
+        );
+        auto next_token_vector = next_token_tensor.to_vector<uint32_t>();
+        uint32_t next_token_id = next_token_vector[0];
 
-        // );
-        // auto next_token_vector = next_token_tensor.to_vector<uint32_t>();
-        // uint32_t next_token_id = next_token_vector[0];
-
-        uint32_t next_token_id =
-            std::distance(logits_span.begin(), std::max_element(logits_span.begin(), logits_span.end()));
-        // auto next_token_tensor = ttnn::argmax(
-        //     ttnn::DefaultQueueId,
-        //     ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(logits_vector, ttnn::Shape({1, 1, 1,
-        //     original_vocab_size}), device));
-
-        // auto next_token_vector = next_token_tensor.to_vector<uint32_t>();
-
-        // uint32_t next_token_id = next_token_vector[0];
+        // uint32_t next_token_id =
+        //     std::distance(logits_span.begin(), std::max_element(logits_span.begin(), logits_span.end()));
 
         if (next_token_id >= original_vocab_size) {
             // Handle out-of-vocabulary token
