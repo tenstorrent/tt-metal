@@ -63,7 +63,6 @@ void build_and_run_program(
     CreateCircularBuffer(program2, cr_set, cb_config);
 
     vector<uint32_t> compile_args = {MAX_LOOP, page_size};
-    // Add placeholder TensorAccessorArgs for test kernels that use dummy buffer
     tt_metal::TensorAccessorArgs().append_to(compile_args);
 
     auto brisc_kernel1 = CreateKernel(

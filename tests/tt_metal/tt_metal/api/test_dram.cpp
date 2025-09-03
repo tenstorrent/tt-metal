@@ -367,7 +367,7 @@ TEST_F(MeshDispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
     uint32_t ncrisc_num_pages_to_read = ((brisc_base_addr - ncrisc_base_addr) / page_size) * num_drams;
 
     std::vector<uint32_t> brisc_compile_time_args = {};
-    tt_metal::TensorAccessorArgs().append_to(brisc_compile_time_args);  // Placeholder for direct DRAM access
+    tt_metal::TensorAccessorArgs().append_to(brisc_compile_time_args);
 
     tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
         program_,
@@ -385,7 +385,7 @@ TEST_F(MeshDispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
         {brisc_base_addr, page_size, l1_address, brisc_num_pages_to_read, num_iterations});
 
     std::vector<uint32_t> ncrisc_compile_time_args = {};
-    tt_metal::TensorAccessorArgs().append_to(ncrisc_compile_time_args);  // Placeholder for direct DRAM access
+    tt_metal::TensorAccessorArgs().append_to(ncrisc_compile_time_args);
 
     tt_metal::KernelHandle ncrisc_kernel = tt_metal::CreateKernel(
         program_,
