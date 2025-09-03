@@ -11,6 +11,11 @@ on:
         required: false
         default: "22.04"
         type: string
+      NIGHTLY:
+        required: false
+        default: false
+        type: boolean
+        description: "Run nightly-only tests"
   workflow_dispatch:
     inputs:
       build-type:
