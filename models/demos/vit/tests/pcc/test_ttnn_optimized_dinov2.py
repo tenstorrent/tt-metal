@@ -23,6 +23,9 @@ def ref_COMPOSITE_48(var0, *args):
 
 
 def ref_COMPOSITE_23(var0, *args):
+    num_heads = 16
+    *_, hidden_size = var0.shape
+    head_size = hidden_size // num_heads
     var1 = torch.ops.aten.native_layer_norm(var0, [1024], args[0], args[1], 1e-06)
     var2 = var1[0]
     var3 = torch.ops.aten.view(var2, [261, 1024])
@@ -30,15 +33,15 @@ def ref_COMPOSITE_23(var0, *args):
     var5 = torch.ops.aten.view(var4, [1, 261, 3072])
     var6 = torch.ops.aten.view(var5, [1, 261, 3, 16, 64])
     var7 = torch.ops.aten.permute(var6, [2, 0, 3, 1, 4])
-    var8 = torch.ops.aten.unbind.int(var7)
-    var9 = var8[0]
-    var10 = var8[1]
-    var11 = var8[2]
-    var12 = torch.ops.aten._scaled_dot_product_flash_attention(var9, var10, var11)
-    var13 = var12[0]
-    var14 = torch.ops.aten.transpose.int(var13, 1, 2)
-    var15 = torch.ops.aten.view(var14, [1, 261, 1024])
-    var16 = torch.ops.aten.view(var15, [261, 1024])
+    q, k, v = var7.unbind(0)
+    scale = 1.0 / (head_size**0.5)
+    q = q * scale
+    attn = q @ k.transpose(-2, -1)
+    attn = attn.softmax(dim=-1)
+    return attn
+    x = attn @ v
+    x = x.transpose(1, 2).reshape(1, 261, -1)
+    var16 = torch.ops.aten.view(x, [261, 1024])
     var17 = torch.ops.aten.addmm(args[4], var16, args[5])
     var18 = torch.ops.aten.view(var17, [1, 261, 1024])
     var19 = torch.ops.aten.mul.Tensor(var18, args[6])
@@ -84,6 +87,9 @@ def ttnn_COMPOSITE_23(var0, *args):
         epsilon=1e-06,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+    num_heads = 16
+    *_, hidden_size = hidden_states.shape
+    head_size = hidden_size // num_heads
     query_key_value = ttnn.linear(
         hidden_states,
         args[3],
@@ -101,25 +107,28 @@ def ttnn_COMPOSITE_23(var0, *args):
     ) = ttnn.transformer.split_query_key_value_and_split_heads(
         query_key_value,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        num_heads=16,
+        num_heads=num_heads,
     )
     ttnn.deallocate(query_key_value)
-    value = ttnn.reallocate(value)
-    scale_factor = 1 / (query.shape[-1] ** 0.5)
-    attention_scores = (
-        ttnn.matmul(
-            query,
-            key,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
-            # program_config=program_configs["query_by_key_matmul_program_config"],
-        )
-        * scale_factor
+    scale = 1.0 / (head_size**0.5)
+    query = ttnn.mul_(
+        query,
+        scale,
     )
+    value = ttnn.reallocate(value)
+    attention_scores = ttnn.matmul(
+        query,
+        key,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        core_grid=ttnn.CoreGrid(y=8, x=8),
+        # program_config=program_configs["query_by_key_matmul_program_config"],
+    )
+
     ttnn.deallocate(query)
     ttnn.deallocate(key)
-    attention_probs = ttnn.transformer.attention_softmax(attention_scores, head_size=64)
+    attention_probs = ttnn.softmax_in_place(attention_scores)
+    return attention_probs
     context_layer = ttnn.matmul(
         attention_probs,
         value,
@@ -134,6 +143,7 @@ def ttnn_COMPOSITE_23(var0, *args):
         context_layer,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+    return context_layer
     self_output = ttnn.linear(
         context_layer,
         args[5],
