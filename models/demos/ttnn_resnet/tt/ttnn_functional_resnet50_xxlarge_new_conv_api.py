@@ -462,7 +462,6 @@ class resnet50:
         self.conv1_bias_tensor = parameters.conv1.bias
         self.conv1_input_channels = self.conv1_weight_tensor.shape[1]
         self.conv1_output_channels = self.conv1_weight_tensor.shape[0]
-        # assert self.conv1_weight_tensor.shape[2] == 4
 
         self.layer1 = self._make_layer(
             parameters=parameters.layer1,
@@ -558,16 +557,6 @@ class resnet50:
         return layers
 
     def preprocessing(self, torch_input_tensor):
-        # resnet50_first_conv_kernel_size = 3
-        # resnet50_first_conv_stride = 2
-        # input_tensor = pad_and_fold_conv_activation_for_unity_stride(
-        #     torch_input_tensor,
-        #     resnet50_first_conv_kernel_size,
-        #     resnet50_first_conv_kernel_size,
-        #     resnet50_first_conv_stride,
-        #     resnet50_first_conv_stride,
-        # )
-        # input_tensor = torch.permute(input_tensor, (0, 2, 3, 1))
         input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
         input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
         return input_tensor
@@ -592,22 +581,14 @@ class resnet50:
         else:
             act_block_h_override = 0
 
-        # input_height_local = 515
-        # input_width_local = 515
-        # kernel_size_local = 4
-        # stride_local = 1
-        input_height_local = 1024
-        input_width_local = 1024
-        kernel_size_local = 7
-        stride_local = 2
         conv_kwargs = {
             "in_channels": self.conv1_input_channels,
             "out_channels": self.conv1_output_channels,
             "batch_size": self.batch_size,
-            "input_height": input_height_local,
-            "input_width": input_width_local,
-            "kernel_size": (kernel_size_local, kernel_size_local),
-            "stride": (stride_local, stride_local),
+            "input_height": 1024,
+            "input_width": 1024,
+            "kernel_size": (7, 7),
+            "stride": (2, 2),
             "padding": (3, 3),
             "dilation": (1, 1),
             "groups": 1,
@@ -937,22 +918,14 @@ class resnet50:
             elif batch_size == 1:
                 act_block_h_override = 256
 
-        # input_height_local = 515
-        # input_width_local = 515
-        # kernel_size_local = 4
-        # stride_local = 1
-        input_height_local = 1024
-        input_width_local = 1024
-        kernel_size_local = 7
-        stride_local = 2
         conv_kwargs = {
             "in_channels": self.conv1_input_channels,
             "out_channels": self.conv1_output_channels,
             "batch_size": self.batch_size,
-            "input_height": input_height_local,
-            "input_width": input_width_local,
-            "kernel_size": (kernel_size_local, kernel_size_local),
-            "stride": (stride_local, stride_local),
+            "input_height": 1024,
+            "input_width": 1024,
+            "kernel_size": (7, 7),
+            "stride": (2, 2),
             "padding": (3, 3),
             "dilation": (1, 1),
             "groups": 1,
