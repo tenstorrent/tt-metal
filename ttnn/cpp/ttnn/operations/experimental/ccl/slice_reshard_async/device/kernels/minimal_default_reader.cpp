@@ -32,7 +32,7 @@ void kernel_main() {
     const uint32_t input_outer_dim_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t outer_dims_to_forward = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t outer_dims_to_keep_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t outer_dims_to_keep_stop = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t outer_dims_to_keep_end = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks_per_outer_dim = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
 
