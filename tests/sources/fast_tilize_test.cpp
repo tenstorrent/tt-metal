@@ -16,12 +16,6 @@ uint32_t unp_cfg_context          = 0;
 uint32_t pack_sync_tile_dst_ptr   = 0;
 uint32_t math_sync_tile_dst_index = 0;
 
-#if defined(LLK_PROFILER)
-uint32_t loop_factor = 1024;
-#else
-uint32_t loop_factor = 1;
-#endif
-
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_common.h"
@@ -72,7 +66,7 @@ void run_kernel()
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        for (uint32_t loop = 0; loop < loop_factor; loop++)
+        for (uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
             for (uint32_t i = 0; i < BLOCK_RT_DIM; i++)
             {
@@ -148,7 +142,7 @@ void run_kernel()
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        for (uint32_t loop = 0; loop < loop_factor; loop++)
+        for (uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
             for (uint32_t i = 0; i < BLOCK_RT_DIM; i++)
             {
@@ -226,7 +220,7 @@ void run_kernel()
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        for (uint32_t loop = 0; loop < loop_factor; loop++)
+        for (uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
             for (uint32_t i = 0; i < BLOCK_RT_DIM; i++)
             {

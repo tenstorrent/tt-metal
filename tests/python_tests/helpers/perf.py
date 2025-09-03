@@ -95,12 +95,13 @@ def timing_l1_congestion(perf_data: PerfData) -> int:
 
 
 def process_runs(runs, test_config):
+    loop_factor = test_config.get("loop_factor", 1)
     tile_cnt = test_config.get("tile_cnt", 1)
 
     return tuple(
         {
-            "mean": mean(column) / tile_cnt,
-            "stddev": stdev(column) / tile_cnt,
+            "mean": mean(column) / loop_factor / tile_cnt,
+            "stddev": stdev(column) / loop_factor / tile_cnt,
         }
         for column in zip(*runs)
     )
@@ -205,6 +206,7 @@ def update_report(report: PerfReport, test_config, results):
     exclude = {
         "testname",
         "perf_run_type",
+        "loop_factor",  # used to minimize the effect of profiler overhead for short loops
     }
 
     params = {

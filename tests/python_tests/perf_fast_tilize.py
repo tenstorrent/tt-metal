@@ -88,6 +88,7 @@ def test_fast_tilize_perf(
     test_config = {
         "formats": formats,
         "testname": TEST_NAME,
+        "loop_factor": 1024,
         "tile_cnt": input_height * input_width,
         "input_A_dimensions": input_dimensions,
         "input_B_dimensions": input_dimensions,
