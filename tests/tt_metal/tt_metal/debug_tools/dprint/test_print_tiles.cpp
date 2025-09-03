@@ -69,13 +69,13 @@ static std::vector<uint32_t> GenerateInputTile(tt::DataFormat data_format) {
         for (int i = 0; i < float_vec.size(); i++) {
             float_vec[i] = 0.012345 * i * (i % 32 == 0 ? -1 : 1);  // Small increments and force negatives for testing
         }
-        u32_vec = pack_fp32_vec_as_bfp8_tiles(float_vec, true, false);
+        u32_vec = pack_as_bfp8_tiles(tt::stl::make_const_span(float_vec), true, false);
     } else if (data_format == tt::DataFormat::Bfp4_b) {
         std::vector<float> float_vec(elements_in_tile);
         for (int i = 0; i < float_vec.size(); i++) {
             float_vec[i] = 0.012345 * i * (i % 16 == 0 ? -1 : 1);  // Small increments and force negatives for testing
         }
-        u32_vec = pack_fp32_vec_as_bfp4_tiles(float_vec, true, false);
+        u32_vec = pack_as_bfp4_tiles(tt::stl::make_const_span(float_vec), true, false);
     } else if (data_format == tt::DataFormat::Int8) {
         std::vector<int8_t> int8_vec(elements_in_tile);
         for (int i = 0; i < int8_vec.size(); i++) {

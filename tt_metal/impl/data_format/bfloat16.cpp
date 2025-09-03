@@ -107,17 +107,6 @@ std::vector<bfloat16> create_random_vector_of_bfloat16_native(
     return vec;
 }
 
-void print_golden_metalium_vectors(std::vector<bfloat16>& golden_vec, std::vector<bfloat16>& result_vec) {
-    std::cout << "-- index -- golden -- metalium --" << std::endl;
-    for (size_t i = 0; i < result_vec.size(); i++) {
-        float a1 = golden_vec[i].to_float();
-        float a2 = result_vec[i].to_float();
-        if (i % 128 == 0) {
-            std::cout << "-- " << i << " -- " << a1 << " <--> " << a2 << std::endl;
-        }
-    }
-}
-
 std::vector<std::uint32_t> create_random_vector_of_bfloat16(
     size_t num_bytes, int rand_max_float, int seed, float offset) {
     auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
