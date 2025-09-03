@@ -15,8 +15,8 @@ from models.demos.segformer.tests.pcc.test_segformer_model import (
     create_custom_mesh_preprocessor as custom_preprocessor_main_model,
 )
 from models.demos.segformer.tests.pcc.test_segformer_model import move_to_device
-from models.demos.segformer.tt.common import get_mesh_mappers
 from models.demos.segformer.tt.ttnn_segformer_for_image_classification import TtSegformerForImageClassification
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

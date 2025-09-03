@@ -330,6 +330,19 @@ run_t3000_llama3_load_checkpoints_tests() {
   fi
 }
 
+run_t3000_gemma3_tests() {
+  # Record the start time
+  start_time=$(date +%s)
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/demo/text_demo.py -k "performance and ci-1"
+  echo "LOG_METAL: Gemma3 27B tests completed (text only)"
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-trace"
+  echo "LOG_METAL: Gemma3 27B tests completed (text and vision)"
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_gemma3_tests $duration seconds to complete"
+}
+
 run_t3000_tests() {
   # Run llama3 load checkpoints tests
   run_t3000_llama3_load_checkpoints_tests
@@ -372,6 +385,9 @@ run_t3000_tests() {
 
   # Run sd35_large tests
   run_t3000_sd35large_tests
+
+  # Run gemma3 tests
+  run_t3000_gemma3_tests
 }
 
 fail=0
