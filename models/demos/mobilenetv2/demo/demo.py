@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+
 import pytest
 import torch
 from loguru import logger
@@ -9,16 +10,14 @@ from tqdm import tqdm
 
 import ttnn
 from models.demos.mobilenetv2.common import load_torch_model
-from models.demos.mobilenetv2.demo.demo_utils import get_batch
 from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
 from models.demos.mobilenetv2.tests.perf.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
 from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
 from models.demos.mobilenetv2.tt.model_preprocessing import (
     create_mobilenetv2_input_tensors,
     create_mobilenetv2_model_parameters,
-    get_mesh_mappers,
 )
-from models.demos.ttnn_resnet.tests.demo_utils import get_data_loader
+from models.demos.utils.common_demo_utils import get_batch, get_data_loader, get_mesh_mappers, load_imagenet_dataset
 from models.tt_cnn.tt.pipeline import (
     PipelineConfig,
     create_pipeline_from_config,
@@ -39,6 +38,7 @@ def run_mobilenetv2_imagenet_demo(
     model_location_generator=None,
     entire_imagenet_dataset=False,
     expected_accuracy=0.68,
+    resolution=(224, 224),
 ):
     batch_size = batch_size_per_device * device.get_num_devices()
     iterations = iterations // device.get_num_devices()
@@ -57,7 +57,11 @@ def run_mobilenetv2_imagenet_demo(
         ttnn_model = ttnn_mobilenetv2.TtMobileNetV2(model_parameters, device, batchsize=batch_size_per_device)
 
         _, host_input_tensor = create_mobilenetv2_input_tensors(
-            batch=batch_size, input_height=224, input_width=224, pad_channels=16, mesh_mapper=inputs_mesh_mapper
+            batch=batch_size,
+            input_height=resolution[0],
+            input_width=resolution[1],
+            pad_channels=16,
+            mesh_mapper=inputs_mesh_mapper,
         )
 
         input_dram_mem_config = get_memory_config_for_persistent_dram_tensor(
@@ -91,14 +95,13 @@ def run_mobilenetv2_imagenet_demo(
         profiler.start(f"compile")
         pipe.compile(host_input_tensor)
         profiler.end(f"compile")
-
-        input_loc = str(model_location_generator("ImageNet_data"))
+        logger.info("ImageNet-1k validation Dataset")
+        input_loc = load_imagenet_dataset(model_location_generator)
         data_loader = get_data_loader(input_loc, batch_size, iterations, entire_imagenet_dataset)
-
         input_tensors_all = []
         input_labels_all = []
         for iter in tqdm(range(iterations), desc="Preparing images"):
-            inputs, labels = get_batch(data_loader, 224)
+            inputs, labels = get_batch(data_loader, resolution[0])
             ttnn_input = torch.permute(inputs, (0, 2, 3, 1))
             ttnn_input = torch.nn.functional.pad(ttnn_input, (0, 16 - ttnn_input.shape[-1]), value=0)
             ttnn_input = ttnn.from_torch(
@@ -127,7 +130,6 @@ def run_mobilenetv2_imagenet_demo(
             labels = input_labels_all[iter]
             output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
             prediction = output.argmax(dim=-1)
-
             for i in range(batch_size):
                 predictions.append(imagenet_label_dict[prediction[i].item()])
                 logger.info(
