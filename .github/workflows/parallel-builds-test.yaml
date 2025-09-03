@@ -47,7 +47,7 @@ jobs:
   # Summary job to verify all builds completed successfully
   verify-parallel-builds:
     name: "✅ Verify parallel builds completed"
-    needs: [build-branch, build-main, build-branch-profiler, build-main-profiler]
+    needs: [build-branch, build-main]
     runs-on: ubuntu-latest
     steps:
       - name: Summary
