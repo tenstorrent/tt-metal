@@ -157,6 +157,7 @@ jobs:
   create-docker-release-image:
     needs: [
       regression-testing,
+      release-precheck,
       create-tag,
       create-and-upload-draft-release
     ]

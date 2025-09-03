@@ -1,128 +1,129 @@
-name: Regression Testing
-on:
-  workflow_call:
-    outputs:
-      packages-artifact-name:
-        description: "Name to give download-artifact to get the packages"
-        value: ${{ jobs.build-artifact.outputs.packages-artifact-name }}
-      build-artifact-name:
-        description: "Name of the published build artifact"
-        value: ${{ jobs.build-artifact.outputs.build_artifact_name }}
-      wheel-artifact-name:
-        description: "Name of the published wheel artifact"
-        value: ${{ jobs.build-wheel.outputs.wheel_artifact_name }}
-permissions:
-  actions: read
-  contents: write
-  pull-requests: write
-  pages: write
-  id-token: write
-  packages: write
-  checks: write
+  name: Regression Testing
+  on:
+    workflow_call:
+      outputs:
+        packages-artifact-name:
+          description: "Name to give download-artifact to get the packages"
+          value: ${{ jobs.build-artifact.outputs.packages-artifact-name }}
+        build-artifact-name:
+          description: "Name of the published build artifact"
+          value: ${{ jobs.build-artifact.outputs.build-artifact-name }}
+        wheel-artifact-name:
+          description: "Name of the published wheel artifact"
+          value: ${{ jobs.build-wheel.outputs.wheel-artifact-name }}
 
-jobs:
-  build-artifact:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      version: 22.04
-      build-wheel: true
-      fetch-depth: 0
-      skip-tt-train: false
-  build-artifact-profiler:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      version: 22.04
-      tracy: true
-      build-wheel: true
-      fetch-depth: 0
-      skip-tt-train: false
-  single-card-demos:
-    needs: build-artifact
-    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      arch: wormhole_b0
-  t3000-demos:
-    needs: build-artifact
-    uses: ./.github/workflows/t3000-demo-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  t3000-model-perf:
-    needs: [build-artifact, build-artifact-profiler]
-    uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-  galaxy-4u-demos:
-    needs: build-artifact
-    uses: ./.github/workflows/tg-demo-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  galaxy-6u-demos:
-    needs: build-artifact
-    uses: ./.github/workflows/tg-demo-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: topology-6u
-  blackhole-single-card-demos:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [ "P100", "P150" ]
-    with:
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  blackhole-multi-card-demos:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group:
-          - name: LLMBox Demo tests
-            runner-label: BH-LLMBox
-            extra-tag: pipeline-perf
-            num_devices: 4
-          - name: DeskBox Demo tests
-            runner-label: BH-DeskBox
-            extra-tag: pipeline-functional
-            num_devices: 2
-          # - name: RackBox Demo tests
-          #   runner-label: BH-RackBox
-          #   extra-tag: pipeline-functional
-          #   num_devices: 8
-    with:
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      extra-tag: ${{ matrix.test-group.extra-tag }}
-      num_devices: ${{ matrix.test-group.num_devices }}
+  permissions:
+    actions: read
+    contents: write
+    pull-requests: write
+    pages: write
+    id-token: write
+    packages: write
+    checks: write
+
+  jobs:
+    build-artifact:
+      uses: ./.github/workflows/build-artifact.yaml
+      permissions:
+        packages: write
+      secrets: inherit
+      with:
+        version: 22.04
+        build-wheel: true
+        fetch-depth: 0
+        skip-tt-train: false
+    build-artifact-profiler:
+      uses: ./.github/workflows/build-artifact.yaml
+      permissions:
+        packages: write
+      secrets: inherit
+      with:
+        version: 22.04
+        tracy: true
+        build-wheel: true
+        fetch-depth: 0
+        skip-tt-train: false
+    single-card-demos:
+      needs: build-artifact
+      uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+      secrets: inherit
+      with:
+        docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+        wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+        build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+        arch: wormhole_b0
+    t3000-demos:
+      needs: build-artifact
+      uses: ./.github/workflows/t3000-demo-tests-impl.yaml
+      secrets: inherit
+      with:
+        docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+        wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+        build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+    t3000-model-perf:
+      needs: [build-artifact, build-artifact-profiler]
+      uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
+      secrets: inherit
+      with:
+        docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+        wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+        build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+        wheel-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+        build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+    galaxy-4u-demos:
+      needs: build-artifact
+      uses: ./.github/workflows/tg-demo-tests-impl.yaml
+      secrets: inherit
+      with:
+        docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+        wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+        build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+    galaxy-6u-demos:
+      needs: build-artifact
+      uses: ./.github/workflows/tg-demo-tests-impl.yaml
+      secrets: inherit
+      with:
+        docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+        wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+        build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+        topology: topology-6u
+    blackhole-single-card-demos:
+      needs: build-artifact
+      secrets: inherit
+      uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
+      strategy:
+        fail-fast: false
+        matrix:
+          test-group: [ "P100", "P150" ]
+      with:
+        runner-label: ${{ matrix.test-group }}
+        docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+        build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+        wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+    blackhole-multi-card-demos:
+      needs: build-artifact
+      secrets: inherit
+      uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
+      strategy:
+        fail-fast: false
+        matrix:
+          test-group:
+            - name: LLMBox Demo tests
+              runner-label: BH-LLMBox
+              extra-tag: pipeline-perf
+              num_devices: 4
+            - name: DeskBox Demo tests
+              runner-label: BH-DeskBox
+              extra-tag: pipeline-functional
+              num_devices: 2
+            # - name: RackBox Demo tests
+            #   runner-label: BH-RackBox
+            #   extra-tag: pipeline-functional
+            #   num_devices: 8
+      with:
+        runner-label: ${{ matrix.test-group.runner-label }}
+        docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+        build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+        wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+        extra-tag: ${{ matrix.test-group.extra-tag }}
+        num_devices: ${{ matrix.test-group.num_devices }}
