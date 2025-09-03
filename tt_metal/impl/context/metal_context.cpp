@@ -1241,6 +1241,9 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     log_debug(LogDevice, "Firmware init complete");
 }
 
+// Command queue id stack for thread
+thread_local MetalContext::CommandQueueIdStack MetalContext::command_queue_id_stack_for_thread_;
+
 MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() {
     return MetalContext::command_queue_id_stack_for_thread_;
 }

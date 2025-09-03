@@ -95,10 +95,8 @@ public:
 
     // This is used to track the current thread's command queue id stack
     using CommandQueueIdStack = std::vector<uint8_t>;
-    CommandQueueIdStack& get_command_queue_id_stack_for_thread() { return command_queue_id_stack_for_thread_; }
-    const CommandQueueIdStack& get_command_queue_id_stack_for_thread() const {
-        return command_queue_id_stack_for_thread_;
-    }
+    CommandQueueIdStack& get_command_queue_id_stack_for_thread();
+    const CommandQueueIdStack& get_command_queue_id_stack_for_thread() const;
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;
