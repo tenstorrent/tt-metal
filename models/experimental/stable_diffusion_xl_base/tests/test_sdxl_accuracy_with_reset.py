@@ -10,7 +10,7 @@ from PIL import Image
 
 from loguru import logger
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
-from models.experimental.stable_diffusion_xl_base.tests.test_sdxl_accuracy import sdxl_get_prompts
+from models.experimental.stable_diffusion_xl_base.tests.test_sdxl_accuracy import sdxl_get_prompts, check_clip_scores
 from models.experimental.stable_diffusion_xl_base.utils.clip_encoder import CLIPEncoder
 from models.experimental.stable_diffusion_xl_base.tests.test_sdxl_accuracy import OUT_ROOT, RESULTS_FILE_NAME
 
@@ -42,11 +42,20 @@ IMAGES_PATH, IMAGE_NAME_BASE = "output", "output"
     ],
     ids=("with_trace", "no_trace"),
 )
+@pytest.mark.parametrize(
+    "encoders_on_device",
+    [
+        (True),
+        (False),
+    ],
+    ids=("device_encoders", "host_encoders"),
+)
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
 @pytest.mark.skipif(is_6u() or IS_RING_6U_LOCAL, reason="skip when 6u, as it does not support reset")
 def test_accuracy_with_reset(
     vae_on_device,
+    encoders_on_device,
     capture_trace,
     captions_path,
     coco_statistics_path,
@@ -64,6 +73,7 @@ def test_accuracy_with_reset(
 
     vae_str = "device_vae" if vae_on_device else "host_vae"
     trace_str = "with_trace" if capture_trace else "no_trace"
+    encoders_str = "device_encoders" if encoders_on_device else "host_encoders"
 
     logger.info(
         f"Running test_accuracy_with_reset with vae_on_device={vae_on_device}, capture_trace={capture_trace}, reset_bool={reset_bool}, reset_period={reset_period}"
@@ -91,7 +101,7 @@ def test_accuracy_with_reset(
                 "--num-prompts",
                 str(current_num_prompts),
                 "-k",
-                f"{vae_str} and {trace_str}",
+                f"{vae_str} and {trace_str} and {encoders_str}",
             ]
         )
         subprocess.run(command, check=True)
@@ -190,18 +200,3 @@ def sdxl_collect_images(start_from, num_prompts):
         img = Image.open(current_filename_path).convert("RGB")
         collected_images.append(img)
     return collected_images
-
-
-def check_clip_scores(start_from, num_prompts, prompts, clip_scores):
-    assert len(clip_scores) == num_prompts == len(prompts), f"Expected {num_prompts} CLIP scores and prompts."
-    for idx, score in enumerate(clip_scores):
-        if clip_scores[idx] < 27:
-            if clip_scores[idx] < 20:
-                logger.error(
-                    f"Very low CLIP score detected for image {start_from + idx + 1}: {score}, prompt: {prompts[idx]},  \
-                        this indicates a fragmented image or noise or prompt mismatch or something else very wrong."
-                )
-            else:
-                logger.warning(
-                    f"Low CLIP score detected for image {start_from + idx + 1}: {score}, prompt: {prompts[idx]}"
-                )

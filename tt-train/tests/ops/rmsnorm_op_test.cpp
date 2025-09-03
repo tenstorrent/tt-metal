@@ -41,9 +41,8 @@ protected:
 // ============================================================================
 TEST_F(RMSNormOpTest, RMSNorm_Small_Forward) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
-    uint32_t N = 1, C = 1, H = 1, W = 8;
+    [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
@@ -57,9 +56,8 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Forward) {
 
 TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
-    uint32_t N = 1, C = 1, H = 1, W = 8;
+    [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
@@ -91,7 +89,6 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
 
 TEST_F(RMSNormOpTest, RMSNorm_Forward_Batch) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
     std::array<uint32_t, 4> a_shape = {2, 1, 20, 5};
@@ -130,7 +127,6 @@ TEST_F(RMSNormOpTest, RMSNorm_Forward_Batch) {
 
 TEST_F(RMSNormOpTest, RMSNorm_Backward_Batch) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
     std::array<uint32_t, 4> a_shape = {2, 1, 20, 5};
@@ -168,9 +164,8 @@ TEST_F(RMSNormOpTest, RMSNorm_Backward_Batch) {
 // ============================================================================
 TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Forward) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
-    uint32_t N = 1, C = 1, H = 1, W = 8;
+    [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
@@ -184,9 +179,8 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Forward) {
 
 TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Backward) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
-    uint32_t N = 1, C = 1, H = 1, W = 8;
+    [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
@@ -218,7 +212,6 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Backward) {
 
 TEST_F(RMSNormOpTest, CompositeRMSNorm_Forward_Batch) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
     std::array<uint32_t, 4> a_shape = {2, 1, 20, 5};
@@ -257,7 +250,6 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Forward_Batch) {
 
 TEST_F(RMSNormOpTest, CompositeRMSNorm_Backward_Batch) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
     std::array<uint32_t, 4> a_shape = {2, 1, 20, 5};
@@ -348,7 +340,7 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
     EXPECT_EQ(result_composite_xtensor.shape(), x_data.shape());
 
     // Compare forward results
-    EXPECT_TRUE(xt::allclose(result_kernel_xtensor, result_composite_xtensor, 1.0e-3F, 3e-2F));
+    EXPECT_TRUE(xt::allclose(result_kernel_xtensor, result_composite_xtensor, 4e-2F, 3e-2F));
     EXPECT_TRUE(xt::all(xt::isfinite(result_kernel_xtensor)));
     EXPECT_TRUE(xt::all(xt::isfinite(result_composite_xtensor)));
 

@@ -248,7 +248,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 core.y,
                 virtual_core.x,
                 virtual_core.y,
-                (is_eth_core) ? "erisc" : " brisc",
+                risc_name,
                 buffer_size,
                 buffer_addr,
                 output_buf_noc_xy.str(),
@@ -320,7 +320,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 core.y,
                 virtual_core.x,
                 virtual_core.y,
-                (is_eth_core) ? "erisc" : " brisc",
+                risc_name,
                 buffer_size,
                 buffer_addr,
                 input_buf_noc_xy.str(),
@@ -407,7 +407,8 @@ void CheckHostSanitization(IDevice* device) {
     uint64_t addr = 0;
     uint32_t sz_bytes = 4;
     try {
-        llrt::read_hex_vec_from_core(device->id(), core, addr, sz_bytes);
+        [[maybe_unused]] auto data =
+            tt::tt_metal::MetalContext::instance().get_cluster().read_core(device->id(), core, addr, sz_bytes);
     } catch (std::runtime_error& e) {
         const std::string expected = fmt::format("Host watcher: bad {} NOC coord {}\n", "read", core.str());
         const std::string error = std::string(e.what());

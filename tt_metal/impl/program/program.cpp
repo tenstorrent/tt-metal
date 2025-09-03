@@ -68,6 +68,7 @@
 #include "tt_memory.h"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
+#include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
@@ -531,7 +532,7 @@ KernelGroup* detail::ProgramImpl::kernels_on_core(const CoreCoord& core, uint32_
 }
 
 struct KernelGroupInt {
-    bool valid;
+    bool valid{};
     kernel_id_array_t kernel_ids;
 
     bool operator==(const KernelGroupInt &b) const;
@@ -718,6 +719,9 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 min_remote_cb_start_index,
                 kg_to_cores.second));
             index++;
+        }
+        for (const auto& kg : kernel_groups_[programmable_core_type_index]) {
+            RecordKernelGroup(*this, hal.get_programmable_core_type(programmable_core_type_index), *kg);
         }
     }
 }
@@ -983,7 +987,7 @@ void detail::ProgramImpl::init_semaphores(
     CoreType core_type = MetalContext::instance().hal().get_core_type(programmable_core_type_index);
     auto semaphores_on_core = this->semaphores_on_core(logical_core, core_type);
     for (auto semaphore : semaphores_on_core) {
-        llrt::write_hex_vec_to_core(
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             device.id(),
             device.virtual_core_from_logical_core(logical_core, core_type),
             std::vector{semaphore.get().initial_value()},
@@ -1202,8 +1206,8 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
         for (const auto& kernel_group : this->get_kernel_groups(index)) {
-            // TODO: add a bit in the hal that says if this core type is unicast/multicast
-            if (core_type == CoreType::WORKER) {
+            if (hal.get_supports_receiving_multicasts(index)) {
+                // Below assumes core has a kernel config buffer
                 std::vector<multicast_transfer_info> dst_noc_multicast_info =
                     extract_dst_noc_multicast_info(device, kernel_group->core_ranges.ranges(), core_type);
                 std::vector<KernelHandle> kernel_ids;
@@ -1228,14 +1232,30 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                     }
                 }
             } else {
+                // Below assumes ethernet dispatch class
                 TT_ASSERT(core_type == CoreType::ETH);
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
                     extract_dst_noc_unicast_info(kernel_group->core_ranges.ranges(), core_type);
 
+                // No checks for max dispatch class
+                // Validated during CreateKernel if the requested processor is supported
+                constexpr auto k_SupportedDispatchClasses = std::array{DISPATCH_CLASS_ETH_DM0, DISPATCH_CLASS_ETH_DM1};
                 std::vector<KernelHandle> kernel_ids;
-                if (kernel_group->kernel_ids[DISPATCH_CLASS_ETH_DM0]) {
-                    KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(kernel_group->kernel_ids[DISPATCH_CLASS_ETH_DM0].value());
-                    kernel_ids.push_back(device_local_kernel_id);
+                for (auto dispatch_class : k_SupportedDispatchClasses) {
+                    if (kernel_group->kernel_ids[dispatch_class].has_value()) {
+                        KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(
+                            kernel_group->kernel_ids[dispatch_class].value());
+                        kernel_ids.push_back(device_local_kernel_id);
+
+                        // Update destination address by kernel config offset
+                        if (hal.get_core_kernel_stored_in_config_buffer(hal.get_programmable_core_type(index))) {
+                            int proc_sub_class = 0;
+                            for (uint32_t& dst_addr : kernel_transfer_info.at(device_local_kernel_id).dst_base_addrs) {
+                                dst_addr = kernel_group->kernel_text_offsets[dispatch_class + proc_sub_class];
+                                proc_sub_class++;
+                            }
+                        }
+                    }
                 }
 
                 for (const auto &[cores, num_mcast_dsts] : dst_noc_unicast_info) {

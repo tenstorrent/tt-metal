@@ -14,12 +14,12 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <limits>
 
 namespace ttnn::operations::ccl {
@@ -53,7 +53,7 @@ std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
 
     auto mapping_pages = get_num_pages(mapping_tensor);
 
-    auto mesh_view = input_tensor.mesh_device()->get_view();
+    auto mesh_view = input_tensor.device()->get_view();
     uint32_t num_devices = mesh_view.num_devices();
 
     uint32_t dispatch_devices =
@@ -96,8 +96,24 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
+    auto mesh_device = tensor_args.input_tensor.device();
+
+    auto init_barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
+    auto final_barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
+    tt::tt_metal::distributed::Synchronize(
+        mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
+
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value, tensor_coords);
+        auto cached_program = create_at(
+            operation_attributes,
+            coord,
+            tensor_args,
+            tensor_return_value,
+            tensor_coords,
+            init_barrier_semaphore,
+            final_barrier_semaphore);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
@@ -110,7 +126,9 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const GlobalSemaphore& init_semaphore,
+    const GlobalSemaphore& cross_device_semaphore) {
     tt::tt_metal::Program program{};
 
     auto input_tensor = tensor_args.input_tensor;
@@ -121,7 +139,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto num_links = operation_attributes.num_links;
     auto topology = tt::tt_fabric::get_fabric_topology();
 
-    auto mesh_device = input_tensor.mesh_device();
+    auto mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
@@ -299,12 +317,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     std::vector<uint32_t> reader_compile_time_args = {
-        input_tensor.buffer()->is_dram(),
-        indices_tensor.buffer()->is_dram(),
-        mapping_tensor.buffer()->is_dram(),
-        output_tensor.buffer()->is_dram(),
-        metadata_tensor.buffer()->is_dram(),
-
         input_tensor_cb_id,
         indices_tensor_cb_id,
         mapping_tensor_cb_id,
@@ -351,6 +363,11 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         operation_attributes.impl == AllToAllTransferType::PageByPage ? 1 : 0,
         linearized_mesh_coord,
     };
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
 
     const auto& writer_compile_time_args = reader_compile_time_args;
 
@@ -397,7 +414,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         mapping_tensor.buffer()->address(),
         output_tensor.buffer()->address(),
         metadata_tensor.buffer()->address(),
-        (uint32_t)operation_attributes.cross_device_semaphore->address(),
+        (uint32_t)cross_device_semaphore.address(),
         0,
         0,
     };
@@ -411,8 +428,8 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             mapping_tensor.buffer()->address(),
             output_tensor.buffer()->address(),
             metadata_tensor.buffer()->address(),
-            (uint32_t)operation_attributes.cross_device_semaphore->address(),
-            (uint32_t)operation_attributes.init_semaphore->address(),
+            (uint32_t)cross_device_semaphore.address(),
+            (uint32_t)init_semaphore.address(),
             0,
             0,
         };
@@ -452,7 +469,9 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         std::move(program),
         {.ternary_reader_kernel_id = ternary_reader_kernel_id,
          .binary_writer_kernel_id = binary_writer_kernel_id,
-         .cores = sender_cores}};
+         .cores = sender_cores,
+         .init_semaphore = init_semaphore,
+         .cross_device_semaphore = cross_device_semaphore}};
 }
 
 void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_arguments(
@@ -477,15 +496,15 @@ void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_a
             reader_runtime_args.at(2) = tensor_args.expert_mapping_tensor.buffer()->address();
             reader_runtime_args.at(3) = output_tensor.buffer()->address();
             reader_runtime_args.at(4) = metadata_tensor.buffer()->address();
-            reader_runtime_args.at(5) = (uint32_t)operation_attributes.cross_device_semaphore->address();
+            reader_runtime_args.at(5) = (uint32_t)shared_variables.cross_device_semaphore.address();
 
             writer_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
             writer_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
             writer_runtime_args.at(2) = tensor_args.expert_mapping_tensor.buffer()->address();
             writer_runtime_args.at(3) = output_tensor.buffer()->address();
             writer_runtime_args.at(4) = metadata_tensor.buffer()->address();
-            writer_runtime_args.at(5) = (uint32_t)operation_attributes.cross_device_semaphore->address();
-            writer_runtime_args.at(6) = (uint32_t)operation_attributes.init_semaphore->address();
+            writer_runtime_args.at(5) = (uint32_t)shared_variables.cross_device_semaphore.address();
+            writer_runtime_args.at(6) = (uint32_t)shared_variables.init_semaphore.address();
         }
     }
 }

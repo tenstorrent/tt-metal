@@ -128,10 +128,10 @@ uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout me
 
 class ShardShapeGenerator {
     CoreCoord end_core;
-    bool row_major;
-    TensorMemoryLayout memory_layout;
-    std::array<uint32_t, 2> shard_shape;
-    std::array<uint32_t, 2> last_shard_shape;
+    bool row_major{};
+    TensorMemoryLayout memory_layout{TensorMemoryLayout::INTERLEAVED};
+    std::array<uint32_t, 2> shard_shape{};
+    std::array<uint32_t, 2> last_shard_shape{};
 
 public:
     ShardShapeGenerator() = default;
@@ -465,19 +465,37 @@ void overwrite_compute_kernel_name_and_defines(
     KernelName& kernel_name,
     const SubtileBroadcastType subtile_broadcast_type,
     std::map<std::string, std::string>& compute_defines) {
-    compute_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
-    compute_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B ? "1" : "0";
-    kernel_name = KernelName::ComputeRowBcastNg;
+    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
+        compute_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
+        compute_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B ? "1" : "0";
+        kernel_name = KernelName::ComputeRowBcastNg;
+    } else if (
+        subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
+        kernel_name = KernelName::ComputeRowColBcastNg;
+    }
 }
 
-bool is_llk_bcast(const SubtileBroadcastType subtile_broadcast_type, const DataType a_dtype, const DataType b_dtype) {
-    if (not(subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
-            subtile_broadcast_type == SubtileBroadcastType::ROW_B)) {
-        return false;
+bool is_llk_bcast(
+    const SubtileBroadcastType subtile_broadcast_type,
+    const DataType a_dtype,
+    const DataType b_dtype,
+    const DataType c_dtype) {
+    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
+        if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16 && c_dtype == DataType::BFLOAT16) {
+            return true;
+        }
     }
-    if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16) {
-        return true;
+
+    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
+        if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16 && c_dtype == DataType::BFLOAT16) {
+            return true;
+        }
     }
+
     return false;
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -630,10 +648,12 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             tt::CBIndex::c_4, program, all_device_cores, b_intermediate_single_tile_size, 1, b_intermediate_format);
     }
 
-    if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A) {
+    if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B) {
         create_cb(tt::CBIndex::c_5, program, all_device_cores, a_single_tile_size, 2, a_data_format);
     }
-    if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
+    if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B ||
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
         create_cb(tt::CBIndex::c_6, program, all_device_cores, b_single_tile_size, 2, b_data_format);
     }
 
@@ -714,7 +734,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
     const uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
-    if (CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype)) {
+    if (CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, c_dtype)) {
         CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(
             compute_kernel, operation_attributes.subtile_broadcast_type, compute_kernel_defines);
         reader_defines["BCAST_LLK"] = "1";

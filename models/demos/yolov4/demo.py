@@ -13,9 +13,11 @@ from loguru import logger
 
 import ttnn
 from models.demos.utils.common_demo_utils import LoadImages, get_mesh_mappers, load_coco_class_names
-from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE
+from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE, get_model_result
 from models.demos.yolov4.post_processing import plot_boxes_cv2, post_processing
-from models.demos.yolov4.runner.performant_runner import YOLOv4PerformantRunner
+from models.demos.yolov4.runner.performant_runner_infra import YOLOv4PerformanceRunnerInfra
+from models.demos.yolov4.runner.pipeline_runner import YoloV4PipelineRunner
+from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 
 
@@ -41,17 +43,38 @@ def run_yolov4(
     logger.info(f"Running with batch_size={batch_size} across {device.get_num_devices()} devices")
 
     inputs_mesh_mapper, _, output_mesh_composer = get_mesh_mappers(device)
-    runner = YOLOv4PerformantRunner(
+
+    # Create the performance runner infrastructure
+    test_infra = YOLOv4PerformanceRunnerInfra(
         device,
         batch_size_per_device,
         act_dtype,
         weight_dtype,
-        resolution=resolution,
         model_location_generator=model_location_generator,
+        resolution=resolution,
         mesh_mapper=inputs_mesh_mapper,
         mesh_composer=output_mesh_composer,
     )
 
+    # Get memory configs from the infrastructure
+    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(
+        device, mesh_mapper=inputs_mesh_mapper, mesh_composer=output_mesh_composer
+    )
+
+    # Create pipeline configuration
+    config = PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False)
+    pipeline = create_pipeline_from_config(
+        config,
+        YoloV4PipelineRunner(test_infra),
+        device,
+        dram_input_memory_config=sharded_mem_config_DRAM,
+        l1_input_memory_config=input_mem_config,
+    )
+
+    # Compile pipeline
+    pipeline.compile(tt_inputs_host)
+
+    # Load and preprocess images
     image_files = [
         os.path.join(input_loc, f) for f in os.listdir(input_loc) if f.lower().endswith((".png", ".jpg", ".jpeg"))
     ]
@@ -73,11 +96,20 @@ def run_yolov4(
         torch_images.append(tensor.unsqueeze(0))
 
     torch_input_tensor = torch.cat(torch_images, dim=0)
-    tt_output = runner.run(torch_input_tensor)
+
+    # Convert input to TTNN format using the infrastructure's method
+    tt_inputs_host, _ = test_infra._setup_l1_sharded_input(device, torch_input_tensor)
+
+    # Run inference
+    outputs = pipeline.enqueue([tt_inputs_host]).pop_all()
+    tt_output = outputs[0]
+
+    # Convert TTNN output to PyTorch tensors using get_model_result
+    result_boxes, result_confs = get_model_result(tt_output, resolution, mesh_composer=output_mesh_composer)
 
     conf_thresh = 0.3
     nms_thresh = 0.4
-    boxes = post_processing(torch_images, conf_thresh, nms_thresh, tt_output)
+    boxes = post_processing(torch_images, conf_thresh, nms_thresh, [result_boxes, result_confs])
 
     class_names = load_coco_class_names()
     output_dir = "yolov4_predictions"
@@ -89,7 +121,7 @@ def run_yolov4(
         output_path = os.path.join(output_dir, output_filename)
         plot_boxes_cv2(orig_images[i], boxes[i], output_path, class_names)
 
-    runner.release()
+    pipeline.cleanup()
 
 
 def run_yolov4_coco(
@@ -106,16 +138,36 @@ def run_yolov4_coco(
     logger.info(f"Running with batch_size={batch_size} across {device.get_num_devices()} devices")
 
     inputs_mesh_mapper, _, output_mesh_composer = get_mesh_mappers(device)
-    runner = YOLOv4PerformantRunner(
+
+    # Create the performance runner infrastructure
+    test_infra = YOLOv4PerformanceRunnerInfra(
         device,
         batch_size_per_device,
         act_dtype,
         weight_dtype,
-        resolution=resolution,
         model_location_generator=model_location_generator,
+        resolution=resolution,
         mesh_mapper=inputs_mesh_mapper,
         mesh_composer=output_mesh_composer,
     )
+
+    # Get memory configs from the infrastructure
+    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(
+        device, mesh_mapper=inputs_mesh_mapper, mesh_composer=output_mesh_composer
+    )
+
+    # Create pipeline configuration
+    config = PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False)
+    pipeline = create_pipeline_from_config(
+        config,
+        YoloV4PipelineRunner(test_infra),
+        device,
+        dram_input_memory_config=sharded_mem_config_DRAM,
+        l1_input_memory_config=input_mem_config,
+    )
+
+    # Compile pipeline
+    pipeline.compile(tt_inputs_host)
 
     dataset = fiftyone.zoo.load_zoo_dataset("coco-2017", split="validation", max_samples=batch_size)
     data_set = LoadImages([sample["filepath"] for sample in dataset])
@@ -138,14 +190,22 @@ def run_yolov4_coco(
             break
 
     torch_input_tensor = torch.cat(torch_images, dim=0)
-    tt_output = runner.run(torch_input_tensor)
+
+    # Convert input to TTNN format using the infrastructure's method
+    tt_inputs_host, _ = test_infra._setup_l1_sharded_input(device, torch_input_tensor)
+
+    # Run inference
+    outputs = pipeline.enqueue([tt_inputs_host]).pop_all()
+    tt_output = outputs[0]
+
+    # Convert TTNN output to PyTorch tensors using get_model_result
+    result_boxes, result_confs = get_model_result(tt_output, resolution, mesh_composer=output_mesh_composer)
 
     conf_thresh = 0.3
     nms_thresh = 0.4
-    boxes = post_processing(torch_images, conf_thresh, nms_thresh, tt_output)
+    boxes = post_processing(torch_images, conf_thresh, nms_thresh, [result_boxes, result_confs])
 
-    namesfile = "models/demos/yolov4/resources/coco.names"
-    class_names = load_coco_class_names(namesfile)
+    class_names = load_coco_class_names()
     output_dir = "yolov4_predictions"
     os.makedirs(output_dir, exist_ok=True)
     for i in range(batch_size):
@@ -154,7 +214,7 @@ def run_yolov4_coco(
         output_path = os.path.join(output_dir, output_filename)
         plot_boxes_cv2(orig_images[i], boxes[i], output_path, class_names)
 
-    runner.release()
+    pipeline.cleanup()
 
 
 @run_for_wormhole_b0()

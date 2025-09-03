@@ -49,11 +49,23 @@ ensureboosttarget(container)
 ensureboosttarget(smart_ptr)
 ensureboosttarget(interprocess)
 
-add_library(small_vector INTERFACE)
-target_link_libraries(
-    small_vector
-    INTERFACE
-        "$<BUILD_INTERFACE:Boost::container>" # FIXME: this is a hack so we do not need to package up Boost
+############################################################################################################################
+# protobuf
+############################################################################################################################
+
+CPMAddPackage(
+    NAME protobuf
+    GITHUB_REPOSITORY protocolbuffers/protobuf
+    GIT_TAG
+        v21.12 # Using 21.12 to avoid using abseil and utf8_range
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "protobuf_BUILD_TESTS OFF"
+        "CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations -Wno-invalid-noreturn"
+        "BUILD_TESTING OFF"
+        "CMAKE_POSITION_INDEPENDENT_CODE ON"
+        "protobuf_BUILD_EXAMPLES OFF"
+        "BUILD_SHARED_LIBS OFF"
 )
 
 ############################################################################################################################

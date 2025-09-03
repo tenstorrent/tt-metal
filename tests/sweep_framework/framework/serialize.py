@@ -76,7 +76,7 @@ def deserialize(object):
             return str(object)
 
 
-def serialize_for_postgres(object, warnings=[]):
+def serialize_structured(object, warnings=[]):
     if "to_json" in dir(object):
         json_str = object.to_json()
         try:
@@ -98,7 +98,7 @@ def serialize_for_postgres(object, warnings=[]):
         return str(object)
 
 
-def deserialize_for_postgres(object):
+def deserialize_structured(object):
     if isinstance(object, dict):
         type = eval(object["type"])
         data = object["data"]
@@ -162,18 +162,11 @@ def convert_enum_strings_to_values(data):
     return result
 
 
-def deserialize_vector_for_postgres(test_vector):
+def deserialize_vector_structured(test_vector):
     """
     Deserialize a test vector that was serialized for PostgreSQL storage.
     """
     param_names = test_vector.keys()
-    test_vector = [deserialize_for_postgres(test_vector[elem]) for elem in test_vector]
-    test_vector = dict(zip(param_names, test_vector))
-    return test_vector
-
-
-def deserialize_vector(test_vector):
-    param_names = test_vector.keys()
-    test_vector = [deserialize(test_vector[elem]) for elem in test_vector]
+    test_vector = [deserialize_structured(test_vector[elem]) for elem in test_vector]
     test_vector = dict(zip(param_names, test_vector))
     return test_vector

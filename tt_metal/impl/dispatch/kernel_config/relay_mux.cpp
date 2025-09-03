@@ -97,38 +97,7 @@ void RelayMux::GenerateStaticConfigs() {
     const auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device_id_);
     const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(destination_device_id);
 
-    auto get_link_idx = [&](tt::tt_fabric::FabricNodeId src_fabric_node_id,
-                            tt::tt_fabric::FabricNodeId dst_fabric_node_id) -> uint32_t {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() && device_->is_mmio_capable()) {
-            const auto forwarding_direction =
-                control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
-            TT_FATAL(
-                forwarding_direction.has_value(),
-                "No forwarding directions found from {} to {}",
-                src_fabric_node_id,
-                dst_fabric_node_id);
-            const auto& fabric_channels =
-                control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, *forwarding_direction);
-
-            for (auto i = 0; i < fabric_channels.size(); i++) {
-                const auto fabric_route =
-                    control_plane.get_fabric_route(src_fabric_node_id, dst_fabric_node_id, fabric_channels[i]);
-                if (fabric_route.size() == 1) {
-                    return i;
-                }
-            }
-        } else {
-            const auto& available_links =
-                tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
-            TT_FATAL(
-                !available_links.empty(), "No links available from {} to {}", src_fabric_node_id, dst_fabric_node_id);
-            return available_links.back();
-        }
-
-        TT_THROW("Unable to find forwarding link from {} to {}", src_fabric_node_id, dst_fabric_node_id);
-    };
-
-    auto link_index = get_link_idx(src_fabric_node_id, dst_fabric_node_id);
+    auto link_index = get_dispatch_link_index(src_fabric_node_id, dst_fabric_node_id, device_);
     log_debug(
         tt::LogMetal,
         "RelayMux Device:{}, HeaderCh:{}, FullCh:{}, FullB:{}, Logical:{}, Virtual: {}, D2H: {} Channel Size: {}, Num "
@@ -229,4 +198,36 @@ int get_num_hops(chip_id_t mmio_dev_id, chip_id_t downstream_dev_id) {
         "RelayMux Downstream device {} is not found in tunnel from MMIO device {}", downstream_dev_id, mmio_dev_id);
     return -1;
 }
+
+uint32_t RelayMux::get_dispatch_link_index(
+    tt::tt_fabric::FabricNodeId src_fabric_node_id, tt::tt_fabric::FabricNodeId dst_fabric_node_id, IDevice* device) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() && device->is_mmio_capable()) {
+        const auto forwarding_direction =
+            control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+        TT_FATAL(
+            forwarding_direction.has_value(),
+            "No forwarding directions found from {} to {}",
+            src_fabric_node_id,
+            dst_fabric_node_id);
+        const auto& fabric_channels =
+            control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, *forwarding_direction);
+
+        for (auto i = 0; i < fabric_channels.size(); i++) {
+            const auto fabric_route =
+                control_plane.get_fabric_route(src_fabric_node_id, dst_fabric_node_id, fabric_channels[i]);
+            if (fabric_route.size() == 1) {
+                return i;
+            }
+        }
+    } else {
+        const auto& available_links = tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
+        TT_FATAL(!available_links.empty(), "No links available from {} to {}", src_fabric_node_id, dst_fabric_node_id);
+        return available_links.back();
+    }
+
+    TT_THROW("Unable to find forwarding link from {} to {}", src_fabric_node_id, dst_fabric_node_id);
+}
+
 }  // namespace tt::tt_metal

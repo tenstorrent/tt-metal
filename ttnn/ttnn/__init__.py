@@ -129,6 +129,10 @@ from ttnn._ttnn.operations.trace import (
     release_trace,
 )
 
+from ttnn._ttnn.operations.debug import (
+    apply_device_delay,
+)
+
 from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
@@ -350,6 +354,7 @@ from ttnn.operations.normalization import (
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
     determine_expected_group_norm_sharded_config_and_grid_size,
+    dram_group_norm_params_from_torch,
 )
 
 from ttnn.operations.embedding import (
@@ -382,6 +387,10 @@ from ttnn._ttnn.operations.conv import (
     convert_conv_weight_tensor_to_tiled_layout,
     convert_conv_weight_tensor_to_special_padding_tiled_layout,
     convert_conv_weight_tensor_to_grouped_layout,
+)
+
+from ttnn.operations.pool import (
+    prepare_grid_sample_grid,
 )
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig

@@ -6,7 +6,7 @@ on:
       version:
         required: true
         type: string
-      is_major_version:
+      tag-latest:
         required: true
         type: boolean
         default: false
@@ -19,11 +19,14 @@ on:
         type: string
 jobs:
   create-docker-release-image:
+    permissions:
+      contents: read
+      packages: write
     strategy:
       matrix:
         os: [ubuntu-22.04]
-    runs-on:
-      - ubuntu-latest
+        image: [release, release-models]
+    runs-on: ubuntu-latest
     outputs:
       tag_name: ${{ steps.generate-tag-name.outputs.TAG_NAME }}
     steps:
@@ -45,7 +48,7 @@ jobs:
         id: generate-tag-name
         run: |
           echo "WHEEL_FILENAME=$(ls -1 *.whl)" >> $GITHUB_ENV
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-release-amd64
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-${{ matrix.image }}-amd64
           echo "REPO_IMAGE_NAME=$REPO_IMAGE_NAME" >> $GITHUB_ENV
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
@@ -59,12 +62,14 @@ jobs:
           tags: ${{ env.TAG_NAME }}
           context: .
           file: dockerfile/Dockerfile
-          target: release
+          target: ${{ matrix.image }}
+
   smoke-test-docker-image:
     needs: create-docker-release-image
     strategy:
       matrix:
         os: [ubuntu-22.04]
+        image: [release, release-models]
         test_group:
           [
               {
@@ -80,7 +85,7 @@ jobs:
           ]
     runs-on: ${{ matrix.test_group.runs-on }}
     container:
-      image: ${{ needs.create-docker-release-image.outputs.tag_name || 'docker-image-unresolved!' }}
+      image: ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-${{ matrix.image }}-amd64:${{ inputs.version }}
       env:
         LOGURU_LEVEL: INFO
         ARCH_NAME: ${{ matrix.test_group.arch }}
@@ -110,7 +115,7 @@ jobs:
       - name: Run frequent regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-            pip install 'torch==2.2.1+cpu' 'numpy>=1.24.4,<2' pytest
+            pip install 'torch>=2.7.1+cpu' 'numpy>=1.24.4,<2' pytest
             ${{ matrix.test_group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
@@ -119,6 +124,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-22.04]
+        image: [release, release-models]
     runs-on:
       - ubuntu-latest
     steps:
@@ -132,13 +138,13 @@ jobs:
         run: |
           set -eu # basic shell hygiene
           LATEST_TAG=latest
-          if [ "${{  inputs.is_major_version }}" = "true" ]; then
+          if [ "${{ inputs.tag-latest }}" = "true" ]; then
             LATEST_TAG=latest
           else
             LATEST_TAG=latest-rc
           fi
           echo "Determined that the current tag is " $LATEST_TAG
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-release-amd64
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-${{ matrix.image }}-amd64
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           docker pull $TAG_NAME
           echo "Tagging the image as " $REPO_IMAGE_NAME:$LATEST_TAG

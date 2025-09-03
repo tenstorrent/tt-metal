@@ -33,8 +33,6 @@ using ::testing::SizeIs;
 using ::tt::tt_metal::distributed::MeshContainer;
 
 TEST(MeshDeviceInitTest, Init1x1Mesh) {
-    auto& sys = SystemMesh::instance();
-
     MeshDeviceConfig config(MeshShape(1, 1));
 
     EXPECT_NO_THROW({
@@ -149,5 +147,6 @@ TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
             fabric_node_id);
     }
 }
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed

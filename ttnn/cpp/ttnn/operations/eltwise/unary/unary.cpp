@@ -96,10 +96,6 @@ template struct ExecuteUnary<UnaryOpType::ISNAN>;
 template struct ExecuteUnary<UnaryOpType::ISNEGINF>;
 template struct ExecuteUnary<UnaryOpType::ISPOSINF>;
 template struct ExecuteUnary<UnaryOpType::LEZ>;
-template struct ExecuteUnary<UnaryOpType::LOG>;
-template struct ExecuteUnary<UnaryOpType::LOG10>;
-template struct ExecuteUnary<UnaryOpType::LOG2>;
-template struct ExecuteUnary<UnaryOpType::LOG1P>;
 template struct ExecuteUnary<UnaryOpType::LOGICAL_NOT_UNARY>;
 template struct ExecuteUnary<UnaryOpType::LTZ>;
 template struct ExecuteUnary<UnaryOpType::NEG>;
@@ -114,7 +110,6 @@ template struct ExecuteUnary<UnaryOpType::SIN>;
 template struct ExecuteUnary<UnaryOpType::SQRT>;
 template struct ExecuteUnary<UnaryOpType::SQUARE>;
 template struct ExecuteUnary<UnaryOpType::TAN>;
-template struct ExecuteUnary<UnaryOpType::TANH>;
 template struct ExecuteUnary<UnaryOpType::TILED_PROD>;
 template struct ExecuteUnary<UnaryOpType::BITWISE_NOT>;
 template struct ExecuteUnary<UnaryOpType::ALT_COMPLEX_ROTATE90>;
@@ -148,6 +143,26 @@ template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::GELU>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::RSQRT>;
 
 template <UnaryOpType unary_op_type>
+Tensor ExecuteUnaryWithFastAndApproximateModeTrue<unary_op_type>::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const bool parameter,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        queue_id,
+        input_tensor,
+        {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
+        memory_config,
+        optional_output_tensor);
+}
+
+template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG>;
+template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG10>;
+template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG2>;
+template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG1P>;
+
+template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithVectorAndFastAndApproximateMode<unary_op_type>::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
@@ -176,6 +191,22 @@ Tensor ExecuteUnaryWithFloatParameter<unary_op_type>::invoke(
         queue_id,
         input_tensor,
         {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
+        memory_config,
+        optional_output_tensor);
+}
+
+template <UnaryOpType unary_op_type>
+Tensor ExecuteUnaryWithTwoFloatParameter<unary_op_type>::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const float parameter_a,
+    const float parameter_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        queue_id,
+        input_tensor,
+        {UnaryWithParam{unary_op_type, {static_cast<float>(parameter_a), static_cast<float>(parameter_b)}}},
         memory_config,
         optional_output_tensor);
 }
@@ -212,6 +243,9 @@ template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_EQ>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::CELU>;
+
+// threshold(a,t,v) = (a <= t ? v : a)
+template struct ExecuteUnaryWithTwoFloatParameter<UnaryOpType::THRESHOLD>;
 
 template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MINIMUM>::invoke<float>(
     QueueId, const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
@@ -295,9 +329,9 @@ Tensor Tanh::invoke(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    bool accuracy) {
+    bool approx) {
     UnaryOpType op_type = UnaryOpType::TANH;
-    if (!accuracy) {
+    if (approx || input_tensor.dtype() == DataType::BFLOAT8_B || input_tensor.dtype() == DataType::BFLOAT4_B) {
         return detail::unary_impl(
             queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
     } else {
@@ -361,9 +395,15 @@ Tensor Tanhshrink::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    bool approx) {
     UnaryOpType op_type = UnaryOpType::TANHSHRINK;
-    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    if (approx || input_tensor.dtype() == DataType::BFLOAT8_B || input_tensor.dtype() == DataType::BFLOAT4_B) {
+        return detail::unary_impl(
+            queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    } else {
+        return ttnn::tanhshrink_accurate(queue_id, input_tensor, memory_config, optional_output_tensor);
+    }
 }
 
 Tensor Hardshrink::invoke(
@@ -391,11 +431,19 @@ Tensor Hardtanh::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::HARDTANH;
     return detail::unary_impl(
-        queue_id,
-        input_tensor,
-        {UnaryWithParam{op_type, std::vector<float>{static_cast<float>(min_val), static_cast<float>(max_val)}}},
-        memory_config,
-        optional_output_tensor);
+        queue_id, input_tensor, {UnaryWithParam{op_type, {min_val, max_val}}}, memory_config, optional_output_tensor);
+}
+
+Tensor Clamp::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const float min_val,
+    const float max_val,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::CLAMP_TSS;
+    return detail::unary_impl(
+        queue_id, input_tensor, {UnaryWithParam{op_type, {min_val, max_val}}}, memory_config, optional_output_tensor);
 }
 
 Tensor Softshrink::invoke(

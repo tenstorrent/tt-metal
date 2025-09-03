@@ -6,7 +6,7 @@
 import pytest
 import torch
 import ttnn
-from models.experimental.swin_v2.demo.demo_utils import get_batch, get_data_loader
+from models.demos.utils.common_demo_utils import get_batch, get_data_loader, load_imagenet_dataset
 from models.experimental.swin_v2.runner.performant_runner import SwinV2PerformantRunner
 from tqdm import tqdm
 from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
@@ -14,25 +14,9 @@ from models.experimental.swin_v2.common import SWIN_V2_L1_SMALL_SIZE
 from loguru import logger
 
 
-@run_for_wormhole_b0()
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": SWIN_V2_L1_SMALL_SIZE, "trace_region_size": 16998400, "num_command_queues": 2}],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "batch_size, act_dtype, weight_dtype",
-    ((1, ttnn.bfloat16, ttnn.bfloat16),),
-)
-@pytest.mark.parametrize(
-    "resolution",
-    [
-        (512, 512),
-    ],
-)
-def test_run_swin_v2_trace_2cqs_inference(
+def run_swin_v2_trace_2cqs_inference(
     device,
-    batch_size,
+    device_batch_size,
     act_dtype,
     weight_dtype,
     model_location_generator,
@@ -41,23 +25,25 @@ def test_run_swin_v2_trace_2cqs_inference(
     iterations=100,
 ):
     disable_persistent_kernel_cache()
+    batch_size = device.get_num_devices() * device_batch_size
+    iterations = iterations // batch_size
     with torch.no_grad():
         swin_v2_trace_2cq = SwinV2PerformantRunner(
             device,
-            batch_size,
+            device_batch_size,
             act_dtype,
             weight_dtype,
             resolution=resolution,
             model_location_generator=model_location_generator,
         )
         logger.info("ImageNet-1k validation Dataset")
-        input_loc = str(model_location_generator("ImageNet_data"))
+        input_loc = load_imagenet_dataset(model_location_generator)
         data_loader = get_data_loader(input_loc, batch_size, iterations)
 
         input_tensors_all = []
         input_labels_all = []
         for iter in tqdm(range(iterations), desc="Preparing images"):
-            inputs, labels = get_batch(data_loader)
+            inputs, labels = get_batch(data_loader, resolution[0])
             input_tensors_all.append(inputs)
             input_labels_all.append(labels)
         logger.info("Processed ImageNet-1k validation Dataset")
@@ -70,7 +56,7 @@ def test_run_swin_v2_trace_2cqs_inference(
             torch_input_tensor = input_tensors_all[iter]
             labels = input_labels_all[iter]
             output = swin_v2_trace_2cq.run(torch_input_tensor)
-            output = ttnn.to_torch(output).to(torch.float)
+            output = ttnn.to_torch(output, mesh_composer=swin_v2_trace_2cq.runner_infra.output_composer).to(torch.float)
             prediction = output.argmax(dim=-1)
             for i in range(batch_size):
                 predictions.append(imagenet_label_dict[prediction[i].item()])
@@ -83,3 +69,79 @@ def test_run_swin_v2_trace_2cqs_inference(
         accuracy = correct / (batch_size * iterations)
         logger.info(f"=============")
         logger.info(f"Accuracy for  batch size: {batch_size} over {iterations} iterations is: {accuracy}")
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": SWIN_V2_L1_SMALL_SIZE, "trace_region_size": 16998400, "num_command_queues": 2}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "iterations,batch_size, act_dtype, weight_dtype",
+    ((100, 1, ttnn.bfloat16, ttnn.bfloat16),),
+)
+@pytest.mark.parametrize(
+    "resolution",
+    [
+        (512, 512),
+    ],
+)
+def test_swin_v2_trace_2cqs_inference(
+    device,
+    batch_size,
+    iterations,
+    act_dtype,
+    weight_dtype,
+    model_location_generator,
+    resolution,
+    imagenet_label_dict,
+):
+    return run_swin_v2_trace_2cqs_inference(
+        device,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        model_location_generator,
+        resolution,
+        imagenet_label_dict,
+        iterations,
+    )
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": SWIN_V2_L1_SMALL_SIZE, "trace_region_size": 16998400, "num_command_queues": 2}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "iterations,device_batch_size, act_dtype, weight_dtype",
+    ((100, 1, ttnn.bfloat16, ttnn.bfloat16),),
+)
+@pytest.mark.parametrize(
+    "resolution",
+    [
+        (512, 512),
+    ],
+)
+def test_swin_v2_trace_2cqs_inference_dp(
+    mesh_device,
+    device_batch_size,
+    iterations,
+    act_dtype,
+    weight_dtype,
+    model_location_generator,
+    resolution,
+    imagenet_label_dict,
+):
+    return run_swin_v2_trace_2cqs_inference(
+        mesh_device,
+        device_batch_size,
+        act_dtype,
+        weight_dtype,
+        model_location_generator,
+        resolution,
+        imagenet_label_dict,
+        iterations,
+    )

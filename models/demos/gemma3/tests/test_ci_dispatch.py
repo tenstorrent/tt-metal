@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import os
+
+import pytest
+from loguru import logger
+
+from models.utility_functions import skip_for_grayskull
+
+
+# This test will run all the nightly fast dispatch tests for all supported TTT models in CI [N150 / N300 only]
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "model_weights",
+    ["/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it", "/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it"],
+    ids=["gemma-3-4b-it", "gemma-3-27b-it"],
+)
+def test_ci_dispatch(model_weights, is_ci_env):
+    if not is_ci_env:
+        pytest.skip("Skipping CI dispatch tests when running locally.")
+    os.environ["HF_MODEL"] = model_weights
+    os.environ["TT_CACHE_PATH"] = model_weights
+    logger.info(f"Running fast dispatch tests for {model_weights}")
+
+    # Pass the exit code of pytest to proper keep track of failures during runtime
+    exit_code = pytest.main(
+        [
+            "models/demos/siglip/tests/test_attention.py",
+            "models/demos/gemma3/tests/test_mmp.py",
+            "models/demos/gemma3/tests/test_patch_embedding.py",
+            "models/demos/gemma3/tests/test_vision_attention.py",
+            "models/demos/gemma3/tests/test_vision_cross_attention_transformer.py",
+            "models/demos/gemma3/tests/test_vision_embedding.py",
+            "models/demos/gemma3/tests/test_vision_layernorm.py",
+            "models/demos/gemma3/tests/test_vision_mlp.py",
+            "models/demos/gemma3/tests/test_vision_pipeline.py",
+            # "models/demos/gemma3/tests/test_vision_rmsnorm.py",
+            "models/demos/gemma3/tests/test_vision_transformer_block.py",
+            "models/demos/gemma3/tests/test_vision_transformer.py",
+            "models/tt_transformers/tests/test_embedding.py",
+            "models/tt_transformers/tests/test_rms_norm.py",
+            "models/tt_transformers/tests/test_mlp.py",
+            # "models/tt_transformers/tests/test_attention.py",
+            # "models/tt_transformers/tests/test_attention_prefill.py",
+            "models/tt_transformers/tests/test_decoder.py",
+            "models/tt_transformers/tests/test_decoder_prefill.py",
+        ]
+        + ["-x"]  # Fail if one of the tests fails
+    )
+    if exit_code == pytest.ExitCode.TESTS_FAILED:
+        pytest.fail(
+            f"One or more CI dispatch tests failed for {model_weights}. Please check the log above for more info",
+            pytrace=False,
+        )

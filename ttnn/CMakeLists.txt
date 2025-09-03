@@ -63,6 +63,10 @@ target_sources(
         core/distributed/distributed_configs.cpp
         core/distributed/host_ccl.cpp
         core/distributed/tensor_topology.cpp
+        core/distributed/bidirectional_fabric_socket.cpp
+        core/distributed/create_socket.cpp
+        core/distributed/fabric_socket.cpp
+        core/distributed/mpi_socket.cpp
         core/events.cpp
         core/global_circular_buffer.cpp
         core/global_semaphore.cpp
@@ -283,6 +287,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/softmax/softmax_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/generic/generic_pools_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/global_avg_pool/global_avg_pool_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/grid_sample/grid_sample_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/pool/upsample/upsample_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/prefetcher/prefetcher/dram_prefetcher_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/prefetcher/prefetcher_${PY_BINDING}.cpp
@@ -310,12 +315,12 @@ set(TTNN_SRC_PYBIND
 )
 
 set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/llama_all_gather_matmul_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_command_processor_async/all_gather_command_processor_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_broadcast_async/all_broadcast_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_matmul/all_gather_matmul_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/rs_matmul_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_reduce/all_reduce_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/ccl_experimental_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter_${PY_BINDING}.cpp
@@ -335,12 +340,15 @@ set(TTNN_P2P_PYBIND ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/point_to_poi
 
 set(CCL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/ccl_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_gather/all_gather_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_to_all_combine/all_to_all_combine_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_to_all_dispatch/all_to_all_dispatch_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/mesh_partition/mesh_partition_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/reduce_scatter/reduce_scatter_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/barrier/barrier_${PY_BINDING}.cpp
+)
+
+set(DEBUG_TTNN_SRCS_PYBIND
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/debug/debug_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/debug/apply_device_delay_${PY_BINDING}.cpp
 )
 
 #TODO : should be using pybind11_add_module, but right now it introduces many build problems
@@ -408,8 +416,11 @@ set_target_properties(
             "default" # FIXME: Export the symbols we want, and use hidden visibility instead of default
         ADDITIONAL_CLEAN_FILES
             "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_'${LIBRARY_NAME}'.so;${PROJECT_SOURCE_DIR}/ttnn/'${LIBRARY_NAME}'.egg-info" # FIXME: Confirm this is a relic of the past and can be deleted; No generated files should land in the source tree!
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
+file(GLOB_RECURSE ttnn_kernels cpp/ttnn/operations/copy/typecast/device/kernels/*)
 file(GLOB_RECURSE api api/*)
 target_sources(
     ttnncpp
@@ -417,7 +428,16 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_SOURCE_DIR}/cpp
-        FILES ${api} cpp/ttnn/operations/creation.hpp cpp/ttnn/operations/functions.hpp
+        FILES
+            ${api}
+            cpp/ttnn/operations/copy/typecast/typecast.hpp
+            cpp/ttnn/operations/creation.hpp
+            cpp/ttnn/operations/functions.hpp
+            cpp/ttnn/operations/compute_throttle_utils.hpp
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${ttnn_kernels}
     PRIVATE
         # FIXME: Move these out to appropriate sub targets
         cpp/ttnn/operations/compute_throttle_utils.cpp
@@ -510,14 +530,13 @@ target_link_libraries(
         TTNN::Ops::SlidingWindow
         TTNN::Ops::Transformer
         TTNN::Ops::Uniform
+        TTNN::Ops::Debug
         TTNN::Ops::PointToPoint
         TTNN::Ops::Pool
         TTNN::Ops::Normalization
         TTNN::Ops::Rand
 )
 if(TT_INSTALL)
-    install(TARGETS ttnncpp LIBRARY COMPONENT ttnn-runtime)
-
     install(
         TARGETS
             ttnncpp
@@ -525,7 +544,20 @@ if(TT_INSTALL)
             DESTINATION ${CMAKE_INSTALL_LIBDIR}
             COMPONENT tar
     )
-    install(TARGETS ttnncpp EXPORT TT-NN LIBRARY COMPONENT ttnn-runtime FILE_SET api COMPONENT ttnn-dev)
+    install(
+        TARGETS
+            ttnncpp
+        EXPORT TT-NN
+        FILE_SET
+        api
+            COMPONENT ttnn-dev
+        FILE_SET
+        kernels
+            DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn
+            COMPONENT ttnn-runtime
+        LIBRARY
+            COMPONENT ttnn-runtime
+    )
 endif()
 
 if(WITH_PYTHON_BINDINGS)
@@ -559,6 +591,7 @@ if(WITH_PYTHON_BINDINGS)
             ${TTNN_SRC_PYBIND}
             ${CCL_TTNN_SRCS_PYBIND}
             ${CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND}
+            ${DEBUG_TTNN_SRCS_PYBIND}
             ${TTNN_P2P_PYBIND}
     )
     target_include_directories(
@@ -667,6 +700,7 @@ add_subdirectory(cpp/ttnn/operations/pool)
 add_subdirectory(cpp/ttnn/operations/point_to_point)
 add_subdirectory(cpp/ttnn/operations/normalization)
 add_subdirectory(cpp/ttnn/operations/rand)
+add_subdirectory(cpp/ttnn/operations/debug)
 add_subdirectory(cpp/ttnn/deprecated)
 
 add_subdirectory(examples)

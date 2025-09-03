@@ -16,6 +16,7 @@
 #include <algorithm>
 
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests::multihost {
@@ -118,8 +119,13 @@ bool test_socket_send_recv(
 
             auto sender_data_buffer = MeshBuffer::create(buffer_config, sender_device_local_config, mesh_device_.get());
             auto sender_mesh_workload = CreateMeshWorkload();
+            std::unordered_set<MeshCoreCoord> mesh_core_coords;
 
             for (const auto& connection : socket.get_config().socket_connection_config) {
+                if (mesh_core_coords.find(connection.sender_core) != mesh_core_coords.end()) {
+                    continue;
+                }
+                mesh_core_coords.insert(connection.sender_core);
                 auto sender_core = connection.sender_core.core_coord;
                 WriteShard(
                     mesh_device_->mesh_command_queue(),
@@ -152,8 +158,7 @@ bool test_socket_send_recv(
                         2 * packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::UInt32}})
                         .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
 
-                auto sender_packet_header_CB_handle =
-                    CreateCircularBuffer(sender_program, sender_core, sender_cb_reserved_packet_header_config);
+                CreateCircularBuffer(sender_program, sender_core, sender_cb_reserved_packet_header_config);
 
                 std::vector<uint32_t> sender_rtas;
                 tt_fabric::append_fabric_connection_rt_args(
@@ -191,7 +196,6 @@ bool test_socket_send_recv(
                 auto recv_program = CreateProgram();
 
                 auto recv_virtual_coord = recv_data_buffer->device()->worker_core_from_logical_core(recv_core);
-                auto output_virtual_coord = recv_data_buffer->device()->worker_core_from_logical_core(recv_core);
 
                 KernelHandle recv_kernel = CreateKernel(
                     recv_program,
@@ -232,7 +236,7 @@ bool test_socket_send_recv(
                     recv_data_readback.begin() + idx * data_size / sizeof(uint32_t),
                     recv_data_readback.begin() + (idx + 1) * data_size / sizeof(uint32_t));
                 is_data_match &= (src_vec_per_core == recv_data_readback_per_core);
-                EXPECT_TRUE(is_data_match);
+                EXPECT_EQ(src_vec_per_core, recv_data_readback_per_core);
             }
         }
         // Increment the source vector for the next iteration
