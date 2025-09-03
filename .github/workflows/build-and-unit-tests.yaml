@@ -48,7 +48,12 @@ jobs:
               mkdir -p /tmp/kernels
               TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*
           - name: data_movement
-            cmd: ./build/test/tt_metal/unit_tests_data_movement
+            cmd: |
+              if [ "${{ inputs.NIGHTLY }}" = "true" ]; then
+                ./build/test/tt_metal/unit_tests_data_movement
+              else
+                ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*-*NIGHTLY_*"
+              fi
           - name: debug_tools and device and dispatch
             cmd: |
               if [ "${{ inputs.NIGHTLY }}" = "true" ]; then
