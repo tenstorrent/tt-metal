@@ -4,25 +4,16 @@
 
 #pragma once
 
-#include <fstream>
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
-#include <google/protobuf/text_format.h>
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
 #include <enchantum/enchantum.hpp>
 #include <scaleout_tools/board/board.hpp>
-
-// Add protobuf includes
-#include "cluster_config.pb.h"
-#include "pod_config.pb.h"
-#include "deployment.pb.h"
 
 namespace tt::scaleout_tools {
 
@@ -114,24 +105,6 @@ struct ResolvedGraphInstance {
 
 class CablingGenerator {
 public:
-    // Helper to load protobuf descriptors
-    template <typename Descriptor>
-    static Descriptor load_descriptor_from_textproto(const std::string& file_path) {
-        std::ifstream file(file_path);
-        if (!file.is_open()) {
-            throw std::runtime_error("Failed to open file: " + file_path);
-        }
-
-        std::string file_content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        file.close();
-
-        Descriptor descriptor;
-        if (!google::protobuf::TextFormat::ParseFromString(file_content, &descriptor)) {
-            throw std::runtime_error("Failed to parse textproto file: " + file_path);
-        }
-        return descriptor;
-    }
-
     // Constructor
     CablingGenerator(const std::string& cluster_descriptor_path, const std::string& deployment_descriptor_path);
 
@@ -144,29 +117,6 @@ public:
     void emit_factory_system_descriptor(const std::string& output_path) const;
 
 private:
-    // Find pod descriptor by name - search inline first, then fallback to file
-    tt::scaleout_tools::cabling_generator::proto::PodDescriptor find_pod_descriptor(
-        const std::string& pod_descriptor_name,
-        const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor);
-
-    // Build pod from descriptor with port connections and validation
-    Pod build_pod(
-        const std::string& pod_descriptor_name,
-        HostId host_id,
-        const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor);
-
-    // Build resolved graph instance from template and concrete host mappings
-    std::shared_ptr<ResolvedGraphInstance> build_graph_instance(
-        const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
-        const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-        const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
-        const std::string& instance_name = "");
-
-    // Build cluster from descriptor with port connections and validation
-    void build_cluster_from_descriptor(
-        const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-        const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor);
-
     // Validate that each host_id is assigned to exactly one pod
     void validate_host_id_uniqueness();
 
