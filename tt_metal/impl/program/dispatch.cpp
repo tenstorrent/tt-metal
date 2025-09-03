@@ -120,8 +120,6 @@ DispatchWriteOffsets get_dispatch_write_offset(HalProgrammableCoreType core_type
     }
 }
 
-};  // namespace
-
 uint32_t configure_rta_offsets_for_kernel_groups(
     uint32_t programmable_core_type_index,
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
@@ -153,10 +151,12 @@ uint32_t configure_rta_offsets_for_kernel_groups(
         uint32_t offset = 0;
         for (std::size_t dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
             auto& optional_id = kg->kernel_ids[dispatch_class];
-            kg->rta_sizes[dispatch_class] = max_rtas[dispatch_class] * sizeof(uint32_t);
             if (optional_id) {
-                const auto& kernel = kernels.at(optional_id.value());
+                auto kernel_id = optional_id.value();
+                kg->rta_sizes[kernel_id] = max_rtas[dispatch_class] * sizeof(uint32_t);
+                const auto& kernel = kernels.at(kernel_id);
                 kernel->set_runtime_args_count(kg->core_ranges, max_rtas[dispatch_class]);
+                // TODO: fix
                 kg->launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset = base_offset + offset;
                 offset += max_rtas[dispatch_class] * sizeof(uint32_t);
             } else {
@@ -217,6 +217,8 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     }
     return total_crta_size;
 }
+
+};  // namespace
 
 uint32_t finalize_rt_args(
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
@@ -739,20 +741,19 @@ BatchedTransfers assemble_runtime_args_commands(
                             for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
                                 auto& optional_id = kg->kernel_ids[dispatch_class];
                                 if (optional_id) {
-                                    auto device_local_kernel_handle =
-                                        get_device_local_kernel_handle(optional_id.value());
+                                    auto kernel_id = optional_id.value();
+                                    auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id);
                                     auto kernel = detail::GetKernel(program, device_local_kernel_handle);
                                     if (!kernel->cores_with_runtime_args().empty()) {
                                         const auto& runtime_args_data = kernel->runtime_args(core_coord);
                                         unique_rt_args_data.back().emplace_back(
                                             RtaDataPair(kernel->runtime_args_data(core_coord), runtime_args_data));
                                         TT_ASSERT(
-                                            runtime_args_data.size() * sizeof(uint32_t) <=
-                                            kg->rta_sizes[dispatch_class]);
+                                            runtime_args_data.size() * sizeof(uint32_t) <= kg->rta_sizes.at(kernel_id));
                                         unique_rt_data_and_sizes.back().emplace_back(
                                             kernel->runtime_args_data(core_coord).rt_args_data,
                                             runtime_args_data.size() * sizeof(uint32_t),
-                                            kg->rta_sizes[dispatch_class]);
+                                            kg->rta_sizes.at(kernel_id));
                                     }
                                 }
                             }
