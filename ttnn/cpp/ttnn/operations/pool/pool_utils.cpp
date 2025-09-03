@@ -3,7 +3,7 @@
 
 #include "pool_utils.hpp"
 
-#include <math.h>
+#include <cmath>
 #include <limits>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/assert.hpp>

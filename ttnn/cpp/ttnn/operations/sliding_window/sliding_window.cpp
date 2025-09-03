@@ -3,7 +3,7 @@
 
 #include "sliding_window.hpp"
 
-#include <math.h>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 #include <tt-metalium/assert.hpp>

@@ -13,7 +13,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <bmm_op.hpp>
 #include <fmt/core.h>
-#include <math.h>
+#include <cmath>
 #include <iostream>
 
 using namespace tt::constants;

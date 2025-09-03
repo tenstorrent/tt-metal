@@ -5,7 +5,7 @@
 #include <chrono>
 #include <errno.h>
 #include <fmt/base.h>
-#include <math.h>
+#include <cmath>
 #include <stdint.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>

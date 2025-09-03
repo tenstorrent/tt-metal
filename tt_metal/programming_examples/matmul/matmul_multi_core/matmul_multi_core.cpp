@@ -14,7 +14,7 @@
 #include <bmm_op.hpp>
 #include <tt-metalium/device.hpp>
 #include <fmt/core.h>
-#include <math.h>
+#include <cmath>
 
 using namespace tt::constants;
 using namespace std;

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <math.h>
+#include <cmath>
 
 #include <vector>
 #include <array>
