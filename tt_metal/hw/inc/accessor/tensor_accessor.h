@@ -293,6 +293,14 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     BankCoordsWrapper,
     /* IsInterleaved */ true,
     IsDram>> : public InterleavedAddrGen<IsDram> {
+    using DSpec = tensor_accessor::DistributionSpec<
+        RankCT,
+        NumBanksCT,
+        TensorShapeWrapper,
+        ShardShapeWrapper,
+        BankCoordsWrapper,
+        /* IsInterleaved */ true,
+        IsDram>;
     template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
     TensorAccessor(
         const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
