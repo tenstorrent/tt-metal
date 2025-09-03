@@ -47,9 +47,9 @@ inline uint16_t float_to_bfloat16(float f) {
  */
 template <typename T>
 struct WelfordStats {
-    T mean;          ///< Mean of the subgroup.
-    T variance;      ///< Variance of the subgroup.
-    uint32_t count;  ///< Number of elements in the subgroup.
+    T mean;          // Mean of the subgroup.
+    T variance;      // Variance of the subgroup.
+    uint32_t count;  // Number of elements in the subgroup.
 };
 
 /**
@@ -59,7 +59,7 @@ struct WelfordStats {
  * @param b Second WelfordStats.
  * @return Combined WelfordStats.
  */
-WelfordStats<float> combine_two(const WelfordStats<float>& a, const WelfordStats<float>& b) {
+WelfordStats<float> combine(const WelfordStats<float>& a, const WelfordStats<float>& b) {
     WelfordStats<float> result;
     result.count = a.count + b.count;
 
@@ -84,7 +84,7 @@ WelfordStats<float> combine_two(const WelfordStats<float>& a, const WelfordStats
  * @return Combined WelfordStats<float> for all subgroups.
  */
 template <uint32_t ARRAY_SIZE, uint32_t COUNT_PER_VALUE, uint32_t STRIDE>
-WelfordStats<float> combine_welford(const float* means, const float* vars) {
+WelfordStats<float> combine_welford_stats(const float* means, const float* vars) {
     static_assert(ARRAY_SIZE > 0, "ARRAY_SIZE must be greater than 0");
 
     WelfordStats<float> result;
@@ -97,7 +97,7 @@ WelfordStats<float> combine_welford(const float* means, const float* vars) {
         next.mean = means[i * STRIDE];
         next.variance = vars[i * STRIDE];
         next.count = COUNT_PER_VALUE;
-        result = combine_two(result, next);
+        result = combine(result, next);
     }
 
     return result;
@@ -115,7 +115,7 @@ WelfordStats<float> combine_welford(const float* means, const float* vars) {
  * @return Combined WelfordStats<uint16_t> for all subgroups.
  */
 template <uint32_t ARRAY_SIZE, uint32_t COUNT_PER_VALUE, uint32_t STRIDE, typename T>
-WelfordStats<uint16_t> combine_welford(T means, T vars) {
+WelfordStats<uint16_t> combine_welford_stats(T means, T vars) {
     static_assert(ARRAY_SIZE > 0, "ARRAY_SIZE must be greater than 0");
     static_assert(
         std::is_same_v<std::remove_volatile_t<std::remove_pointer_t<T>>, uint16_t>,
@@ -131,7 +131,7 @@ WelfordStats<uint16_t> combine_welford(T means, T vars) {
         next.mean = detail::bfloat16_to_float(means[i * STRIDE]);
         next.variance = detail::bfloat16_to_float(vars[i * STRIDE]);
         next.count = COUNT_PER_VALUE;
-        overall = combine_two(overall, next);
+        overall = combine(overall, next);
     }
 
     WelfordStats<uint16_t> result;
