@@ -224,4 +224,15 @@ uint8_t get_router_direction(uint32_t eth_channel) {
     return connection_info->read_only[eth_channel].edm_direction;
 }
 
+template <uint8_t dim, bool compressed = true>
+bool get_routing_info(uint16_t dst_dev_id, uint8_t* out_route_buffer) {
+    tt_l1_ptr compressed_routing_path_t<dim, compressed>* routing_info =
+        reinterpret_cast<tt_l1_ptr compressed_routing_path_t<dim, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE);
+    if constexpr (compressed) {
+        return routing_info->decode_compressed_route_to_buffer(dst_dev_id, out_route_buffer);
+    } else {
+        routing_info->decode_route_to_buffer(dst_dev_id, out_route_buffer);
+    }
+}
+
 }  // namespace tt::tt_fabric

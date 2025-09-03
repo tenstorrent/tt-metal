@@ -24,7 +24,7 @@ inline void pack_command_into_buffer(
 
 // Common helper function for both 1D and 2D routing
 template <uint8_t dim>
-inline void decode_route_to_buffer_common(
+inline bool decode_route_to_buffer_common(
     const compressed_routing_path_t<dim, false>& routing_path,
     uint16_t dst_chip_id,
     uint8_t* out_route_buffer,
@@ -35,7 +35,7 @@ inline void decode_route_to_buffer_common(
         for (uint16_t i = 0; i < route_size; ++i) {
             out_route_buffer[i] = 0;
         }
-        return;
+        return false;
     }
 
     const uint8_t* packed_route = &routing_path.paths.raw[dst_chip_id * route_size];
@@ -43,20 +43,21 @@ inline void decode_route_to_buffer_common(
     for (uint16_t i = 0; i < route_size; ++i) {
         out_route_buffer[i] = packed_route[i];
     }
+    return true;
 }
 
 // Device-side decoder function for 2D routing (packed paths)
 template <>
-inline void compressed_routing_path_t<2, false>::decode_route_to_buffer(
+inline bool compressed_routing_path_t<2, false>::decode_route_to_buffer(
     uint16_t dst_chip_id, uint8_t* out_route_buffer) const {
-    decode_route_to_buffer_common(*this, dst_chip_id, out_route_buffer, MAX_CHIPS_LOWLAT, SINGLE_ROUTE_SIZE);
+    return decode_route_to_buffer_common(*this, dst_chip_id, out_route_buffer, MAX_CHIPS_LOWLAT, SINGLE_ROUTE_SIZE);
 }
 
 // Device-side decoder function for 1D routing (packed paths)
 template <>
-inline void compressed_routing_path_t<1, false>::decode_route_to_buffer(
+inline bool compressed_routing_path_t<1, false>::decode_route_to_buffer(
     uint16_t dst_chip_id, uint8_t* out_route_buffer) const {
-    decode_route_to_buffer_common(*this, dst_chip_id, out_route_buffer, MAX_CHIPS_LOWLAT, SINGLE_ROUTE_SIZE);
+    return decode_route_to_buffer_common(*this, dst_chip_id, out_route_buffer, MAX_CHIPS_LOWLAT, SINGLE_ROUTE_SIZE);
 }
 
 // Device-side compressed decoder function for 2D routing

@@ -177,7 +177,7 @@ struct __attribute__((packed)) compressed_routing_path_t {
     void calculate_chip_to_all_routing_fields_compressed(uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim = 0);
 #else
     // Device-side methods (declared here, implemented in fabric_routing_path_interface.h):
-    inline void decode_route_to_buffer(uint16_t dst_chip_id, uint8_t* out_route_buffer) const;
+    inline bool decode_route_to_buffer(uint16_t dst_chip_id, uint8_t* out_route_buffer) const;
     inline bool decode_compressed_route_to_buffer(uint16_t dst_chip_id, uint8_t* out_route_buffer) const;
 #endif
 };

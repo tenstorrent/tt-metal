@@ -1725,7 +1725,6 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
         this->write_routing_tables_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
         this->write_fabric_connections_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
         this->write_routing_tables_to_eth_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
-
     }
     this->write_all_to_all_routing_fields_1D(16);
 }
@@ -2282,19 +2281,29 @@ void ControlPlane::populate_fabric_connection_info(
     }
 }
 
+template <bool compressed>
 void ControlPlane::write_all_to_all_routing_fields_1D(uint8_t num_chips) const {
-    compressed_routing_path_t<1, false> routing_path;
+    compressed_routing_path_t<1, compressed> routing_path;
     for (uint8_t src_chip_id = 0; src_chip_id < num_chips; ++src_chip_id) {
         routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips);
-        // TODO copy
+        write_to_all_tensix_cores(
+            &routing_path,
+            sizeof(routing_path),
+            tt::tt_metal::HalL1MemAddrType::TENSIX_ROUTING_PATH_1D,
+            (chip_id_t)src_chip_id);
     }
 }
 
+template <bool compressed>
 void ControlPlane::write_all_to_all_routing_fields_2D(uint16_t num_chips, uint16_t ew_dim) const {
-    compressed_routing_path_t<2, false> routing_path;
+    compressed_routing_path_t<2, compressed> routing_path;
     for (uint16_t src_chip_id = 0; src_chip_id < num_chips; ++src_chip_id) {
         routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips, ew_dim);
-        // TODO copy
+        write_to_all_tensix_cores(
+            &routing_path,
+            sizeof(routing_path),
+            tt::tt_metal::HalL1MemAddrType::TENSIX_ROUTING_PATH_2D,
+            (chip_id_t)src_chip_id);
     }
 }
 

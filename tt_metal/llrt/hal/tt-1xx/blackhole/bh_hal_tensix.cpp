@@ -49,6 +49,9 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_TABLE)] = MEM_TENSIX_ROUTING_TABLE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
         MEM_TENSIX_FABRIC_CONNECTIONS_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_PATH_1D)] = MEM_TENSIX_ROUTING_PATH_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_PATH_2D)] =
+        MEM_TENSIX_ROUTING_PATH_BASE + COMPRESSED_ROUTING_PATH_SIZE_1D;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         ((MEM_MAP_END + default_l1_kernel_config_size - 1) | (max_alignment - 1)) + 1;
 
