@@ -60,6 +60,20 @@ jobs:
     uses: ./.github/workflows/regression-testing.yaml
     secrets: inherit
 
+  debug-create-tag-output:
+    needs: create-tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Echo create-tag version output
+        run: echo "create-tag.outputs = ${{ needs.create-tag.outputs }}"
+
+  debug-regression-testing-output:
+    needs: regression-testing
+    runs-on: ubuntu-latest
+    steps:
+      - name: Echo regression-testing wheel-artifact-name output
+        run: echo "regression-testing.outputs = ${{ needs.regression-testing.outputs }}"
+
   create-changelog:
     needs: [create-tag, regression-testing]
     permissions: read-all
@@ -154,12 +168,3 @@ jobs:
             models/docs/MODEL_UPDATES.md
             tt-metalium.tar.gz
           fail_on_unmatched_files: true
-  create-docker-release-image:
-    needs: [create-tag, release-precheck, regression-testing, create-and-upload-draft-release]
-    uses: ./.github/workflows/publish-release-image.yaml
-    secrets: inherit
-    if: ${{ github.ref != 'refs/heads/main' }}
-    with:
-      version: ${{ needs.create-tag.outputs.version }}
-      tag-latest: ${{ needs.release-precheck.outputs.is-release-candidate != 'true' }}
-      wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
