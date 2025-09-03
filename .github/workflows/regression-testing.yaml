@@ -2,15 +2,16 @@
   on:
     workflow_call:
       outputs:
-        packages-artifact-name:
-          description: "Name to give download-artifact to get the packages"
-          value: ${{ jobs.build-artifact.outputs.packages-artifact-name }}
+        dev-docker-image:
+          description: "The Docker image for the development environment"
+          value: ${{ jobs.build-artifact.outputs.dev-docker-image }}
         build-artifact-name:
-          description: "Name of the published build artifact"
+          description: "The build artifact name"
           value: ${{ jobs.build-artifact.outputs.build-artifact-name }}
         wheel-artifact-name:
-          description: "Name of the published wheel artifact"
+          description: "The wheel artifact name"
           value: ${{ jobs.build-artifact.outputs.wheel-artifact-name }}
+
 
   permissions:
     actions: read
