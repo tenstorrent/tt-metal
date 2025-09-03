@@ -92,8 +92,8 @@ graph_descriptors {
   instances { mesh { mesh_descriptor: "M2" mesh_id: 0 } }
   instances { mesh { mesh_descriptor: "M3" mesh_id: 1 } }
   instances { mesh { mesh_descriptor: "M4" mesh_id: 2 } }
-  graph_topology: { 
-    layout_type: ALL_TO_ALL 
+  graph_topology: {
+    layout_type: ALL_TO_ALL
     channels { count: 2 policy: RELAXED }
   }
 }
@@ -103,8 +103,8 @@ graph_descriptors {
   type: "CLUSTER"
   instances { graph { graph_descriptor: "G1" graph_id: 0 } }
   instances { graph { graph_descriptor: "G0" graph_id: 1 } }
-  graph_topology: { 
-    layout_type: ALL_TO_ALL 
+  graph_topology: {
+    layout_type: ALL_TO_ALL
     channels { count: 2 policy: RELAXED }
   }
 }

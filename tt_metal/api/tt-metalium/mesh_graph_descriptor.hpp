@@ -27,7 +27,7 @@ private:
 
     static void set_defaults(proto::MeshGraphDescriptor& proto);
     static std::vector<std::string> static_validate(const proto::MeshGraphDescriptor& proto);
-    
+
     // Helper methods for validation that return their own error lists
     static std::vector<std::string> validate_basic_structure(const proto::MeshGraphDescriptor& proto);
     static std::vector<std::string> validate_names(const proto::MeshGraphDescriptor& proto);
