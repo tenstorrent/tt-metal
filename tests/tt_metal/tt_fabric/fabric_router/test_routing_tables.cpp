@@ -43,15 +43,9 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(
     return control_plane;
 }
 
-}  // namespace
-
-namespace tt::tt_fabric::fabric_router_tests {
-
-using ::testing::ElementsAre;
-
 // Deep-compare helper for IntraMeshConnectivity
-static void ExpectIntraMeshConnectivityEqual(
-    const IntraMeshConnectivity &lhs, const IntraMeshConnectivity &rhs) {
+void expect_intra_mesh_connectivity_equal(
+    const tt::tt_fabric::IntraMeshConnectivity &lhs, const tt::tt_fabric::IntraMeshConnectivity &rhs) {
     ASSERT_EQ(lhs.size(), rhs.size()) << "Number of meshes differ";
     for (std::size_t mesh_idx = 0; mesh_idx < lhs.size(); ++mesh_idx) {
         ASSERT_EQ(lhs[mesh_idx].size(), rhs[mesh_idx].size()) << "Number of chips differ at mesh index " << mesh_idx;
@@ -62,11 +56,11 @@ static void ExpectIntraMeshConnectivityEqual(
                 << "Neighbor count differs at mesh " << mesh_idx << ", chip " << chip_idx;
             for (const auto &kv : neighbors_lhs) {
                 const auto &neighbor_chip_id = kv.first;
-                const RouterEdge &edge_lhs = kv.second;
+                const tt::tt_fabric::RouterEdge &edge_lhs = kv.second;
                 auto it = neighbors_rhs.find(neighbor_chip_id);
                 ASSERT_NE(it, neighbors_rhs.end())
                     << "Mesh " << mesh_idx << ", chip " << chip_idx << " has no neighbor chip id " << neighbor_chip_id;
-                const RouterEdge &edge_rhs = it->second;
+                const tt::tt_fabric::RouterEdge &edge_rhs = it->second;
                 EXPECT_EQ(edge_lhs.port_direction, edge_rhs.port_direction)
                     << "Port direction differs at mesh " << mesh_idx << ", chip " << chip_idx;
                 EXPECT_EQ(edge_lhs.weight, edge_rhs.weight)
@@ -77,6 +71,42 @@ static void ExpectIntraMeshConnectivityEqual(
         }
     }
 }
+
+void expect_inter_mesh_connectivity_equal(
+    const tt::tt_fabric::InterMeshConnectivity &lhs, const tt::tt_fabric::InterMeshConnectivity &rhs) {
+    ASSERT_EQ(lhs.size(), rhs.size()) << "Number of meshes differ";
+    for (std::size_t mesh_idx = 0; mesh_idx < lhs.size(); ++mesh_idx) {
+        ASSERT_EQ(lhs[mesh_idx].size(), rhs[mesh_idx].size()) << "Number of chips differ at mesh index " << mesh_idx;
+        for (std::size_t chip_idx = 0; chip_idx < lhs[mesh_idx].size(); ++chip_idx) {
+            const auto &neighbors_lhs = lhs[mesh_idx][chip_idx];
+            const auto &neighbors_rhs = rhs[mesh_idx][chip_idx];
+            ASSERT_EQ(neighbors_lhs.size(), neighbors_rhs.size())
+                << "Neighbor count differs at mesh " << mesh_idx << ", chip " << chip_idx;
+            for (const auto &kv : neighbors_lhs) {
+                const auto &neighbor_mesh_id = kv.first;
+                const tt::tt_fabric::RouterEdge &edge_lhs = kv.second;
+                auto it = neighbors_rhs.find(neighbor_mesh_id);
+                ASSERT_NE(it, neighbors_rhs.end())
+                    << "Mesh " << mesh_idx << ", chip " << chip_idx << " has no neighbor mesh id " << neighbor_mesh_id.get();
+                const tt::tt_fabric::RouterEdge &edge_rhs = it->second;
+                EXPECT_EQ(edge_lhs.port_direction, edge_rhs.port_direction)
+                    << "Port direction differs at mesh " << mesh_idx << ", chip " << chip_idx;
+                EXPECT_EQ(edge_lhs.weight, edge_rhs.weight)
+                    << "Weight differs at mesh " << mesh_idx << ", chip " << chip_idx;
+                EXPECT_EQ(edge_lhs.connected_chip_ids, edge_rhs.connected_chip_ids)
+                    << "Connected chip IDs differ at mesh " << mesh_idx << ", chip " << chip_idx;
+            }
+        }
+    }
+}
+
+
+
+}  // namespace
+
+namespace tt::tt_fabric::fabric_router_tests {
+
+using ::testing::ElementsAre;
 
 TEST(MeshGraphValidation, TestTGMeshGraphInit) {
     const std::filesystem::path tg_mesh_graph_desc_path =
@@ -135,9 +165,11 @@ TEST(MeshGraphValidation, TestTGMeshGraphInitConsistencyCheck) {
         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto";
     auto mesh_graph2 = std::make_unique<MeshGraph>(tg_mesh_graph_desc_2_path.string(), true);
 
-    // Compare the inter_mesh_connectivity deeply
-    ExpectIntraMeshConnectivityEqual(
+    // Compare connectivity deeply
+    expect_intra_mesh_connectivity_equal(
         mesh_graph->get_intra_mesh_connectivity(), mesh_graph2->get_intra_mesh_connectivity());
+    expect_inter_mesh_connectivity_equal(
+        mesh_graph->get_inter_mesh_connectivity(), mesh_graph2->get_inter_mesh_connectivity());
 }
 
 TEST_F(ControlPlaneFixture, TestTGControlPlaneInit) {

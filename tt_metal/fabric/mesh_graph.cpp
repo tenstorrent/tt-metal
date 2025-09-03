@@ -206,8 +206,6 @@ void MeshGraph::initialize_from_mgd2(const MeshGraphDescriptor& mgd2) {
 
     // Make intramesh connectivity
     this->intra_mesh_connectivity_.resize(mgd2.all_meshes().size());
-    this->inter_mesh_connectivity_.resize(mgd2.all_meshes().size());
-    // TODO: Add the host ranks
 
     for (const auto& id : mgd2.all_meshes()) {
         auto mesh_data = mgd2.mesh(id);
@@ -232,7 +230,13 @@ void MeshGraph::initialize_from_mgd2(const MeshGraphDescriptor& mgd2) {
         }
     }
 
-    // Verify if intra mesh is same as yaml
+    this->inter_mesh_connectivity_.resize(mgd2.all_meshes().size());
+
+    // Must use Fabric keyboard for graph descriptors in current version
+    for (const auto& id : mgd2.by_type("FABRIC")) {
+        const auto& graph_data = mgd2.graph(id);
+        // FIXME: Start here
+    }
 
 }
 
