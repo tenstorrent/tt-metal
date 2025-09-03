@@ -173,6 +173,63 @@ You can find them in either the release assets for that version, or in the sourc
 <span class="o">./</span><span class="n">install</span><span class="o">.</span><span class="n">sh</span> <span class="o">--</span><span class="n">no</span><span class="o">-</span><span class="n">install</span><span class="o">-</span><span class="n">podman</span> <span class="o">--</span><span class="n">no</span><span class="o">-</span><span class="n">install</span><span class="o">-</span><span class="n">metalium</span><span class="o">-</span><span class="n">container</span>
 </pre></div>
 </div>
+<blockquote>
+<div>
+<p>[!WARNING]
+TT-Installer automatically installs all latest versions. Galaxy Wormhole 4U and Blackhole systems require the following versions:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Device</p></th>
+<th class="head"><p>OS</p></th>
+<th class="head"><p>Python</p></th>
+<th class="head"><p>Driver (TT-KMD)</p></th>
+<th class="head"><p>Firmware (TT-Flash)</p></th>
+<th class="head"><p>TT-SMI</p></th>
+<th class="head"><p>TT-Topology</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Galaxy (Wormhole 4U)</p></td>
+<td><p>Ubuntu 22.04</p></td>
+<td><p>3.10</p></td>
+<td><p>v1.33 or above</p></td>
+<td><p>fw_pack-80.10.1.0</p></td>
+<td><p>v2.2.3 or lower</p></td>
+<td><p>v1.1.3, <code class="docutils literal notranslate"><span class="pre">mesh</span></code> config</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Blackhole</p></td>
+<td><p>Ubuntu 22.04</p></td>
+<td><p>3.10</p></td>
+<td><p>v2.1.0 or above</p></td>
+<td><p>fw_pack-18.7.0.fwbundle (v18.7.0)</p></td>
+<td><p>v3.0.20 or above</p></td>
+<td><p>N/A</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</blockquote>
+<ul class="simple">
+<li><p>If required, add the following flags for specifying dependencies versions:</p></li>
+</ul>
+<blockquote>
+<div>
+<p>[!NOTE]
+The following dependencies versions are examples. Install the versions above depending on your device.</p>
+</div>
+</blockquote>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="o">./</span><span class="n">install</span><span class="o">.</span><span class="n">sh</span> \
+  <span class="o">--</span><span class="n">smi</span><span class="o">-</span><span class="n">version</span><span class="o">=</span><span class="n">v3</span><span class="mf">.0.17</span> \
+  <span class="o">--</span><span class="n">fw</span><span class="o">-</span><span class="n">version</span><span class="o">=</span><span class="mf">18.3.0</span> \
+  <span class="o">--</span><span class="n">kmd</span><span class="o">-</span><span class="n">version</span><span class="o">=</span><span class="mf">1.34</span> \
+  <span class="o">--</span><span class="n">no</span><span class="o">-</span><span class="n">install</span><span class="o">-</span><span class="n">podman</span> \
+  <span class="o">--</span><span class="n">no</span><span class="o">-</span><span class="n">install</span><span class="o">-</span><span class="n">metalium</span><span class="o">-</span><span class="n">container</span>
+</pre></div>
+</div>
 <ul class="simple">
 <li><p>For more information visit Tenstorrent’s <a class="reference external" href="https://github.com/tenstorrent/tt-installer">TT-Installer GitHub repository</a>.</p></li>
 </ul>
