@@ -82,7 +82,7 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/setup-job@philei/tensor-accessor-perf-regression-tests
         timeout-minutes: 10
         with:
-          # build-artifact-name: ${{ needs.build-baseline-artifact.outputs.build-artifact-name }}
+          build-artifact-name: ${{ needs.build-baseline-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-baseline-artifact.outputs.wheel-artifact-name }}
           path: docker-job-baseline
 
@@ -163,10 +163,10 @@ jobs:
           path: docker-job
 
       - name: ⬇️ Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@${{ github.event_name == 'push' && github.ref_name || inputs.branch || 'main' }}
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@${{ (github.event_name == 'push' && github.ref_name) || inputs.branch || 'main' }}
         timeout-minutes: 10
         with:
-          # build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
       - name: ⬇️ Download Baseline Performance Data
