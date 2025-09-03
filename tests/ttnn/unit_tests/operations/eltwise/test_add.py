@@ -69,6 +69,32 @@ def test_add_2D_tensors(device, hw):
     assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
+@pytest.mark.parametrize("input_shape", [(1, 4096, 640)])
+@pytest.mark.parametrize("is_legacy", [True, False])
+def test_add_sharded(device, input_shape, is_legacy):
+    torch_input_tensor_a = torch.rand(input_shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand(input_shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
+
+    sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=(512, 96),
+        core_grid=ttnn.CoreGrid(y=8, x=7),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem_config
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem_config
+    )
+    output = ttnn.add(input_tensor_a, input_tensor_b, use_legacy=is_legacy)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output, 0.9999)
+
+
 @pytest.mark.parametrize("hw", [(32, 64), (1, 1), (0, 0)])
 def test_add_2D_tensors_with_program_cache(device, hw):
     torch_input_tensor_a = torch.rand(hw, dtype=torch.bfloat16)
