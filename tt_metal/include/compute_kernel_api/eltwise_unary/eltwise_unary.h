@@ -29,6 +29,7 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
     MATH((llk_math_hw_configure_disaggregated(icb, icb)));
 }
 
+// dest variant to be used with tilize_dest variants
 ALWI void unary_op_dest_init_common(uint32_t icb) {
     UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, true>(icb)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(

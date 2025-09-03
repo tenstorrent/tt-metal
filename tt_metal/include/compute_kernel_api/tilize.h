@@ -42,6 +42,21 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb) {
 #endif
 }
 
+// clang-format off
+/**
+ * The same as tilize_init, but skips the packer configuration on blackhole in preparation to leave the
+ * tilized result in DST without packing to an out CB
+ *
+ * Should only be used with tilize_dest_* variants
+ *
+ * Return value: None
+ *
+ * | Param Type | Name   | Description                                   | Type     | Valid Range | Required |
+ * |----------- |--------|-----------------------------------------------|----------|-------------|----------|
+ * | Function   | icb    | Input circular buffer identifier              | uint32_t | 0 to 31     | True     |
+ * | Function   | block  | Size of tile block to work on                 | uint32_t | > 0         | True     |
+ */
+// clang-format on
 ALWI void tilize_dest_init(uint32_t icb, uint32_t block) {
     UNPACK((llk_unpack_tilize_init(icb, block)));
     MATH((llk_math_eltwise_unary_datacopy_init<
@@ -126,6 +141,22 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
 #endif
 }
 
+// clang-format off
+/**
+ * The same as tilize_init_short_with_dt, but skips part of the packer configuration on blackhole in
+ * preparation to leave the tilized result in DST without packing to an out CB
+ *
+ * Should only be used with tilize_dest_* variants
+ *
+ * Return value: None
+ *
+ * | Param Type | Name     | Description                              | Type     | Valid Range | Required |
+ * |----------- |----------|------------------------------------------|----------|-------------|----------|
+ * | Function   | old_icb  | Previous input circular buffer identifier| uint32_t | 0 to 31     | True     |
+ * | Function   | new_icb  | New input circular buffer identifier     | uint32_t | 0 to 31     | True     |
+ * | Function   | block    | Size of tile block to work on            | uint32_t | > 0         | True     |
+ */
+// clang-format on
 ALWI void tilize_dest_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t block) {
     MATH((llk_math_eltwise_unary_datacopy_init<
           A2D,
@@ -156,11 +187,13 @@ ALWI void tilize_dest_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uin
  *
  * Return value: None
  *
- * | Param Type | Name   | Description                              | Type     | Valid Range | Required |
- * |----------- |--------|------------------------------------------|----------|-------------|----------|
- * | Function   | icb    | Input circular buffer identifier         | uint32_t | 0 to 31     | True     |
- * | Function   | block  | Size of tile block to work on            | uint32_t | > 0         | True     |
- * | Function   | ocb    | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
+ * | Param Type | Name             | Description                              | Type     | Valid Range | Required |
+ * |----------- |------------------|------------------------------------------|----------|-------------|----------|
+ * | Function   | icb              | Input circular buffer identifier         | uint32_t | 0 to 31     | True     |
+ * | Function   | block            | Size of tile block to work on            | uint32_t | > 0         | True     |
+ * | Function   | ocb              | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
+ * | Function   | input_tile_index | Index of the input tile in the icb       | uint32_t | >= 0        | False    |
+ * | Function   | output_tile_index| Index of the output tile in the ocb      | uint32_t | >= 0        | False    |
  */
 // clang-format on
 ALWI void tilize_block(
@@ -183,19 +216,30 @@ ALWI void tilize_block(
     }
 }
 
+// clang-format off
+/**
+ * The same as tilize_block, but skips the packing step and MATH/PACK synchronization to leave the
+ * tilized result in DST without packing to an out CB
+ *
+ * Should only be used with tilize_dest_* variants
+ *
+ * Return value: None
+ *
+ * | Param Type | Name             | Description                              | Type     | Valid Range   | Required |
+ * |----------- |------------------|------------------------------------------|----------|---------------|----------|
+ * | Function   | icb              | Input circular buffer identifier         | uint32_t | 0 to 31       | True     |
+ * | Function   | block            | Size of tile block to work on            | uint32_t | > 0           | True     |
+ * | Function   | dst_idx          | Index of the tile in DST to write to     | uint32_t | 0 to DST size | True     |
+ * | Function   | input_tile_index | Index of the input tile in the icb       | uint32_t | >= 0          | False    |
+ */
+// clang-format on
 ALWI void tilize_dest_block(uint32_t icb, uint32_t block, uint32_t dst_idx, uint32_t input_tile_index = 0) {
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
     for (uint32_t t = 0; t < block; t++) {
-        // Acquire dst
-        // MATH((llk_math_wait_for_dest_available()));
-
         // Datacopy
         MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
             dst_idx /*dst index*/)));
-
-        // Release dest
-        // MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
     }
 }
 
@@ -258,6 +302,23 @@ ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
 #endif
 }
 
+// clang-format off
+/**
+ * The same as tilize_uninit, but skips the packer configuration on blackhole in preparation to leave
+ * the tilized result in DST without packing to an out CB
+ *
+ * Should only be used with tilize_dest_* variants
+ *
+ * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025
+ * as a part of tt-metal#22904.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name   | Description                              | Type     | Valid Range | Required |
+ * |----------- |--------|------------------------------------------|----------|-------------|----------|
+ * | Function   | icb    | Input circular buffer identifier         | uint32_t | 0 to 31     | True     |
+ */
+// clang-format on
 ALWI void tilize_dest_uninit(uint32_t icb) { UNPACK((llk_unpack_tilize_uninit(icb))); }
 
 // clang-format off
@@ -285,6 +346,24 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
 #endif
 }
 
+// clang-format off
+/**
+ * The same as tilize_uninit_with_dt, but skips the packer configuration on blackhole in preparation to
+ * leave the tilized result in DST without packing to an out CB
+ *
+ * Should only be used with tilize_dest_* variants
+ *
+ * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025
+ * as a part of tt-metal#22904.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name     | Description                              | Type     | Valid Range | Required |
+ * |----------- |----------|------------------------------------------|----------|-------------|----------|
+ * | Function   | old_icb  | Previous input circular buffer identifier| uint32_t | 0 to 31     | True     |
+ * | Function   | new_icb  | New input circular buffer identifier     | uint32_t | 0 to 31     | True     |
+ */
+// clang-format on
 ALWI void tilize_dest_uninit_with_dt(uint32_t old_icb, uint32_t new_icb) {
     UNPACK((llk_unpack_tilize_uninit(old_icb)));
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
