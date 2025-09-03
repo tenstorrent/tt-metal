@@ -223,38 +223,41 @@ void set_or_update_runtime_arguments(
                 c_start_id = start_tile_id;
             }
 
-            // Standard first 5 args + extended args for column broadcast
-            std::array<uint32_t, 27> reader_runtime_args = {
-                // Standard first 5 arguments (same as nobcast kernels)
-                predicate_tensor.buffer()->address(),            // 0: src0_addr (predicate)
-                value_true_tensor.value().buffer()->address(),   // 1: src1_addr (true tensor)
-                value_false_tensor.value().buffer()->address(),  // 2: src2_addr (false tensor)
-                num_tiles_per_core,                              // 3: num_tiles (per core)
-                c_start_id,                                      // 4: start_id
-                // Additional broadcast arguments (args 5-26)
-                aHt * aWt * aC * aN * aD * (aND > 1),  // 5: nD_stride
-                aHt * aWt * aC * aN * (aD > 1),        // 6: d_stride
-                aHt * aWt * aC * (aN > 1),             // 7: n_stride
-                aHt * aWt * (aC > 1),                  // 8: c_stride
-                cD,                                    // 9: D
-                cN,                                    // 10: N
-                cC,                                    // 11: C
-                cHt,                                   // 12: Ht
-                cWt,                                   // 13: Wt
-                cND,                                   // 14: cND
-                bHt * bWt * bC * bN * bD * (bND > 1),  // 15: true_nD_stride
-                bHt * bWt * bC * bN * (bD > 1),        // 16: true_d_stride
-                bHt * bWt * bC * (bN > 1),             // 17: true_n_stride
-                bHt * bWt * (bC > 1),                  // 18: true_c_stride
-                b_num_tiles,                           // 19: true_num_tiles
-                fHt * fWt * fC * fN * fD * (fND > 1),  // 20: false_nD_stride
-                fHt * fWt * fC * fN * (fD > 1),        // 21: false_d_stride
-                fHt * fWt * fC * (fN > 1),             // 22: false_n_stride
-                fHt * fWt * (fC > 1),                  // 23: false_c_stride
-                f_num_tiles,                           // 24: false_num_tiles
-                c_current_shard_width,                 // 25: dst_shard_width
-                a_num_tiles,                           // 26: src_num_tiles (predicate)
-            };
+            // Standard first 5 args + extended args for column and outer dim broadcast
+            std::array<uint32_t, num_reader_args> reader_runtime_args{};  // zero-initialized
+
+            // Standard first 5 arguments
+            reader_runtime_args[0] = predicate_tensor.buffer()->address();            // 0: src0_addr (predicate)
+            reader_runtime_args[1] = value_true_tensor.value().buffer()->address();   // 1: src1_addr (true tensor)
+            reader_runtime_args[2] = value_false_tensor.value().buffer()->address();  // 2: src2_addr (false tensor)
+            reader_runtime_args[3] = num_tiles_per_core;                              // 3: num_tiles (per core)
+            reader_runtime_args[4] = c_start_id;                                      // 4: start_id
+
+            // Extended broadcast arguments (only when broadcast != NONE)
+            if (broadcast_type != WhereBroadcastType::NONE) {
+                reader_runtime_args[5] = aHt * aWt * aC * aN * aD * (aND > 1);   // 5: nD_stride
+                reader_runtime_args[6] = aHt * aWt * aC * aN * (aD > 1);         // 6: d_stride
+                reader_runtime_args[7] = aHt * aWt * aC * (aN > 1);              // 7: n_stride
+                reader_runtime_args[8] = aHt * aWt * (aC > 1);                   // 8: c_stride
+                reader_runtime_args[9] = cD;                                     // 9: D
+                reader_runtime_args[10] = cN;                                    // 10: N
+                reader_runtime_args[11] = cC;                                    // 11: C
+                reader_runtime_args[12] = cHt;                                   // 12: Ht
+                reader_runtime_args[13] = cWt;                                   // 13: Wt
+                reader_runtime_args[14] = cND;                                   // 14: cND
+                reader_runtime_args[15] = bHt * bWt * bC * bN * bD * (bND > 1);  // 15: true_nD_stride
+                reader_runtime_args[16] = bHt * bWt * bC * bN * (bD > 1);        // 16: true_d_stride
+                reader_runtime_args[17] = bHt * bWt * bC * (bN > 1);             // 17: true_n_stride
+                reader_runtime_args[18] = bHt * bWt * (bC > 1);                  // 18: true_c_stride
+                reader_runtime_args[19] = b_num_tiles;                           // 19: true_num_tiles
+                reader_runtime_args[20] = fHt * fWt * fC * fN * fD * (fND > 1);  // 20: false_nD_stride
+                reader_runtime_args[21] = fHt * fWt * fC * fN * (fD > 1);        // 21: false_d_stride
+                reader_runtime_args[22] = fHt * fWt * fC * (fN > 1);             // 22: false_n_stride
+                reader_runtime_args[23] = fHt * fWt * (fC > 1);                  // 23: false_c_stride
+                reader_runtime_args[24] = f_num_tiles;                           // 24: false_num_tiles
+                reader_runtime_args[25] = c_current_shard_width;                 // 25: dst_shard_width
+                reader_runtime_args[26] = a_num_tiles;                           // 26: src_num_tiles (predicate)
+            }
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
         }  else {
             TT_THROW("Unsupported Where variant in WhereDeviceOperation. Supported: TTS, TST, TTT");
@@ -487,6 +490,19 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         pred_is_bcast = (pred_w == 1 && (true_w > 1 || false_w > 1));
         true_is_bcast = (true_w == 1 && (pred_w > 1 || false_w > 1));
         false_is_bcast = (false_w == 1 && (pred_w > 1 || true_w > 1));
+    } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
+        // Row broadcast detection based on height dimension (second-to-last)
+        auto pred_shape = predicate_tensor.logical_shape();
+        auto true_shape = value_true_tensor.value().logical_shape();
+        auto false_shape = value_false_tensor.value().logical_shape();
+
+        auto pred_h = pred_shape[pred_shape.rank() - 2];  // height dim
+        auto true_h = true_shape[true_shape.rank() - 2];
+        auto false_h = false_shape[false_shape.rank() - 2];
+
+        pred_is_bcast = (pred_h == 1 && (true_h > 1 || false_h > 1));
+        true_is_bcast = (true_h == 1 && (pred_h > 1 || false_h > 1));
+        false_is_bcast = (false_h == 1 && (pred_h > 1 || true_h > 1));
     }
 
     // READER KERNEL - Use kernel path from utils
@@ -513,6 +529,27 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         reader_defines["SRC_BCAST_FALSE"] = false_is_bcast ? "1" : "0";
 
         // Add BCAST_LLK define (set to 0 for now, can be optimized later)
+        reader_defines["BCAST_LLK"] = "0";
+    } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
+        // ROW_BCAST: need dataflow defines for FILL_TILE_WITH_FIRST_ROW_B etc.
+        reader_defines = make_dataflow_defines(
+            predicate_tensor.dtype(),
+            value_true_tensor.value().dtype(),
+            value_false_tensor.value().dtype());  // For predicate (a) and value_true (b)
+
+        bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
+        bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
+        bool value_false_sharded = value_false_tensor.value().memory_config().is_sharded();
+        reader_defines["SRC_SHARDED_A"] = predicate_sharded ? "1" : "0";    // CB0 sharding
+        reader_defines["SRC_SHARDED_B"] = value_true_sharded ? "1" : "0";   // CB1 sharding
+        reader_defines["SRC_SHARDED_C"] = value_false_sharded ? "1" : "0";  // CB2 sharding
+
+        // Set broadcast defines to match ternary reader kernel expectations
+        // CB0 = predicate, CB1 = true tensor, CB2 = false tensor
+        reader_defines["SRC_BCAST_A"] = pred_is_bcast ? "1" : "0";   // First tensor (CB0)
+        reader_defines["SRC_BCAST_B"] = true_is_bcast ? "1" : "0";   // Second tensor (CB1)
+        reader_defines["SRC_BCAST_C"] = false_is_bcast ? "1" : "0";  // Third tensor (CB2)
+
         reader_defines["BCAST_LLK"] = "0";
     }
     if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::OUTER_BCAST) {

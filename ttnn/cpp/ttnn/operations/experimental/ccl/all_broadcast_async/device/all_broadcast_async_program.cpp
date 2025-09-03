@@ -9,7 +9,6 @@
 #include <tt-metalium/fabric.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/experimental/ccl/all_broadcast_async/device/all_broadcast_async_op.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -18,6 +17,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
@@ -121,22 +121,18 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
 
     // Tensor Info
-    const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
 
     // KERNEL CREATION
     // Reader
     std::vector<uint32_t> reader_compile_args = {
-        static_cast<uint32_t>(input_tensor_buffer_type),  // buffer0_type
-        src0_cb_index,                                    // cb0_id
-        num_pages_per_packet,                             // packet_size_in_pages
-        op_config.get_page_size(),                        // tensor0_page_size
+        src0_cb_index,              // cb0_id
+        num_pages_per_packet,       // packet_size_in_pages
+        op_config.get_page_size(),  // tensor0_page_size
     };
 
     if (!tilized) {
         reader_compile_args = {
-            static_cast<uint32_t>(input_tensor_buffer_type),      // buffer0_type
             src0_cb_index,                                        // cb0_id
             num_width_shards > 1 ? buffer_page_size : page_size,  // page_size
             row_size,
@@ -146,18 +142,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     }
 
     std::vector<uint32_t> writer_compile_args = {
-        static_cast<uint32_t>(output_tensor_buffer_type),  // buffer0_type
-        src0_cb_index,                                     // cb0_id
-        num_pages_per_packet,                              // packet_size_in_pages
-        op_config.get_page_size(),                         // tensor0_page_size
-        num_targets_forward,                               // num_targets_forward_direction
-        num_targets_backward,                              // num_targets_backward_direction
+        src0_cb_index,              // cb0_id
+        num_pages_per_packet,       // packet_size_in_pages
+        op_config.get_page_size(),  // tensor0_page_size
+        num_targets_forward,        // num_targets_forward_direction
+        num_targets_backward,       // num_targets_backward_direction
     };
 
     if (!tilized) {
         writer_compile_args = {
-            static_cast<uint32_t>(output_tensor_buffer_type),  // buffer0_type
-            src0_cb_index,                                     // cb0_id
+            src0_cb_index,  // cb0_id
             num_width_shards > 1 ? buffer_page_size : page_size,
             row_size,
             max_packet_size,
@@ -173,6 +167,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         kernel_defines["SHARDED"] = "1";
         shard_builder::extend_sharding_compile_time_args(input_tensor, reader_compile_args);
         shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_args);
+    } else {
+        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);
     }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -18,25 +17,23 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
 using address_t = uint32_t;
-using tt::tt_metal::BufferType;
 using namespace tt::tt_fabric::linear::experimental;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(0));
-constexpr uint32_t cb0_id = get_compile_time_arg_val(1);
-constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(2);
-constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(3);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(4);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(5);
+constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
+constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(1);
+constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(2);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(3);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(4);
 constexpr ccl_routing_utils::line_multicast_route_info_t forward_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<6>();
+    ccl_routing_utils::get_line_multicast_route_info_from_args<5>();
 constexpr ccl_routing_utils::line_multicast_route_info_t backward_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<6 + ccl_routing_utils::num_line_multicast_args>();
+    ccl_routing_utils::get_line_multicast_route_info_from_args<5 + ccl_routing_utils::num_line_multicast_args>();
 
-inline constexpr uint32_t sharded_args_start_idx = 6 + 2 * ccl_routing_utils::num_line_multicast_args;
+inline constexpr uint32_t sharded_args_start_idx = 5 + 2 * ccl_routing_utils::num_line_multicast_args;
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -85,11 +82,11 @@ void kernel_main() {
     size_t fab_idx = arg_for_fab + rt_increment;
     open_connections(fabric_connection, data_route_id, fab_idx);
 #else
-    // interleaved addrgen
-    constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
-    auto tensor0_addrgen = InterleavedAddrGenFast<is_dram>{
-        .bank_base_address = tensor_address0, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
+    constexpr auto tensor0_args = TensorAccessorArgs<sharded_args_start_idx>();
+    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, tensor0_page_size);
+    // auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
     open_connections(fabric_connection, data_route_id, arg_for_fab);
+
 #endif
     uint8_t starts[] = {
         static_cast<uint8_t>(forward_multicast_route_info.start_distance_in_hops),

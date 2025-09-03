@@ -19,8 +19,8 @@ from models.demos.segformer.tests.pcc.test_segformer_decode_head import (
 from models.demos.segformer.tests.pcc.test_segformer_model import (
     create_custom_mesh_preprocessor as create_custom_preprocessor_model,
 )
-from models.demos.segformer.tt.common import get_mesh_mappers
 from models.demos.segformer.tt.ttnn_segformer_for_semantic_segmentation import TtSegformerForSemanticSegmentation
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
