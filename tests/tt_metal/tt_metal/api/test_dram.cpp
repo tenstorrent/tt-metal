@@ -28,6 +28,7 @@
 #include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -365,12 +366,17 @@ TEST_F(MeshDispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
     uint32_t brisc_num_pages_to_read = 43264;
     uint32_t ncrisc_num_pages_to_read = ((brisc_base_addr - ncrisc_base_addr) / page_size) * num_drams;
 
+    std::vector<uint32_t> brisc_compile_time_args = {};
+    tt_metal::TensorAccessorArgs().append_to(brisc_compile_time_args);
+
     tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_arbiter_hang.cpp",
         core,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = brisc_compile_time_args});
 
     tt_metal::SetRuntimeArgs(
         program_,
@@ -378,12 +384,17 @@ TEST_F(MeshDispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
         core,
         {brisc_base_addr, page_size, l1_address, brisc_num_pages_to_read, num_iterations});
 
+    std::vector<uint32_t> ncrisc_compile_time_args = {};
+    tt_metal::TensorAccessorArgs().append_to(ncrisc_compile_time_args);
+
     tt_metal::KernelHandle ncrisc_kernel = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_arbiter_hang.cpp",
         core,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = ncrisc_compile_time_args});
 
     tt_metal::SetRuntimeArgs(
         program_,

@@ -55,8 +55,8 @@ void kernel_main() {
     }
 
     // Test gen_fast
-    const InterleavedAddrGenFast<false> s0 = {
-        .bank_base_address = l1_read_addr, .page_size = page_size, .data_format = DataFormat::Float16_b};
+    constexpr auto s_args = TensorAccessorArgs<2>();
+    const auto s0 = TensorAccessor(s_args, l1_read_addr, page_size);
 
     for (uint32_t i = 0; i < iteration; i++) {
         uint32_t noc = noc_index;
