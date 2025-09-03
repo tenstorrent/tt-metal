@@ -80,11 +80,14 @@ std::vector<CBInfo> get_cb_info(
     const uint32_t bias_tile_size = weights_tile_size;
     const uint32_t output_tile_size = tt::tile_size(output_df);
 
+    const TensorMemoryLayout sharding_scheme = conv_config.shard_layout.value();
+
     // Block dims
     const uint32_t tilized_act_block_num_tiles = block_config.act_block_h_ntiles * block_config.act_block_w_ntiles;
     uint32_t act_block_num_tiles, act_block_split_num_tiles = 0;
     const uint32_t padded_in_channels = weights_shape[2] / (kernel_size[0] * kernel_size[1]);
-    if (!conv_config.enable_split_reader || is_1d_depthwise_conv) {
+    if (sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED || !conv_config.enable_split_reader ||
+        is_1d_depthwise_conv) {
         if (!conv_config.enable_activation_reuse) {
             act_block_num_tiles = block_config.act_block_h_ntiles * block_config.act_block_w_ntiles;
         } else {
@@ -135,7 +138,6 @@ std::vector<CBInfo> get_cb_info(
 
     const uint32_t num_blocks_act_w = weight_matrix_height_ntiles / block_config.act_block_w_ntiles;
 
-    const TensorMemoryLayout sharding_scheme = conv_config.shard_layout.value();
     const uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
     const uint32_t in0_num_blocks_w =
         sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED ? num_blocks_act_w * conv_act_c_blocks : num_blocks_act_w;
