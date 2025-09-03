@@ -96,10 +96,12 @@ class TtTemporalSelfAttention:
         value = ttnn.reshape(value, (bs * self.num_bev_queue, num_value, self.num_heads, -1))
 
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
+
         sampling_offsets = ttnn.linear(query, params.sampling_offsets.weight, bias=params.sampling_offsets.bias)
         sampling_offsets = ttnn.reshape(
             sampling_offsets, (bs, num_query, self.num_heads, self.num_bev_queue, self.num_levels, self.num_points, 2)
         )
+        ttnn.reallocate(sampling_offsets)
 
         attention_weights = ttnn.linear(query, params.attention_weights.weight, bias=params.attention_weights.bias)
         ttnn.deallocate(params.attention_weights.weight)
@@ -108,7 +110,7 @@ class TtTemporalSelfAttention:
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_bev_queue, self.num_levels * self.num_points)
         )
-
+        ttnn.reallocate(attention_weights)
         # attention_weights = ttnn.to_torch(attention_weights)  # OOM ISSUE
         # attention_weights = attention_weights.softmax(dim=-1)
         # attention_weights = ttnn.from_torch(
@@ -172,6 +174,7 @@ class TtTemporalSelfAttention:
             raise ValueError(
                 f"Last dim of reference_points must be 2 or 4, but got {reference_points.shape[-1]} instead."
             )
+        ttnn.deallocate(reference_points)
 
         output = multi_scale_deformable_attn(value, spatial_shapes, sampling_locations, attention_weights, self.device)
         ttnn.deallocate(attention_weights)

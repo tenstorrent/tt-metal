@@ -174,6 +174,9 @@ class TtBEVFormerEncoder:
         reference_points_cam = ttnn.matmul(lidar2img, reference_points)
         reference_points_cam = ttnn.squeeze(reference_points_cam, -1)
 
+        ttnn.deallocate(lidar2img)
+        ttnn.deallocate(reference_points)
+
         eps = 1e-5
         z = reference_points_cam[..., 2:3]
         bev_mask = z > eps
@@ -214,8 +217,7 @@ class TtBEVFormerEncoder:
         ttnn.deallocate(b)
         ttnn.deallocate(x)
         ttnn.deallocate(y)
-        ttnn.deallocate(lidar2img)
-        ttnn.deallocate(reference_points)
+        ttnn.deallocate(ref)
 
         return reference_points_cam, bev_mask
 
@@ -295,9 +297,15 @@ class TtBEVFormerEncoder:
             bev_query = output
             if self.return_intermediate:
                 intermediate.append(output)
+        ttnn.deallocate(ref_3d)
+        ttnn.deallocate(hybird_ref_2d)
+        ttnn.deallocate(bev_mask)
 
         if self.return_intermediate:
-            return ttnn.stack(intermediate)
+            stacked = ttnn.stack(intermediate)
+            for it in intermediate:
+                ttnn.deallocate(it)
+            return stacked
 
         return output
 
