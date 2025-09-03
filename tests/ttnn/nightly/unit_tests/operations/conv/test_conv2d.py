@@ -124,7 +124,6 @@ def run_conv(
     bs_full_inner_dim=False,
     sharded_cfg=None,
     enable_activation_reuse=False,
-    prepared_input_tensor=None,
 ):
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
@@ -221,19 +220,16 @@ def run_conv(
     requires_device_placement = input_dtype == ttnn.bfloat8_b or sharded_cfg is not None
 
     tt_input_tensor = None
-    if prepared_input_tensor is None:
-        tt_input_tensor = ttnn.from_torch(
-            torch_input_tensor,
-            input_dtype,
-            mesh_mapper=input_mesh_mapper,
-            layout=input_layout,
-            device=device if requires_device_placement else None,
-        )
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        input_dtype,
+        mesh_mapper=input_mesh_mapper,
+        layout=input_layout,
+        device=device if requires_device_placement else None,
+    )
 
-        if sharded_cfg:
-            tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_cfg)
-    else:
-        tt_input_tensor = prepared_input_tensor
+    if sharded_cfg:
+        tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_cfg)
 
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=weights_dtype,
@@ -4667,16 +4663,8 @@ def test_conv2d_activation_reuse_unet_conv_group_4(
 ):
     batch_size = 1
     groups = 4
-
-    # prepare input tensor
     input_channels = groups * input_channels
     output_channels = groups * output_channels
-
-    conv_input_shape = (batch_size, input_channels, input_height, input_width)
-    torch_input_tensor_nchw = randomize_torch_tensor(torch_tensor_map, conv_input_shape)
-    torch_input_tensor_nchw_reshaped = torch_input_tensor_nchw.reshape(
-        [1, 1, input_channels, input_height * input_width]
-    )
 
     input_core_grid = ttnn.CoreRangeSet(
         {
@@ -4684,18 +4672,8 @@ def test_conv2d_activation_reuse_unet_conv_group_4(
             ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(6, 7)),
         }
     )
-    input_sharded_memory_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(input_core_grid, (16, 2688), ttnn.ShardOrientation.ROW_MAJOR)
-    )
-    tt_input_tensor = ttnn.from_torch(
-        torch_input_tensor_nchw_reshaped, dtype=ttnn.bfloat16, device=device, memory_config=input_sharded_memory_config
-    )
-
     memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(input_core_grid, (2688, input_channels), ttnn.ShardOrientation.ROW_MAJOR)
-    )
-    tt_input_tensor = ttnn.experimental.convert_to_hwc(
-        tt_input_tensor, memory_config=memory_config, dtype=ttnn.bfloat16
     )
 
     # run conv
@@ -4726,7 +4704,7 @@ def test_conv2d_activation_reuse_unet_conv_group_4(
         enable_weights_double_buffer=True,
         activation="relu",
         input_dtype=ttnn.bfloat16,
-        prepared_input_tensor=tt_input_tensor,
+        sharded_cfg=memory_config,
         enable_split_reader=enable_split_reader,
         enable_activation_reuse=enable_activation_reuse
     )
