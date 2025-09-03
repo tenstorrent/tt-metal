@@ -56,7 +56,7 @@ protected:
         const KernelSource& kernel_src,
         const CoreRangeSet& core_range_set,
         const std::vector<uint32_t>& compile_args,
-        const std::unordered_map<std::string, uint32_t>& named_compile_time_args,
+        const std::unordered_map<std::string, uint32_t>& named_compile_args,
         const std::map<std::string, std::string>& defines) :
         Kernel(
             programmable_core_type,
@@ -64,7 +64,7 @@ protected:
             kernel_src,
             core_range_set,
             compile_args,
-            named_compile_time_args,
+            named_compile_args,
             defines) {}
     // DataMovement kernels have one binary each and Compute kernels have three binaries
     // Different set of binaries per device because kernel compilation is device dependent
@@ -83,7 +83,7 @@ public:
             kernel_src,
             cr_set,
             config.compile_args,
-            config.named_compile_time_args,
+            config.named_compile_args,
             config.defines),
         config_(config) {
         this->dispatch_class_ =
@@ -127,7 +127,7 @@ public:
             kernel_src,
             cr_set,
             config.compile_args,
-            config.named_compile_time_args,
+            config.named_compile_args,
             config.defines),
         config_(config) {
         this->dispatch_class_ =
@@ -170,7 +170,7 @@ public:
             kernel_src,
             cr_set,
             config.compile_args,
-            config.named_compile_time_args,
+            config.named_compile_args,
             config.defines),
         config_(config) {
         this->dispatch_class_ = enchantum::to_underlying(HalProcessorClassType::COMPUTE);

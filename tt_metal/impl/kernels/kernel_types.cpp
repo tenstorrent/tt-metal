@@ -21,7 +21,7 @@ ReaderDataMovementConfig::ReaderDataMovementConfig(
         .noc = detail::GetPreferredNOCForDRAMRead(tt::tt_metal::MetalContext::instance().get_cluster().arch()),
         .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
         .compile_args = std::move(compile_args),
-        .named_compile_time_args = std::move(named_compile_time_args),
+        .named_compile_args = std::move(named_compile_time_args),
         .defines = std::move(defines),
         .opt_level = opt_level} {}
 
@@ -35,7 +35,7 @@ WriterDataMovementConfig::WriterDataMovementConfig(
         .noc = detail::GetPreferredNOCForDRAMWrite(tt::tt_metal::MetalContext::instance().get_cluster().arch()),
         .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
         .compile_args = std::move(compile_args),
-        .named_compile_time_args = std::move(named_compile_time_args),
+        .named_compile_args = std::move(named_compile_time_args),
         .defines = std::move(defines),
         .opt_level = opt_level} {}
 

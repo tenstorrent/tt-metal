@@ -42,8 +42,8 @@ constexpr uint32_t get_named_ct_arg(std::string_view name) {
         }
     }
     // This should never be reached if the named argument is defined in KERNEL_COMPILE_TIME_ARG_MAP.
-    // Upon reaching this point, compilation should fail, but it currently does not.
-    __builtin_unreachable();
+    // Upon reaching this point, compilation should fail.
+    __builtin_unreachable();  // Invalid named compile time argument
 }
 #endif
 
