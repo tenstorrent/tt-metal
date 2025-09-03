@@ -617,7 +617,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
              local_nh_end,
              local_q_start,
              local_q_end,
-             chunked_q_chunk_offset});
+             chunked_q_chunk_offset,
+             0});  // read_offset
         SetRuntimeArgs(
             program,
             writer_kernels_id,
@@ -630,7 +631,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
              local_nh_end,
              local_q_start,
              local_q_end,
-             chunked_q_chunk_offset});
+             chunked_q_chunk_offset,
+             0});  // write_offset
         SetRuntimeArgs(
             program,
             compute_kernels_id,

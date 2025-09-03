@@ -31,7 +31,6 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
     uint32_t ring_size,
     uint32_t ring_id,
     std::optional<float> scale,
-    bool is_causal,
     std::size_t q_chunk_size,
     std::size_t k_chunk_size,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -72,7 +71,7 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
 
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = input_tensor_k.logical_shape();
-    const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2] / ring_size, DH = q_shape[3];
+    const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2] / (2 * ring_size), DH = q_shape[3];
     const uint32_t NKH = k_shape[1];
 
     // define chunk_1 and chunk_2
@@ -102,7 +101,7 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
     uint32_t chunked_q_chunk_offset_phase_1 = (chunk_1 * Sq) / q_chunk_size;
     uint32_t chunked_q_chunk_offset_phase_2 = (chunk_2 * Sq) / q_chunk_size;
 
-    uint32_t num_cores_phase_1 = (chunk_1 + 1) * (num_cores / (ring_size * 2));
+    uint32_t num_cores_phase_1 = (chunk_1 + 1) * (num_cores / (chunk_1 + 1 + chunk_2));
     uint32_t num_cores_phase_2 = num_cores - num_cores_phase_1;
 
     // Parallelization scheme
@@ -136,14 +135,6 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
     uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
 
     // log all values
-    log_debug(tt::LogOp, "q_tiles: {}", q_tiles);
-    log_debug(tt::LogOp, "k_tiles: {}", k_tiles);
-    log_debug(tt::LogOp, "v_tiles: {}", v_tiles);
-    log_debug(tt::LogOp, "mask_tiles: {}", mask_tiles);
-    log_debug(tt::LogOp, "qk_tiles: {}", qk_tiles);
-    log_debug(tt::LogOp, "out0_t: {}", out0_t);
-    log_debug(tt::LogOp, "scale_tiles: {}", scale_tiles);
-    log_debug(tt::LogOp, "statistics_tiles: {}", statistics_tiles);
 
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
@@ -223,8 +214,8 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
 
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
-        B,     NQH,  NKH,        Sqt,          Skt,        valid_Sqt,    valid_Skt,
-        DHt,   vDHt, Sq_chunk_t, q_num_chunks, Sk_chunk_t, k_num_chunks, num_cores,
+        B,          NQH,          NKH,        Sqt,          Skt,       valid_Sqt * 2 * ring_size, valid_Skt, DHt, vDHt,
+        Sq_chunk_t, q_num_chunks, Sk_chunk_t, k_num_chunks, num_cores,
         true,   //(std::uint32_t)is_causal,
         false,  //(std::uint32_t)use_provided_mask,
         false,  //(std::uint32_t)use_padded_mask,
@@ -240,7 +231,7 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
         NQH,
         NKH,
         Sqt,
-        valid_Sqt,
+        valid_Sqt * 2,
         Sk,
         DHt,
         vDHt,
@@ -300,14 +291,14 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     uint32_t balanced_q_parallel =
-        (is_causal && (q_per_core_phase_1 * q_parallel_factor_phase_1 == q_num_chunks) &&
+        ((q_per_core_phase_1 * q_parallel_factor_phase_1 == q_num_chunks) &&
          (q_per_core_phase_2 * q_parallel_factor_phase_2 == q_num_chunks) && (q_per_core_phase_1 % 2 == 0) &&
          (q_per_core_phase_2 % 2 == 0));
     if (balanced_q_parallel) {
         defines["BALANCED_Q_PARALLEL"] = "1";
     }
 
-    log_debug(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
+    log_info(tt::LogOp, "BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
 
     auto reader_kernels_id = CreateKernel(
         program,
@@ -353,15 +344,6 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
     uint32_t scalar_tile_size = tt::tt_metal::detail::TileSize(scalar_df);
     uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_df);
     uint32_t stats_tile_size = tt::tt_metal::detail::TileSize(stats_df);
-
-    log_debug(tt::LogOp, "q_data_format: {}", q_df);
-    log_debug(tt::LogOp, "k_data_format: {}", k_df);
-    log_debug(tt::LogOp, "v_data_format: {}", v_df);
-    log_debug(tt::LogOp, "mask_data_format: {}", mask_df);
-    log_debug(tt::LogOp, "out_data_format: {}", out_df);
-    log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
-    log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
-    log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
 
     // Q input
     auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
@@ -453,6 +435,9 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
         uint32_t q_parallel_factor = 0;
         uint32_t batch_parallel_factor = 0;
         uint32_t chunked_q_chunk_offset = 0;
+        uint32_t core_id = i;
+        uint32_t write_offset = 0;
+        uint32_t read_offset = 0;
         if (i < num_cores_phase_1) {
             // phase 1
             batch_per_core = batch_per_core_phase_1;
@@ -462,8 +447,10 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
             q_parallel_factor = q_parallel_factor_phase_1;
             batch_parallel_factor = batch_parallel_factor_phase_1;
             chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1;
+            read_offset = chunk_1 * Sqt;
         } else {
             // phase 2
+            log_info(tt::LogOp, "core: getting runtime args for idx {}", i);
             batch_per_core = batch_per_core_phase_2;
             nh_per_core = nh_per_core_phase_2;
             q_per_core = q_per_core_phase_2;
@@ -471,14 +458,16 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
             q_parallel_factor = q_parallel_factor_phase_2;
             batch_parallel_factor = batch_parallel_factor_phase_2;
             chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2;
+            core_id = i - num_cores_phase_1;
+            write_offset = Sqt;
+            read_offset = chunk_2 * Sqt;
         }
 
-        // log_debug(tt::LogOp, "core: {} getting runtime args for idx {i}", core, i);
-        uint32_t local_batch_start = (i / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
+        uint32_t local_batch_start = (core_id / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
         uint32_t local_batch_end = local_batch_start + batch_per_core;
-        uint32_t local_nh_start = ((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
+        uint32_t local_nh_start = ((core_id / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
         uint32_t local_nh_end = local_nh_start + nh_per_core;
-        uint32_t local_q_start = (i % q_parallel_factor) * q_per_core;
+        uint32_t local_q_start = (core_id % q_parallel_factor) * q_per_core;
         uint32_t local_q_end = local_q_start + q_per_core;
 
         // clamp all to max values for non-even partitioning
@@ -505,7 +494,8 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
              local_nh_end,
              local_q_start,
              local_q_end,
-             chunked_q_chunk_offset});
+             chunked_q_chunk_offset,
+             read_offset});
         SetRuntimeArgs(
             program,
             writer_kernels_id,
@@ -518,7 +508,8 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
              local_nh_end,
              local_q_start,
              local_q_end,
-             chunked_q_chunk_offset});
+             chunked_q_chunk_offset,
+             write_offset});
         SetRuntimeArgs(
             program,
             compute_kernels_id,

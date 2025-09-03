@@ -43,15 +43,13 @@ void kernel_main() {
     const uint32_t local_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_q_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t chunked_q_chunk_offset = get_arg_val<uint32_t>(argidx++);
+    const uint32_t read_offset = get_arg_val<uint32_t>(argidx++);
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
     // When chunked, update the bounds of valid K sequence length based on Q chunk offset
-    uint32_t valid_Skt_bound = valid_Skt;
-    if constexpr (is_chunked) {
-        valid_Skt_bound += chunked_q_chunk_offset * Sq_chunk_t;
-    }
-    // uint32_t valid_Skt_bound = valid_Skt + chunked_q_chunk_offset * Sq_chunk_t;
+
+    uint32_t valid_Skt_bound = valid_Skt + chunked_q_chunk_offset * Sq_chunk_t;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -146,15 +144,11 @@ void kernel_main() {
                 const uint32_t q_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
                 const uint32_t q_row_end_tile = std::min(q_row_start_tile + Sq_chunk_t, valid_Sqt);
                 const uint32_t q_row_tile_count = q_row_end_tile - q_row_start_tile;
-                const uint32_t q_tile_id = q_tile_shape.id_of(nb, nq, q_row_start_tile, 0);
-
+                const uint32_t q_tile_id = q_tile_shape.id_of(nb, nq, read_offset + q_row_start_tile, 0);
                 read_chunk_with_padding<is_dram, q_tile_bytes>(
                     q_reader, cb_q_in, q_tile_id, q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
 
-                if constexpr (is_chunked) {
-                    q_chunk = chunked_q_chunk_offset + q_chunk;
-                }
-                // fix this ^
+                q_chunk = chunked_q_chunk_offset + q_chunk;
                 uint32_t q_low_idx =
                     q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
                 uint32_t q_high_idx;

@@ -37,6 +37,7 @@ void kernel_main() {
     const uint32_t local_q_start = get_arg_val<uint32_t>(6);
     const uint32_t local_q_end = get_arg_val<uint32_t>(7);
     const uint32_t chunk_start_t_in_q_chunks = get_arg_val<uint32_t>(8);
+    const uint32_t write_offset = get_arg_val<uint32_t>(9);
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
@@ -118,8 +119,7 @@ void kernel_main() {
                 const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
                 const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
                 const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
-                uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, out_row_start_tile, 0);
-
+                uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
                 cb_wait_front(cb_out, out_chunk_tiles);
                 barrier_count = 0;
                 uint32_t l1_read_addr = get_read_ptr(cb_out);
