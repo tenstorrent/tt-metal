@@ -15,7 +15,7 @@
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/core_descriptor.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
+#include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "core_coord.hpp"
 
 namespace tt::tt_fabric {
@@ -56,6 +56,14 @@ public:
         return translated_fabric_or_dispatch_mux_cores_;
     }
 
+    const std::unordered_set<CoreCoord>& get_translated_fabric_mux_cores() const {
+        return translated_fabric_mux_cores_;
+    }
+
+    const std::unordered_set<CoreCoord>& get_translated_dispatch_mux_cores() const {
+        return translated_dispatch_mux_cores_;
+    }
+
     // Wrapper APIs for mux config access - these takes device_id, eth_chan_id and channel_id (channels inside a mux)
     size_t get_local_flow_control_semaphore_address(
         chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
@@ -68,6 +76,8 @@ public:
 private:
     std::vector<CoreCoord> logical_fabric_mux_cores_;
     std::vector<CoreCoord> logical_dispatch_mux_cores_;
+    std::unordered_set<CoreCoord> translated_fabric_mux_cores_;
+    std::unordered_set<CoreCoord> translated_dispatch_mux_cores_;
     std::unordered_set<CoreCoord> translated_fabric_or_dispatch_mux_cores_;
 
     // based on the number of channels used, get the number of risc needed per tensix
@@ -114,7 +124,8 @@ public:
         size_t risc_id,
         uint32_t noc_x,
         uint32_t noc_y,
-        std::shared_ptr<tt::tt_fabric::FabricMuxConfig> fabric_mux_config);
+        std::shared_ptr<tt::tt_fabric::FabricMuxConfig> fabric_mux_config,
+        eth_chan_directions direction);
 
     // Static builder method called from topology to construct a tensix builder
     static FabricTensixDatamoverBuilder build(
@@ -122,7 +133,8 @@ public:
         tt::tt_metal::Program& program,
         tt::tt_fabric::FabricNodeId local_fabric_node_id,
         tt::tt_fabric::FabricNodeId remote_fabric_node_id,
-        uint32_t ethernet_channel_id);
+        uint32_t ethernet_channel_id,
+        eth_chan_directions direction);
 
     // Create and compile the mux kernel
     void create_and_compile(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program);
@@ -138,6 +150,7 @@ public:
     size_t get_risc_id() const { return risc_id_; }
     uint32_t get_noc_x() const { return noc_x_; }
     uint32_t get_noc_y() const { return noc_y_; }
+    eth_chan_directions get_direction() const { return direction_; }
 
 private:
     // Core and fabric configuration
@@ -155,8 +168,15 @@ private:
     // Mux configuration
     std::shared_ptr<tt::tt_fabric::FabricMuxConfig> fabric_mux_config_;
 
+    // Direction for routing
+    eth_chan_directions direction_;
+
+    // Channel connection liveness check disable array
+    mutable std::array<bool, FabricEriscDatamoverConfig::num_sender_channels>
+        channel_connection_liveness_check_disable_array_{};
+
     // Helper methods for kernel compilation
-    std::vector<uint32_t> get_compile_time_args() const;
+    std::vector<uint32_t> get_compile_time_args(tt::tt_metal::IDevice* device) const;
     std::vector<uint32_t> get_runtime_args(tt::tt_metal::Program& program) const;
 };
 

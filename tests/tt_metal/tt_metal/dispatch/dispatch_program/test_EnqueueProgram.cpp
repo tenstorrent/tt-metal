@@ -260,7 +260,7 @@ void test_dummy_EnqueueProgram_with_runtime_args(
     distributed::EnqueueMeshWorkload(cq, workload, false);
     Finish(cq);
 
-    vector<uint32_t> dummy_kernel0_args_readback = tt::llrt::read_hex_vec_from_core(
+    vector<uint32_t> dummy_kernel0_args_readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         device->id(),
         eth_noc_xy,
         MetalContext::instance().hal().get_dev_addr(
@@ -781,40 +781,6 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     return pass;
 }
 
-bool test_EnqueueWrap_on_EnqueueWriteBuffer(IDevice* device, CommandQueue& cq, const TestBufferConfig& config) {
-    EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
-
-    /*
-    This just ensures we don't hang on the subsequent EnqueueWriteBuffer
-    */
-    size_t buf_size = config.num_pages * config.page_size;
-    auto buffer = Buffer::create(device, buf_size, config.page_size, config.buftype);
-
-    vector<uint32_t> src(buf_size / sizeof(uint32_t), 0);
-
-    for (uint32_t i = 0; i < src.size(); i++) {
-        src.at(i) = i;
-    }
-    EnqueueWriteBuffer(cq, *buffer, src, false);
-    Finish(cq);
-
-    return true;
-}
-
-bool test_EnqueueWrap_on_Finish(IDevice* device, CommandQueue& cq, const TestBufferConfig& config) {
-    bool pass = true;
-    EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
-
-    return pass;
-}
-
-bool test_EnqueueWrap_on_EnqueueProgram(IDevice* device, CommandQueue& cq, const TestBufferConfig& config) {
-    bool pass = true;
-    EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
-
-    return pass;
-}
-
 // Verify RT args for a core at a given address by comparing to expected values.
 bool verify_rt_args(
     bool unique,
@@ -831,7 +797,8 @@ bool verify_rt_args(
     auto noc_xy = (core_type == HalProgrammableCoreType::ACTIVE_ETH || core_type == HalProgrammableCoreType::IDLE_ETH)
                       ? device->ethernet_core_from_logical_core(logical_core)
                       : device->worker_core_from_logical_core(logical_core);
-    std::vector<uint32_t> args_readback = tt::llrt::read_hex_vec_from_core(device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
+    std::vector<uint32_t> args_readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
     log_debug(tt::LogTest, "Verifying {} {} RT args for {} (Logical: {}) at addr: 0x{:x} w/ incr_val: {}", expected_rt_args.size(), label, noc_xy, logical_core.str(), addr, incr_val);
 
     for(int i=0; i<expected_rt_args.size(); i++){
@@ -2350,29 +2317,6 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestSimplePrograms) {
     Finish(device_->mesh_command_queue());
 }
 
-TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestSimplePrograms) {
-    for (const auto& device : device_->get_devices()) {
-        if (!does_device_have_active_eth_cores(device)) {
-            GTEST_SKIP() << "Skipping test because device " << device->id()
-                         << " does not have any active ethernet cores";
-        }
-    }
-
-    for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
-        if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
-        }
-        distributed::MeshWorkload workload;
-        Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
-        auto& program_ = workload.get_programs().at(device_range_);
-        this->create_kernel(program_, CoreType::WORKER, true);
-        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
-    }
-
-    Finish(device_->mesh_command_queue());
-}
-
 TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestSimplePrograms) {
     for (const auto& device : device_->get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
@@ -2405,22 +2349,6 @@ TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestSimplePrograms) {
     Finish(device_->mesh_command_queue());
 }
 
-TEST_F(UnitMeshRandomProgramFixture, TensixTestPrograms) {
-    for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
-        if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
-        }
-        distributed::MeshWorkload workload;
-        Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
-        auto& program_ = workload.get_programs().at(device_range_);
-        this->create_kernel(program_, CoreType::WORKER, true);
-        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
-    }
-
-    Finish(device_->mesh_command_queue());
-}
-
 TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
     for (const auto& device : device_->get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
@@ -2442,7 +2370,7 @@ TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
         KernelProperties kernel_properties;
         kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
         kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
-        this->create_kernel(program_, CoreType::WORKER, true);
+        this->create_kernel(program_, CoreType::ETH, true);
         distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
 

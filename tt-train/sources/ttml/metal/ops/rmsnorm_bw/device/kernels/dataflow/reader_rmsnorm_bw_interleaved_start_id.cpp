@@ -32,9 +32,10 @@ constexpr bool do_mask_w = true;
 constexpr bool do_mask_w = false;
 #endif
 
+template <typename AddrGen>
 inline void read_tiles(
     const uint32_t cb_idx,
-    const InterleavedAddrGenFast<true>& addr_gen,
+    const AddrGen& addr_gen,
     const uint32_t start_tile,
     const uint32_t num_tiles,
     const uint32_t tile_bytes) {
@@ -69,19 +70,14 @@ void kernel_main() {
     generate_matmul_row_reduce_tile(cb_mat_mul_reduce);
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
-    const DataFormat data_format = get_dataformat(cb_input_idx);
-
-    const InterleavedAddrGenFast</* is_dram */ true> input_address_generator = {
-        .bank_base_address = input_address, .page_size = tile_bytes, .data_format = data_format};
-
-    const InterleavedAddrGenFast</* is_dram */ true> gamma_address_generator = {
-        .bank_base_address = gamma_address, .page_size = tile_bytes, .data_format = data_format};
-
-    const InterleavedAddrGenFast</* is_dram */ true> rms_a_address_generator = {
-        .bank_base_address = rms_a_address, .page_size = tile_bytes, .data_format = data_format};
-
-    const InterleavedAddrGenFast</* is_dram */ true> dL_out_address_generator = {
-        .bank_base_address = dL_out_address, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto input_args = TensorAccessorArgs<4>();
+    constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr auto rms_a_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    constexpr auto dL_out_args = TensorAccessorArgs<rms_a_args.next_compile_time_args_offset()>();
+    const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
+    const auto gamma_address_generator = TensorAccessor(gamma_args, gamma_address, tile_bytes);
+    const auto rms_a_address_generator = TensorAccessor(rms_a_args, rms_a_address, tile_bytes);
+    const auto dL_out_address_generator = TensorAccessor(dL_out_args, dL_out_address, tile_bytes);
 
     // Read input tensors row by row, reading each row's data twice due to compute requirements
     uint32_t end_row = start_row + num_rows_to_process;

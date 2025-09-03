@@ -22,16 +22,6 @@ struct SamplingOperation {
         const std::optional<uint32_t>& seed = std::nullopt,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static ttnn::Tensor invoke(
-        const Tensor& input_values_tensor,
-        const Tensor& input_indices_tensor,
-        const Tensor& k,
-        const Tensor& p,
-        const Tensor& temp,
-        const std::optional<uint32_t>& seed = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
 }  // namespace operations::reduction

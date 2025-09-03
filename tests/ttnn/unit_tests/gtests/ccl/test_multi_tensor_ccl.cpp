@@ -4,10 +4,7 @@
 
 #include "gtest/gtest.h"
 
-#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
-#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
-#include "ttnn/operations/experimental/ccl/all_reduce/all_reduce.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_command_processor_async/all_gather_command_processor_async.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
@@ -60,7 +57,7 @@ protected:
     }
 };
 
-TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherAsync) {
+TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherCommandProcessorAsync) {
     auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices_as_idevice(mesh_devices);
 
@@ -75,8 +72,16 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherAsync) {
     std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {semaphore};
     tt::tt_metal::distributed::Synchronize(mesh_device_.get(), std::nullopt, std::vector<SubDeviceId>());
 
-    auto all_gathered = ttnn::experimental::all_gather_async(
-        tensors, 0, multi_dev_semaphore, 1, std::nullopt, ttnn::ccl::Topology::Linear, SubDeviceId(0));
+    auto all_gathered = ttnn::experimental::all_gather_command_processor_async(
+        tensors,
+        /* dim */ 0,
+        multi_dev_semaphore,
+        /* persistent_output_buffer */ std::nullopt,
+        /* num_links */ 1,
+        /* memory_config */ std::nullopt,
+        ttnn::ccl::Topology::Linear,
+        /* cluster_axis */ std::nullopt,
+        SubDeviceId(0));
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = all_gathered[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {

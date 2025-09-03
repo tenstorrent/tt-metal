@@ -5,10 +5,10 @@
 #pragma once
 
 #include "dataflow_api.h"
-#include "fabric_edm_packet_header.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "edm_fabric_worker_adapters.hpp"
 #include "fabric_edm_types.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 #include <cstdint>
 
 // If the hop/distance counter equals to the below value, it indicates that it has
@@ -285,7 +285,12 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 // !!!WARNING!!! * ENSURE DOWNSTREAM EDM HAS SPACE FOR PACKET BEFORE CALLING
 // !!!WARNING!!!
 // This function does a write, so needs to be volatile to avoid compiler optimizations
-template <bool enable_deadlock_avoidance, bool stateful_api, bool increment_pointers = true, uint8_t NUM_SENDER_BUFFERS>
+template <
+    bool enable_deadlock_avoidance,
+    bool vc1_has_different_downstream_dest,
+    bool stateful_api,
+    bool increment_pointers = true,
+    uint8_t NUM_SENDER_BUFFERS>
 #ifndef FABRIC_2D
 FORCE_INLINE
 #endif
@@ -306,6 +311,7 @@ FORCE_INLINE
     }
     downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<
         enable_deadlock_avoidance,
+        vc1_has_different_downstream_dest,
         tt::tt_fabric::edm_to_downstream_noc,
         stateful_api,
         increment_pointers>(

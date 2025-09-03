@@ -166,8 +166,8 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     constexpr uint32_t briscIndex = 0;
     uint64_t addr = reinterpret_cast<uint64_t>(&profiler_msg->buffer[briscIndex][kernel_profiler::CUSTOM_MARKERS]);
 
-    std::vector<std::uint32_t> sync_times =
-        tt::llrt::read_hex_vec_from_core(device_id, core, addr, (sampleCount + 1) * 2 * sizeof(uint32_t));
+    std::vector<std::uint32_t> sync_times = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        device_id, core, addr, (sampleCount + 1) * 2 * sizeof(uint32_t));
 
     uint32_t preDeviceTime = 0;
     uint32_t preHostTime = 0;
@@ -306,16 +306,21 @@ void peekDeviceData(IDevice* device, std::vector<CoreCoord>& worker_cores) {
     const auto& device_profiler_it = tt_metal_device_profiler_map.find(device_id);
     if (device_profiler_it != tt_metal_device_profiler_map.end()) {
         DeviceProfiler& device_profiler = device_profiler_it->second;
-        device_profiler.device_sync_new_events.clear();
+        device_profiler.device_sync_new_markers.clear();
         device_profiler.readResults(device, worker_cores, ProfilerReadState::NORMAL, ProfilerDataBufferSource::L1);
         device_profiler.processResults(device, worker_cores, ProfilerReadState::NORMAL, ProfilerDataBufferSource::L1);
-        for (auto& event : device_profiler.device_events) {
-            const ZoneDetails zone_details = device_profiler.getZoneDetails(event.timer_id);
-            if (zone_details.zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::SYNC_ZONE)]) {
-                ZoneScopedN("Adding_device_sync_event");
-                auto ret = device_profiler.device_sync_events.insert(event);
-                if (ret.second) {
-                    device_profiler.device_sync_new_events.insert(event);
+        for (const auto& [core, risc_map] : device_profiler.device_markers_per_core_risc_map) {
+            for (const auto& [risc, device_markers] : risc_map) {
+                for (const tracy::TTDeviceMarker& marker : device_markers) {
+                    const tracy::MarkerDetails marker_details = device_profiler.getMarkerDetails(marker.marker_id);
+                    if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+                            tracy::MarkerDetails::MarkerNameKeyword::SYNC_ZONE)]) {
+                        ZoneScopedN("Adding_device_sync_marker");
+                        auto ret = device_profiler.device_sync_markers.insert(marker);
+                        if (ret.second) {
+                            device_profiler.device_sync_new_markers.insert(marker);
+                        }
+                    }
                 }
             }
         }
@@ -418,15 +423,15 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
         peekDeviceData(device_receiver, receiver_cores);
 
         TT_ASSERT(
-            tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_events.size() ==
-            tt_metal_device_profiler_map.at(device_id_receiver).device_sync_new_events.size());
+            tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_markers.size() ==
+            tt_metal_device_profiler_map.at(device_id_receiver).device_sync_new_markers.size());
 
-        auto event_receiver = tt_metal_device_profiler_map.at(device_id_receiver).device_sync_new_events.begin();
+        auto event_receiver = tt_metal_device_profiler_map.at(device_id_receiver).device_sync_new_markers.begin();
 
-        for (auto event_sender = tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_events.begin();
-             event_sender != tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_events.end();
+        for (auto event_sender = tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_markers.begin();
+             event_sender != tt_metal_device_profiler_map.at(device_id_sender).device_sync_new_markers.end();
              event_sender++) {
-            TT_ASSERT(event_receiver != tt_metal_device_profiler_map.at(device_id_receiver).device_sync_events.end());
+            TT_ASSERT(event_receiver != tt_metal_device_profiler_map.at(device_id_receiver).device_sync_markers.end());
             deviceDeviceTimePair.at(device_id_sender)
                 .at(device_id_receiver)
                 .push_back({event_sender->timestamp, event_receiver->timestamp});
@@ -727,11 +732,12 @@ void ReadDeviceProfilerResults(
 
                 profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
                 for (int i = 0; i < maxLoopCount; i++) {
-                    const std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
-                        device->id(),
-                        core,
-                        reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-                        kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+                    const std::vector<std::uint32_t> control_buffer =
+                        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                            device->id(),
+                            core,
+                            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+                            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
                     if (control_buffer[kernel_profiler::PROFILER_DONE] == 1) {
                         is_core_done = true;
                         break;
@@ -763,6 +769,25 @@ void ReadDeviceProfilerResults(
 #endif
 }
 
+bool pushToTracyMidRun(const ProfilerReadState state) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
+        return false;
+    }
+
+    TT_FATAL(
+        tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push() &&
+            !tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only(),
+        "Cannot push to Tracy GUI mid-run if only profiling trace runs");
+
+    TT_FATAL(
+        tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push() &&
+            !tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores(),
+        "Cannot push to Tracy GUI mid-run if profiling dispatch cores");
+
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push() &&
+           state == ProfilerReadState::NORMAL;
+}
+
 void ProcessDeviceProfilerResults(
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
@@ -785,8 +810,12 @@ void ProcessDeviceProfilerResults(
         } else {
             profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
         }
-        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
-            profiler.pushTracyDeviceResults();
+
+        if (pushToTracyMidRun(state)) {
+            std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
+                getSortedDeviceMarkersVector(profiler.device_markers_per_core_risc_map);
+            profiler.pushTracyDeviceResults(device_markers_vec);
+            profiler.device_markers_per_core_risc_map.clear();
         }
     }
 #endif

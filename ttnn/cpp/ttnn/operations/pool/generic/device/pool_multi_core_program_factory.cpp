@@ -88,7 +88,8 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
             if (!scalars.empty()) {
                 scalars.back().end = i;
             }
-            scalars.push_back({i, bfloat16(value).to_packed(), i});
+            // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
+            scalars.push_back({i, bfloat16::truncate(value).to_packed(), i});
             first_scalar = false;
         }
         last_pool_area = static_cast<uint32_t>(pool_area);
@@ -271,8 +272,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                   params.nbytes
             : tt::round_up(input_shape[3] / num_shards_c, tt::constants::TILE_WIDTH) * params.nbytes;
 
-    TT_FATAL(dilation_h == 1 && dilation_w == 1, "Dilation is not yet supported by the maxpool reader");
-
     uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t in_scalar_cb_id_0 = next_cb_index++;
     const uint32_t in_scalar_cb_pagesize = tile_size(params.data_format);
@@ -445,7 +444,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_nbytes_c,                    // 25
         in_nbytes_padded_c,             // 26
         params.multi_buffering_factor,  // 27
-        stride_w};                      // 28
+        stride_w,                       // 28
+        dilation_h,                     // 29
+        dilation_w};                    // 30
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
@@ -487,7 +488,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id_1,              // 10
         out_cb_id,                      // 11
         one_scalar_per_core,
-        num_of_pages_to_reserve_back};          // 12
+        num_of_pages_to_reserve_back};  // 12
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,

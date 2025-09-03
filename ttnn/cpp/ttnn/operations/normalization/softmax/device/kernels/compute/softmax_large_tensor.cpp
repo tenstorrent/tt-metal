@@ -441,12 +441,12 @@ void reduce_cb(
 
     reconfig_data_format(cb_in, cb_scaler);
     pack_reconfig_data_format(cb_out);
-    reduce_init<reduce_type, ReduceDim::REDUCE_ROW>(cb_in, cb_scaler, cb_out);
+    reduce_init<reduce_type, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_in, cb_scaler, cb_out);
     tile_regs_acquire();
     cb_reserve_back(cb_out, 1);
     for (uint32_t cur_tile = 0; cur_tile < cb_length_t; cur_tile++) {
         cb_wait_front(cb_in, 1);
-        reduce_tile<reduce_type, ReduceDim::REDUCE_ROW>(cb_in, cb_scaler, 0, 0, 0);
+        reduce_tile<reduce_type, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_in, cb_scaler, 0, 0, 0);
         cb_pop_front(cb_in, 1);
     }
 
@@ -464,7 +464,7 @@ void reduce_cb(
         } else {
             // path if we are doing a sum redudce
             add_binary_tile_init();
-            add_binary_tile(0, 1);
+            add_binary_tile(0, 1, 0);
         }
         cb_pop_front(cb_prev_out, 1);
     }
