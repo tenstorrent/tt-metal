@@ -43,6 +43,7 @@ constexpr uint32_t get_named_ct_arg(std::string_view name) {
     }
     // This should never be reached if the named argument is defined in KERNEL_COMPILE_TIME_ARG_MAP.
     // Upon reaching this point, compilation should fail.
+    // Note: Compilation currently fails with a segfault.
     __builtin_unreachable();  // Invalid named compile time argument
 }
 #endif
@@ -64,7 +65,10 @@ constexpr uint32_t get_named_ct_arg(std::string_view name) {
 // clang-format off
 /**
  * Returns the value of a named constexpr argument from kernel_compile_time_args array provided during kernel creation using
- * CreateKernel calls. The name-to-index mapping is defined via KERNEL_COMPILE_TIME_ARG_MAP.
+ * CreateKernel calls. The name-to-index mapping is defined via KERNEL_COMPILE_TIME_ARG_MAP. Migrating all existing kernels to
+ * use named compile time arguments is not a trivial task, so backward-compatibility is maintained by allowing the use of the
+ * get_compile_time_arg_val function with an index. get_compile_time_arg_val can be deprecated in the future upon completion
+ * of the migration and by request.
  *
  * Return value: constexpr uint32_t
  *
