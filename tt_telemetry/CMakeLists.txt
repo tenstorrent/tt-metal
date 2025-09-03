@@ -29,7 +29,6 @@ target_sources(
     tt_telemetry_server
     PRIVATE
         server/main.cpp
-        server/sysfs.cpp
         telemetry/telemetry_provider.cpp
         telemetry/metric.cpp
         server/web_server.cpp
