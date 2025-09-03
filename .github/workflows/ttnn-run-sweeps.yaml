@@ -606,7 +606,6 @@ jobs:
       - name: Run ttnn sweeps generation (all sweeps)
         if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
         run: python3 tests/sweep_framework/sweeps_parameter_generator.py --dump-file --tag ci-main --explicit
-
       - name: Upload sweep vectors
         uses: actions/upload-artifact@v4
         with:
@@ -714,15 +713,6 @@ jobs:
           name: sweeps-results
           path: /work/tests/sweep_framework/results_export/
           retention-days: 1
-      - name: Upload sweep results to SFTP server
-        if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs.upload_results }}
-        uses: ./.github/actions/upload-data-via-sftp
-        with:
-          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
-          sftp-batchfile: .github/actions/upload-data-via-sftp/optest_batchfile.txt
-          username: ml-kernel-op-test-writer
-          hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
-          path: /work
 
   ttnn-run-sweeps-parallel:
     name: Run sweeps in parallel
@@ -807,8 +797,19 @@ jobs:
     needs:
       - ttnn-run-single-sweep
       - ttnn-run-sweeps-parallel
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
     runs-on: tt-ubuntu-2204-large-stable
-    if: ${{ always() }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -822,12 +823,14 @@ jobs:
         run: |
           python3 tests/sweep_framework/run_collective_update.py
       - name: Upload runs
-        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: sweeps-run-result
           path: tests/sweep_framework/results_export/oprun_*.json
           retention-days: 7
+      - name: Print first three levels from starting directory
+        run: |
+          find . -maxdepth 3 -type d | sort
       - name: Upload sweep results to SFTP server
         if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs.upload_results }}
         uses: ./.github/actions/upload-data-via-sftp
