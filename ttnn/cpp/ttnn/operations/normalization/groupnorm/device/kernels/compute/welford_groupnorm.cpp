@@ -298,14 +298,14 @@ void MAIN {
 #endif
 
                             // Check if this is the first tile in the row and set tile_offset accordingly
-                            auto welford_tile_offset = (j + w) ? 0 : tile_offset;
+                            auto this_tile_offset = (j + w) ? 0 : tile_offset;
                             // Print all args to welford
                             DPRINT << "welford args: " << " " << curr_xy_coord << " " << curr_xy_limit << " "
-                                   << (uint32_t)false << " " << welford_tile_offset << ENDL();
+                                   << (uint32_t)false << " " << this_tile_offset << ENDL();
 
                             if (curr_xy_coord != curr_xy_limit) {
-                                welford(0, 1, 2, curr_xy_coord, curr_xy_limit, false, welford_tile_offset);
-                                curr_xy_coord += std::min(32 - welford_tile_offset, curr_xy_limit - curr_xy_coord);
+                                welford_tile<0, 1, 2, false>(curr_xy_coord, curr_xy_limit, this_tile_offset);
+                                curr_xy_coord += std::min(32 - this_tile_offset, curr_xy_limit - curr_xy_coord);
                             }
                             // // Print dst 1 and dst2
                             dprint_tensix_dest_reg(0);
@@ -325,7 +325,7 @@ void MAIN {
                 DPRINT << "welford done: out_block_index: " << out_block_index << ENDL();
             }
 
-            welford(DONT_CARE, DONT_CARE, DONT_CARE, curr_xy_limit, DONT_CARE, 2, DONT_CARE);  // Convert M2 to variance
+            welford_final();  // Convert M2 to variance
 
             // Update for next group
             tile_offset = (tile_offset + num_channels_per_group) % TILE_WIDTH;
