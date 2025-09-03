@@ -55,8 +55,8 @@ jobs:
             newNumber=$(($currentNumberRCs+1))
             version="$baseVersion-rc$newNumber"
           elif [ "$tagType" = "dev" ]; then
-            dateInt=$(date +%Y%m%d)
-            version="$baseVersion-dev$dateInt"
+            dateTimeInt=$(date +%Y%m%d%H%M%S)
+            version="$baseVersion-dev$dateTimeInt"
           else
             version="$baseVersion"
           fi
