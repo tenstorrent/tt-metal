@@ -129,7 +129,7 @@ def test_clip_encoder(
         hf_end_time = time.time()
         hf_execution_time = hf_end_time - hf_start_time
 
-    hf_sequence_output = hf_output.hidden_states[-1]  # after final layer norm
+    hf_sequence_output = hf_output.hidden_states[-2]  # after final layer norm
     hf_projected_output = hf_output.text_embeds  # projected/pooled output
 
     # convert mesh tensor to torch tensor for pcc
