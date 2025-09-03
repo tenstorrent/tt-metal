@@ -48,11 +48,8 @@ void kernel_main() {
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
-    constexpr auto src_args = TensorAccessorArgs<5>();
+    constexpr auto dst_args = TensorAccessorArgs<5>();
     uint32_t read_size = stick_size;
-    const auto src_accessor = TensorAccessor(src_args, input_tensor_address, stick_size);
-
-    constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
 
     // packet header cb
@@ -118,15 +115,23 @@ void kernel_main() {
             static_cast<uint16_t>(1),  // increment 1
             32});
         // Write the unicast packet
-        fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        pkt_hdr_sem_inc->to_chip_unicast(1);
-        fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        if (direction) {
+            fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+            pkt_hdr_sem_inc->to_chip_unicast(1);
+            fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        } else {
+            fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+            pkt_hdr_sem_inc->to_chip_unicast(1);
+            fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
+                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        }
     }
 
     // Copy the entire input
     if (direction) {
-        for (uint32_t outer_dim_id = outer_dims_to_keep_start; outer_dim_id <= outer_dims_to_keep_end; outer_dim_id++) {
+        for (uint32_t outer_dim_id = 0; outer_dim_id <= (outer_dims_to_keep_end - outer_dims_to_keep_start);
+             outer_dim_id++) {
             uint32_t dst_stick_id = (outer_dim_id + outer_dims_to_receive) * num_sticks_per_outer_dim + stick_start_id;
             for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
                 cb_wait_front(cb_output_id, 1);
