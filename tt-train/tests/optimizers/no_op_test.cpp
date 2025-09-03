@@ -27,10 +27,10 @@ protected:
 
 TEST_F(NoOpFullTest, NoOpTest) {
     using namespace ttml::ops;
-    ttml::autograd::ctx().set_seed(123);
+    ttml::autograd::ctx().set_seed(123U);
     auto* device = &ttml::autograd::ctx().get_device();
-    const size_t batch_size = 32;
-    const size_t num_features = 64;
+    const size_t batch_size = 32U;
+    const size_t num_features = 64U;
     std::vector<float> features;
     features.reserve(batch_size * num_features);
 
@@ -46,18 +46,18 @@ TEST_F(NoOpFullTest, NoOpTest) {
     }
 
     auto data_tensor = ttml::autograd::create_tensor(
-        ttml::core::from_vector(features, ttnn::Shape({batch_size, 1, 1, num_features}), device));
+        ttml::core::from_vector(features, ttnn::Shape({batch_size, 1U, 1U, num_features}), device));
 
     auto targets_tensor =
-        ttml::autograd::create_tensor(ttml::core::from_vector(targets, ttnn::Shape({batch_size, 1, 1, 1}), device));
+        ttml::autograd::create_tensor(ttml::core::from_vector(targets, ttnn::Shape({batch_size, 1U, 1U, 1U}), device));
 
-    auto model = ttml::modules::LinearLayer(num_features, 1);
+    auto model = ttml::modules::LinearLayer(num_features, 1U);
     auto initial_weight = model.get_weight();
     auto initial_weight_values = ttml::core::to_vector(initial_weight->get_value());
 
     auto optimizer = ttml::optimizers::NoOp(model.parameters());
 
-    const size_t steps = 100;
+    const size_t steps = 100U;
     std::vector<float> losses;
     losses.reserve(steps);
     for (size_t step = 0; step < steps; ++step) {
