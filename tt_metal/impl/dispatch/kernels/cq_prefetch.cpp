@@ -963,7 +963,7 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
     volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = (volatile CQPrefetchCmdLarge tt_l1_ptr*)cmd_ptr;
     uint32_t noc_xy_addr = cmd->relay_linear.noc_xy_addr;
     uint32_t read_addr = cmd->relay_linear.addr;
-    uint64_t wlength = cmd->relay_linear.length | ((uint64_t)cmd->relay_linear.length_hi << 32);
+    uint64_t wlength = cmd->relay_linear.length;
     // DPRINT << "relay_linear: " << cmd_ptr << " " << wlength << " " << read_addr << " " << noc_xy_addr << ENDL();
 
     // First step - read into DB0
@@ -1565,7 +1565,7 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd =
         (volatile CQPrefetchCmd tt_l1_ptr*)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
     uint32_t noc_xy_addr = cmd->relay_linear_h.noc_xy_addr;
-    uint32_t read_addr = cmd->relay_linear_h.addr;
+    uint64_t read_addr = cmd->relay_linear_h.addr;
     uint32_t length = cmd->relay_linear_h.length;
 
     uint32_t total_length = length + CQ_PREFETCH_CMD_BARE_MIN_SIZE;
@@ -1584,9 +1584,8 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr) {
     dptr->header.extra_pages = 1;
 
     uint32_t payload_ptr = data_ptr + sizeof(CQPrefetchHToPrefetchDHeader);
-    uint64_t noc_addr = get_noc_addr_helper(noc_xy_addr, read_addr);
 
-    noc_async_read(noc_addr, payload_ptr, length);
+    noc_read_64bit_any_len<true>(noc_xy_addr, read_addr, payload_ptr, length);
     noc_async_read_barrier();
 
     uint32_t npages = (total_length + downstream_cb_page_size - 1) >> downstream_cb_log_page_size;

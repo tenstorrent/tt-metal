@@ -88,10 +88,9 @@ struct CQPrefetchBaseCmd {
 // Flushes an extra page at the end (so it can only be used after CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH)
 struct CQPrefetchRelayLinearCmd {
     uint16_t pad1;
-    uint8_t length_hi;
-    uint32_t length;
+    uint64_t length;
     uint32_t noc_xy_addr;
-    uint32_t addr;
+    uint64_t addr;
 } __attribute__((packed));
 
 // Flushes an extra page at the end (so it can only be used after CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH). Must be only

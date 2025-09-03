@@ -159,7 +159,6 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_linear(uint32_t noc_xy_ad
         relay_linear_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR;
         relay_linear_cmd->relay_linear.noc_xy_addr = noc_xy_addr;
         relay_linear_cmd->relay_linear.length = lengthB;
-        relay_linear_cmd->relay_linear.length_hi = (lengthB >> 32) & 0xff;
         relay_linear_cmd->relay_linear.addr = addr;
     };
     CQPrefetchCmdLarge* relay_linear_cmd_dst = this->reserve_space<CQPrefetchCmdLarge*>(increment_sizeB);
