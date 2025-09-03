@@ -7,6 +7,7 @@ import ttnn
 
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
 from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
@@ -87,7 +88,7 @@ from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_ccl_smoke_test(
-    p150_mesh_device,
+    bh_1d_mesh_device,
     num_devices,
     ag_output_shape,
     cluster_axis,
@@ -104,14 +105,11 @@ def test_ccl_smoke_test(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    if p150_mesh_device.shape[cluster_axis] < num_devices:
-        pytest.skip("Test requires more devices than are available on this platform in this axis")
-    if (p150_mesh_device.shape[cluster_axis] != num_devices) and (all_gather_topology == ttnn.Topology.Ring):
-        pytest.skip("Ring configuration requires the entire row or column so it loops around")
+    validate_test(num_devices, all_gather_topology, bh_1d_mesh_device.shape, cluster_axis)
     if cluster_axis == 0:
-        submesh_device = p150_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+        submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     else:
-        submesh_device = p150_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
+        submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_all_gather_impl(
         submesh_device,
         num_devices,
