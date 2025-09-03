@@ -18,7 +18,7 @@ class Yolov11Conv2D:
         activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
         reshard=False,
-        shard_layout=None,  # Use interleaved to reduce circular buffer usage
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         is_detect=False,
         is_dfl=False,
         config_override=None,
