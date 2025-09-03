@@ -40,6 +40,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "umd/device/types/arch.h"
 #include <tt-metalium/utils.hpp>
+#include <tt-metalium/distributed.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -65,10 +66,12 @@ struct PipelineRowConfig {
     size_t num_repetitions;
 };
 
-void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowConfig& test_config) {
-    CommandQueue& cq = device->command_queue();
+void create_and_run_row_pipeline(
+    std::shared_ptr<distributed::MeshDevice> mesh_device, const PipelineRowConfig& test_config) {
+    auto& cq = mesh_device->mesh_command_queue();
 
     tt_metal::Program program = tt_metal::CreateProgram();
+    distributed::MeshWorkload mesh_workload;
 
     uint32_t num_cores = (uint32_t)test_config.num_cores;
     uint32_t num_tiles = (uint32_t)test_config.num_tiles;
@@ -119,11 +122,18 @@ void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowCon
 
     tt_metal::BufferType buff_type =
         test_config.IO_data_in_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1;
-    tt_metal::InterleavedBufferConfig buff_config{
-        .device = device, .size = buffer_size, .page_size = buffer_size, .buffer_type = buff_type};
 
-    auto src_buffer = CreateBuffer(buff_config);
-    auto dst_buffer = CreateBuffer(buff_config);
+    const distributed::DeviceLocalBufferConfig device_local_config{
+        .page_size = buffer_size,
+        .buffer_type = buff_type,
+    };
+
+    const distributed::ReplicatedBufferConfig replicated_buffer_config{
+        .size = buffer_size,
+    };
+
+    auto src_buffer = distributed::MeshBuffer::create(replicated_buffer_config, device_local_config, mesh_device.get());
+    auto dst_buffer = distributed::MeshBuffer::create(replicated_buffer_config, device_local_config, mesh_device.get());
 
     src_address = src_buffer->address();
     dst_address = dst_buffer->address();
@@ -205,8 +215,8 @@ void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowCon
                 program,
                 receiver_kernels.at(core_id),
                 core,
-                {(uint32_t)device->worker_core_from_logical_core(cores[core_id - 1]).x,
-                 (uint32_t)device->worker_core_from_logical_core(cores[core_id - 1]).y,
+                {(uint32_t)mesh_device->worker_core_from_logical_core(cores[core_id - 1]).x,
+                 (uint32_t)mesh_device->worker_core_from_logical_core(cores[core_id - 1]).y,
                  (uint32_t)num_tiles,
                  (uint32_t)sender_semaphore_id,
                  (uint32_t)receiver_semaphore_id,
@@ -224,8 +234,8 @@ void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowCon
                 program,
                 sender_kernels.at(core_id),
                 core,
-                {(uint32_t)device->worker_core_from_logical_core(cores[core_id + 1]).x,
-                 (uint32_t)device->worker_core_from_logical_core(cores[core_id + 1]).y,
+                {(uint32_t)mesh_device->worker_core_from_logical_core(cores[core_id + 1]).x,
+                 (uint32_t)mesh_device->worker_core_from_logical_core(cores[core_id + 1]).y,
                  (uint32_t)num_tiles,
                  (uint32_t)sender_semaphore_id,
                  (uint32_t)receiver_semaphore_id,
@@ -233,7 +243,8 @@ void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowCon
                  (uint32_t)num_repetitions});
         }
     }
-
+    distributed::AddProgramToMeshWorkload(
+        mesh_workload, std::move(program), distributed::MeshCoordinateRange(mesh_device->shape()));
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
@@ -242,17 +253,16 @@ void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowCon
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     log_info(LogTest, "Writing to device buffer->..");
-    tt_metal::detail::WriteToBuffer(src_buffer, src_vec);
+    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec);
     log_info(LogTest, "Writing to device buffer Done.");
-
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
+    distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
+    distributed::Finish(cq);
 
     log_info(LogTest, "Kernels done.");
 
     log_info(LogTest, "Reading results from device...");
     std::vector<uint32_t> result_vec;
-    tt_metal::detail::ReadFromBuffer(dst_buffer, result_vec);
+    distributed::ReadShard(cq, result_vec, dst_buffer, distributed::MeshCoordinate(0, 0));
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown
@@ -262,93 +272,93 @@ void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowCon
 
 }  // namespace unit_tests::create_pipeline
 
-TEST_F(CommandQueueProgramFixture, TensixTestPipelineAcrossRows) {
+TEST_F(UnitMeshCQProgramFixture, TensixTestPipelineAcrossRows) {
     if (this->arch_ != tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
 
     unit_tests::create_pipeline::PipelineRowConfig test_config{};
-
+    auto mesh_device = this->devices_[0];
     // // saturate DRAM
-    test_config.num_cores = this->device_->compute_with_storage_grid_size().x - 1;
+    test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
     test_config.num_tiles = 64 * 1024;
     test_config.block_size_tiles = 16;
     test_config.num_blocks_in_CB = 2;
     test_config.IO_data_in_dram = true;
     test_config.num_repetitions = 1;
-    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
+    unit_tests::create_pipeline::create_and_run_row_pipeline(mesh_device, test_config);
 
     // saturate L1
-    test_config.num_cores = this->device_->compute_with_storage_grid_size().x - 1;
+    test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
     test_config.num_tiles = 64;
     test_config.block_size_tiles = 16;
     test_config.num_blocks_in_CB = 2;
     test_config.IO_data_in_dram = false;
     test_config.num_repetitions = 64;
-    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
+    unit_tests::create_pipeline::create_and_run_row_pipeline(mesh_device, test_config);
 
     // test #1
-    test_config.num_cores = this->device_->compute_with_storage_grid_size().x - 1;
+    test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
     test_config.num_tiles = 64;
     test_config.block_size_tiles = 1;
     test_config.num_blocks_in_CB = 16;
     test_config.IO_data_in_dram = false;
     test_config.num_repetitions = 128;
-    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
+    unit_tests::create_pipeline::create_and_run_row_pipeline(mesh_device, test_config);
 
     // test #2
-    test_config.num_cores = this->device_->compute_with_storage_grid_size().x - 1;
+    test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
     test_config.num_tiles = 64;
     test_config.block_size_tiles = 2;
     test_config.num_blocks_in_CB = 16;
     test_config.IO_data_in_dram = false;
     test_config.num_repetitions = 128;
-    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
+    unit_tests::create_pipeline::create_and_run_row_pipeline(mesh_device, test_config);
 
     // test #3
-    test_config.num_cores = this->device_->compute_with_storage_grid_size().x - 1;
+    test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
     test_config.num_tiles = 64;
     test_config.block_size_tiles = 4;
     test_config.num_blocks_in_CB = 16;
     test_config.IO_data_in_dram = false;
     test_config.num_repetitions = 128;
-    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
+    unit_tests::create_pipeline::create_and_run_row_pipeline(mesh_device, test_config);
 
     // test #4
-    test_config.num_cores = this->device_->compute_with_storage_grid_size().x - 1;
+    test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
     test_config.num_tiles = 64;
     test_config.block_size_tiles = 8;
     test_config.num_blocks_in_CB = 8;
     test_config.IO_data_in_dram = false;
     test_config.num_repetitions = 128;
-    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
+    unit_tests::create_pipeline::create_and_run_row_pipeline(mesh_device, test_config);
 
     // test #5
-    test_config.num_cores = this->device_->compute_with_storage_grid_size().x - 1;
+    test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
     test_config.num_tiles = 64;
     test_config.block_size_tiles = 16;
     test_config.num_blocks_in_CB = 4;
     test_config.IO_data_in_dram = false;
     test_config.num_repetitions = 128;
-    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
+    unit_tests::create_pipeline::create_and_run_row_pipeline(mesh_device, test_config);
 
     // test #6
-    test_config.num_cores = this->device_->compute_with_storage_grid_size().x - 1;
+    test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
     test_config.num_tiles = 64;
     test_config.block_size_tiles = 32;
     test_config.num_blocks_in_CB = 4;
     test_config.IO_data_in_dram = false;
     test_config.num_repetitions = 128;
-    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
+    unit_tests::create_pipeline::create_and_run_row_pipeline(mesh_device, test_config);
 
     // test #7
-    test_config.num_cores = this->device_->compute_with_storage_grid_size().x - 1;
+    test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
     test_config.num_tiles = 64;
     test_config.block_size_tiles = 64;
     test_config.num_blocks_in_CB = 4;
     test_config.IO_data_in_dram = false;
     test_config.num_repetitions = 128;
-    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
+    unit_tests::create_pipeline::create_and_run_row_pipeline(mesh_device, test_config);
 }
 
 }  // namespace tt::tt_metal
