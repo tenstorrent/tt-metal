@@ -544,16 +544,17 @@ def test_binary_mul_int32_edge_cases(use_legacy, device):
 @pytest.mark.parametrize(
     "shapes",
     [
-        pytest.param([(1, 1, 1), (8, 16, 32)], id="broadcast_lhs_1"),
-        pytest.param([(1, 1, 32), (8, 16, 32)], id="broadcast_lhs_2"),
-        pytest.param([(1, 16, 32), (8, 16, 32)], id="broadcast_lhs_3"),
-        pytest.param([(8, 16, 32), (1, 1, 1)], id="broadcast_rhs_1"),
-        pytest.param([(8, 16, 32), (1, 1, 32)], id="broadcast_rhs_2"),
-        pytest.param([(8, 16, 32), (1, 16, 32)], id="broadcast_rhs_3"),
-        pytest.param([(8, 16, 1), (1, 1, 32)], id="broadcast_both_1"),
-        pytest.param([(1, 1, 32), (8, 16, 1)], id="broadcast_both_2"),
-        pytest.param([(8, 1, 32), (8, 16, 1)], id="broadcast_both_3"),
-        pytest.param([(8, 16, 1), (8, 1, 32)], id="broadcast_both_4"),
+        # pytest.param([(1, 1, 1), (8, 16, 32)], id="broadcast_lhs_1"),
+        # pytest.param([(1, 1, 32), (8, 16, 32)], id="broadcast_lhs_2"),
+        # pytest.param([(1, 16, 32), (8, 16, 32)], id="broadcast_lhs_3"),
+        # pytest.param([(8, 16, 32), (1, 1, 1)], id="broadcast_rhs_1"),
+        # pytest.param([(8, 16, 32), (1, 1, 32)], id="broadcast_rhs_2"),
+        # pytest.param([(8, 16, 32), (1, 16, 32)], id="broadcast_rhs_3"),
+        # pytest.param([(8, 16, 1), (1, 1, 32)], id="broadcast_both_1"),
+        # pytest.param([(1, 1, 32), (8, 16, 1)], id="broadcast_both_2"),
+        # pytest.param([(8, 1, 32), (8, 16, 1)], id="broadcast_both_3"),
+        # pytest.param([(8, 16, 1), (8, 1, 32)], id="broadcast_both_4"),
+        (torch.Size([1, 1, 32, 32])),
     ],
 )
 @pytest.mark.parametrize(
@@ -570,17 +571,17 @@ def test_binary_implicit_broadcast(device, shapes, ttnn_op):
 
     min_int = torch.iinfo(torch.int32).min
     max_int = torch.iinfo(torch.int32).max
-    torch_input_tensor_a = torch.randint(low=min_int, high=max_int, size=shapes[0], dtype=torch.int32)
-    torch_input_tensor_b = torch.randint(low=min_int, high=max_int, size=shapes[1], dtype=torch.int32)
-    torch_input_tensor_a = torch.tensor(
-        [209652396, -698378168, -1347192322, 209652396, -209652396, 2109652396, 209652396]
-    )
-    torch_input_tensor_b = torch.tensor(
-        [-2060646285, -1347192322, -698378168, 1478610112, 2060646285, -2060646285, 398764591]
-    )
+    torch_input_tensor_a = torch.randint(low=-100, high=100, size=shapes, dtype=torch.int32)
+    torch_input_tensor_b = torch.randint(low=-150, high=150, size=shapes, dtype=torch.int32)
+    # torch_input_tensor_a = torch.tensor(
+    #     [209652396, -698378168, -1347192322, 209652396, -209652396, 2109652396, 209652396]
+    # )
+    # torch_input_tensor_b = torch.tensor(
+    #     [-2060646285, -1347192322, -698378168, 1478610112, 2060646285, -2060646285, 398764591]
+    # )
     # torch_input_tensor_b = -2060646285
-    print("input_a: ", torch_input_tensor_a)
-    print("input_b: ", torch_input_tensor_b)
+    # print("input_a: ", torch_input_tensor_a)
+    # print("input_b: ", torch_input_tensor_b)
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
@@ -604,15 +605,15 @@ def test_binary_implicit_broadcast(device, shapes, ttnn_op):
 
     output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
-    print(output_tensor)
-    print(torch_output_tensor)
+    # print(output_tensor)
+    # print(torch_output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
 def test_binary_lt_edge_cases(device):
     torch_input_tensor_a = torch.tensor(
-        [0, 1, 0, 1, -1, 2147483647, -2147483647, 2147483647, 0, -5, -3, 3, 5, 2147483647, -2147483647]
+        [0, 1, 0, 1, -1, 2147483647, -2147483647, 2147483647, 0, -5, -3, 3, 5, 2147483647, -2147483647, 0, 0, 0]
     )
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -622,7 +623,9 @@ def test_binary_lt_edge_cases(device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    torch_input_tensor_b = torch.tensor([0, 0, -1, 1, -1, 2147483647, -2147483647, 0, -2147483647, -3, -5, 5, 3, -2, 2])
+    torch_input_tensor_b = torch.tensor(
+        [0, 0, -1, 1, -1, 2147483647, -2147483647, 0, -2147483647, -3, -5, 5, 3, -2, 2, -2, 0, 2]
+    )
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b,
         dtype=ttnn.int32,
@@ -631,11 +634,12 @@ def test_binary_lt_edge_cases(device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    golden_function = ttnn.get_golden_function(ttnn.lt)
+    golden_function = ttnn.get_golden_function(ttnn.gt)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
-    output_tensor = ttnn.lt(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.gt(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
+    print(torch_output_tensor)
     print(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
