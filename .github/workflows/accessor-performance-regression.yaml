@@ -40,7 +40,7 @@ jobs:
       build-type: Release
       tracy: true
       build-wheel: true
-      version: ${{ inputs.version || '22.04' }}
+      version: ${{ github.event.inputs.version || '22.04' }}
       ref: philei/tensor-accessor-perf-regression-tests
 
   generate-baseline-performance:
@@ -126,8 +126,8 @@ jobs:
       build-type: Release
       tracy: true
       build-wheel: true
-      version: ${{ inputs.version || '22.04' }}
-      ref: ${{ github.event_name == 'push' && github.ref || inputs.branch || 'main' }}
+      version: ${{ github.event.inputs.version || '22.04' }}
+      ref: ${{ github.event.inputs.branch || 'main' }}
 
   accessor-perf-regression-tests:
     name: "📊 Accessor Performance Regression Tests"
@@ -158,12 +158,12 @@ jobs:
       - name: ⬇️ Checkout specific branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch || 'main' }}
+          ref: ${{ github.event.inputs.branch || 'main' }}
           submodules: recursive
           path: docker-job
 
       - name: ⬇️ Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@${{ inputs.branch || 'main' }}
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@${{ github.event.inputs.branch || 'main' }}
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
