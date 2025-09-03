@@ -151,7 +151,8 @@ private:
     void initialize_intermesh_mapping(
         std::optional<std::map<FabricNodeId, chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping,
         std::shared_ptr<tt_metal::PhysicalSystemDescriptor> physical_system_descriptor,
-        const std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>>& mesh_edge_ports_to_chip_id);
+        const std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>>& mesh_edge_ports_to_chip_id,
+        const std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>>& requested_connections);
 
     void add_to_connectivity(
         MeshId src_mesh_id,

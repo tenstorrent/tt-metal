@@ -179,7 +179,8 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
 void MeshGraph::initialize_intermesh_mapping(
     std::optional<std::map<FabricNodeId, chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping,
     std::shared_ptr<tt_metal::PhysicalSystemDescriptor> physical_system_descriptor,
-    const std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>>& mesh_edge_ports_to_chip_id) {
+    const std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>>& mesh_edge_ports_to_chip_id,
+    const std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>>& requested_connections) {
     using namespace tt::tt_metal::distributed::multihost;
     const auto& my_host = physical_system_descriptor->my_host_name();
     const auto my_rank = physical_system_descriptor->get_rank_for_hostname(my_host);
@@ -200,8 +201,24 @@ void MeshGraph::initialize_intermesh_mapping(
                                     .get_logical_node_ids()
                                     .at(Rank{neighbor_rank})
                                     .first;
+        if (requested_connections.find(*my_mesh_id) == requested_connections.end() ||
+            requested_connections.at(*my_mesh_id).find(*neighbor_mesh_id) ==
+                requested_connections.at(*my_mesh_id).end()) {
+            // No connections between these 2 meshes are specified, skip
+            continue;
+        }
+
         // Get all exit nodes between my host and neighbor host
         const auto& exit_nodes = physical_system_descriptor->get_connecting_exit_nodes(my_host, neighbor_host);
+        auto num_requested_chans = requested_connections.at(*my_mesh_id).at(*neighbor_mesh_id);
+        TT_FATAL(
+            exit_nodes.size() >= num_requested_chans,
+            "Requested {} channels between {} and {}, but only have {} physical links",
+            num_requested_chans,
+            *my_mesh_id,
+            *neighbor_mesh_id,
+            exit_nodes.size());
+
         // Determine a valid Direction and Port for each exit node
         // Step 1: Determine which Fabric Node ID each exit node belongs to (assert if exit node is not on edge)
         // Step 2: Compute associative connection hash for the exit node
@@ -293,11 +310,23 @@ void MeshGraph::initialize_intermesh_mapping(
     std::vector<uint8_t> serialized_connections;
     std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>> resolved_connections;
     if (my_rank == 0) {
+        std::set<std::pair<uint32_t, uint32_t>> processed_neighbors;
+
         for (const auto& [src_mesh, port_identifiers] : port_id_table) {
             for (const auto& [dest_mesh, src_ports] : port_identifiers) {
+                if (processed_neighbors.find({*dest_mesh, *src_mesh}) != processed_neighbors.end()) {
+                    // Connections for these neighbors have already been setup - skip
+                    continue;
+                }
+                std::size_t num_ports_assigned = 0;
+                std::size_t num_ports_requested = requested_connections.at(*src_mesh).at(*dest_mesh);
+
                 const auto& dest_ports = port_id_table[dest_mesh][src_mesh];
                 // Iterate over src ports. For each src port, determine which dst port it connects to
                 for (const auto& src_port : src_ports) {
+                    if (num_ports_assigned == num_ports_requested) {
+                        break;
+                    }
                     const auto& connection_hash = src_port.connection_hash;
                     for (const auto& dest_port : dest_ports) {
                         if (dest_port.connection_hash == connection_hash) {
@@ -305,10 +334,14 @@ void MeshGraph::initialize_intermesh_mapping(
                                       << *dest_mesh << " " << dest_port.port_tag << std::endl;
                             resolved_connections.push_back(
                                 {{*src_mesh, src_port.port_tag}, {*dest_mesh, dest_port.port_tag}});
+                            resolved_connections.push_back(
+                                {{*dest_mesh, dest_port.port_tag}, {*src_mesh, src_port.port_tag}});
+                            num_ports_assigned++;
                             break;
                         }
                     }
                 }
+                processed_neighbors.insert({*src_mesh, *dest_mesh});
             }
         }
         for (const auto& hostname : physical_system_descriptor->get_all_hostnames()) {
@@ -559,26 +592,23 @@ void MeshGraph::initialize_from_yaml(
     }
     std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>> connections;
     if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
+        std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>> requested_connections;
+        for (const auto& connection : yaml["Graph"]) {
+            auto src_mesh_str = connection[0].as<std::string>();
+            auto dst_mesh_str = connection[1].as<std::string>();
+            auto num_chans = connection[2].as<uint32_t>();
+            auto src_mesh = static_cast<uint32_t>(std::stoul(src_mesh_str.substr(1, src_mesh_str.size() - 1)));
+            auto dst_mesh = static_cast<uint32_t>(std::stoul(dst_mesh_str.substr(1, dst_mesh_str.size() - 1)));
+            requested_connections[src_mesh][dst_mesh] = num_chans;
+            requested_connections[dst_mesh][src_mesh] = num_chans;
+            std::cout << "requested connections: " << src_mesh << " " << dst_mesh << " " << num_chans << std::endl;
+        }
         initialize_intermesh_mapping(
-            logical_mesh_chip_id_to_physical_chip_id_mapping, physical_system_descriptor, mesh_edge_ports_to_chip_id);
+            logical_mesh_chip_id_to_physical_chip_id_mapping,
+            physical_system_descriptor,
+            mesh_edge_ports_to_chip_id,
+            requested_connections);
         return;
-    }
-    // Loop over Graph, populate inter mesh
-    auto convert_yaml_to_port_id = [](const YAML::Node& node) -> std::pair<MeshId, port_id_t> {
-        MeshId mesh_id{node[0].as<std::uint32_t>()};
-        std::string port_string = node[1].as<std::string>();
-        RoutingDirection port_direction =
-            enchantum::cast<RoutingDirection>(port_string.substr(0, 1), ttsl::ascii_caseless_comp).value();
-        std::uint32_t chan_id = static_cast<uint32_t>(std::stoul(port_string.substr(1, port_string.size() - 1)));
-        return {mesh_id, {port_direction, chan_id}};
-    };
-    for (const auto& mesh_connection : yaml["Graph"]) {
-        TT_FATAL(mesh_connection.size() == 2, "MeshGraph: Expecting 2 elements in each Graph connection");
-        const auto& [src_mesh_id, src_port_id] = convert_yaml_to_port_id(mesh_connection[0]);
-        const auto& [dst_mesh_id, dst_port_id] = convert_yaml_to_port_id(mesh_connection[1]);
-        const auto& src_chip_id = mesh_edge_ports_to_chip_id[*src_mesh_id].at(src_port_id);
-        const auto& dst_chip_id = mesh_edge_ports_to_chip_id[*dst_mesh_id].at(dst_port_id);
-        this->add_to_connectivity(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id, src_port_id.first);
     }
 }
 
