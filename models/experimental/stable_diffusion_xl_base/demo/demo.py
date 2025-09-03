@@ -35,7 +35,6 @@ def run_demo_inference(
     batch_size = ttnn_device.get_num_devices()
 
     start_from, _ = evaluation_range
-    torch.manual_seed(0)
 
     if isinstance(prompts, str):
         prompts = [prompts]
@@ -74,6 +73,9 @@ def run_demo_inference(
             is_galaxy=is_galaxy(),
         ),
     )
+
+    # Load seed after tt_sdxl is initialized, as it can be changed with calls to torch.rand during the initialization
+    torch.manual_seed(0)
 
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
@@ -199,7 +201,7 @@ def run_demo_inference(
     ids=("with_trace", "no_trace"),
 )
 def test_demo(
-    mesh_device,
+    device,
     is_ci_env,
     prompt,
     negative_prompt,
@@ -211,7 +213,7 @@ def test_demo(
     guidance_scale,
 ):
     return run_demo_inference(
-        mesh_device,
+        device,
         is_ci_env,
         prompt,
         negative_prompt,
