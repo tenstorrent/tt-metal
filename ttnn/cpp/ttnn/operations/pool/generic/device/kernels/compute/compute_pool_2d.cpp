@@ -110,10 +110,13 @@ void MAIN {
                 (last_tile_is_partial && last_c_block)
                     ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
                     : number_of_tiles * num_faces_in_output_tile;
-            if constexpr (tilize_reconfig) {
+            if constexpr (tilize_reconfig || is_output_tiled) {
                 if (first_c_block || last_c_block) {
                     UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
+                    if constexpr (is_output_tiled) {
+                        MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
+                    }
                 }
             }
             if constexpr (is_output_tiled) {
@@ -124,7 +127,7 @@ void MAIN {
                           false,
                           false,
                           TILE_C_DIM>(tmp_cb_id, 1, num_faces_in_output_tile)));
-                } else {
+                } else if (first_c_block) {
                     PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
                         tmp_cb_id, 1, num_faces_in_output_tile)));
                 }
@@ -174,9 +177,6 @@ void MAIN {
                     unary_op_init_common(in_cb_id_0, tmp_cb_id);
                     tensix_sync();
 
-                    UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
-                    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
                     tilize_stick_counter = 0;
                     temp_cb_row_offset = 0;
                 }
