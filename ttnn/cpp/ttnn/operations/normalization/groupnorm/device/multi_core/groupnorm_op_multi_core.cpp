@@ -1413,8 +1413,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t xmm_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t xmm_CB_size_group_2 = 0;
     uint32_t ex_partial_CB_size = single_tile_size * (use_welford ? 2 : 1);  // partial Ex
-    uint32_t ex2_partial_CB_size = single_tile_size;  // partial Ex2
-    uint32_t ex_global_CB_size = ex_partial_CB_size;  // the final result Ex
+    uint32_t ex2_partial_CB_size = single_tile_size;                         // partial Ex2
+    uint32_t ex_global_CB_size = ex_partial_CB_size;                         // the final result Ex
     uint32_t ex2_global_CB_size = ex2_partial_CB_size;  // the final result Ex2
     uint32_t xmm2_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t xmm2_CB_size_group_2 = 0;

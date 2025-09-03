@@ -190,9 +190,6 @@ void MAIN {
     constexpr int cb_outbeta = cb_out0;
 #endif
 
-    // Syntactic sugar to indicate that we don't care about the value
-    constexpr uint32_t DONT_CARE = 0;
-
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
     binary_op_init_common(cb_in0, cb_in0, cb_in);
@@ -303,10 +300,8 @@ void MAIN {
                             DPRINT << "welford args: " << " " << curr_xy_coord << " " << curr_xy_limit << " "
                                    << (uint32_t)false << " " << this_tile_offset << ENDL();
 
-                            if (curr_xy_coord != curr_xy_limit) {
-                                welford_tile<0, 1, 2, false>(curr_xy_coord, curr_xy_limit, this_tile_offset);
-                                curr_xy_coord += std::min(32 - this_tile_offset, curr_xy_limit - curr_xy_coord);
-                            }
+                            welford_tile<0, 1, 2, false>(curr_xy_coord, curr_xy_limit, this_tile_offset);
+                            curr_xy_coord += std::min(32 - this_tile_offset, curr_xy_limit - curr_xy_coord);
                             // // Print dst 1 and dst2
                             dprint_tensix_dest_reg(0);
                             dprint_tensix_dest_reg(1);
@@ -325,7 +320,7 @@ void MAIN {
                 DPRINT << "welford done: out_block_index: " << out_block_index << ENDL();
             }
 
-            welford_final();  // Convert M2 to variance
+            welford_final(curr_xy_limit);  // Convert M2 to variance
 
             // Update for next group
             tile_offset = (tile_offset + num_channels_per_group) % TILE_WIDTH;
