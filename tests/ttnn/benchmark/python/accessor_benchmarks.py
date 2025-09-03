@@ -88,6 +88,13 @@ def get_individual_test_names(gtest_filter):
     BASE = Path(ENV["TT_METAL_HOME"])
     binary_path = Path(BASE / "build" / "test" / "ttnn" / "unit_tests_ttnn_accessor")
 
+    # Check if the binary exists
+    if not binary_path.exists():
+        logger.error(f"Test binary not found at: {binary_path}")
+        logger.error("This usually means the build was incomplete or ttnn tests were not built.")
+        logger.error("Make sure to build with --build-ttnn-tests or --build-all flags.")
+        return []
+
     # Use --gtest_list_tests with the filter to get all matching test names
     result = subprocess.run(
         [binary_path, f"--gtest_filter={gtest_filter}", "--gtest_list_tests"], env=ENV, capture_output=True, text=True
@@ -129,6 +136,14 @@ def benchmark_impl(gtest_filter, res_dir, export_results_to=None, args_configs=N
     BASE = Path(ENV["TT_METAL_HOME"])
 
     binary_path = Path(BASE / "build" / "test" / "ttnn" / "unit_tests_ttnn_accessor")
+
+    # Check if the binary exists
+    if not binary_path.exists():
+        logger.error(f"Test binary not found at: {binary_path}")
+        logger.error("This usually means the build was incomplete or ttnn tests were not built.")
+        logger.error("Make sure to build with --build-ttnn-tests or --build-all flags.")
+        logger.error("Example: ./build_metal.sh --build-ttnn-tests --enable-profiler")
+        raise FileNotFoundError(f"Test binary not found: {binary_path}")
 
     # Get individual test names if using star pattern
     if "*" in gtest_filter:

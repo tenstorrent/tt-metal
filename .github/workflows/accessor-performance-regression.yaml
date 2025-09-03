@@ -42,6 +42,7 @@ jobs:
       build-wheel: true
       version: ${{ inputs.version || '22.04' }}
       ref: philei/tensor-accessor-perf-regression-tests
+      skip-tt-train: false  # This ensures --build-all is used instead of selective builds
 
   generate-baseline-performance:
     name: "📊 Generate Baseline Performance Data"
@@ -115,6 +116,7 @@ jobs:
       build-wheel: true
       version: ${{ inputs.version || '22.04' }}
       ref: ${{ github.event_name == 'push' && github.ref || inputs.branch || 'main' }}
+      skip-tt-train: false  # This ensures --build-all is used instead of selective builds
 
   accessor-perf-regression-tests:
     name: "📊 Accessor Performance Regression Tests"
