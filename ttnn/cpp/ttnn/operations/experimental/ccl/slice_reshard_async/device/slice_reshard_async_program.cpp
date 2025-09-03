@@ -191,10 +191,10 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
     uint32_t num_directions = 2;
     uint32_t stick_start_id = 0;
     for (uint32_t link = 0; link < num_links; link++) {
+        uint32_t num_sticks_to_read = 0;
         for (uint32_t direction = 0; direction < num_directions; direction++) {
             CoreCoord core = {link * num_directions + direction, 0};
             CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
-            uint32_t num_sticks_to_read = 0;
             if (core_group_1.contains(core)) {
                 num_sticks_to_read = num_sticks_per_core_group_1;
             } else {
@@ -241,8 +241,8 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
                 direction ? is_last_device : is_first_device,
                 sender_cb_index,                  // cb_forward_id
                 reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
-                direction};
-            TensorAccessorArgs(*input_buffer).append_to(writer_kernel_config.compile_args);
+                direction,
+            };
             TensorAccessorArgs(*output_buffer).append_to(writer_kernel_config.compile_args);
             auto worker_writer_kernel_id = tt::tt_metal::CreateKernel(
                 program,
@@ -262,7 +262,7 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
                 direction ? outer_dims_to_forward : outer_dims_to_backward,      // outer_dims_to_forward
                 outer_dims_to_keep_start,                                        // outer_dims_to_keep
                 outer_dims_to_keep_end,                                          // outer_dims_to_keep
-                direction ? outer_dims_from_forward : outer_dims_from_backward,  // outer_dims_to_receive
+                direction ? outer_dims_from_backward : outer_dims_from_forward,  // outer_dims_to_receive
                 num_sticks_per_outer_dim,                                        // num_sticks_per_outer_dim
                 virtual_core.x,                                                  // out_ready_sem_noc0_x
                 virtual_core.y,                                                  // out_ready_sem_noc0_y
@@ -292,9 +292,8 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
                 }
             }
             tt::tt_metal::SetRuntimeArgs(program, worker_writer_kernel_id, {core}, writer_rt_args);
-
-            stick_start_id += num_sticks_to_read;
         }
+        stick_start_id += num_sticks_to_read;
     }
 
     auto override_runtime_arguments_callback =
