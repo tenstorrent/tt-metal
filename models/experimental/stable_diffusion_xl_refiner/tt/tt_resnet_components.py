@@ -18,8 +18,8 @@ class ResNetTimeEmbedding:
         temb = ttnn.silu(temb)
         temb = ttnn.linear(
             temb,
-            self.tt_weights,
-            bias=self.tt_bias,
+            self.temb_weights,
+            bias=self.temb_bias,
         )
         return ttnn.add(hidden_states, temb, use_legacy=True)
 
