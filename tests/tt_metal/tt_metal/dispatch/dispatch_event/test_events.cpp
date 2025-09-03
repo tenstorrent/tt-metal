@@ -110,7 +110,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
             -1,
             mesh_device.get(),
             cq.id(),
-            distributed:: ::MeshCoordinateRange(
+            distributed::MeshCoordinateRange(
                 distributed::MeshCoordinate(0, 0),
                 distributed::MeshCoordinate(0, 0)));  // type is std::shared_ptr<Event>
         distributed::EnqueueRecordEvent(cq);
@@ -142,7 +142,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventAndSynchronize) {
             -1,
             mesh_device.get(),
             cq.id(),
-            distributed:: ::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0))));
+            distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0))));
         distributed::EnqueueRecordEvent(cq);
 
         // Host synchronize every N number of events.
@@ -175,7 +175,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventAndSynchronizeHang) {
         -1,
         mesh_device.get(),
         cq.id(),
-        distributed:: ::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0)));
+        distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0)));
     distributed::EnqueueRecordEvent(cq);
     // future_event->wait_until_ready();  // in case async used, must block until async cq populated event.
     // future_event->id = 0xFFFF;   // Modify event_id to be a future event that isn't issued yet.
@@ -215,7 +215,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsQueueWaitForEventHang) {
         -1,
         mesh_device.get(),
         cq.id(),
-        distributed:: ::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0)));
+        distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0)));
     distributed::EnqueueRecordEvent(cq);
     // future_event->wait_until_ready();  // in case async used, must block until async cq populated event.
     // future_event->event_id = 0xFFFF;   // Modify event_id to be a future event that isn't issued yet.
@@ -257,7 +257,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsQueueWaitForEventBasic) {
             -1,
             mesh_device.get(),
             cq.id(),
-            distributed:: ::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0))));
+            distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0))));
         distributed::EnqueueRecordEvent(cq);
 
         // Device synchronize every N number of events.
@@ -295,7 +295,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEventsQueryBasic) {
             -1,
             mesh_device.get(),
             cq.id(),
-            distributed:: ::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0))));
+            distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0))));
         distributed::EnqueueRecordEvent(cq);
 
         if (i > 0 && ((i % num_events_between_query) == 0)) {
@@ -320,7 +320,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEventsQueryBasic) {
         -1,
         mesh_device.get(),
         cq.id(),
-        distributed:: ::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0)));
+        distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0)));
     distributed::EnqueueRecordEvent(cq);
     // future_event->wait_until_ready();  // in case async used, must block until async cq populated event.
     // future_event->event_id = 0xFFFF;   // Modify event_id to be a future event that isn't issued yet.
@@ -357,7 +357,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
             -1,
             mesh_device.get(),
             cq.id(),
-            distributed:: ::MeshCoordinateRange(
+            distributed::MeshCoordinateRange(
                 distributed::MeshCoordinate(0, 0),
                 distributed::MeshCoordinate(0, 0)));  // type is std::shared_ptr<Event>
         distributed::EnqueueRecordEvent(cq);
