@@ -11,12 +11,12 @@ class TtAttention(LightweightModule):
         device,
         state_dict,
         module_path,
-        heads: int,
+        num_attn_heads: int,
     ):
         super().__init__()
         self.device = device
 
-        self.heads = heads
+        self.heads = num_attn_heads
 
         q_weights = state_dict[f"{module_path}.to_q.weight"].unsqueeze(0).unsqueeze(0)
         k_weights = state_dict[f"{module_path}.to_k.weight"].unsqueeze(0).unsqueeze(0)
@@ -55,7 +55,7 @@ class TtAttention(LightweightModule):
 
         self.tt_out_weights, self.tt_out_bias = prepare_linear_params(device, out_weights, out_bias, ttnn.bfloat16)
 
-    def forward(self, hidden_states, attention_mask, encoder_hidden_states=None):
+    def forward(self, hidden_states, encoder_hidden_states=None):
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
         B = list(hidden_states.shape)[0]
@@ -122,7 +122,6 @@ class TtAttention(LightweightModule):
             k_heads,
             v_heads,
             is_causal=False,
-            attn_mask=attention_mask,
         )
         hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
