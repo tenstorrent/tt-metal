@@ -69,6 +69,7 @@ constexpr uint32_t get_named_ct_arg(std::string_view name) {
  * use named compile time arguments is not a trivial task, so backward-compatibility is maintained by allowing the use of the
  * get_compile_time_arg_val function with an index. get_compile_time_arg_val can be deprecated in the future upon completion
  * of the migration and by request.
+ * Note: Return value must be stored in a constexpr variable to guarantee compile time evaluation.
  *
  * Return value: constexpr uint32_t
  *
