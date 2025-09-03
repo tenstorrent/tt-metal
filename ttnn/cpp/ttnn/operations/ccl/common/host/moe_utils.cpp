@@ -59,7 +59,9 @@ std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>> get_neighbors(
             if (neighbor.has_value()) {
                 neighbors.push_back(neighbor.value());
                 directions[dir] = true;
+                printf("Neighbor has value\n");
             } else {
+                printf("Neighbor has no value\n");
                 directions[dir] = false;
             }
         };
