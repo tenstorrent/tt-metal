@@ -405,13 +405,13 @@ void kernel_main() {
                     }
 
                     DPRINT << "global means: ";
-                    for (uint32_t j = 0; j < 32 * 16; j+=16) {
+                    for (uint32_t j = 0; j < num_mcast_cores * 16; j+=16) {
                         DPRINT << BF16(p_global_means[j]) << " ";
                     }
                     DPRINT << ENDL();
 
                     DPRINT << "global vars: ";
-                    for (uint32_t j = 0; j < 32 * 16; j+=16) {
+                    for (uint32_t j = 0; j < num_mcast_cores * 16; j+=16) {
                         DPRINT << BF16(p_global_vars[j]) << " ";
                     }
                     DPRINT << ENDL();
