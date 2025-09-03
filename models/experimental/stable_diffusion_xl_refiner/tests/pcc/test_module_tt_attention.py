@@ -14,12 +14,12 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "input_shape, encoder_shape, attn_id, down_block_id, query_dim, num_attn_heads, out_dim",
+    "input_shape, encoder_shape, attn_id, down_block_id, num_attn_heads",
     [
-        ((1, 4096, 768), None, 1, 1, 768, 12, 768),
-        ((1, 4096, 768), (1, 77, 1280), 2, 1, 768, 12, 768),
-        ((1, 256, 1536), None, 1, 2, 1536, 24, 1536),
-        ((1, 256, 1536), (1, 77, 1280), 2, 2, 1536, 24, 1536),
+        ((1, 4096, 768), None, 1, 1, 12),
+        ((1, 4096, 768), (1, 77, 1280), 2, 1, 12),
+        ((1, 256, 1536), None, 1, 2, 24),
+        ((1, 256, 1536), (1, 77, 1280), 2, 2, 24),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
@@ -29,11 +29,8 @@ def test_attention(
     encoder_shape,
     attn_id,
     down_block_id,
-    query_dim,
     num_attn_heads,
-    out_dim,
     is_ci_env,
-    reset_seeds,
 ):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-refiner-1.0",
@@ -55,8 +52,6 @@ def test_attention(
         state_dict,
         f"down_blocks.{down_block_id}.attentions.0.transformer_blocks.0.attn{attn_id}",
         heads=num_attn_heads,
-        query_dim=query_dim,
-        out_dim=out_dim,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_encoder_tensor = (

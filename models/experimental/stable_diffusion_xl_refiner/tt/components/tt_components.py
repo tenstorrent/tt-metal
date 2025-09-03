@@ -7,6 +7,9 @@ from models.experimental.stable_diffusion_xl_refiner.tt.components.convolution_l
 # TODO: Remove hardcoded values
 
 
+# ResNet components
+
+
 class ResNetTimeEmbedding:
     def __init__(self, device, weights, bias, conv_w_dtype=ttnn.bfloat16):
         self.device = device
@@ -46,3 +49,27 @@ class ResNetShortcutConnection:
         shortcut = ttnn.to_layout(shortcut, ttnn.TILE_LAYOUT)
         result = ttnn.add(hidden_states, shortcut, use_legacy=True)
         return ttnn.to_memory_config(result, ttnn.DRAM_MEMORY_CONFIG), [C, H, W]
+
+
+# Transformer components
+
+
+class TransformerBlockLayerNorm:
+    def __init__(self, device, weights, bias, eps=1e-5):
+        self.device = device
+        self.eps = eps
+
+        self.norm_weights = ttnn.from_torch(weights, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        self.norm_bias = (
+            ttnn.from_torch(bias, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT) if bias is not None else None
+        )
+
+    def apply(self, hidden_states):
+        hidden_states = ttnn.layer_norm(
+            hidden_states,
+            weight=self.norm_weights,
+            bias=self.norm_bias,
+            eps=self.eps,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return hidden_states
