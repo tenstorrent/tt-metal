@@ -196,9 +196,6 @@ class Model1D(SharedStateAddOn, AbstractModule):
                 DecoderBlock.create_state(hf_config, mesh_device, paged_config, is_padding_layer=None, ccl=ccl)
                 for _ in range(cls.NUM_MLP_META_LAYERS)
             ],
-            "transfer_row": {
-                "semaphore": ccl.get_gather_sem(0),
-            },
             "norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
         }
 

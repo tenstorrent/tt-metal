@@ -105,16 +105,19 @@ run_t3000_qwen25_vl_tests() {
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
+  export HF_HOME=/mnt/MLPerf/huggingface
 
   # Qwen2.5-VL-32B
-  qwen25_vl_32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-32B-Instruct/
-  # Qwen2.5-VL-72B
-  qwen25_vl_72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-72B-Instruct/
+  qwen25_vl_32b=Qwen/Qwen2.5-VL-32B-Instruct
+  tt_cache_32b=$HF_HOME/tt_cache/Qwen--Qwen2.5-VL-32B-Instruct
+  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/qwen25_vl/demo/demo.py --timeout 600 || fail=1
 
-  for qwen_dir in "$qwen25_vl_32b" "$qwen25_vl_72b"; do
-    MESH_DEVICE=T3K HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 900 || fail=1
-    echo "LOG_METAL: Tests for $qwen_dir on T3K completed"
-  done
+  # Qwen2.5-VL-72B
+  qwen25_vl_72b=Qwen/Qwen2.5-VL-72B-Instruct
+  tt_cache_72b=$HF_HOME/tt_cache/Qwen--Qwen2.5-VL-72B-Instruct
+  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b pytest models/demos/qwen25_vl/demo/demo.py --timeout 900 || fail=1
+
+  echo "LOG_METAL: Tests for Qwen2.5-VL-32B and Qwen2.5-VL-72B on T3K completed"
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -327,6 +330,19 @@ run_t3000_llama3_load_checkpoints_tests() {
   fi
 }
 
+run_t3000_gemma3_tests() {
+  # Record the start time
+  start_time=$(date +%s)
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/demo/text_demo.py -k "performance and ci-1"
+  echo "LOG_METAL: Gemma3 27B tests completed (text only)"
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-trace"
+  echo "LOG_METAL: Gemma3 27B tests completed (text and vision)"
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_gemma3_tests $duration seconds to complete"
+}
+
 run_t3000_tests() {
   # Run llama3 load checkpoints tests
   run_t3000_llama3_load_checkpoints_tests
@@ -369,6 +385,9 @@ run_t3000_tests() {
 
   # Run sd35_large tests
   run_t3000_sd35large_tests
+
+  # Run gemma3 tests
+  run_t3000_gemma3_tests
 }
 
 fail=0

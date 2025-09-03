@@ -4,6 +4,7 @@
 
 #include "binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/assert.hpp>
 
 #include <fmt/core.h>
@@ -532,7 +533,9 @@ uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const
     if (dtype == DataType::UINT32) {
         return std::bit_cast<uint32_t>(scalar);
     }
-    return pack_two_bfloat16_into_uint32({scalar, scalar});
+    // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
+    auto scalar_bf16 = bfloat16::truncate(scalar);
+    return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
 }
 
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>);

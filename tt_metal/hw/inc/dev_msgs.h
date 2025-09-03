@@ -11,6 +11,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
@@ -271,15 +272,18 @@ enum riscv_id_t {
     DebugTrisc1 = 3,
     DebugTrisc2 = 4,
     DebugErisc = 5,
-    DebugIErisc = 6,
-    DebugSubordinateIErisc = 7,
-    DebugNumUniqueRiscs
+    DebugSubordinateErisc = 6,
+    DebugIErisc = 7,
+    DebugSubordinateIErisc = 8,
+    DebugNumUniqueRiscs = 9,
+    DebugDebugMaxRiscvId = 15,  // For alignment requirements
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
 
 struct debug_pause_msg_t {
-    volatile uint8_t flags[DebugNumUniqueRiscs];
+    volatile uint8_t flags[NUM_PROCESSORS_PER_CORE_TYPE];
+    uint8_t pad[3];
 };
 
 constexpr static int DEBUG_RING_BUFFER_ELEMENTS = 32;
@@ -295,7 +299,12 @@ struct debug_stack_usage_t {
         // min free stack, offset by +1 (0 == unset)
         volatile uint16_t min_free;
         volatile uint16_t watcher_kernel_id;
-    } cpu[DebugNumUniqueRiscs];
+    } cpu[NUM_PROCESSORS_PER_CORE_TYPE];
+    uint8_t pad[12];
+};
+
+struct debug_eth_link_t {
+    volatile uint8_t link_down;
 };
 
 enum watcher_enable_msg_t {
@@ -311,7 +320,8 @@ struct watcher_msg_t {
     struct debug_waypoint_msg_t debug_waypoint[MAX_RISCV_PER_CORE];
     struct debug_sanitize_noc_addr_msg_t sanitize_noc[MAX_NUM_NOCS_PER_CORE];
     std::atomic<bool> noc_linked_status[MAX_NUM_NOCS_PER_CORE];
-    uint8_t pad_0[2];
+    struct debug_eth_link_t eth_status;
+    uint8_t pad0;
     struct debug_assert_msg_t assert_status;
     struct debug_pause_msg_t pause_status;
     struct debug_stack_usage_t stack_usage;

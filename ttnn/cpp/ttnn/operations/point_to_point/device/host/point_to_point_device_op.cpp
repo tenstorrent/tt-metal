@@ -8,6 +8,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/fabric.hpp>
+#include "ttnn/global_semaphore.hpp"
 
 #include "point_to_point_device_op.hpp"
 
@@ -121,13 +122,6 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
         mesh_device->get_view().contains(operation_attributes.receive_coord),
         "Mesh device must contain receiver coordinate device");
 
-    auto semaphore_device = dynamic_cast<MeshDevice*>(operation_attributes.semaphore.device());
-    TT_FATAL(semaphore_device != nullptr, "Semaphore must be allocated on MeshDevice");
-    TT_FATAL(
-        semaphore_device->get_view().contains(operation_attributes.receive_coord) &&
-            semaphore_device->get_view().contains(operation_attributes.send_coord),
-        "Semaphore must be on sending and receiving devices");
-
     const auto& optional_output_tensor = tensor_args.optional_output_tensor;
     if (optional_output_tensor.has_value()) {
         const auto output_spec = compute_output_specs(operation_attributes, tensor_args).at(1);
@@ -142,7 +136,7 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
             output_spec);
 
         TT_FATAL(
-            output_tensor.mesh_device() == mesh_device,
+            output_tensor.device() == mesh_device,
             "Output tensor must be allocated on same mesh device as input tensor");
     }
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
@@ -203,6 +197,13 @@ PointToPointOp::SendReceive::cached_mesh_workload_t PointToPointOp::SendReceive:
 
     std::array<MeshCoordinate, 2> use_coords = {operation_attributes.send_coord, operation_attributes.receive_coord};
 
+    auto mesh_device = tensor_args.input_tensor.device();
+    auto sd_id = mesh_device->get_sub_device_ids().at(0);
+    auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+    log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
+    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+
     const auto& coords = tensor_coords.coords();
     for (const auto& c : use_coords) {
         auto it = std::find(coords.begin(), coords.end(), c);
@@ -210,7 +211,7 @@ PointToPointOp::SendReceive::cached_mesh_workload_t PointToPointOp::SendReceive:
     }
 
     for (const auto& coord : use_coords) {
-        auto cached_workload = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
+        auto cached_workload = create_at(operation_attributes, coord, tensor_args, tensor_return_value, semaphore);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_workload.program));
         shared_variables.emplace(coord, std::move(cached_workload.shared_variables));
     }
@@ -221,20 +222,21 @@ cached_workload_t PointToPointOp::SendReceive::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& tensor_return_value,
+    const tt::tt_metal::GlobalSemaphore& semaphore) {
     const auto& send_coordinate = operation_attributes.send_coord;
     const auto& receive_coordinate = operation_attributes.receive_coord;
 
     if (mesh_coordinate == send_coordinate) {
         return send_program_factory(
-            tensor_args, operation_attributes, send_coordinate, receive_coordinate, tensor_return_value);
+            tensor_args, operation_attributes, send_coordinate, receive_coordinate, tensor_return_value, semaphore);
 
     } else if (mesh_coordinate == receive_coordinate) {
-        return receive_program_factory(operation_attributes, tensor_return_value);
+        return receive_program_factory(operation_attributes, tensor_return_value, semaphore);
     }
 
     TT_THROW("Invalid coordinate in p2p");
-    return {Program{}, shared_variables_t{}};
+    return {Program{}, shared_variables_t{.semaphore = semaphore}};
 }
 
 void PointToPointOp::SendReceive::override_runtime_arguments(
@@ -266,7 +268,7 @@ void PointToPointOp::SendReceive::override_runtime_arguments(
 
             auto& writer_runtime_args = GetRuntimeArgs(program, send_unary_writer_kernel_id, core);
             writer_runtime_args.at(0) = tensor_return_value.at(0).mesh_buffer()->get_device_buffer(coord)->address();
-            writer_runtime_args.at(8) = operation_attributes.semaphore.address();
+            writer_runtime_args.at(8) = shared_variables.semaphore.address();
         }
 
         if (coord == receive_coord) {
@@ -278,7 +280,7 @@ void PointToPointOp::SendReceive::override_runtime_arguments(
 
             auto& reader_runtime_args = GetRuntimeArgs(program, receive_unary_reader_kernel_id, core);
             reader_runtime_args.at(3) = tensor_return_value.at(0).mesh_buffer()->get_device_buffer(coord)->address();
-            reader_runtime_args.at(7) = operation_attributes.semaphore.address();
+            reader_runtime_args.at(7) = shared_variables.semaphore.address();
 
             auto& writer_runtime_args = GetRuntimeArgs(program, receive_unary_writer_kernel_id, core);
             writer_runtime_args.at(0) = tensor_return_value.at(1).mesh_buffer()->get_device_buffer(coord)->address();
