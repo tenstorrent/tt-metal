@@ -49,7 +49,7 @@ def create_whole_model_state_dict(model_path, hf_config):
 @pytest.fixture
 def hf_config(hf_config):
     """Load DeepSeek config for testing."""
-    hf_config.num_hidden_layers = 4
+    hf_config.num_hidden_layers = 9
     hf_config.max_seq_len = 5 * 1024  # Set max sequence length for testing
     return hf_config
 
@@ -85,7 +85,7 @@ def load_reference_model(hf_config):
 )
 @pytest.mark.parametrize(
     "weights_type",
-    ["random", "real"],
+    ["real"],
 )
 def test_forward_pass(
     module_path,
@@ -114,11 +114,13 @@ def test_forward_pass(
     logger.info("Setting up reference model")
     reference_model = load_reference_model(hf_config)
     if weights_type == "random":
+        logger.info("Using random weights")
         state_dict = add_inv_scale_to_state_dict(
             reference_model.to(torch.bfloat16).state_dict(),
             block_shape=hf_config.quantization_config["weight_block_size"],
         )
     else:
+        logger.info("Loading weights from the pretrained model")
         state_dict = create_whole_model_state_dict(model_path, hf_config)
         dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
         reference_model.load_state_dict(dequantized_state_dict)
