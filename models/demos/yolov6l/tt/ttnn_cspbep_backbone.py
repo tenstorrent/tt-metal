@@ -67,6 +67,7 @@ class TtCSPBepBackbone:
             n=6,
             shard_layout_cv2=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             shard_layout_rep_block_first_two=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            reshape=False,
         )
         self.erblock5_2 = TtSppf(device, parameters.ERBlock_5[2].sppf, model_params.ERBlock_5[2].sppf)
 
