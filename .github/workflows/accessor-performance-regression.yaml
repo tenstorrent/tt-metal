@@ -76,14 +76,27 @@ jobs:
         with:
           ref: philei/tensor-accessor-perf-regression-tests
           submodules: recursive
-          path: docker-job-baseline
+          path: docker-job
 
-      - name: ⬇️ Setup Baseline Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+      - name: ⬇️ Download Build Artifact
+        uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          build-artifact-name: ${{ needs.build-baseline-artifact.outputs.build-artifact-name }}
-          wheel-artifact-name: ${{ needs.build-baseline-artifact.outputs.wheel-artifact-name }}
+          name: ${{ needs.build-baseline-artifact.outputs.build-artifact-name }}
+
+      - name: 📂 Extract Build Files
+        run: tar -xvf ttm_any.tar
+
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-baseline-artifact.outputs.wheel-artifact-name }}
+
+      - name: 💿 Install Wheel
+        run: |
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          pip3 install "$WHEEL_FILENAME"
 
       - name: 🔍 Debug Build Artifacts
         run: |
@@ -161,12 +174,25 @@ jobs:
           submodules: recursive
           path: docker-job
 
-      - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+      - name: ⬇️ Download Build Artifact
+        uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+
+      - name: 📂 Extract Build Files
+        run: tar -xvf ttm_any.tar
+
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+      - name: 💿 Install Wheel
+        run: |
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          pip3 install "$WHEEL_FILENAME"
 
       - name: ⬇️ Download Baseline Performance Data
         uses: actions/download-artifact@v4
