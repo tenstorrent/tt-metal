@@ -1010,3 +1010,13 @@ def trace_torch_model(
             )
         raise e
     return operation_graph
+
+
+def trace_torch_function(func, input_shapes, input_dtypes=None, dump_visualization=False):
+    class GenericClass(torch.nn.Module):
+        def forward(self, *args):
+            return func(*args)
+
+    model = GenericClass()
+    operation_graph = trace_torch_model(model, input_shapes, input_dtypes, dump_visualization=dump_visualization)
+    return operation_graph
