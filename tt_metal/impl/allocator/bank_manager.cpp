@@ -388,9 +388,12 @@ void BankManager::deallocate_buffer(DeviceAddr address, BankManager::StateDepend
 
 void BankManager::deallocate_all() {
     for (const auto state : state_dependencies_.states()) {
+        auto* alloc = this->get_allocator_for_state(state);
+        TT_ASSERT(bool(alloc), "Allocator not initialized!");
         for (DeviceAddr addr : allocated_buffers_[state.value]) {
-            this->deallocate_buffer(addr, state);
+            alloc->deallocate(addr);
         }
+        allocated_buffers_[state.value].clear();
     }
 }
 
