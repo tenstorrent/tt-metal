@@ -9,6 +9,7 @@
 #include <string>
 #include <cstdio>
 #include <set>
+#include <unordered_set>
 
 #include <tt-metalium/mesh_graph_descriptor.hpp>
 
@@ -344,10 +345,11 @@ namespace {
     }
     
     void check_instance_type(const MeshGraphDescriptor& desc, uint32_t global_id, bool should_be_graph) {
+        const auto & inst = desc.at(global_id);
         if (should_be_graph) {
-            EXPECT_TRUE(desc.is_graph(global_id)) << "Instance should be graph";
+            EXPECT_TRUE(desc.is_graph(inst)) << "Instance should be graph";
         } else {
-            EXPECT_TRUE(desc.is_mesh(global_id)) << "Instance should be mesh";
+            EXPECT_TRUE(desc.is_mesh(inst)) << "Instance should be mesh";
         }
     }
     
@@ -355,11 +357,8 @@ namespace {
         std::set<std::string> names;
         auto ids = desc.by_type(type);
         for (uint32_t id : ids) {
-            if (desc.is_graph(id)) {
-                names.insert(std::string(desc.graph(id).name));
-            } else {
-                names.insert(std::string(desc.mesh(id).name));
-            }
+            const auto & inst = desc.at(id);
+            names.insert(std::string(inst.name));
         }
         return names;
     }
@@ -372,16 +371,50 @@ namespace {
         }
     }
     void check_sub_instances(const MeshGraphDescriptor& desc, const std::string& name, size_t expected_count, const std::unordered_set<std::string_view>& expected_names) {
-        auto ids = desc.graph(desc.by_name(name)[0]).sub_instances;
+        auto ids = desc.at(desc.by_name(name)[0]).sub_instances;
         EXPECT_EQ(ids.size(), expected_count) << "Should have exactly " << expected_count << " sub instances with name '" << name << "'";
         for (const auto & id : ids) {
-            if (desc.is_graph(id)) {
-                EXPECT_TRUE(expected_names.contains(desc.graph(id).name))
-                    << "Should have sub instance '" << desc.graph(id).name << "'";
-            } else {
-                EXPECT_TRUE(expected_names.contains(desc.mesh(id).name))
-                    << "Should have sub instance '" << desc.mesh(id).name << "'";
-            }
+            const auto & child = desc.at(id);
+            EXPECT_TRUE(expected_names.contains(child.name))
+                << "Should have sub instance '" << child.name << "'";
+        }
+    }
+
+    void expect_hierarchy_names(const MeshGraphDescriptor& desc, const std::string& instance_name, const std::vector<std::string>& expected_names) {
+        const auto& ids = desc.by_name(instance_name);
+        ASSERT_FALSE(ids.empty()) << "No instance found with name '" << instance_name << "'";
+        const auto & inst = desc.at(ids[0]);
+        std::vector<std::string> actual_names;
+        actual_names.reserve(inst.hierarchy.size());
+        for (auto nid : inst.hierarchy) {
+            actual_names.emplace_back(std::string(desc.at(nid).name));
+        }
+        EXPECT_EQ(actual_names, expected_names);
+    }
+
+    // Simple device checks for a mesh: only count and a few local IDs
+    void check_mesh_devices_simple(
+        const MeshGraphDescriptor& desc,
+        const std::string& mesh_name,
+        size_t expected_devices,
+        const std::vector<uint32_t>& sample_local_ids
+    ) {
+        const auto & mesh_ids = desc.by_name(mesh_name);
+        ASSERT_EQ(mesh_ids.size(), 1u) << "Expected exactly one instance named '" << mesh_name << "'";
+        const auto & mesh_inst = desc.at(mesh_ids[0]);
+        ASSERT_TRUE(desc.is_mesh(mesh_inst)) << "'" << mesh_name << "' should be a mesh instance";
+
+        EXPECT_EQ(mesh_inst.sub_instances.size(), expected_devices)
+            << "Mesh '" << mesh_name << "' should have exactly " << expected_devices << " devices";
+
+        for (auto local_id : sample_local_ids) {
+            auto it = mesh_inst.sub_instances_local_id_to_global_id.find(local_id);
+            ASSERT_TRUE(it != mesh_inst.sub_instances_local_id_to_global_id.end())
+                << "Missing device local id " << local_id << " in mesh '" << mesh_name << "'";
+            const auto & dev = desc.at(it->second);
+            EXPECT_EQ(dev.kind, MeshGraphDescriptor::NodeKind::Device);
+            EXPECT_EQ(std::string(dev.type), "DEVICE");
+            EXPECT_EQ(dev.local_id, local_id);
         }
     }
 }
@@ -399,17 +432,17 @@ TEST(MeshGraphDescriptorTests, TestInstanceCreation) {
     // Check hierarchy levels with helper functions
     check_instance_count_by_type(desc, "CLUSTER", 1);
     check_instance_count_by_type(desc, "POD", 2);
-    check_instance_count_by_type(desc, "mesh", 5);
+    check_instance_count_by_type(desc, "MESH", 5);
     
     // Check specific instance names exist
     check_instances_have_names(desc, "CLUSTER", {"G2"});
     check_instances_have_names(desc, "POD", {"G0", "G1"});
-    check_instances_have_names(desc, "mesh", {"M0", "M1", "M2", "M3", "M4"});
+    check_instances_have_names(desc, "MESH", {"M0", "M1", "M2", "M3", "M4"});
     
     // Check instance types (graph vs mesh)
     auto cluster_ids = desc.by_type("CLUSTER");
     auto pod_ids = desc.by_type("POD");
-    auto mesh_ids = desc.by_type("mesh");
+    auto mesh_ids = desc.by_type("MESH");
     
     for (uint32_t id : cluster_ids) check_instance_type(desc, id, true);   // CLUSTER should be graph
     for (uint32_t id : pod_ids) check_instance_type(desc, id, true);       // POD should be graph
@@ -428,6 +461,22 @@ TEST(MeshGraphDescriptorTests, TestInstanceCreation) {
     // Verify total instance count
     size_t total = desc.all_graphs().size() + desc.all_meshes().size();
     EXPECT_EQ(total, 8) << "Should have exactly 8 total instances (1 CLUSTER + 2 POD + 5 mesh)";
+
+    // Check hierarchy chains
+    expect_hierarchy_names(desc, "G2", {"G2"});
+    expect_hierarchy_names(desc, "G0", {"G2", "G0"});
+    expect_hierarchy_names(desc, "G1", {"G2", "G1"});
+    expect_hierarchy_names(desc, "M0", {"G2", "G0", "M0"});
+    expect_hierarchy_names(desc, "M1", {"G2", "G0", "M1"});
+    expect_hierarchy_names(desc, "M2", {"G2", "G1", "M2"});
+    expect_hierarchy_names(desc, "M3", {"G2", "G1", "M3"});
+    expect_hierarchy_names(desc, "M4", {"G2", "G1", "M4"});
+
+
+    // Simple device check for one mesh (M2): just count and a few local IDs
+    check_mesh_devices_simple(desc, "M2", 8u * 4u, {0u, 5u, 31u});
+
+    desc.print_all_nodes();
 }
 
 TEST(MeshGraphDescriptorTests, GraphInstancesWithDifferentGraphTypesError) {
@@ -474,7 +523,7 @@ TEST(MeshGraphDescriptorTests, GraphInstancesWithDifferentGraphTypesError) {
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::AllOf(
                 ::testing::HasSubstr("Graph instance type"),
-                ::testing::HasSubstr("does not match graph descriptor type"),
+                ::testing::HasSubstr("does not match graph descriptor child type"),
                 ::testing::HasSubstr("POD"),
                 ::testing::HasSubstr("PODX")
             )));
