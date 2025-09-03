@@ -10,6 +10,7 @@
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "tt-metalium/host_buffer.hpp"
 #include "tt-metalium/buffer.hpp"
+#include "ttnn/tensor/types.hpp"
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -358,6 +359,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     }
 
     const bool is_output_tiled = output_layout == Layout::TILE;
+    const bool is_output_block_format = is_block_float(output.dtype());
 
     // Conditionally allocate temporary CB - only needed for TILED output
     uint32_t temp_cb_id = 32;  // default invalid CB ID
@@ -519,7 +521,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         one_scalar_per_core,            // 12
         num_of_pages_to_reserve_back,   // 13
         temp_cb_id,                     // 14
-        is_output_tiled};               // 15
+        is_output_tiled,                // 15
+        is_output_block_format};        // 16
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,

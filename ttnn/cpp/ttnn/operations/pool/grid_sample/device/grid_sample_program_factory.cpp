@@ -139,6 +139,8 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     tt::tt_metal::KernelHandle compute_kernel_group_1 = 0;
     tt::tt_metal::KernelHandle compute_kernel_group_2 = 0;
 
+    const bool is_output_tiled = false;
+    const bool is_output_block_format = false;
     const uint32_t tmp_cb_id =
         32;  // Unused CB for pool compute kernel for grid sample, we don't have tiled output in gridsample
 
@@ -160,7 +162,8 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             one_scalar_per_core,          // 12: Scalar mode
             in_ntiles_c,                  // 13: Tiles per channel (for CB space reservation)
             tmp_cb_id,                    // 14: Default tmp CB id (unused)
-            false                         // 15: is_output_tiled - always row major for grid sample
+            is_output_tiled,              // 15: Is output tiled - always row major for grid sample
+            is_output_block_format        // 16: Is output block format - always BFLOAT16 for grid sample
         };
 
         compute_kernel_group_1 = tt::tt_metal::CreateKernel(

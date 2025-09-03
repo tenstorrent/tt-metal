@@ -45,6 +45,7 @@ void MAIN {
     constexpr uint32_t num_of_output_pages_to_reserve = get_compile_time_arg_val(13);
     constexpr uint32_t tmp_cb_id = get_compile_time_arg_val(14);
     constexpr bool is_output_tiled = get_compile_time_arg_val(15);  // 1 = TILED, 0 = ROW_MAJOR
+    constexpr bool is_output_block_format = get_compile_time_arg_val(16);  // 1 = BLOCK format, 0 = otherwise
 
     constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT ? window_size_hw : FACE_HEIGHT;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0 && in_c % TILE_WIDTH <= FACE_WIDTH;
@@ -163,9 +164,11 @@ void MAIN {
                     PACK((pack_untilize_uninit(tmp_cb_id)));
 
                     // Workaround until #27504 is not closed
-                    tensix_sync();
-                    unary_op_init_common(tmp_cb_id, out_cb_id);
-                    tensix_sync();
+                    if constexpr (is_output_block_format) {
+                        tensix_sync();
+                        unary_op_init_common(tmp_cb_id, out_cb_id);
+                        tensix_sync();
+                    }
 
                     tilize_init(tmp_cb_id, in_ntiles_c, out_cb_id);
                     tilize_block(tmp_cb_id, in_ntiles_c, out_cb_id);
@@ -173,9 +176,11 @@ void MAIN {
                     cb_push_back(out_cb_id, in_ntiles_c);
                     tilize_uninit(tmp_cb_id, out_cb_id);
 
-                    tensix_sync();
-                    unary_op_init_common(in_cb_id_0, tmp_cb_id);
-                    tensix_sync();
+                    if constexpr (is_output_block_format) {
+                        tensix_sync();
+                        unary_op_init_common(in_cb_id_0, tmp_cb_id);
+                        tensix_sync();
+                    }
 
                     tilize_stick_counter = 0;
                     temp_cb_row_offset = 0;
