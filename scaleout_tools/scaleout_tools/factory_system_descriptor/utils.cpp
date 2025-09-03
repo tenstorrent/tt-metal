@@ -10,7 +10,6 @@
 #include <sstream>
 
 #include <fmt/base.h>
-#include <gtest/gtest.h>
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <yaml-cpp/yaml.h>
@@ -70,11 +69,14 @@ void validate_fsd_against_gsd(
     }
 
     if (strict_validation) {
-        EXPECT_EQ(generated_hostnames, discovered_hostnames) << "Hostnames mismatch";
+        if (generated_hostnames != discovered_hostnames) {
+            throw std::runtime_error("Hostnames mismatch");
+        }
     } else {
         for (const auto& hostname : discovered_hostnames) {
-            EXPECT_TRUE(generated_hostnames.find(hostname) != generated_hostnames.end())
-                << "Hostname not found in FSD: " << hostname;
+            if (generated_hostnames.find(hostname) == generated_hostnames.end()) {
+                throw std::runtime_error("Hostname not found in FSD: " + hostname);
+            }
         }
     }
 
@@ -143,7 +145,9 @@ void validate_fsd_against_gsd(
         }
     }
     if (strict_validation) {
-        EXPECT_EQ(fsd_board_types.size(), 0) << "Expected all board types to be found in FSD";
+        if (fsd_board_types.size() != 0) {
+            throw std::runtime_error("Expected all board types to be found in FSD");
+        }
     }
 
     // Compare chip connections

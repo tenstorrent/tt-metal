@@ -40,8 +40,8 @@ target_sources(
 target_include_directories(
     scaleout_tools
     PRIVATE
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}> # Protobuf headers
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR} # Protobuf headers
 )
 
 target_link_libraries(
@@ -49,9 +49,9 @@ target_link_libraries(
     PUBLIC
         TT::STL
         umd::device
-        enchantum::enchantum
     PRIVATE
         $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>
+        enchantum::enchantum
         protobuf::libprotobuf
 )
 
