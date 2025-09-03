@@ -116,7 +116,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
         with:
-          path: ${{ github.workspace }}/docker-job-baseline
+          path: /__w/tt-metal/tt-metal/docker-job-baseline
 
   build-artifact:
     needs: generate-baseline-performance
@@ -200,4 +200,4 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
         with:
-          path: ${{ github.workspace }}/docker-job
+          path: /__w/tt-metal/tt-metal/docker-job
