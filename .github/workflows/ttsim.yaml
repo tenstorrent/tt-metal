@@ -16,6 +16,8 @@ on:
 jobs:
   ttsim-integration:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       volumes:
@@ -56,7 +58,7 @@ jobs:
           repository: tenstorrent/ttsim
           ref: ad55f44869ee1c30cae78ea0ff67eea502ee0350
           path: ttsim
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.WILDER_PAT }}
 
       - name: Build ttsim
         run: |
