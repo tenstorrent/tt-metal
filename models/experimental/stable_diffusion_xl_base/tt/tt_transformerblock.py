@@ -80,37 +80,82 @@ class TtBasicTransformerBlock(LightweightModule):
         )
 
     def forward(self, input_tensor, attention_mask=None, encoder_hidden_states=None):
+        N, C, H, W = list(input_tensor.shape)
+        if C == 640:
+            ln_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(5, 8),
+                subblock_w=1,
+                block_h=16,
+                block_w=4,
+                inplace=False,
+            )
+        else:
+            ln_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                subblock_w=1,
+                block_h=4,
+                block_w=5,
+                inplace=False,
+            )
+        # mem_cfg = input_tensor.memory_config()
+        # print(f"Input tensor cfg at start of TtBasicTransformerBlock: {input_tensor.memory_config()}, shape: {input_tensor.shape}")
+        # input_tensor = ttnn.sharded_to_interleaved(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
         attn_hidden_states = ttnn.layer_norm(
             input_tensor,
             weight=self.tt_norm1_weights,
             bias=self.tt_norm1_bias,
             epsilon=self.ln_eps,
             compute_kernel_config=self.ln_compute_kernel_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=input_tensor.memory_config(),
+            program_config=ln_program_config if input_tensor.is_sharded() else None,
         )
+        # attn_hidden_states = ttnn.to_memory_config(attn_hidden_states, ttnn.L1_MEMORY_CONFIG)
         attn_hidden_states = self.attn1(attn_hidden_states, attention_mask, None)
         hidden_states = ttnn.add(input_tensor, attn_hidden_states, use_legacy=False)
         ttnn.deallocate(input_tensor)
+        # print(f"after attn1 cfg: {hidden_states.memory_config()}, shape: {hidden_states.shape}")
 
+        # hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         attn_hidden_states = ttnn.layer_norm(
             hidden_states,
             weight=self.tt_norm2_weights,
             bias=self.tt_norm2_bias,
             epsilon=self.ln_eps,
             compute_kernel_config=self.ln_compute_kernel_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=hidden_states.memory_config(),
+            program_config=ln_program_config if hidden_states.is_sharded() else None,
+            # program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(
+            #     compute_with_storage_grid_size=ttnn.CoreCoord(5, 8),
+            #     subblock_w=1,
+            #     block_h=16,
+            #     block_w=4,
+            #     inplace=True,
+            # )
         )
         attn_hidden_states = self.attn2(attn_hidden_states, attention_mask, encoder_hidden_states)
         hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
+        # print(f"after attn2 cfg: {hidden_states.memory_config()}, shape: {hidden_states.shape}")
 
+        # hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
         attn_hidden_states = ttnn.layer_norm(
             hidden_states,
             weight=self.tt_norm3_weights,
             bias=self.tt_norm3_bias,
             epsilon=self.ln_eps,
             compute_kernel_config=self.ln_compute_kernel_config,
+            memory_config=hidden_states.memory_config(),
+            program_config=ln_program_config if hidden_states.is_sharded() else None,
+            # program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(
+            #     compute_with_storage_grid_size=ttnn.CoreCoord(5, 8),
+            #     subblock_w=1,
+            #     block_h=16,
+            #     block_w=4,
+            #     inplace=True,
+            # )
         )
         attn_hidden_states = self.ff(attn_hidden_states)
         hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
+
+        # hidden_states = ttnn.interleaved_to_sharded(hidden_states, sharded_memory_config=mem_cfg)
 
         return hidden_states

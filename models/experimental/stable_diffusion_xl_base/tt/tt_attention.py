@@ -93,7 +93,7 @@ class TtAttention(LightweightModule):
     def forward(self, hidden_states, attention_mask, encoder_hidden_states=None):
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
-        B = list(hidden_states.shape)[0]
+        B, C, H, W = list(hidden_states.shape)
 
         if self.is_self_attention:
             if hidden_states.shape[-1] == 640:
@@ -193,7 +193,7 @@ class TtAttention(LightweightModule):
             bias=self.tt_out_bias,
             program_config=self.dense_out_program_config,
             compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG if W == 1280 else ttnn.L1_MEMORY_CONFIG,
         )
 
         return hidden_states

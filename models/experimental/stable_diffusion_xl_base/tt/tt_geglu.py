@@ -35,16 +35,18 @@ class TtGEGLU(LightweightModule):
             # due to block sharded mm constraints, if we block shard the input tensor, we can only run it on 56 cores
             # hence using L1 memory config instead
             input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
-        else:
-            # here we can run the block sharded matmul on 64 cores
-            block_sharded_mem_config = ttnn.create_sharded_memory_config(
-                (input_tensor.shape[2] // 8, input_tensor.shape[3] // 8),
-                core_grid=ttnn.CoreGrid(y=8, x=8),
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            input_tensor = ttnn.to_memory_config(input_tensor, block_sharded_mem_config)
+        # else:
+        #     # here we can run the block sharded matmul on 64 cores
+        #     print(f"Input tensor cfg before GEGLU: {input_tensor.memory_config()}, shape: {input_tensor.shape}")
+        #     block_sharded_mem_config = ttnn.create_sharded_memory_config(
+        #         (input_tensor.shape[2] // 8, input_tensor.shape[3] // 8),
+        #         core_grid=ttnn.CoreGrid(y=8, x=8),
+        #         strategy=ttnn.ShardStrategy.BLOCK,
+        #         orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        #         use_height_and_width_as_shard_shape=True,
+        #     )
+        #     input_tensor = ttnn.to_memory_config(input_tensor, block_sharded_mem_config)
+        #     print(f"Input tensor cfg after GEGLU: {input_tensor.memory_config()}, shape: {input_tensor.shape}")
 
         hidden_states = ttnn.linear(
             input_tensor,
