@@ -49,7 +49,7 @@ target_sources(
         FILE_SET jit_api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES cpp/ttnn/kernel/kernel_common_utils.hpp cpp/ttnn/kernel/kernel_utils.hpp api/ttnn/tensor/enum_types.hpp
+        FILES cpp/ttnn/kernel/kernel_common_utils.hpp cpp/ttnn/kernel/kernel_utils.hpp api/ttnn/tensor/layout/layout.hpp
     PRIVATE
         ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp
@@ -80,8 +80,10 @@ target_sources(
         core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
         core/tensor/host_buffer/functions.cpp
         core/tensor/layout/alignment.cpp
+        core/tensor/layout/layout.cpp
         core/tensor/layout/page_config.cpp
         core/tensor/layout/tensor_layout.cpp
+        core/tensor/memory_config/memory_config.cpp
         core/tensor/serialization.cpp
         core/tensor/storage.cpp
         core/tensor/tensor.cpp

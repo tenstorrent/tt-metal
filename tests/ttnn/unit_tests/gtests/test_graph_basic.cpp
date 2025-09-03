@@ -24,7 +24,6 @@
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"

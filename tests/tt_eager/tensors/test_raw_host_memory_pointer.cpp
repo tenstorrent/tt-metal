@@ -15,7 +15,6 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/storage.hpp"
