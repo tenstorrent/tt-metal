@@ -462,12 +462,13 @@ int main(int argc, char** argv) {
             } else {
                 // in0
                 auto activations_tilized = tilize_swizzled(tensor_in0_fp8.get_values(), M, K);
-                std::vector<uint32_t> activations = pack_fp32_vec_as_bfp8_tiles(activations_tilized, true, false);
+                std::vector<uint32_t> activations =
+                    pack_as_bfp8_tiles(tt::stl::make_const_span(activations_tilized), true, false);
                 input_buffer0 = create_and_transfer_data_sharded_cb_fp8(device.get(), activations, Mt, Kt);
 
                 // in1
                 auto identity_tilized = tilize_swizzled(tensor_in1_fp8.get_values(), K, N);
-                auto weights = pack_fp32_vec_as_bfp8_tiles(identity_tilized, true, false);
+                auto weights = pack_as_bfp8_tiles(tt::stl::make_const_span(identity_tilized), true, false);
                 input_buffer1 = create_and_transfer_data_sharded_cb_fp8(device.get(), weights, Kt, Nt);
 
                 // output
@@ -479,7 +480,7 @@ int main(int argc, char** argv) {
                     100,
                     std::chrono::system_clock::now().time_since_epoch().count());
                 auto output_tilized = tilize_swizzled(out_tensor.get_values(), M, N);
-                auto outputs = pack_fp32_vec_as_bfp8_tiles(output_tilized, true, false);
+                auto outputs = pack_as_bfp8_tiles(tt::stl::make_const_span(output_tilized), true, false);
                 output_buffer = create_and_transfer_data_sharded_cb_fp8(device.get(), outputs, Mt, Nt);
             }
         }
@@ -1458,8 +1459,8 @@ void prepare_inputs(
         // only use the first block of in0_slice
         auto in0_block_slice = get_col_slice(in0_slice, 0, in0_block_w * 32, num_r * 32, Kt * 32);
         auto in0_block_tilized = tilize_swizzled(in0_block_slice, num_r * 32, in0_block_w * 32);
-        std::vector<uint32_t> in0 =
-            pack_fp32_vec_as_bfp8_tiles(in0_block_tilized, /*row_major_input=*/true, /*is_exp_a=*/false);
+        std::vector<uint32_t> in0 = pack_as_bfp8_tiles(
+            tt::stl::make_const_span(in0_block_tilized), /*row_major_input=*/true, /*is_exp_a=*/false);
 
         auto unpack_vec = unpack_bfp8_tiles_into_float_vec(in0, true, false);
         auto untilize_vec = untilize_swizzled(unpack_vec, num_r * 32, in0_block_w * 32);
@@ -1475,8 +1476,8 @@ void prepare_inputs(
             }
 
             auto in1_block_tilized = tilize_swizzled(in1_block_slice, in0_block_w * 32, num_c * 32);
-            std::vector<uint32_t> in1 =
-                pack_fp32_vec_as_bfp8_tiles(in1_block_tilized, /*row_major_input=*/true, /*is_exp_a=*/false);
+            std::vector<uint32_t> in1 = pack_as_bfp8_tiles(
+                tt::stl::make_const_span(in1_block_tilized), /*row_major_input=*/true, /*is_exp_a=*/false);
 
             // copy in0, in1, in2 to L1
             CoreCoord core = {(std::size_t)c, (std::size_t)r};

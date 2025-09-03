@@ -48,6 +48,7 @@
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/test_utils/bfloat_utils.hpp"
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -594,9 +595,9 @@ int main(int argc, char** argv) {
 
         std::vector<uint32_t> input_vec;
         if (tile_format == tt::DataFormat::Bfp4_b) {
-            input_vec = create_random_vector_of_bfp4(input_size, false, 100, 1234);
+            input_vec = test_utils::create_random_vector_of_bfp4(input_size, false, 100, 1234);
         } else if (tile_format == tt::DataFormat::Bfp8_b) {
-            input_vec = create_random_vector_of_bfp8(input_size, false, 100, 1234);
+            input_vec = test_utils::create_random_vector_of_bfp8(input_size, false, 100, 1234);
         } else {
             input_vec = create_random_vector_of_bfloat16(input_size, 100, 1234);
         }

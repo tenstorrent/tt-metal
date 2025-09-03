@@ -34,6 +34,7 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "umd/device/types/arch.h"
 #include <tt-metalium/utils.hpp>
+#include "tt_metal/test_utils/bfloat_utils.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -284,7 +285,7 @@ bool single_core_reconfig(std::shared_ptr<distributed::MeshDevice> mesh_device, 
         packed_golden0 = pack_vector<uint32_t, bfloat16>(golden0_bfp16);
     }
     // Pack out1 vector:
-    std::vector<uint32_t> packed_golden1 = pack_fp32_vec_as_bfp8_tiles(golden1, true, false);
+    std::vector<uint32_t> packed_golden1 = pack_as_bfp8_tiles(tt::stl::make_const_span(golden1), true, false);
 
     // ////////////////////////////////////////////////////////////////////////////
     // //                      Compile and Execute Application

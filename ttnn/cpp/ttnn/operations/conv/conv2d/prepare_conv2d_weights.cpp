@@ -120,11 +120,11 @@ static tt::tt_metal::HostBuffer create_host_buffer_for_conv_weight(
             auto temp_tensor =
                 Tensor(std::move(data), output_shape, DataType::FLOAT32, Layout::ROW_MAJOR).to_layout(Layout::TILE);
 
-            auto output_float_data = tt::tt_metal::host_buffer::get_as<float>(temp_tensor);
+            auto output_float_data = tt::tt_metal::host_buffer::get_as<const float>(temp_tensor);
             auto output_packed_data =
                 output_dtype == DataType::BFLOAT8_B
-                    ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
-                    : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                    ? pack_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
+                    : pack_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
             return tt::tt_metal::HostBuffer(std::move(output_packed_data));
         } else {
             TT_THROW("Unsupported data type");
@@ -168,11 +168,11 @@ Tensor create_tensor_from_owned_buffer(
         if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
             auto tensor =
                 Tensor(std::move(buf), output_shape, DataType::FLOAT32, Layout::ROW_MAJOR).to_layout(Layout::TILE);
-            auto output_float_data = tt::tt_metal::host_buffer::get_as<float>(tensor);
+            auto output_float_data = tt::tt_metal::host_buffer::get_as<const float>(tensor);
             auto output_packed_data =
                 output_dtype == DataType::BFLOAT8_B
-                    ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
-                    : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                    ? pack_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
+                    : pack_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
             auto output_uint32_buffer = tt::tt_metal::HostBuffer(std::move(output_packed_data));
             return Tensor(std::move(output_uint32_buffer), output_shape, output_dtype, Layout::TILE);
         }
