@@ -57,15 +57,14 @@ get_ordered_ethernet_connections(const std::unique_ptr<tt::umd::Cluster>& cluste
 bool is_ethernet_endpoint_up(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const EthernetEndpoint& endpoint,
+    uint32_t link_up_addr,
     bool force_refresh_link_status) {
-    uint32_t wormhole_link_up_addr = 0x1ed4;
     tt::umd::TTDevice* device = cluster->get_tt_device(endpoint.chip.id);
-    TT_ASSERT(device->get_arch() == tt::ARCH::WORMHOLE_B0, "Unsupported architecture for chip {}", endpoint.chip);
 
     uint32_t link_up_value = 0;
     tt::umd::CoreCoord ethernet_core = tt::umd::CoreCoord(
         endpoint.ethernet_core.x, endpoint.ethernet_core.y, tt::umd::CoreType::ETH, tt::umd::CoordSystem::LOGICAL);
-    cluster->read_from_device(&link_up_value, endpoint.chip.id, ethernet_core, wormhole_link_up_addr, sizeof(uint32_t));
+    cluster->read_from_device(&link_up_value, endpoint.chip.id, ethernet_core, link_up_addr, sizeof(uint32_t));
 
     if (cluster->get_tt_device(endpoint.chip.id)->get_arch() == tt::ARCH::WORMHOLE_B0) {
         return link_up_value == 6;  // see eth_fw_api.h

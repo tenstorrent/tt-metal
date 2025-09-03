@@ -21,13 +21,7 @@ class EthernetEndpointUpMetric: public BoolMetric {
 public:
     static constexpr std::chrono::seconds FORCE_REFRESH_LINK_STATUS_TIMEOUT{120};
 
-    EthernetEndpointUpMetric(size_t id, const EthernetEndpoint &endpoint)
-        : BoolMetric(id)
-        , endpoint_(endpoint)
-        , last_force_refresh_time_(std::chrono::steady_clock::time_point::min())
-    {
-    }
-
+    EthernetEndpointUpMetric(size_t id, const EthernetEndpoint &endpoint, const std::unique_ptr<tt::tt_metal::Hal> &hal);
     const std::vector<std::string> telemetry_path() const override;
     void update(
         const std::unique_ptr<tt::umd::Cluster>& cluster,
@@ -36,6 +30,7 @@ public:
 private:
     EthernetEndpoint endpoint_;
     std::chrono::steady_clock::time_point last_force_refresh_time_;
+    uint32_t link_up_addr_;
 };
 
 class EthernetCRCErrorCountMetric: public UIntMetric {

@@ -9,6 +9,14 @@
  Whether link is up.
 **************************************************************************************************/
 
+EthernetEndpointUpMetric::EthernetEndpointUpMetric(size_t id, const EthernetEndpoint &endpoint, const std::unique_ptr<tt::tt_metal::Hal> &hal)
+    : BoolMetric(id)
+    , endpoint_(endpoint)
+    , last_force_refresh_time_(std::chrono::steady_clock::time_point::min())
+    , link_up_addr_(hal->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::LINK_UP))
+{
+}
+
 const std::vector<std::string> EthernetEndpointUpMetric::telemetry_path() const {
     std::vector<std::string> path = endpoint_.telemetry_path();
     path.push_back("linkIsUp");
@@ -25,7 +33,7 @@ void EthernetEndpointUpMetric::update(
         last_force_refresh_time_ = start_of_update_cycle;
     }
 
-    bool is_up_now = is_ethernet_endpoint_up(cluster, endpoint_, should_force_refresh);
+    bool is_up_now = is_ethernet_endpoint_up(cluster, endpoint_, link_up_addr_, should_force_refresh);
     bool is_up_old = value_;
     changed_since_transmission_ = is_up_now != is_up_old;
     value_ = is_up_now;

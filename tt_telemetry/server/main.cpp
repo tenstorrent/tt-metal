@@ -12,6 +12,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 
+#include <hal/hal.hpp>
 #include <telemetry/ethernet/chip_identifier.hpp>
 #include <telemetry/ethernet/ethernet_endpoint.hpp>
 #include <telemetry/ethernet/ethernet_helpers.hpp>
@@ -27,6 +28,8 @@
 static void test_print_link_health() {
     std::cout << "Num PCIE devices: " << PCIDevice::enumerate_devices_info().size() << std::endl;
     std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
+    std::unique_ptr<tt::tt_metal::Hal> hal = create_hal(cluster);
+    uint32_t link_up_addr = hal->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::LINK_UP);
 
     const std::map<
         tt::umd::chip_id_t,
@@ -64,8 +67,8 @@ static void test_print_link_health() {
 
             // Print
             std::cout << "  Channel " << channel << " -> [" << remote_chip << "], Channel " << remote_channel
-                      << " (Link Status: " << (is_ethernet_endpoint_up(cluster, endpoint) ? "UP" : "DOWN") << '/'
-                      << (is_ethernet_endpoint_up(cluster, remote_endpoint) ? "UP" : "DOWN") << ')' << std::endl;
+                      << " (Link Status: " << (is_ethernet_endpoint_up(cluster, endpoint, link_up_addr) ? "UP" : "DOWN") << '/'
+                      << (is_ethernet_endpoint_up(cluster, remote_endpoint, link_up_addr) ? "UP" : "DOWN") << ')' << std::endl;
         }
     }
 }

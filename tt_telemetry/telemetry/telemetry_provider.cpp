@@ -201,7 +201,7 @@ static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> s
     // Create Ethernet metrics
     for (const auto &[chip_id, endpoints]: get_ethernet_endpoints_by_chip(cluster)) {
         for (const auto &endpoint: endpoints) {
-            bool_metrics.push_back(std::make_unique<EthernetEndpointUpMetric>(id++, endpoint));
+            bool_metrics.push_back(std::make_unique<EthernetEndpointUpMetric>(id++, endpoint, hal));
             uint_metrics.push_back(std::make_unique<EthernetRetrainCountMetric>(id++, endpoint, cluster, hal));
             if (hal->get_arch() == tt::ARCH::WORMHOLE_B0) {
                 // These are available only on Wormhole
