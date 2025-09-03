@@ -3,6 +3,7 @@
 #include <unistd.h>
 
 #include <telemetry/telemetry_provider.hpp>
+#include <hal/hal.hpp>
 #include <telemetry/ethernet/ethernet_metrics.hpp>
 #include <telemetry/arc/arc_metrics.hpp>
 #include <telemetry/arc/arc_telemetry_reader.hpp>
@@ -189,6 +190,7 @@ static void send_delta(
 
 static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers) {
     std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
+    std::unique_ptr<tt::tt_metal::Hal> hal = create_hal(cluster);
 
     // Create vectors of all metrics we will monitor by value type
     size_t id = 1;
@@ -200,10 +202,13 @@ static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> s
     for (const auto &[chip_id, endpoints]: get_ethernet_endpoints_by_chip(cluster)) {
         for (const auto &endpoint: endpoints) {
             bool_metrics.push_back(std::make_unique<EthernetEndpointUpMetric>(id++, endpoint));
-            uint_metrics.push_back(std::make_unique<EthernetCRCErrorCountMetric>(id++, endpoint, cluster));
-            uint_metrics.push_back(std::make_unique<EthernetRetrainCountMetric>(id++, endpoint, cluster));
-            uint_metrics.push_back(std::make_unique<EthernetCorrectedCodewordCountMetric>(id++, endpoint, cluster));
-            uint_metrics.push_back(std::make_unique<EthernetUncorrectedCodewordCountMetric>(id++, endpoint, cluster));
+            uint_metrics.push_back(std::make_unique<EthernetRetrainCountMetric>(id++, endpoint, cluster, hal));
+            if (hal->get_arch() == tt::ARCH::WORMHOLE_B0) {
+                // These are available only on Wormhole
+                uint_metrics.push_back(std::make_unique<EthernetCRCErrorCountMetric>(id++, endpoint, cluster, hal));
+                uint_metrics.push_back(std::make_unique<EthernetCorrectedCodewordCountMetric>(id++, endpoint, cluster, hal));
+                uint_metrics.push_back(std::make_unique<EthernetUncorrectedCodewordCountMetric>(id++, endpoint, cluster, hal));
+            }
         }
     }
 

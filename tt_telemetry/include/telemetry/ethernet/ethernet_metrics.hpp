@@ -12,6 +12,7 @@
  #include <vector>
 
 #include <third_party/umd/device/api/umd/device/cluster.h>
+#include <llrt/hal.hpp>
 
 #include <telemetry/metric.hpp>
 #include <telemetry/ethernet/ethernet_endpoint.hpp>
@@ -40,7 +41,7 @@ private:
 class EthernetCRCErrorCountMetric: public UIntMetric {
 public:
     EthernetCRCErrorCountMetric(
-        size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster);
+        size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster, const std::unique_ptr<tt::tt_metal::Hal> &hal);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -56,7 +57,7 @@ private:
 class EthernetRetrainCountMetric: public UIntMetric {
 public:
     EthernetRetrainCountMetric(
-        size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster);
+        size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster, const std::unique_ptr<tt::tt_metal::Hal> &hal);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -72,7 +73,7 @@ private:
 class EthernetCorrectedCodewordCountMetric: public UIntMetric {
 public:
     EthernetCorrectedCodewordCountMetric(
-        size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster);
+        size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster, const std::unique_ptr<tt::tt_metal::Hal> &hal);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -88,7 +89,7 @@ private:
 class EthernetUncorrectedCodewordCountMetric: public UIntMetric {
 public:
     EthernetUncorrectedCodewordCountMetric(
-        size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster);
+        size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster, const std::unique_ptr<tt::tt_metal::Hal> &hal);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(

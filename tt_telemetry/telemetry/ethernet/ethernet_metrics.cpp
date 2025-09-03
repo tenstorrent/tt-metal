@@ -40,18 +40,18 @@ void EthernetEndpointUpMetric::update(
 **************************************************************************************************/
 
 EthernetCRCErrorCountMetric::EthernetCRCErrorCountMetric(
-    size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster) :
+    size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster, const std::unique_ptr<tt::tt_metal::Hal> &hal) :
     UIntMetric(id), endpoint_(endpoint) {
     value_ = 0;
     tt::umd::TTDevice* device = cluster->get_tt_device(endpoint_.chip.id);
-    if (device->get_arch() == tt::ARCH::WORMHOLE_B0) {
-        ethernet_core_ = tt::umd::CoreCoord(
-            endpoint_.ethernet_core.x,
-            endpoint_.ethernet_core.y,
-            tt::umd::CoreType::ETH,
-            tt::umd::CoordSystem::LOGICAL);
-        crc_addr_ = 0x1f7c;
-    }
+    TT_FATAL(device->get_arch() == tt::ARCH::WORMHOLE_B0, "Metric {} available only on Wormhole", __func__);
+    ethernet_core_ = tt::umd::CoreCoord(
+        endpoint_.ethernet_core.x,
+        endpoint_.ethernet_core.y,
+        tt::umd::CoreType::ETH,
+        tt::umd::CoordSystem::LOGICAL);
+    crc_addr_ = hal->get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CRC_ERR);
 }
 
 const std::vector<std::string> EthernetCRCErrorCountMetric::telemetry_path() const {
@@ -80,12 +80,13 @@ void EthernetCRCErrorCountMetric::update(
 **************************************************************************************************/
 
 EthernetRetrainCountMetric::EthernetRetrainCountMetric(
-    size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster) :
+    size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster, const std::unique_ptr<tt::tt_metal::Hal> &hal) :
     UIntMetric(id), endpoint_(endpoint) {
     value_ = 0;
     ethernet_core_ = tt::umd::CoreCoord(
         endpoint_.ethernet_core.x, endpoint_.ethernet_core.y, tt::umd::CoreType::ETH, tt::umd::CoordSystem::LOGICAL);
-    retrain_count_addr_ = 0x1edc;
+    retrain_count_addr_ = hal->get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
 }
 
 const std::vector<std::string> EthernetRetrainCountMetric::telemetry_path() const {
@@ -110,18 +111,18 @@ void EthernetRetrainCountMetric::update(
 **************************************************************************************************/
 
 EthernetCorrectedCodewordCountMetric::EthernetCorrectedCodewordCountMetric(
-    size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster) :
+    size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster, const std::unique_ptr<tt::tt_metal::Hal> &hal) :
     UIntMetric(id), endpoint_(endpoint) {
     value_ = 0;
     tt::umd::TTDevice* device = cluster->get_tt_device(endpoint_.chip.id);
-    if (device->get_arch() == tt::ARCH::WORMHOLE_B0) {
-        ethernet_core_ = tt::umd::CoreCoord(
-            endpoint_.ethernet_core.x,
-            endpoint_.ethernet_core.y,
-            tt::umd::CoreType::ETH,
-            tt::umd::CoordSystem::LOGICAL);
-        corr_addr_ = 0x1f90;
-    }
+    TT_FATAL(device->get_arch() == tt::ARCH::WORMHOLE_B0, "Metric {} available only on Wormhole", __func__);
+    ethernet_core_ = tt::umd::CoreCoord(
+        endpoint_.ethernet_core.x,
+        endpoint_.ethernet_core.y,
+        tt::umd::CoreType::ETH,
+        tt::umd::CoordSystem::LOGICAL);
+    corr_addr_ = hal->get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CORR_CW);
 }
 
 const std::vector<std::string> EthernetCorrectedCodewordCountMetric::telemetry_path() const {
@@ -152,18 +153,18 @@ void EthernetCorrectedCodewordCountMetric::update(
 **************************************************************************************************/
 
 EthernetUncorrectedCodewordCountMetric::EthernetUncorrectedCodewordCountMetric(
-    size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster) :
+    size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster, const std::unique_ptr<tt::tt_metal::Hal> &hal) :
     UIntMetric(id), endpoint_(endpoint) {
     value_ = 0;
     tt::umd::TTDevice* device = cluster->get_tt_device(endpoint_.chip.id);
-    if (device->get_arch() == tt::ARCH::WORMHOLE_B0) {
-        ethernet_core_ = tt::umd::CoreCoord(
-            endpoint_.ethernet_core.x,
-            endpoint_.ethernet_core.y,
-            tt::umd::CoreType::ETH,
-            tt::umd::CoordSystem::LOGICAL);
-        uncorr_addr_ = 0x1f98;
-    }
+    TT_FATAL(device->get_arch() == tt::ARCH::WORMHOLE_B0, "Metric {} available only on Wormhole", __func__);
+    ethernet_core_ = tt::umd::CoreCoord(
+        endpoint_.ethernet_core.x,
+        endpoint_.ethernet_core.y,
+        tt::umd::CoreType::ETH,
+        tt::umd::CoordSystem::LOGICAL);
+    uncorr_addr_ = hal->get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW);
 }
 
 const std::vector<std::string> EthernetUncorrectedCodewordCountMetric::telemetry_path() const {
