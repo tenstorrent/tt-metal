@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sub_device_types.hpp>
 #include <tracy/Tracy.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt_align.hpp>
@@ -305,9 +306,12 @@ uint32_t finalize_kernel_bins(
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
     uint32_t max_offset = 0;
+    uint32_t num_processors = hal.get_num_risc_processors(hal.get_programmable_core_type(programmable_core_type_index));
     for (auto& kg : kernel_groups) {
         uint32_t offset = base_offset;
 
+        kg->kernel_text_offsets.resize(num_processors);
+        std::ranges::fill(kg->kernel_text_offsets, 0);
         for (int class_id = 0; class_id < DISPATCH_CLASS_MAX; class_id++) {
             auto& optional_id = kg->kernel_ids[class_id];
             if (!optional_id.has_value()) {
@@ -319,37 +323,23 @@ uint32_t finalize_kernel_bins(
                 BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
             // TODO: this is really ugly, save me future-HAL!
             if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
-                const auto binary_packed_size = kernel_impl.get_binary_packed_size(device, 0);
-
-                if (class_id == DISPATCH_CLASS_TENSIX_COMPUTE) {
-                    constexpr uint32_t k_MaxMathProcessorsCount = 3;
-                    for (uint32_t proc_type_index = 0; proc_type_index < k_MaxMathProcessorsCount; proc_type_index++) {
-                        uint32_t binary_packed_size = kernel_impl.get_binary_packed_size(device, proc_type_index);
-                        kg->kernel_bin_sizes[2 + proc_type_index] = binary_packed_size;
-                        kg->kernel_text_offsets[2 + proc_type_index] = offset;
-                        kg->launch_msg.kernel_config.kernel_text_offset[2 + proc_type_index] = offset;
-                        offset += binary_packed_size;
-                        offset = tt::align(offset, l1_alignment);
-                    }
-                } else {
-                    kg->kernel_bin_sizes[class_id] = binary_packed_size;
-                    kg->kernel_text_offsets[class_id] = offset;
-                    kg->launch_msg.kernel_config.kernel_text_offset[class_id] = offset;
+                uint32_t processor_type_count = class_id == DISPATCH_CLASS_TENSIX_COMPUTE ? 3 : 1;
+                for (uint32_t proc_type_index = 0; proc_type_index < processor_type_count; proc_type_index++) {
+                    uint32_t binary_packed_size = kernel_impl.get_binary_packed_size(device, proc_type_index);
+                    kg->kernel_text_offsets[class_id + proc_type_index] = offset;
+                    kg->launch_msg.kernel_config.kernel_text_offset[class_id + proc_type_index] = offset;
                     offset += binary_packed_size;
                     offset = tt::align(offset, l1_alignment);
-
-                    // Provide text size for copying to NCRISC IRAM
-                    if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
-                        const auto binary_text_size = kernel_impl.get_binary_text_size(device, 0);
-                        TT_ASSERT(binary_text_size >> 4 <= std::numeric_limits<uint16_t>::max());
-                        kg->launch_msg.kernel_config.ncrisc_kernel_size16 = (binary_text_size + 15) >> 4;
-                    }
+                }
+                // Provide text size for copying to NCRISC IRAM
+                if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
+                    const auto binary_text_size = kernel_impl.get_binary_text_size(device, 0);
+                    TT_ASSERT(binary_text_size >> 4 <= std::numeric_limits<uint16_t>::max());
+                    kg->launch_msg.kernel_config.ncrisc_kernel_size16 = (binary_text_size + 15) >> 4;
                 }
             } else {
                 // All other core types
                 const auto binary_packed_size = kernel_impl.get_binary_packed_size(device, 0);
-                kg->kernel_bin_sizes[class_id] = binary_packed_size;
-
                 if (hal.get_core_kernel_stored_in_config_buffer(
                         hal.get_programmable_core_type(programmable_core_type_index))) {
                     kg->kernel_text_offsets[class_id] = offset;
