@@ -25,6 +25,7 @@ class TtBepC3:
         shard_layout=None,
         shard_layout_cv2=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         shard_layout_rep_block_first_two=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        reshape=True,
     ):
         self.parameters = parameters
         self.model_params = model_params
@@ -48,7 +49,7 @@ class TtBepC3:
             conv_pth=parameters.cv3.block.conv,
             activation="silu",
             shard_layout=shard_layout_cv2 if shard_layout == None else shard_layout,
-            reshape=True,
+            reshape=reshape,
         )
         self.repblock = TtRepBlock(
             device,
