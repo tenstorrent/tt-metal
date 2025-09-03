@@ -218,7 +218,7 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
     auto random_dev = std::uniform_int_distribution<uint32_t>(0, devices.size() - 1)(global_rng);
     auto dst_physical_device_id = devices[random_dev]->get_devices()[0]->id();
     auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
-    auto receiver_device = devices[random_dev];
+    const auto& receiver_device = devices[random_dev];
 
     // Randomly select an rx core
     const auto& worker_grid_size = receiver_device->compute_with_storage_grid_size();
