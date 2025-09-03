@@ -11,62 +11,65 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "input_shape, temb_shape, down_block_id, resnet_id, conv_shortcut, block, pcc",
+    "input_shape, temb_shape, block_id, resnet_id, block, pcc",
     [
         # Down blocks
         # DownBlock2D - 2 x ResnetBlock2D
         # [(1, 384, 128, 128), (1, 1536)]	[(1, 384, 128, 128)]
-        ((1, 384, 128, 128), (1, 1536), 0, 0, False, "down_blocks", 0.998),
+        ((1, 384, 128, 128), (1, 1536), 0, 0, "down_blocks", 0.999),
         # DownBlock2D - Downsample2D
         # CrossAttnDownBlock2D - 2 x Transformer2DModel
         # CrossAttnDownBlock2D - ResnetBlock2D
         # [(1, 384, 64, 64), (1, 1536)]	[(1, 768, 64, 64)]
-        ((1, 384, 64, 64), (1, 1536), 1, 0, True, "down_blocks", 0.998),
+        ((1, 384, 64, 64), (1, 1536), 1, 0, "down_blocks", 0.999),
         # CrossAttnDownBlock2D - ResnetBlock2D
         # [(1, 768, 64, 64), (1, 1536)]	[(1, 768, 64, 64)]
-        ((1, 768, 64, 64), (1, 1536), 1, 1, False, "down_blocks", 0.997),
+        ((1, 768, 64, 64), (1, 1536), 1, 1, "down_blocks", 0.999),
         # CrossAttnDownBlock2D - Downsample2D
         # CrossAttnDownBlock2D - 2 x Transformer2DModel
         # CrossAttnDownBlock2D - ResnetBlock2D
         # [(1, 768, 32, 32), (1, 1536)]	[(1, 1536, 32, 32)]
-        ((1, 768, 32, 32), (1, 1536), 2, 0, True, "down_blocks", 0.997),
+        ((1, 768, 32, 32), (1, 1536), 2, 0, "down_blocks", 0.999),
         # CrossAttnDownBlock2D - ResnetBlock2D
         # [(1, 1536, 32, 32), (1, 1536)]	[(1, 1536, 32, 32)]
-        ((1, 1536, 32, 32), (1, 1536), 2, 1, False, "down_blocks", 0.997),
+        ((1, 1536, 32, 32), (1, 1536), 2, 1, "down_blocks", 0.999),
         # CrossAttnDownBlock2D - Downsample2D
         # DownBlock2D - 2 x ResnetBlock2D
         # [(1, 1536, 16, 16), (1, 1536)]	[(1, 1536, 16, 16)]
-        ((1, 1536, 16, 16), (1, 1536), 3, 0, False, "down_blocks", 0.997),
+        ((1, 1536, 16, 16), (1, 1536), 3, 0, "down_blocks", 0.999),
         # Up blocks
         # UpBlock2D - 3 x ResnetBlock2D
         # [(1, 3072, 16, 16), (1, 1536)]	[(1, 1536, 16, 16)]
-        ((1, 3072, 16, 16), (1, 1536), 0, 0, True, "up_blocks", 0.998),
+        ((1, 3072, 16, 16), (1, 1536), 0, 0, "up_blocks", 0.999),
         # UpBlock2D - Upsample2D
         # CrossAttnUpBlock2D - 3 x Transformer2DModel
         # CrossAttnUpBlock2D - 2 x ResnetBlock2D
         # [(1, 3072, 32, 32), (1, 1536)]	[(1, 1536, 32, 32)]
-        ((1, 3072, 32, 32), (1, 1536), 1, 0, True, "up_blocks", 0.998),
+        ((1, 3072, 32, 32), (1, 1536), 1, 0, "up_blocks", 0.999),
         # CrossAttnUpBlock2D - ResnetBlock2D
         # [(1, 2304, 32, 32), (1, 1536)]	[(1, 1536, 32, 32)]
-        ((1, 2304, 32, 32), (1, 1536), 1, 2, True, "up_blocks", 0.998),
+        ((1, 2304, 32, 32), (1, 1536), 1, 2, "up_blocks", 0.999),
         # CrossAttnUpBlock2D - Upsample2D
         # CrossAttnUpBlock2D - 3 x Transformer2DModel
         # CrossAttnUpBlock2D - ResnetBlock2D
         # [(1, 2304, 64, 64), (1, 1536)]	[(1, 768, 64, 64)]
-        ((1, 2304, 64, 64), (1, 1536), 2, 0, True, "up_blocks", 0.998),
+        ((1, 2304, 64, 64), (1, 1536), 2, 0, "up_blocks", 0.999),
         # CrossAttnUpBlock2D - ResnetBlock2D
         # [(1, 1536, 64, 64), (1, 1536)]	[(1, 768, 64, 64)]
-        ((1, 1536, 64, 64), (1, 1536), 2, 1, True, "up_blocks", 0.998),
+        ((1, 1536, 64, 64), (1, 1536), 2, 1, "up_blocks", 0.999),
         # CrossAttnUpBlock2D - ResnetBlock2D
         # [(1, 1152, 64, 64), (1, 1536)]	[(1, 768, 64, 64)]
-        ((1, 1152, 64, 64), (1, 1536), 2, 2, True, "up_blocks", 0.998),
+        ((1, 1152, 64, 64), (1, 1536), 2, 2, "up_blocks", 0.999),
         # CrossAttnUpBlock2D - Upsample2D
         # UpBlock2D - ResnetBlock2D
         # [(1, 1152, 128, 128), (1, 1536)]	[(1, 384, 128, 128)]
-        ((1, 1152, 128, 128), (1, 1536), 3, 0, True, "up_blocks", 0.998),
+        ((1, 1152, 128, 128), (1, 1536), 3, 0, "up_blocks", 0.999),
         # UpBlock2D - 2 x ResnetBlock2D
         # [(1, 768, 128, 128), (1, 1536)]	[(1, 384, 128, 128)]
-        ((1, 768, 128, 128), (1, 1536), 3, 1, True, "up_blocks", 0.998),
+        ((1, 768, 128, 128), (1, 1536), 3, 1, "up_blocks", 0.999),
+        # CrossAttnMidBlock2D - 2 x ResnetBlock2D
+        # [(1, 1536, 16, 16), (1, 1536)]	[(1, 1536, 16, 16)]
+        ((1, 1536, 16, 16), (1, 1536), 0, 0, "mid_block", 0.997),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
@@ -74,9 +77,8 @@ def test_resnetblock2d_refiner(
     device,
     input_shape,
     temb_shape,
-    down_block_id,
+    block_id,
     resnet_id,
-    conv_shortcut,
     block,
     pcc,
     is_ci_env,
@@ -95,19 +97,23 @@ def test_resnetblock2d_refiner(
     state_dict = unet.state_dict()
 
     if block == "down_blocks":
-        torch_resnet = unet.down_blocks[down_block_id].resnets[resnet_id]
+        torch_resnet = unet.down_blocks[block_id].resnets[resnet_id]
     elif block == "up_blocks":
-        torch_resnet = unet.up_blocks[down_block_id].resnets[resnet_id]
+        torch_resnet = unet.up_blocks[block_id].resnets[resnet_id]
+    elif block == "mid_block":
+        torch_resnet = unet.mid_block.resnets[resnet_id]
     else:
         assert "Incorrect block name"
 
-    module_path = f"{block}.{down_block_id}.resnets.{resnet_id}"
+    if block == "mid_block":
+        module_path = f"{block}.resnets.{resnet_id}"
+    else:
+        module_path = f"{block}.{block_id}.resnets.{resnet_id}"
 
     tt_resnet = TtResnetBlock2D(
         device=device,
         state_dict=state_dict,
         module_path=module_path,
-        use_conv_shortcut=conv_shortcut,
     )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
@@ -135,7 +141,8 @@ def test_resnetblock2d_refiner(
     )
 
     ttnn_output_tensor, output_shape = tt_resnet.forward(ttnn_input_tensor, ttnn_temb_tensor, [B, C, H, W])
-
+    print(f"Output shape from TTNN: {output_shape}")
+    print(f"Output tensor shape from TTNN: {ttnn_output_tensor.shape}")
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
     output_tensor = output_tensor.reshape(input_shape[0], output_shape[1], output_shape[2], output_shape[0])
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
