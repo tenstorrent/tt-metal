@@ -406,7 +406,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
     CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
     CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
 
-    unit_tests::dm::all_from_all::packet_sizes_test(
+    unit_tests::dm::all_from_all::directed_ideal_test(
         mesh_device, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
 }
 

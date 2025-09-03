@@ -1209,6 +1209,7 @@ private:
             comp_result.packet_size = summary_result.packet_size;
             comp_result.current_bandwidth_gb_s = summary_result.bandwidth_gb_s;
 
+            double test_tolerance = 1.0;  // Default tolerance for no golden case
             if (golden_it != golden_csv_entries_.end()) {
                 comp_result.golden_bandwidth_gb_s = golden_it->bandwidth_gb_s;
                 comp_result.difference_percent =
@@ -1217,24 +1218,32 @@ private:
                     100.0;
 
                 // Use per-test tolerance from golden CSV instead of global tolerance
-                double test_tolerance = golden_it->tolerance_percent;
+                test_tolerance = golden_it->tolerance_percent;
                 comp_result.within_tolerance = std::abs(comp_result.difference_percent) <= test_tolerance;
 
                 if (comp_result.within_tolerance) {
                     comp_result.status = "PASS";
                 } else {
                     comp_result.status = "FAIL";
-                    failed_tests_.push_back(
-                        config.name + " (" + ftype_str + "," + ntype_str + "," + topology_str + "," + num_devices_str +
-                        ") - diff: " + std::to_string(comp_result.difference_percent) +
-                        "%, tolerance: " + std::to_string(test_tolerance) + "%");
                 }
             } else {
                 comp_result.golden_bandwidth_gb_s = 0.0;
                 comp_result.difference_percent = 0.0;
                 comp_result.within_tolerance = false;
                 comp_result.status = "NO_GOLDEN";
-                failed_tests_.push_back(config.name + " (NO GOLDEN ENTRY)");
+            }
+
+            // Create common CSV format string for any failure case
+            if (!comp_result.within_tolerance) {
+                std::ostringstream tolerance_stream;
+                tolerance_stream << std::fixed << std::setprecision(1) << test_tolerance;
+                std::string csv_format_string =
+                    config.name + "," + ftype_str + "," + ntype_str + "," + topology_str + ",\"" + num_devices_str +
+                    "\"," + std::to_string(config.fabric_setup.num_links) + "," +
+                    std::to_string(summary_result.packet_size) + "," + std::to_string(summary_result.cycles) + "," +
+                    std::to_string(comp_result.current_bandwidth_gb_s) + "," +
+                    std::to_string(summary_result.packets_per_second) + "," + tolerance_stream.str();
+                failed_tests_.push_back(csv_format_string);
             }
 
             comparison_results_.push_back(comp_result);

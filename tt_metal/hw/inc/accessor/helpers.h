@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "compile_time_args.h"
+
 namespace tensor_accessor {
 namespace detail {
 template <template <uint32_t...> class Wrapper, size_t BASE_IDX, size_t... Is>
@@ -22,15 +24,27 @@ using struct_cta_sequence_wrapper_t =
 template <bool Enable, typename T = void>
 struct ConditionalField {
     T value;
+    // Constructor that forwards a single argument
     template <typename T_>
     ConditionalField(T_&& val) : value(std::forward<T_>(val)) {}
+
+    // Variadic constructor that forwards multiple arguments to T's constructor
+    template <typename... Args>
+    ConditionalField(Args&&... args) : value(std::forward<Args>(args)...) {}
+
     ConditionalField() = default;
 };
 
 template <typename T>
 struct ConditionalField<false, T> {
+    // Constructor that ignores a single argument
     template <typename T_>
     ConditionalField(T_&& val) {}  // Ignore value if passed to constructor
+
+    // Variadic constructor that ignores all arguments
+    template <typename... Args>
+    ConditionalField(Args&&... args) {}  // Ignore all arguments if passed to constructor
+
     ConditionalField() = default;
 };
 

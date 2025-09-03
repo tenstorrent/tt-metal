@@ -15,7 +15,8 @@ namespace ttnn::operations::point_to_point {
 
 ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> receive_program_factory(
     const PointToPointOp::operation_attributes_t& operation_attributes,
-    PointToPointOp::tensor_return_value_t& output_tensors) {
+    PointToPointOp::tensor_return_value_t& output_tensors,
+    const tt::tt_metal::GlobalSemaphore& semaphore) {
     auto mesh_device = dynamic_cast<MeshDevice*>(output_tensors.at(0).device());
 
     const auto& send_coord = operation_attributes.send_coord;
@@ -117,7 +118,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             packet_size_bytes,
             output_page_size_bytes,
             num_page_segments,
-            operation_attributes.semaphore.address(),
+            semaphore.address(),
             num_hops,
             sender_is_forward};
 
@@ -150,6 +151,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         PointToPointOp::SendReceive::shared_variables_t{
             .receive_unary_reader_kernel_id = receive_unary_reader_kernel_id,
             .receive_unary_writer_kernel_id = receive_unary_writer_kernel_id,
-            .receiver_cores = receiver_cores}};
+            .receiver_cores = receiver_cores,
+            .semaphore = semaphore}};
 }
 }  // namespace ttnn::operations::point_to_point
