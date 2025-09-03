@@ -69,6 +69,13 @@ enum class RoutingDirection {
     NONE = 32,  // No direction, means that destination is not reachable
 };
 
+struct PortIdentifier {
+    std::string port_tag;
+    std::size_t connection_hash;
+};
+
+using PortIdTable = std::unordered_map<MeshId, std::unordered_map<MeshId, std::vector<PortIdentifier>>>;
+
 struct RouterEdge {
     // TODO: change this to be port_id_t
     RoutingDirection port_direction;  // Assume all ports in one direction connect to the same chip
@@ -140,6 +147,11 @@ private:
         const std::string& mesh_graph_desc_file_path,
         std::optional<std::map<FabricNodeId, chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping,
         std::shared_ptr<tt_metal::PhysicalSystemDescriptor> physical_system_descriptor);
+
+    void initialize_intermesh_mapping(
+        std::optional<std::map<FabricNodeId, chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping,
+        std::shared_ptr<tt_metal::PhysicalSystemDescriptor> physical_system_descriptor,
+        const std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>>& mesh_edge_ports_to_chip_id);
 
     void add_to_connectivity(
         MeshId src_mesh_id,

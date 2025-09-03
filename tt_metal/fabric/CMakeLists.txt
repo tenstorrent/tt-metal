@@ -45,6 +45,7 @@ target_sources(
         serialization/logical_port_to_eth_chan.cpp
         serialization/connections_table.cpp
         serialization/physical_desc.cpp
+        serialization/port_id_table.cpp
         erisc_datamover_builder_helper.cpp
         ccl/ccl_common.cpp
         physical_system_descriptor.cpp
@@ -57,6 +58,7 @@ set(FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/logical_eth_chan_table.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/connections_table.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/physical_desc.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/port_id_table.fbs
 )
 
 # Collect all generated headers

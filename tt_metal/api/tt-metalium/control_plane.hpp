@@ -189,6 +189,10 @@ public:
     // Get the mesh graph from the routing table
     const MeshGraph& get_mesh_graph() const;
 
+    // Get the logical node id to mesh id and mesh host rank id mapping
+    const std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>&
+    get_logical_node_ids() const;
+
 private:
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;
@@ -229,7 +233,8 @@ private:
 
     // Mapping from MeshId, MeshHostRankId to MPI rank
     std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, tt_metal::distributed::multihost::Rank>> mpi_ranks_;
-
+    std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>> logical_node_ids_;
+    std::string mesh_graph_desc_file_;
     // TODO: remove once UMD can provide all intermesh links
     std::unordered_map<chip_id_t, uint64_t> chip_id_to_asic_id_;
 

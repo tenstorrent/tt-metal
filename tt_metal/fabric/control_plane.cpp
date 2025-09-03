@@ -427,7 +427,8 @@ void ControlPlane::initialize_distributed_contexts() {
     int mpi_rank = 0;
     for (std::uint64_t encoded_value : encoded_mesh_ids) {
         const auto [mesh_id, mesh_host_rank] = decode_mesh_id_and_rank(encoded_value);
-        mpi_ranks_[mesh_id][mesh_host_rank] = tt::tt_metal::distributed::multihost::Rank{mpi_rank++};
+        mpi_ranks_[mesh_id][mesh_host_rank] = tt::tt_metal::distributed::multihost::Rank{mpi_rank};
+        logical_node_ids_[tt::tt_metal::distributed::multihost::Rank{mpi_rank++}] = {mesh_id, mesh_host_rank};
     }
 
     // Create a sub-context for each mesh-host-rank pair.
@@ -457,7 +458,7 @@ void ControlPlane::init_control_plane(
         logical_mesh_chip_id_to_physical_chip_id_mapping) {
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
-
+    mesh_graph_desc_file_ = mesh_graph_desc_file;
     this->initialize_distributed_contexts();
 
     // Printing, only enabled with log_debug
@@ -468,10 +469,6 @@ void ControlPlane::init_control_plane(
     } else {
         this->load_physical_chip_mapping(get_logical_chip_to_physical_chip_mapping(mesh_graph_desc_file));
     }
-
-    auto physical_system_descriptor = std::make_shared<tt_metal::PhysicalSystemDescriptor>();
-    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(
-        mesh_graph_desc_file, this->logical_mesh_chip_id_to_physical_chip_id_mapping_, physical_system_descriptor);
     this->initialize_intermesh_eth_links();
     this->generate_local_intermesh_link_table();
 }
@@ -936,6 +933,10 @@ size_t ControlPlane::get_num_live_routing_planes(
 // fabric routers on device
 void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
     tt::tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode) {
+    auto physical_system_descriptor = std::make_shared<tt_metal::PhysicalSystemDescriptor>();
+    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(
+        mesh_graph_desc_file_, this->logical_mesh_chip_id_to_physical_chip_id_mapping_, physical_system_descriptor);
+
     this->intra_mesh_routing_tables_.clear();
     this->inter_mesh_routing_tables_.clear();
     this->router_port_directions_to_physical_eth_chan_map_.clear();
@@ -2166,6 +2167,11 @@ const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>&
 const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& ControlPlane::get_host_local_context()
     const {
     return host_local_context_;
+}
+
+const std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>&
+ControlPlane::get_logical_node_ids() const {
+    return logical_node_ids_;
 }
 
 void ControlPlane::populate_fabric_connection_info(
