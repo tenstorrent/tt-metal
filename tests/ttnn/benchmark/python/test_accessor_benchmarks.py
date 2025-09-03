@@ -49,8 +49,12 @@ ARGS_CONFIGS = [
 ]
 
 # For benchmarks that only support all-static configuration
-STATIC_ONLY_ARGS_CONFIGS = [
+STATIC_ONLY_SHARDED_ARGS_CONFIGS = [
     "0000001",  # Everything static
+]
+
+STATIC_ONLY_INTERLEAVED_ARGS_CONFIGS = [
+    "0000000",  # Everything static
 ]
 
 
@@ -106,18 +110,18 @@ def impl_test(gtest_filter, res_dir, args_configs=None):
 
     binary_path = Path(BASE / "build" / "test" / "ttnn" / "unit_tests_ttnn_accessor")
 
-    # Get individual test names if using star pattern
-    if "*" in gtest_filter:
-        individual_tests = get_individual_test_names(gtest_filter)
-        logger.info(f"Found {len(individual_tests)} individual tests for pattern '{gtest_filter}'")
+    # # Get individual test names if using star pattern
+    # if "*" in gtest_filter:
+    #     individual_tests = get_individual_test_names(gtest_filter)
+    #     logger.info(f"Found {len(individual_tests)} individual tests for pattern '{gtest_filter}'")
 
-        # Run each test individually
-        for test_name in individual_tests:
-            logger.info(f"Running individual test: {test_name}")
-            subprocess.run([binary_path, f"--gtest_filter={test_name}"], env=ENV)
-    else:
-        # Run the test as before for non-star patterns
-        subprocess.run([binary_path, f"--gtest_filter={gtest_filter}"], env=ENV)
+    #     # Run each test individually
+    #     for test_name in individual_tests:
+    #         logger.info(f"Running individual test: {test_name}")
+    #         subprocess.run([binary_path, f"--gtest_filter={test_name}"], env=ENV)
+    # else:
+    #     # Run the test as before for non-star patterns
+    #     subprocess.run([binary_path, f"--gtest_filter={gtest_filter}"], env=ENV)
 
     setup = device_post_proc_config.default_setup()
     zone_names = []
@@ -149,9 +153,14 @@ def impl_test(gtest_filter, res_dir, args_configs=None):
             logger.info(f"Zone: {zone_name}: Average: {st['Average']} (cycles)")
 
 
-def impl_test_static_only(gtest_filter, res_dir):
+def impl_test_sharded_static_only(gtest_filter, res_dir):
     """Implementation for tests that only run with all-static configuration."""
-    impl_test(gtest_filter, res_dir, STATIC_ONLY_ARGS_CONFIGS)
+    impl_test(gtest_filter, res_dir, STATIC_ONLY_SHARDED_ARGS_CONFIGS)
+
+
+def impl_test_interleaved_static_only(gtest_filter, res_dir):
+    """Implementation for tests that only run with all-static configuration."""
+    impl_test(gtest_filter, res_dir, STATIC_ONLY_INTERLEAVED_ARGS_CONFIGS)
 
 
 def test_get_noc_addr_page_id():
@@ -169,27 +178,27 @@ def test_constructor():
 
 
 def test_manual_pages_iteration_sharded():
-    impl_test_static_only(
+    impl_test_sharded_static_only(
         "AccessorTests/AccessorBenchmarks.ManualPagesIterationSharded/*",
         res_dir="accessor_manual_pages_iteration_sharded_benchmarks",
     )
 
 
 def test_pages_iterator_sharded():
-    impl_test_static_only(
+    impl_test_sharded_static_only(
         "AccessorTests/AccessorBenchmarks.PagesIteratorSharded/*", res_dir="accessor_pages_iterator_sharded_benchmarks"
     )
 
 
 def test_manual_pages_iteration_interleaved():
-    impl_test_static_only(
+    impl_test_interleaved_static_only(
         "AccessorTests/AccessorBenchmarks.ManualPagesIterationInterleaved/*",
         res_dir="accessor_manual_pages_iteration_interleaved_benchmarks",
     )
 
 
 def test_pages_iterator_interleaved():
-    impl_test_static_only(
+    impl_test_interleaved_static_only(
         "AccessorTests/AccessorBenchmarks.PagesIteratorInterleaved/*",
         res_dir="accessor_pages_iterator_interleaved_benchmarks",
     )
