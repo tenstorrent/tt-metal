@@ -18,6 +18,7 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
+        (1, 32, 1, 64, 1, 1, 1, 1),  # simple case
         (8, 768, 1, 512, 32, 2, 8, 8),  # base case
         (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
         (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
@@ -77,23 +78,22 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     # torch input tensor
     # Create a tensor where each group has a unique value, but all elements within that group are the same.
     per_n_tensors = []
-    for n in range(N * num_groups):
+    parts = 2
+    for n in range(N * num_groups * parts):
         random_mean = torch.randn(1).item()  # add a random mean
         # Each N gets a unique value (e.g., n + random_mean)
-        value = torch.tensor(10 * (n + 1), dtype=torch.float32)
-        per_n_tensor = value.expand(C // num_groups, H, W).clone()
+        value = torch.tensor(1 * (n + 1), dtype=torch.float32)
+        per_n_tensor = value.expand(C // num_groups // parts, H, W).clone()
         per_n_tensors.append(per_n_tensor)
-
-        # Print mean and variance of data
-        logger.info(f"Chunk {n} Mean of data: {per_n_tensor.mean()}")
-        logger.info(f"Chunk {n} Variance of data: {per_n_tensor.var()}")
 
     # Stack along the N dimension
     repeated_values = torch.stack(per_n_tensors, dim=0)
     # Reshape to (N, C, H, W)
     torch_input_tensor = repeated_values.view(N, C, H, W).to(torch.bfloat16)
 
-    # torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    # random_mean = torch.randn(1).item()  # add a random mean
+    # torch_input_tensor = torch.rand(N * C * H * W, dtype=torch.bfloat16) + random_mean
+    # torch_input_tensor = torch_input_tensor.view(N, C, H, W).to(torch.bfloat16)
     torch_weight = torch.rand((C,), dtype=torch.bfloat16)
     torch_bias = torch.rand((C,), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.group_norm(
@@ -138,7 +138,7 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)

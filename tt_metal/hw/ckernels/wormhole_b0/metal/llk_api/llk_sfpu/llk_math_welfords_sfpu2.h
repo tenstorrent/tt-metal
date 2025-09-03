@@ -12,9 +12,8 @@ namespace ckernel {
 
 inline void llk_math_welfords_sfpu_init() { _llk_math_welfords_sfpu_init_(); }
 
-inline void
-llk_math_welfords_sfpu<uint32_t input_dst_index, uint32_t mean_dst_index, uint32_t m2_dst_index, uint32_t reformat_dst>(
-    uint32_t current_row, uint32_t final_row, uint32_t num_skip_rows) {
+template <uint32_t input_dst_index, uint32_t mean_dst_index, uint32_t m2_dst_index, uint32_t reformat_dst>
+inline void llk_math_welfords_sfpu(uint32_t current_row, uint32_t final_row, uint32_t num_skip_rows) {
     _llk_math_welfords_sfpu_params_(
         ckernel::sfpu::_welfords_llk_entry_,
         input_dst_index,
