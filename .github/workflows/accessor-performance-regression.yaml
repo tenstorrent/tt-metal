@@ -158,12 +158,12 @@ jobs:
       - name: ⬇️ Checkout specific branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'push' && github.ref || inputs.branch || 'main' }}
+          ref: ${{ inputs.branch || 'main' }}
           submodules: recursive
           path: docker-job
 
       - name: ⬇️ Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@${{ (github.event_name == 'push' && github.ref_name) || inputs.branch || 'main' }}
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@${{ inputs.branch || 'main' }}
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
