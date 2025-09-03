@@ -21,18 +21,6 @@
 
 </div>
 
-## Latest Releases
-
-| Release | Release Date |
-|---------|--------------|
-| [0.62.2](https://github.com/tenstorrent/tt-metal/releases/tag/v0.62.2) | Aug 20, 2025 |
-| 0.61.0  | Skipped |
-| [0.60.1](https://github.com/tenstorrent/tt-metal/releases/tag/v0.60.1) | Jul 22, 2025 |
-| [0.59.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.59.0) | Jun 18, 2025 |
-| [0.58.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.58.0) | May 13, 2025 |
-| [0.57.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.57.0) | Apr 15, 2025 |
-| [0.56.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.56.0) | Mar 7, 2025  |
-
 ## Quick Links
 
 - [TT-Forge](https://github.com/tenstorrent/tt-forge/tree/main)
@@ -59,7 +47,7 @@ The Models team is focused on developing the following models to a customer-read
 ### [Llama 3.1 70B (TP=32)](./models/demos/llama3_70b_galaxy)
 | Batch | Hardware                                                     | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                                     | vLLM Tenstorrent Repo Release                                                                         |
 |-------|--------------------------------------------------------------|-----------|-------|-----------------|--------|-------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------|
-| 32    | [Galaxy (Wormhole)](https://tenstorrent.com/hardware/galaxy) | 53        | 72.5  | 80              | 2268.8 | [v0.62.2](https://github.com/tenstorrent/tt-metal/tree/v0.62.2)) | [c348d08](https://github.com/tenstorrent/vllm/tree/c348d085a463340a66194bbee9cd4bfc5f9c697a/tt_metal) |
+| 32    | [Galaxy (Wormhole)](https://tenstorrent.com/hardware/galaxy) | 53        | 72.5  | 80              | 2268.8 | [v0.62.2](https://github.com/tenstorrent/tt-metal/tree/v0.62.2) | [c348d08](https://github.com/tenstorrent/vllm/tree/c348d085a463340a66194bbee9cd4bfc5f9c697a/tt_metal) |
 
 ### [Qwen 3 32B (TP=8)](./models/tt_transformers)
 | Batch | Hardware                                                            | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                                       | vLLM Tenstorrent Repo Release                                                                         |
@@ -177,6 +165,20 @@ pip install ttnn-visualizer
 - [TT-XLA](https://github.com/tenstorrent/tt-xla)
 - [TT-MLIR](https://github.com/tenstorrent/tt-mlir)
 - [TT-TVM](https://github.com/tenstorrent/tt-tvm)
+
+## Latest Releases
+
+| Release | Release Date |
+|---------|--------------|
+| [0.62.2](https://github.com/tenstorrent/tt-metal/releases/tag/v0.62.2)  | Aug 20, 2025 |
+| 0.61.0  | Skipped |
+| [0.60.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.60.0) | Jul 16, 2025 |
+| [0.59.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.59.0) | Jun 18, 2025 |
+| [0.58.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.58.0) | May 13, 2025 |
+| [0.57.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.57.0) | Apr 15, 2025 |
+| [0.56.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.56.0) | Mar 7, 2025 |
+
+Visit the [releases](https://github.com/tenstorrent/tt-metal/tree/main/releases) folder for details on releases, release notes, and estimated release dates.
 
 ## Tenstorrent Bounty Program Terms and Conditions
 This repo is a part of Tenstorrent’s bounty program. If you are interested in helping to improve tt-metal, please make sure to read the [Tenstorrent Bounty Program Terms and Conditions](https://docs.tenstorrent.com/bounty_terms.html) before heading to the issues tab. Look for the issues that are tagged with both “bounty” and difficulty level!

@@ -6,6 +6,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "../common.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
 using tt::data_movement::common::round_up;
 using tt::data_movement::common::tt_memmove;
@@ -60,6 +61,9 @@ void kernel_main() {
     // wait for receiver to signal it is ready
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr);
     noc_semaphore_wait(local_semaphore_ptr, 1);
+    // clean up semaphore – needs to be done before the sender side semaphore increment if we're re-using the semaphore
+    // in subsequent program cache hits
+    noc_semaphore_set(local_semaphore_ptr, 0);
 
     fabric_connection.open_finish();
     auto& connection_direction =
@@ -80,14 +84,9 @@ void kernel_main() {
             ++packet_page_idx;
             if (packet_page_idx >= curr_pages_per_packet) {
                 const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer, 0, 0);
-                packet_header_ptr->to_noc_unicast_write(
-                    tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, align(payload_size_bytes, alignment));
-
-                connection_direction.wait_for_empty_write_slot();
-                connection_direction.send_payload_without_header_non_blocking_from_address(
-                    packet_base_addr, payload_size_bytes);
-                connection_direction.send_payload_flush_non_blocking_from_address(
-                    (uint32_t)packet_header_ptr, packet_header_size_bytes);
+                tt::tt_fabric::linear::to_noc_unicast_write(
+                    align(payload_size_bytes, alignment), packet_header_ptr, packet_idx, dst_buffer);
+                perform_payload_send(connection_direction, packet_base_addr, payload_size_bytes, packet_header_ptr);
 
                 // reset counters
                 packet_page_idx = 0;
@@ -114,7 +113,4 @@ void kernel_main() {
     connection_direction.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
 
     fabric_connection.close();
-
-    // clean up semaphore
-    noc_semaphore_set(local_semaphore_ptr, 0);
 }

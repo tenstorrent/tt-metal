@@ -73,7 +73,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const uint32_t num_heads,
     bool use_noc1_only) {
     tt::tt_metal::Program program{};
-    ttnn::MeshDevice* mesh_device = input_tensor.mesh_device();
+    ttnn::MeshDevice* mesh_device = input_tensor.device();
     const bool enable_async_output_tensor = false;
 
     auto ring_core_ranges = output_tensor.shard_spec().value().grid.ranges();

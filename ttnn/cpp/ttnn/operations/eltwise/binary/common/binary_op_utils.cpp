@@ -331,6 +331,8 @@ std::map<std::string, std::string> get_defines_fp32(
         case BinaryOpType::SQUARED_DIFFERENCE:
             if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
                 op_name = "sub_int32_tile";
+            } else if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+                op_name = "sub_uint16_tile";
             } else {
                 op_name = "sub_binary_tile";
             }
@@ -442,7 +444,7 @@ std::map<std::string, std::string> get_defines_fp32(
             TT_FATAL(false, "Undefined op type for binary sfpu operation {}", op_type);
     }
 
-    new_defines.insert({"BINARY_SFPU_OP", fmt::format("{}({}, {});", op_name, idst1, idst2)});
+    new_defines.insert({"BINARY_SFPU_OP", fmt::format("{}({}, {}, {});", op_name, idst1, idst2, idst1)});
 
     if (fused_activations.has_value()) {
         if (op_type == BinaryOpType::ADD and fused_activations.value().size() == 1 and

@@ -9,6 +9,7 @@
 #include "paged_cache_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/experimental/paged_cache/device/paged_fused_update_cache_program_factory.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
@@ -238,12 +239,9 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
 
     auto dst2_buffer = cache_tensor2.buffer();
 
-    bool dst_is_dram = dst1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src1_cb_index,
         (std::uint32_t)src2_cb_index,
-        (std::uint32_t)dst_is_dram,
         (std::uint32_t)cache_cb_index,
         // Index tensor args
         (std::uint32_t)use_index_tensor,
@@ -266,9 +264,12 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
         St,
         in0_sequential_mode_semaphore_id,
         B};
+    TensorAccessorArgs(dst1_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(update_idxs_tensor.has_value() ? update_idxs_tensor->buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)dst_is_dram,
         (std::uint32_t)output_cb_index,
         (std::uint32_t)intermed0_cb_index,
         (std::uint32_t)intermed1_cb_index,
@@ -291,6 +292,7 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
         B,
         page_table_stick_size,
         page_table_is_dram};
+    TensorAccessorArgs(dst1_buffer).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_kernel_args = {
         src1_cb_index,
@@ -726,12 +728,9 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
 
     const auto dst2_buffer = cache_tensor2.buffer();
 
-    const bool dst_is_dram = dst1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-
     std::vector<uint32_t> reader_compile_time_args = {
         src1_cb_index,
         src2_cb_index,
-        dst_is_dram,
         cache_cb_index,
         // Index tensor args
         use_index_tensor,
@@ -754,9 +753,12 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
         St,
         in0_sequential_mode_semaphore_id,
         B};
+    TensorAccessorArgs(dst1_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(update_idxs_tensor.has_value() ? update_idxs_tensor->buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
-        dst_is_dram,
         output_cb_index,
         intermed0_cb_index,
         intermed1_cb_index,
@@ -780,6 +782,7 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
         B,
         page_table_stick_size,
         page_table_is_dram};
+    TensorAccessorArgs(dst1_buffer).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_kernel_args = {
         src1_cb_index,
