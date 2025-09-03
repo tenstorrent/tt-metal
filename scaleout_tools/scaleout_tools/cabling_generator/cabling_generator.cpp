@@ -328,7 +328,7 @@ CablingGenerator::get_boards_by_host_tray() const {
     return boards_by_host_tray_;
 }
 
-const std::vector<LogicalChipConnectionPair>& CablingGenerator::get_chip_connections() const {
+const std::vector<LogicalChannelConnection>& CablingGenerator::get_chip_connections() const {
     return chip_connections_;
 }
 
@@ -454,9 +454,9 @@ void CablingGenerator::generate_connections_from_resolved_graph(const std::uniqu
             tt::scaleout_tools::get_asic_channel_connections(port_type, start_channels, end_channels);
         for (const auto& [start_channel, end_channel] : asic_channel_pairs) {
             chip_connections_.emplace_back(
-                LogicalChipConnection{
+                LogicalChannelEndpoint{
                     .host_id = start_host_id, .tray_id = start_tray_id, .asic_channel = start_channel},
-                LogicalChipConnection{.host_id = end_host_id, .tray_id = end_tray_id, .asic_channel = end_channel});
+                LogicalChannelEndpoint{.host_id = end_host_id, .tray_id = end_tray_id, .asic_channel = end_channel});
         }
     };
 
@@ -566,14 +566,14 @@ void CablingGenerator::populate_boards_from_resolved_graph(const std::unique_ptr
 }
 
 // Overload operator<< for readable test output
-std::ostream& operator<<(std::ostream& os, const PhysicalChannelConnection& conn) {
-    os << "PhysicalChannelConnection{hostname='" << conn.hostname << "', tray_id=" << *conn.tray_id
+std::ostream& operator<<(std::ostream& os, const PhysicalChannelEndpoint& conn) {
+    os << "PhysicalChannelEndpoint{hostname='" << conn.hostname << "', tray_id=" << *conn.tray_id
        << ", asic_location=" << conn.asic_location << ", channel_id=" << *conn.channel_id << "}";
     return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const PhysicalPortConnection& conn) {
-    os << "PhysicalPortConnection{hostname='" << conn.hostname << "', aisle='" << conn.aisle << "', rack=" << conn.rack
+std::ostream& operator<<(std::ostream& os, const PhysicalPortEndpoint& conn) {
+    os << "PhysicalPortEndpoint{hostname='" << conn.hostname << "', aisle='" << conn.aisle << "', rack=" << conn.rack
        << ", shelf_u=" << conn.shelf_u << ", port_type=" << enchantum::to_string(conn.port_type)
        << ", port_id=" << *conn.port_id << "}";
     return os;
@@ -584,24 +584,24 @@ std::ostream& operator<<(std::ostream& os, const PhysicalPortConnection& conn) {
 // Hash specializations
 namespace std {
 template <>
-struct hash<tt::scaleout_tools::LogicalChipConnection> {
-    std::size_t operator()(const tt::scaleout_tools::LogicalChipConnection& conn) const {
+struct hash<tt::scaleout_tools::LogicalChannelEndpoint> {
+    std::size_t operator()(const tt::scaleout_tools::LogicalChannelEndpoint& conn) const {
         return tt::stl::hash::hash_objects_with_default_seed(
             *conn.host_id, conn.tray_id, conn.asic_channel.asic_location, conn.asic_channel.channel_id);
     }
 };
 
 template <>
-struct hash<tt::scaleout_tools::PhysicalChannelConnection> {
-    std::size_t operator()(const tt::scaleout_tools::PhysicalChannelConnection& conn) const {
+struct hash<tt::scaleout_tools::PhysicalChannelEndpoint> {
+    std::size_t operator()(const tt::scaleout_tools::PhysicalChannelEndpoint& conn) const {
         return tt::stl::hash::hash_objects_with_default_seed(
             conn.hostname, *conn.tray_id, conn.asic_location, conn.channel_id);
     }
 };
 
 template <>
-struct hash<tt::scaleout_tools::PhysicalPortConnection> {
-    std::size_t operator()(const tt::scaleout_tools::PhysicalPortConnection& conn) const {
+struct hash<tt::scaleout_tools::PhysicalPortEndpoint> {
+    std::size_t operator()(const tt::scaleout_tools::PhysicalPortEndpoint& conn) const {
         return tt::stl::hash::hash_objects_with_default_seed(
             conn.hostname, conn.aisle, conn.rack, conn.shelf_u, conn.port_type, *conn.port_id);
     }
