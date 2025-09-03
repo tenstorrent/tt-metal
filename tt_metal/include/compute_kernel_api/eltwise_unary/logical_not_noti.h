@@ -40,6 +40,10 @@ ALWI void logical_not_unary_tile_uint32(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_logical_not_unary_op<APPROX, sfpi::vUInt, uint16_t>(idst)));
 }
 
+ALWI void logical_not_unary_tile_uint16(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_logical_not_unary_uint16<APPROX>(idst)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
