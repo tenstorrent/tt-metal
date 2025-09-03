@@ -34,6 +34,7 @@
 #include "test_gold_impls.hpp"
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -117,12 +118,12 @@ int main(int argc, char** argv) {
                 .set_page_size(ouput_cb_index, single_tile_size);
         tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-        bool src0_is_dram = true;
-        bool src1_is_dram = true;
-        std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+        std::vector<uint32_t> reader_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(src0_dram_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(src1_dram_buffer).append_to(reader_compile_time_args);
 
-        bool dst_is_dram = true;
-        std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
+        std::vector<uint32_t> writer_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
         auto reader = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
