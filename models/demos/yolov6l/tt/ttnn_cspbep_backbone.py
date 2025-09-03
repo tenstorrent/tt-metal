@@ -25,6 +25,7 @@ class TtCSPBepBackbone:
             conv=model_params.stem.block.conv,
             conv_pth=parameters.stem.block.conv,
             activation="silu",
+            activation_dtype=ttnn.bfloat16,
             deallocate_activation=True,
         )
         self.erblock2_0 = Yolov6l_Conv2D(
