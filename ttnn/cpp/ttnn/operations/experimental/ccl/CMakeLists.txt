@@ -78,6 +78,9 @@ target_sources(
         neighbor_pad_async/neighbor_pad_async.cpp
         neighbor_pad_async/device/neighbor_pad_async_op.cpp
         neighbor_pad_async/device/neighbor_pad_async_program.cpp
+        slice_reshard_async/slice_reshard_async.cpp
+        slice_reshard_async/device/slice_reshard_async_op.cpp
+        slice_reshard_async/device/slice_reshard_async_program.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})
