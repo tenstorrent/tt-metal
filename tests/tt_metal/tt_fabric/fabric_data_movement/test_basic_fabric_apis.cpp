@@ -589,6 +589,7 @@ TEST_P(T3kCustomMeshGraphFabric2DDynamicFixture, TestGetNextHopRouterDirectionDi
     RunGetNextHopRouterDirectionTest(this, true);
 }
 
+// Skipping other t3k configs because multi-mesh in single process isn't supported
 INSTANTIATE_TEST_SUITE_P(
     T3kCustomMeshGraphFabric2DDynamicTests,
     T3kCustomMeshGraphFabric2DDynamicFixture,
