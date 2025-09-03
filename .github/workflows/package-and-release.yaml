@@ -23,19 +23,21 @@ permissions:
 # if we are promoting a release candidate, don't rerun the tests
 
 jobs:
-
-  regression-testing:
-    uses: ./.github/workflows/regression-testing.yaml
-    secrets: inherit
   create-tag:
-    needs: regression-testing
+
     uses: ./.github/workflows/release-verify-or-create-tag.yaml
     with:
       fetch_depth: 0
       bump_each_commit: false
       tag_type: nightly
-  create-changelog:
+
+  regression-testing:
     needs: create-tag
+    uses: ./.github/workflows/regression-testing.yaml
+    secrets: inherit
+
+  create-changelog:
+    needs: [create-tag, regression-testing]
     permissions: read-all
     runs-on: ubuntu-latest
     steps:
