@@ -30,6 +30,13 @@ class TtYolov6l:
         input_tensor = ttnn.reshape(nhwc, [1, 1, nhwc.shape[0] * nhwc.shape[1] * nhwc.shape[2], nhwc.shape[-1]])
 
         backbone_outputs = self.backbone(input_tensor)
+        ttnn.deallocate(input_tensor)
         neck_outputs = self.neck(backbone_outputs)
+        # Deallocate each tensor in the backbone_outputs tuple
+        for tensor in backbone_outputs:
+            ttnn.deallocate(tensor)
         output = self.detect(neck_outputs)
+        # neck_outputs is a list of tensors
+        for tensor in neck_outputs:
+            ttnn.deallocate(tensor)
         return output
