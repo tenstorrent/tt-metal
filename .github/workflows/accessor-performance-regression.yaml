@@ -76,27 +76,15 @@ jobs:
         with:
           ref: philei/tensor-accessor-perf-regression-tests
           submodules: recursive
-          path: docker-job
+          path: docker-job-baseline
 
-      - name: ⬇️ Download Build Artifact
-        uses: actions/download-artifact@v4
+      - name: ⬇️ Setup Baseline Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@philei/tensor-accessor-perf-regression-tests
         timeout-minutes: 10
         with:
-          name: ${{ needs.build-baseline-artifact.outputs.build-artifact-name }}
-
-      - name: 📂 Extract Build Files
-        run: tar -xvf ttm_any.tar
-
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ needs.build-baseline-artifact.outputs.wheel-artifact-name }}
-
-      - name: 💿 Install Wheel
-        run: |
-          WHEEL_FILENAME=$(ls -1 *.whl)
-          pip3 install "$WHEEL_FILENAME"
+          # build-artifact-name: ${{ needs.build-baseline-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-baseline-artifact.outputs.wheel-artifact-name }}
+          path: docker-job-baseline
 
       - name: 🔍 Debug Build Artifacts
         run: |
@@ -157,7 +145,7 @@ jobs:
         PYTHONPATH: /work
         TT_METAL_HOME: /work
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}/docker-job-baseline:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent"
     defaults:
@@ -174,25 +162,12 @@ jobs:
           submodules: recursive
           path: docker-job
 
-      - name: ⬇️ Download Build Artifact
-        uses: actions/download-artifact@v4
+      - name: ⬇️ Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@${{ github.event_name == 'push' && github.ref_name || inputs.branch || 'main' }}
         timeout-minutes: 10
         with:
-          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-
-      - name: 📂 Extract Build Files
-        run: tar -xvf ttm_any.tar
-
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-
-      - name: 💿 Install Wheel
-        run: |
-          WHEEL_FILENAME=$(ls -1 *.whl)
-          pip3 install "$WHEEL_FILENAME"
+          # build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
       - name: ⬇️ Download Baseline Performance Data
         uses: actions/download-artifact@v4
