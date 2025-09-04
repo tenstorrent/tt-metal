@@ -142,6 +142,9 @@ public:
     const std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>>& get_requested_intermesh_connections()
         const;
 
+    const std::unordered_map<uint32_t, std::unordered_map<uint32_t, std::vector<std::pair<std::string, std::string>>>>&
+    get_requested_intermesh_ports() const;
+
     const std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>>& get_mesh_edge_ports_to_chip_id() const;
 
     void load_intermesh_connections(
@@ -177,6 +180,8 @@ private:
         cluster_type_to_mesh_graph_descriptor;
     std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>> mesh_edge_ports_to_chip_id_;
     std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>> requested_intermesh_connections_;
+    std::unordered_map<uint32_t, std::unordered_map<uint32_t, std::vector<std::pair<std::string, std::string>>>>
+        requested_intermesh_ports_;
 };
 
 }  // namespace tt::tt_fabric

@@ -297,13 +297,6 @@ private:
         eth_chan_directions router_direction) const;
 
     // TODO: remove once UMD can provide all intermesh links
-    // Populate the local intermesh link to remote intermesh link table
-    void generate_local_intermesh_link_table();
-
-    // All to All exchange of intermesh link tables between all hosts in the system
-    void exchange_intermesh_link_tables();
-
-    // TODO: remove once UMD can provide all intermesh links
     // Initialize internal map of physical chip_id to intermesh ethernet links
     void initialize_intermesh_eth_links();
 

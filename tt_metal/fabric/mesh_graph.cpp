@@ -202,6 +202,11 @@ MeshGraph::get_requested_intermesh_connections() const {
     return requested_intermesh_connections_;
 }
 
+const std::unordered_map<uint32_t, std::unordered_map<uint32_t, std::vector<std::pair<std::string, std::string>>>>&
+MeshGraph::get_requested_intermesh_ports() const {
+    return requested_intermesh_ports_;
+}
+
 const std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>>& MeshGraph::get_mesh_edge_ports_to_chip_id()
     const {
     return mesh_edge_ports_to_chip_id_;
@@ -404,14 +409,28 @@ void MeshGraph::initialize_from_yaml(
     }
     std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>> connections;
 
-    for (const auto& connection : yaml["Graph"]) {
-        auto src_mesh_str = connection[0].as<std::string>();
-        auto dst_mesh_str = connection[1].as<std::string>();
-        auto num_chans = connection[2].as<uint32_t>();
-        auto src_mesh = static_cast<uint32_t>(std::stoul(src_mesh_str.substr(1, src_mesh_str.size() - 1)));
-        auto dst_mesh = static_cast<uint32_t>(std::stoul(dst_mesh_str.substr(1, dst_mesh_str.size() - 1)));
-        requested_intermesh_connections_[src_mesh][dst_mesh] = num_chans;
-        requested_intermesh_connections_[dst_mesh][src_mesh] = num_chans;
+    TT_FATAL(
+        !(yaml["RelaxedGraph"] && yaml["Graph"]),
+        "Mesh Graph Descriptor cannot specify both RelaxedGraph and Graph connections.");
+    if (yaml["RelaxedGraph"]) {
+        for (const auto& connection : yaml["Graph"]) {
+            auto src_mesh_str = connection[0].as<std::string>();
+            auto dst_mesh_str = connection[1].as<std::string>();
+            auto num_chans = connection[2].as<uint32_t>();
+            auto src_mesh = static_cast<uint32_t>(std::stoul(src_mesh_str.substr(1, src_mesh_str.size() - 1)));
+            auto dst_mesh = static_cast<uint32_t>(std::stoul(dst_mesh_str.substr(1, dst_mesh_str.size() - 1)));
+            requested_intermesh_connections_[src_mesh][dst_mesh] = num_chans;
+            requested_intermesh_connections_[dst_mesh][src_mesh] = num_chans;
+        }
+    } else {
+        TT_FATAL(yaml["Graph"], "Mesh Graph Descriptor must specify either RelaxedGraph or Graph connections.");
+        for (const auto& connection : yaml["Graph"]) {
+            uint32_t src_mesh = connection[0].as<uint32_t>();
+            uint32_t dst_mesh = connection[1].as<uint32_t>();
+            auto src_port = connection[2].as<std::string>();
+            auto dst_port = connection[3].as<std::string>();
+            requested_intermesh_ports_[src_mesh][dst_mesh].push_back({src_port, dst_port});
+        }
     }
 }
 

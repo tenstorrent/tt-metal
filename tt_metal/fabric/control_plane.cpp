@@ -463,11 +463,18 @@ PortIdTable ControlPlane::generate_exit_node_port_id_table() {
     const auto& mesh_graph = this->routing_table_generator_->mesh_graph;
     const auto& mesh_edge_ports_to_chip_id = mesh_graph->get_mesh_edge_ports_to_chip_id();
     const auto& requested_intermesh_connections = mesh_graph->get_requested_intermesh_connections();
+    const auto& requested_intermesh_ports = mesh_graph->get_requested_intermesh_ports();
     const auto& physical_system_descriptor = this->physical_system_descriptor_;
     const auto& my_host = physical_system_descriptor->my_host_name();
     const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
     const auto& logical_mesh_chip_id_to_physical_chip_id_mapping =
         this->logical_mesh_chip_id_to_physical_chip_id_mapping_;
+
+    TT_FATAL(
+        !(requested_intermesh_connections.size() && requested_intermesh_ports.size()),
+        "Mesh Graph Descriptor must specify either RelaxedGraph or Graph connections.");
+
+    bool strict_binding = requested_intermesh_ports.size() > 0;
 
     // Track the Logical Ethernet Ports connecting to all neighbors of my_mesh
     PortIdTable port_id_table;
@@ -482,15 +489,27 @@ PortIdTable ControlPlane::generate_exit_node_port_id_table() {
         auto neighbor_host_rank = physical_system_descriptor->get_rank_for_hostname(neighbor_host);
         auto neighbor_mesh_id =
             this->logical_node_ids_.at(tt::tt_metal::distributed::multihost::Rank{neighbor_host_rank}).first;
-
-        if (requested_intermesh_connections.find(*my_mesh_id) == requested_intermesh_connections.end() ||
-            requested_intermesh_connections.at(*my_mesh_id).find(*neighbor_mesh_id) ==
-                requested_intermesh_connections.at(*my_mesh_id).end()) {
-            // No connections between these 2 meshes are specified, skip
-            continue;
+        if (strict_binding) {
+            if (requested_intermesh_ports.find(*my_mesh_id) == requested_intermesh_ports.end() ||
+                requested_intermesh_ports.at(*my_mesh_id).find(*neighbor_mesh_id) ==
+                    requested_intermesh_ports.at(*my_mesh_id).end()) {
+                // No connections between these 2 meshes are specified, skip
+                continue;
+            }
+        } else {
+            if (requested_intermesh_connections.find(*my_mesh_id) == requested_intermesh_connections.end() ||
+                requested_intermesh_connections.at(*my_mesh_id).find(*neighbor_mesh_id) ==
+                    requested_intermesh_connections.at(*my_mesh_id).end()) {
+                // No connections between these 2 meshes are specified, skip
+                continue;
+            }
         }
-
-        auto num_requested_chans = requested_intermesh_connections.at(*my_mesh_id).at(*neighbor_mesh_id);
+        std::size_t num_requested_chans = 0;
+        if (strict_binding) {
+            num_requested_chans = requested_intermesh_ports.at(*my_mesh_id).at(*neighbor_mesh_id).size();
+        } else {
+            num_requested_chans = requested_intermesh_connections.at(*my_mesh_id).at(*neighbor_mesh_id);
+        }
         const auto& exit_nodes = physical_system_descriptor->get_connecting_exit_nodes(my_host, neighbor_host);
         TT_FATAL(
             exit_nodes.size() >= num_requested_chans,
@@ -603,7 +622,9 @@ ControlPlane::pair_logical_intermesh_ports(PortIdTable& port_id_table, uint32_t 
 
     const auto& mesh_graph = this->routing_table_generator_->mesh_graph;
     const auto& requested_intermesh_connections = mesh_graph->get_requested_intermesh_connections();
+    const auto& requested_intermesh_ports = mesh_graph->get_requested_intermesh_ports();
 
+    bool strict_binding = requested_intermesh_ports.size() > 0;
     if (my_rank == 0) {
         std::set<std::pair<uint32_t, uint32_t>> processed_neighbors;
 
@@ -614,12 +635,17 @@ ControlPlane::pair_logical_intermesh_ports(PortIdTable& port_id_table, uint32_t 
                     continue;
                 }
                 std::size_t num_ports_assigned = 0;
-                std::size_t num_ports_requested = requested_intermesh_connections.at(*src_mesh).at(*dest_mesh);
+                std::size_t num_ports_requested;
+                if (strict_binding) {
+                    num_ports_requested = requested_intermesh_ports.at(*src_mesh).at(*dest_mesh).size();
+                } else {
+                    num_ports_requested = requested_intermesh_connections.at(*src_mesh).at(*dest_mesh);
+                }
 
                 const auto& dest_ports = port_id_table[dest_mesh][src_mesh];
                 // Iterate over src ports. For each src port, determine which dst port it connects to
                 for (const auto& src_port : src_ports) {
-                    if (num_ports_assigned == num_ports_requested) {
+                    if (num_ports_assigned == num_ports_requested && !strict_binding) {
                         break;
                     }
                     const auto& connection_hash = src_port.connection_hash;
@@ -725,7 +751,6 @@ void ControlPlane::init_control_plane(
     this->generate_intermesh_connectivity();
 
     this->initialize_intermesh_eth_links();
-    this->generate_local_intermesh_link_table();
 }
 
 ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
@@ -1193,10 +1218,6 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
     this->intra_mesh_routing_tables_.clear();
     this->inter_mesh_routing_tables_.clear();
     this->router_port_directions_to_physical_eth_chan_map_.clear();
-
-    // When running multi-host workloads, have all hosts in the system exchange their local intermesh link tables
-    // with all other hosts in the system. This information is used to assign directions to intermesh links.
-    this->exchange_intermesh_link_tables();
 
     const auto& intra_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_intra_mesh_connectivity();
     const auto& inter_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity();
@@ -2174,85 +2195,6 @@ std::unordered_set<CoreCoord> ControlPlane::get_inactive_ethernet_cores(chip_id_
         }
     }
     return inactive_ethernet_cores;
-}
-
-void ControlPlane::generate_local_intermesh_link_table() {
-    // Populate the local to remote mapping for all intermesh links
-    // This cannot be done by UMD, since it has no knowledge of links marked
-    // for intermesh routing (these links are hidden from UMD).
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    intermesh_link_table_.local_mesh_id = local_mesh_binding_.mesh_ids[0];
-    intermesh_link_table_.local_host_rank_id = this->get_local_host_rank_id_binding();
-    for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
-        auto local_board_id = cluster.get_unique_chip_ids().find(chip_id);
-        if (local_board_id == cluster.get_unique_chip_ids().end()) {
-            chip_id_to_asic_id_[chip_id] = chip_id;
-            continue;
-        }
-        chip_id_to_asic_id_[chip_id] = local_board_id->second;
-        for (const auto& [eth_core, chan_id] : this->get_intermesh_eth_links(chip_id)) {
-            auto [remote_board_id, remote_chan_id] =
-                cluster.get_ethernet_connections_to_remote_devices().at(chip_id).at(chan_id);
-            auto local_eth_chan_desc = EthChanDescriptor{
-                .board_id = local_board_id->second,
-                .chan_id = chan_id,
-            };
-            auto remote_eth_chan_desc = EthChanDescriptor{
-                .board_id = remote_board_id,
-                .chan_id = remote_chan_id,
-            };
-            intermesh_link_table_.intermesh_links[local_eth_chan_desc] = remote_eth_chan_desc;
-        }
-    }
-}
-
-void ControlPlane::exchange_intermesh_link_tables() {
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    if (*distributed_context.size() == 1) {
-        // No need to exchange intermesh link tables when running a single process
-        return;
-    }
-
-    auto serialized_table = tt::tt_fabric::serialize_to_bytes(intermesh_link_table_);
-    std::vector<uint8_t> serialized_remote_table;
-    auto my_rank = *(distributed_context.rank());
-
-    for (std::size_t bcast_root = 0; bcast_root < *(distributed_context.size()); ++bcast_root) {
-        if (my_rank == bcast_root) {
-            // Issue the broadcast from the current process to all other processes in the world
-            int local_table_size_bytes = serialized_table.size();  // Send txn size first
-            distributed_context.broadcast(
-                tt::stl::Span<std::byte>(
-                    reinterpret_cast<std::byte*>(&local_table_size_bytes), sizeof(local_table_size_bytes)),
-                distributed_context.rank());
-
-            distributed_context.broadcast(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
-                distributed_context.rank());
-        } else {
-            // Acknowledge the broadcast issued by the root
-            int remote_table_size_bytes = 0;  // Receive the size of the serialized descriptor
-            distributed_context.broadcast(
-                tt::stl::Span<std::byte>(
-                    reinterpret_cast<std::byte*>(&remote_table_size_bytes), sizeof(remote_table_size_bytes)),
-                tt::tt_metal::distributed::multihost::Rank{bcast_root});
-            serialized_remote_table.clear();
-            serialized_remote_table.resize(remote_table_size_bytes);
-            distributed_context.broadcast(
-                tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_remote_table.data(), serialized_remote_table.size())),
-                tt::tt_metal::distributed::multihost::Rank{bcast_root});
-            tt_fabric::IntermeshLinkTable deserialized_remote_table =
-                tt::tt_fabric::deserialize_from_bytes(serialized_remote_table);
-            peer_intermesh_link_tables_[deserialized_remote_table.local_mesh_id]
-                                       [deserialized_remote_table.local_host_rank_id] =
-                                           std::move(deserialized_remote_table.intermesh_links);
-        }
-        // Barrier here for safety - Ensure that all ranks have completed the bcast op before proceeding to the next
-        // root
-        distributed_context.barrier();
-    }
 }
 
 void ControlPlane::assign_direction_to_fabric_eth_chan(
