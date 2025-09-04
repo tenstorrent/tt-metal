@@ -218,22 +218,16 @@ def run_max_pool(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape, kernel_size",
+    "input_shape, kernel_size, stride",
     [
-        ([1, 256, 16, 16], (2, 2)),
-        ([1, 256, 32, 32], (4, 4)),
+        ([1, 256, 16, 16], (2, 2), (2, 2)),
+        ([1, 256, 32, 32], (4, 4), (4, 4)),
     ],
 )
 @pytest.mark.parametrize(
     "padding",
     [
         (0, 0),
-    ],
-)
-@pytest.mark.parametrize(
-    "stride",
-    [
-        (1, 1),
     ],
 )
 @pytest.mark.parametrize(
@@ -255,7 +249,7 @@ def run_max_pool(
     ],
 )
 def test_run_max_pool_height_shard_custom(
-    input_shape, kernel_size, padding, stride, dilation, device, tensor_map, dtype, ceil_mode
+    input_shape, kernel_size, stride, padding, dilation, device, tensor_map, dtype, ceil_mode
 ):
     run_max_pool(
         input_shape,

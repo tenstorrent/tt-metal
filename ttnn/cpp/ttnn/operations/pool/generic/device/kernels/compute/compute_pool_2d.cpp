@@ -6,6 +6,7 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tilize.h"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 #define DEBUG_PRINT 0
 
@@ -112,13 +113,16 @@ void MAIN {
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 cb_wait_front(curr_in_cb_id, 1);
-                unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                    curr_in_cb_id,
-                    curr_scalar_cb_id,
-                    tiles_to_reduce,
-                    0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
-                    num_faces_in_input_tile,
-                    face_r_dim);
+                {
+                    DeviceZoneScopedN("unpack_tilizeA_B_block");
+                    unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                        curr_in_cb_id,
+                        curr_scalar_cb_id,
+                        tiles_to_reduce,
+                        0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
+                        num_faces_in_input_tile,
+                        face_r_dim);
+                }
                 for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                     reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
                 }
