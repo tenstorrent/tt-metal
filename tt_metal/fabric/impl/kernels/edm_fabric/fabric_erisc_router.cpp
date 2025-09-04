@@ -1304,7 +1304,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             }
             {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    !UPDATE_PKT_HDR_ON_RX_CH>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,

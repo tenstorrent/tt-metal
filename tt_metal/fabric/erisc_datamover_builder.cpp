@@ -1221,8 +1221,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         // to the mux yet to implement sender side updates.
         update_pkt_hdr_on_rx_ch = false;
     }
-    log_warning(tt::LogFabric, "update_pkt_hdr_on_rx_ch: {}", update_pkt_hdr_on_rx_ch);
-    log_warning(tt::LogFabric, "fabric_tensix_extension_enabled: {}", fabric_tensix_extension_enabled);
 
     TT_FATAL(
         sender_channel_num_buffers > 0,
