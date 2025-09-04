@@ -2,8 +2,6 @@ name: "(Galaxy) APC fast tests"
 
 on:
   workflow_dispatch:  # Manual trigger only used to test galaxy apc fast tests
-  push:
-    branches: ["roseli/0-enable-6u-apc"]
 
 jobs:
   build-artifact:
