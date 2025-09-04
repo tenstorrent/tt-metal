@@ -72,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Echo regression-testing wheel-artifact-name output
-        run: echo "regression-testing.outputs.wheel-artifact-name = ${{ steps.regression-testing.outputs.wheel-artifact-name }}"
+        run: echo "regression-testing.outputs.wheel-artifact-name = ${{ needs.regression-testing.outputs.wheel-artifact-name }}"
 
   create-changelog:
     needs: [create-tag, regression-testing]

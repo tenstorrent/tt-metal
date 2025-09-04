@@ -44,6 +44,13 @@
         build-wheel: true
         fetch-depth: 0
         skip-tt-train: false
+
+    debug-regression-testing-output:
+      needs: build-artifact
+      runs-on: ubuntu-latest
+      steps:
+        - name: Echo regression-testing wheel-artifact-name output
+          run: echo "regression-testing.outputs.wheel-artifact-name = ${{ needs.build-artifact.outputs.wheel-artifact-name }}"
     # single-card-demos:
     #   needs: build-artifact
     #   uses: ./.github/workflows/single-card-demo-tests-impl.yaml
