@@ -16,7 +16,6 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
 #include <tt-metalium/host_buffer.hpp>
 #include "ttnn/tensor/types.hpp"
@@ -66,11 +65,7 @@ public:
     ~Tensor();
 
     // Constructs a tensor with `Storage`, `TensorSpec`, and `TensorTopology`.
-    [[nodiscard]] Tensor(
-        Storage storage,
-        TensorSpec tensor_spec,
-        DistributedTensorConfig distributed_tensor_config,
-        TensorTopology tensor_topology);
+    [[nodiscard]] Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
     // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
@@ -213,7 +208,6 @@ public:
     const TensorSpec& tensor_spec() const;
     uint64_t logical_volume() const;
     uint64_t physical_volume() const;
-    const DistributedTensorConfig& distributed_tensor_config() const;
     const MemoryConfig& memory_config() const;
 
     // Multi-device topology configuration - tracks how tensor is distributed across mesh devices
@@ -267,11 +261,7 @@ public:
     }
 
 private:
-    void init(
-        Storage storage,
-        TensorSpec tensor_spec,
-        DistributedTensorConfig distributed_tensor_config,
-        TensorTopology tensor_topology);
+    void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
 };
 
