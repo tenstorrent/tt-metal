@@ -21,7 +21,7 @@ void kernel_main() {
 
 #ifdef REDUCE_SCALER
     constexpr uint32_t cb_id_in2 = 2;
-    constexpr uint32_t scaler = get_compile_time_arg_val(1);
+    constexpr uint32_t scaler = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
     cb_reserve_back(cb_id_in2, 1);
     constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
