@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cstring>
 #include <memory>
+#include <cstdint>
+#include <unistd.h>
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -33,10 +35,12 @@ PinnedMemoryImpl::~PinnedMemoryImpl() { device_buffers_.clear(); }
 PinnedMemoryImpl::PinnedMemoryImpl(PinnedMemoryImpl&& other) noexcept :
     buffer_size_(other.buffer_size_),
     map_to_noc_(other.map_to_noc_),
+    host_offset_(other.host_offset_),
     device_buffers_(std::move(other.device_buffers_)),
     device_to_mmio_map_(std::move(other.device_to_mmio_map_)) {
     other.buffer_size_ = 0;
     other.map_to_noc_ = false;
+    other.host_offset_ = 0;
 }
 
 PinnedMemoryImpl& PinnedMemoryImpl::operator=(PinnedMemoryImpl&& other) noexcept {
@@ -45,11 +49,13 @@ PinnedMemoryImpl& PinnedMemoryImpl::operator=(PinnedMemoryImpl&& other) noexcept
 
         buffer_size_ = other.buffer_size_;
         map_to_noc_ = other.map_to_noc_;
+        host_offset_ = other.host_offset_;
         device_buffers_ = std::move(other.device_buffers_);
         device_to_mmio_map_ = std::move(other.device_to_mmio_map_);
 
         other.buffer_size_ = 0;
         other.map_to_noc_ = false;
+        other.host_offset_ = 0;
     }
     return *this;
 }
@@ -82,11 +88,24 @@ void PinnedMemoryImpl::initialize_from_devices(
         unique_mmio_devices.insert(mmio_device_id);
     }
 
-    // Create one buffer per unique MMIO device, all mapping the same host memory
+    // Determine system page size and align the host buffer down to page boundary
+    size_t page_size = 4096;
+    long sys_page = sysconf(_SC_PAGESIZE);
+    if (sys_page > 0) {
+        page_size = static_cast<size_t>(sys_page);
+    }
+
+    uintptr_t host_addr = reinterpret_cast<uintptr_t>(host_buffer);
+    uintptr_t aligned_base_addr = host_addr & ~(static_cast<uintptr_t>(page_size) - 1);
+    host_offset_ = static_cast<size_t>(host_addr - aligned_base_addr);
+    size_t mapped_size = buffer_size + host_offset_;
+    void* aligned_host_ptr = reinterpret_cast<void*>(aligned_base_addr);
+
+    // Create one buffer per unique MMIO device, all mapping the same aligned host memory
     std::unordered_map<chip_id_t, std::unique_ptr<tt::umd::SysmemBuffer>> mmio_buffers;
 
     for (chip_id_t mmio_device_id : unique_mmio_devices) {
-        auto buffer = cluster.map_sysmem_buffer(mmio_device_id, host_buffer, buffer_size, map_to_noc);
+        auto buffer = cluster.map_sysmem_buffer(mmio_device_id, aligned_host_ptr, mapped_size, map_to_noc);
 
         if (!buffer) {
             throw std::runtime_error("Failed to create SysmemBuffer for MMIO device " + std::to_string(mmio_device_id));
@@ -133,20 +152,22 @@ void* PinnedMemoryImpl::get_host_ptr() {
     if (device_buffers_.empty()) {
         throw std::runtime_error("No buffers available in PinnedMemory");
     }
-    // Return host pointer from any buffer since they all map the same memory
-    return device_buffers_.begin()->second->get_buffer_va();
+    // Return the original (unaligned) host pointer by adjusting from aligned base
+    auto* base = static_cast<std::uint8_t*>(device_buffers_.begin()->second->get_buffer_va());
+    return static_cast<void*>(base + host_offset_);
 }
 
 const void* PinnedMemoryImpl::get_host_ptr() const {
     if (device_buffers_.empty()) {
         throw std::runtime_error("No buffers available in PinnedMemory");
     }
-    // Return host pointer from any buffer since they all map the same memory
-    return device_buffers_.begin()->second->get_buffer_va();
+    // Return the original (unaligned) host pointer by adjusting from aligned base
+    auto* base = static_cast<const std::uint8_t*>(device_buffers_.begin()->second->get_buffer_va());
+    return static_cast<const void*>(base + host_offset_);
 }
 
 uint64_t PinnedMemoryImpl::get_device_addr(chip_id_t device_id) const {
-    return get_buffer(device_id).get_device_io_addr();
+    return get_buffer(device_id).get_device_io_addr() + static_cast<uint64_t>(host_offset_);
 }
 
 std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(chip_id_t device_id) const {
@@ -165,9 +186,10 @@ std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(chip_id_t de
     if (!noc_addr_opt.has_value()) {
         return std::nullopt;
     }
+    fmt::println(stderr, "noc_addr_opt: {}", noc_addr_opt.value());
 
     // Return NOC address and the MMIO device ID where it's usable from
-    return PinnedMemory::NocAddr{noc_addr_opt.value(), mmio_device_id};
+    return PinnedMemory::NocAddr{noc_addr_opt.value() + static_cast<uint64_t>(host_offset_), mmio_device_id};
 }
 
 std::vector<chip_id_t> PinnedMemoryImpl::get_device_ids() const {
