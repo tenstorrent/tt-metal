@@ -58,6 +58,7 @@
 #include "fabric/hw/inc/fabric_routing_mode.h"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
+#include "get_platform_architecture.hpp"
 
 namespace tt {
 
@@ -411,6 +412,10 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
     tt::tt_metal::MetalContext::instance().get_cluster().read_reg(
         &regval, tt_cxy_pair(device->id(), worker_core), address);
     return true;
+}
+
+std::string get_physical_architecture_name() {
+    return tt::get_string_lowercase(tt::tt_metal::get_physical_architecture());
 }
 
 std::map<chip_id_t, IDevice*> CreateDevices(

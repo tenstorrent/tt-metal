@@ -49,16 +49,11 @@ void SliceWriteDeviceOperation::validate_with_output_tensors(
             this->slice_start[i],
             this->slice_end[i]);
     }
+    // If the input tensor is sharded, then rank should be 4
     TT_FATAL(
-        this->slice_start[-1] == 0,
-        "Slice write doesn't support slicing along the last dimension. Slice start [-1] should be 0");
-    TT_FATAL(
-        this->slice_end[-1] == output_padded_shape[-1],
-        "Slice write doesn't support slicing along the last dimension. Slice end [-1] {} should be equal to output "
-        "shape "
-        "[-1] {}",
-        this->slice_end[-1],
-        output_padded_shape[-1]);
+        !input_tensor_a.is_sharded() || input_tensor_a.padded_shape().rank() == 4,
+        "Sharded input tensor should be of rank 4. Got {}",
+        input_tensor_a.padded_shape().rank());
 }
 
 std::vector<ttnn::Tensor> SliceWriteDeviceOperation::create_output_tensors(

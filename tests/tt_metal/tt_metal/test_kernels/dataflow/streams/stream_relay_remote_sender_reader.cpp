@@ -27,7 +27,8 @@ void kernel_main() {
     }
 
     const uint32_t read_page_size = cb_page_size - msg_hdr_size;
-    const InterleavedAddrGen<true> src_addr_gen = {.bank_base_address = input_buffer_addr, .page_size = read_page_size};
+    constexpr auto src_args = TensorAccessorArgs<2>();
+    const auto src_addr_gen = TensorAccessor(src_args, input_buffer_addr, read_page_size);
 
     auto cb = tt::CBIndex::c_0;
 

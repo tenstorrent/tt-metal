@@ -21,7 +21,6 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/data_movement/fold/fold.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/tensor/types.hpp"
@@ -1066,10 +1065,13 @@ uint32_t calculate_conv_dram_slice_L1_usage(
     const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
 
     uint32_t slice_rounding_value = 1;
-    if (conv_config.output_layout == tt_metal::Layout::TILE) {
+    if (conv_config.output_layout == tt_metal::Layout::TILE &&
+        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::WIDTH) {
         // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
         slice_rounding_value = tt::constants::TILE_HEIGHT;
     }
+    uint32_t width_rounding_value =
+        (conv_config.output_layout == tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
 
     auto compute_l1_usage_for_slice = [&](uint32_t input_slice_height,
                                           uint32_t input_slice_width,
@@ -1170,9 +1172,10 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                                          input_datum_size;
         log_debug(
             tt::LogOp,
-            "Conv DRAM Auto slicing: num_slices = {}, input_size = {}, approx_max_halo_bytes = {}, conv size = {}",
+            "Conv DRAM Auto slicing: num_slices = {}, input_shard_shape = {}, approx_max_halo_bytes = {}, conv size = "
+            "{}",
             dram_slice_config.num_slices,
-            input_size,
+            sliced_input_tensor_memory_config.shard_spec().value(),
             approx_max_halo_bytes,
             l1_usage);
         return std::make_tuple(l1_usage, input_size, approx_max_halo_bytes);
@@ -1247,8 +1250,8 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         uint32_t input_slice_height = (input_slice_height_end - input_slice_height_start) + pad_top + pad_bottom;
         uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
         uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
-        if (output_slice_width % slice_rounding_value != 0) {
-            additional_padded_width = slice_rounding_value - (output_slice_width % slice_rounding_value);
+        if (output_slice_width % width_rounding_value != 0) {
+            additional_padded_width = width_rounding_value - (output_slice_width % width_rounding_value);
             log_trace(
                 LogOp,
                 "Conv2d DRAM Slicing: Slice {}: Additional padding of {} added to the right side.",

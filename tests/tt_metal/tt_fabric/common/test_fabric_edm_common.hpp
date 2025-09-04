@@ -11,6 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/kernel.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "erisc_datamover_builder.hpp"
 #include "tt-metalium/kernel_types.hpp"
 #include <tt-metalium/fabric.hpp>
@@ -483,10 +484,10 @@ static void generate_fabric_test_kernels(
     receiver_noc_y = receiver_noc_coord.y;
 
     std::vector<uint32_t> sender_worker_reader_compile_args{
-        src_is_dram,      //
         num_pages_total,  //
         page_size,
         num_pages_per_edm_buffer};
+    tt::tt_metal::TensorAccessorArgs().append_to(sender_worker_reader_compile_args);
     std::vector<uint32_t> sender_worker_reader_runtime_args{dram_input_buffer_base_addr};
 
     log_trace(tt::LogTest, "\tSenderReader CT Args");
@@ -499,7 +500,7 @@ static void generate_fabric_test_kernels(
     }
 
     std::vector<uint32_t> sender_worker_writer_compile_args{
-        num_pages_total, page_size, dest_is_dram, std::holds_alternative<mcast_send>(mode) ? 1 : 0, scatter_write};
+        num_pages_total, page_size, std::holds_alternative<mcast_send>(mode) ? 1 : 0, scatter_write};
     std::vector<uint32_t> sender_worker_writer_runtime_args{
         dram_output_buffer_base_addr, global_completion_semaphore_addr};
 
