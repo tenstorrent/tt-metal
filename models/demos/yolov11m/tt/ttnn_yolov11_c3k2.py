@@ -17,7 +17,7 @@ class TtnnC3k2:
         if is_bk_enabled:
             self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1, reshard=reshard)
             self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)
-            self.k = TtnnBottleneck(device, parameter[0], conv_pt.m[0])
+            self.k = TtnnBottleneck(device, parameter[2], conv_pt.m[2])
         else:
             self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1, reshard=reshard)
             self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)
