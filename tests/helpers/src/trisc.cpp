@@ -68,12 +68,4 @@ int main()
     }
 
     *mailbox = ckernel::KERNEL_COMPLETE; // 0x1
-
-    // Use a volatile variable to prevent the compiler from optimizing away the loop
-    volatile bool run = true;
-
-    // Infinite loop
-    while (run)
-    {
-    }
 }

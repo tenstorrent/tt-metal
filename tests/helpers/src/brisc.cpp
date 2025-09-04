@@ -21,12 +21,4 @@ int main()
     // Release reset of triscs here in order to achieve brisc <-> trisc synchronization
     clear_trisc_soft_reset();
 #endif
-
-    // Use a volatile variable to prevent the compiler from optimizing away the loop
-    volatile bool run = true;
-
-    // Infinite loop
-    while (run)
-    {
-    }
 }
