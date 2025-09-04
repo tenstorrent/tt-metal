@@ -891,9 +891,11 @@ void issue_read_buffer_dispatch_command_sequence(
 
     // Select write op once, then unify relay
     if (pinned_feasible) {
+        //fmt::println(stderr, "Reading pinned");
         command_sequence.add_dispatch_write_linear_h<false, false>(0, pinned_dst_noc_xy | 0x8, pinned_dst_addr_lo, xfer_bytes);
     } else {
         bool flush_prefetch = false;
+        //fmt::println(stderr, "Reading unpinned");
         command_sequence.add_dispatch_write_host(flush_prefetch, xfer_bytes, false);
     }
 
