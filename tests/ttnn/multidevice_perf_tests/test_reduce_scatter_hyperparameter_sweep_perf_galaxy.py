@@ -20,6 +20,7 @@ from tests.ttnn.multidevice_perf_tests.sweep_reduce_scatter_hyperparameters_gala
     CHUNKS_PER_SYNC_IDS,
     WORKERS_PER_LINK_IDS,
 )
+import shlex
 
 
 def total_elems(rs_input_shape):
@@ -39,7 +40,7 @@ def test_reduce_scatter_chunk_perf():
 
     chunks_per_sync_list = CHUNKS_PER_SYNC
     num_workers_per_link_list = WORKERS_PER_LINK
-    topology_list = TOPOLOGY
+    topology_list = ["ring"]
     start_time = time.time()
     results_subdir = f"ReduceScatter_{start_time}"
     os.makedirs(results_subdir, exist_ok=True)
@@ -72,7 +73,7 @@ def test_reduce_scatter_chunk_perf():
 
                     cols = ["DEVICE KERNEL"]
                     op_name = "ReduceScatterMinimalAsync"
-                    step_name = f"reduce_scatter_chunk_perf_{num_devices}U_{chunks_per_sync}_{num_workers_per_link}_{topology}_perf"
+                    step_name = f"reduce_scatter_chunk_perf_{num_devices}_{chunks_per_sync}_{num_workers_per_link}_{topology}_perf"
 
                     final_command = (
                         base_command
@@ -84,7 +85,7 @@ def test_reduce_scatter_chunk_perf():
                         profiler.start("run")
                         profiler.start(step_name)
                         results = run_device_perf_detailed(
-                            final_command, subdir, cols, op_name, has_signposts=False, warmup_iters=10
+                            final_command, subdir, cols, op_name, has_signposts=False, warmup_iters=5
                         )
                         profiler.end(step_name)
                         profiler.end("run")

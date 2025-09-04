@@ -38,6 +38,7 @@ def run_reduce_scatter_impl(
     chunks_per_sync=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
+    verify_output=True,
 ):
     torch.manual_seed(0)
 
@@ -213,19 +214,20 @@ def run_reduce_scatter_impl(
 
             logger.info(f"Done iteration {i}")
 
-    for i in range(num_iters):
-        tt_rs_out = tt_reduce_scatter_output_list[i]
-        torch_rs_out_tensor = torch_reduce_scatter_output_list[i]
+    if verify_output:
+        for i in range(num_iters):
+            tt_rs_out = tt_reduce_scatter_output_list[i]
+            torch_rs_out_tensor = torch_reduce_scatter_output_list[i]
 
-        torch_rs_out = torch.cat(torch_rs_out_tensor, dim)
+            torch_rs_out = torch.cat(torch_rs_out_tensor, dim)
 
-        if ones_tensor:
-            eq, output = comp_equal(tt_rs_out, torch_rs_out)
-        else:
-            eq, output = comp_pcc(tt_rs_out, torch_rs_out)
+            if ones_tensor:
+                eq, output = comp_equal(tt_rs_out, torch_rs_out)
+            else:
+                eq, output = comp_pcc(tt_rs_out, torch_rs_out)
 
-        logger.info(f"{output}, iteration {i}")
-        assert eq, f"{i} FAILED ag: {output}"
+            logger.info(f"{output}, iteration {i}")
+            assert eq, f"{i} FAILED ag: {output}"
 
     t3k_mesh_device.reset_sub_device_stall_group()
     t3k_mesh_device.clear_loaded_sub_device_manager()

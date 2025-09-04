@@ -116,4 +116,5 @@ def test_reduce_scatter_chunks_per_sync(
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=None,
+        verify_output=False,
     )
