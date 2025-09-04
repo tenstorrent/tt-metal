@@ -170,6 +170,8 @@ ALWI void tilize_init_short_with_dt_no_pack(uint32_t old_icb, uint32_t new_icb, 
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
     UNPACK((llk_unpack_tilize_init(new_icb, block)));
 
+// while the *_no_pack variants do not configure the packer, testing has shown that this call is
+// still necessary to ensure the data type is properly updated
 #ifdef ARCH_BLACKHOLE
     PACK((_llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false, true>(
         pack_dst_format[new_icb],
