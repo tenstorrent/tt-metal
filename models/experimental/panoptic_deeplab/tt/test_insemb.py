@@ -17,6 +17,12 @@ import ttnn
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_ttnn_wholeInsEmbed(device):
+    compute_grid = device.compute_with_storage_grid_size()
+
+    print(f"compute_grid: {compute_grid.x}x{compute_grid.y}")
+    if compute_grid.x != 5 or compute_grid.y != 4:
+        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+
     torch.manual_seed(0)
 
     # 1. Definicija Konfiguracije Modela (uglavnom ista kao SemSeg)
@@ -150,14 +156,6 @@ def test_ttnn_wholeInsEmbed(device):
     # Pokrećemo TTNN model
     ttnn_center_out_tt, ttnn_offset_out_tt, _, _ = ttnn_model(ttnn_features)
 
-    # Konvertovanje i poređenje Center izlaza
-    print("\n--- Comparing Center Prediction ---")
-    ttnn_center_out_torch = ttnn.to_torch(ttnn_center_out_tt).permute(0, 3, 1, 2)
-    passed_center, msg_center = assert_with_pcc(torch_center_out, ttnn_center_out_torch, pcc=0.98)
-    print(f"PCC Result (Center): {msg_center}")
-    assert passed_center, f"Center comparison FAILED: {msg_center}"
-    print("✅ Center Prediction PASSED")
-
     # Konvertovanje i poređenje Offset izlaza
     print("\n--- Comparing Offset Prediction ---")
     ttnn_offset_out_torch = ttnn.to_torch(ttnn_offset_out_tt).permute(0, 3, 1, 2)
@@ -165,5 +163,13 @@ def test_ttnn_wholeInsEmbed(device):
     print(f"PCC Result (Offset): {msg_offset}")
     assert passed_offset, f"Offset comparison FAILED: {msg_offset}"
     print("✅ Offset Prediction PASSED")
+
+    # Konvertovanje i poređenje Center izlaza
+    print("\n--- Comparing Center Prediction ---")
+    ttnn_center_out_torch = ttnn.to_torch(ttnn_center_out_tt).permute(0, 3, 1, 2)
+    passed_center, msg_center = assert_with_pcc(torch_center_out, ttnn_center_out_torch, pcc=0.98)
+    print(f"PCC Result (Center): {msg_center}")
+    assert passed_center, f"Center comparison FAILED: {msg_center}"
+    print("✅ Center Prediction PASSED")
 
     print("\n✅✅✅ TEST PASSED ✅✅✅")
