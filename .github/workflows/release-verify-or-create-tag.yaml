@@ -61,7 +61,7 @@ jobs:
             version="$baseVersion-rc$newNumber"
           elif [ "$tagType" = "dev" ]; then
             dateTimeInt=$(date +%Y%m%d%H%M%S)
-            version="$baseVersion-dev$dateTimeInt"
+            version="$baseVersion-dev$dateTimeInt-nightyl"
           else
             version="$baseVersion"
           fi
