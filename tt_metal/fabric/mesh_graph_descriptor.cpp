@@ -790,7 +790,10 @@ namespace {
             S = MeshCoordinate((src_mesh_coord[0] + 1) % mesh_shape[0], src_mesh_coord[1]);
         }
 
-        for (const auto& coord : {N, E, S, W}) {
+        for (const auto& [coord, direction] : {std::pair{N, MeshGraphDescriptor::RoutingDirection::N},
+                                  std::pair{E, MeshGraphDescriptor::RoutingDirection::E},
+                                  std::pair{S, MeshGraphDescriptor::RoutingDirection::S},
+                                  std::pair{W, MeshGraphDescriptor::RoutingDirection::W}}) {
             if (mesh_coord_range.contains(coord)) {
                 const auto src_device_id = instance.sub_instances_local_id_to_global_id.at(get_device_id(src_mesh_coord, mesh_shape));
                 const auto dst_device_id = instance.sub_instances_local_id_to_global_id.at(get_device_id(coord, mesh_shape));
@@ -801,6 +804,7 @@ namespace {
                     .policy = policy,
                     .directional = false,
                     .parent_instance_id = instance.global_id,
+                    .routing_direction = direction, // TODO: Remove after MGD 1.0 is deprecated
                 };
 
                 connections[src_device_id].push_back(data);
@@ -852,6 +856,7 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
             .policy = mesh_desc->channels().policy(),
             .directional = false,
             .parent_instance_id = mesh_id,
+            .routing_direction = MeshGraphDescriptor::RoutingDirection::C, // TODO: Remove after MGD 1.0 is deprecated
         };
 
         add_connection_to_fast_lookups(data, instance.type);
@@ -863,6 +868,7 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
             .policy = mesh_desc->channels().policy(),
             .directional = false,
             .parent_instance_id = mesh_id,
+            .routing_direction = MeshGraphDescriptor::RoutingDirection::C, // TODO: Remove after MGD 1.0 is deprecated
         };
 
         const auto id = data_reverse.connection_id;

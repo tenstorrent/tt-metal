@@ -364,4 +364,17 @@ message Connection {
 
     // Optional directionality; defaults to false (undirected) when absent.
     optional bool directional = 3;
+
+    // Optional direction assignment for the connection, this is needed for MGD 1.0 back compatibility but will be removed for MGD 2.0
+    optional Direction direction = 4;
+}
+
+// NOTE: This is for compatibility with MGD 1.0, this will be removed after migration to MGD 2.0
+enum Direction {
+    N = 0;
+    E = 2;
+    S = 4;
+    W = 8;
+    C = 16;
+    NONE = 32;
 }

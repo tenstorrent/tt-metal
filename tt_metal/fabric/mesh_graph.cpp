@@ -205,31 +205,12 @@ void MeshGraph::initialize_from_mgd2(const MeshGraphDescriptor& mgd2) {
     };
 
     // Make intramesh connectivity
+    // NOTE: Not using MGD 2.0 Mesh graph because it currently does not support port direction
     this->intra_mesh_connectivity_.resize(mgd2.all_meshes().size());
 
-    for (const auto& id : mgd2.all_meshes()) {
-        auto & mesh_data = mgd2.get_instance(id);
+    for (const auto & connection : mgd2.connections_by_type("MESH")) {
+        const auto& connection_data = mgd2.get_connection(connection);
 
-        const auto& mesh_desc = std::get<const proto::MeshDescriptor*>(mesh_data.desc);
-
-        // Retrieve the fabric type from the device topology
-        auto fabric_type = topology_to_fabric_type(mesh_desc->device_topology());
-
-        // Only for 2D meshes
-        MeshShape mesh_shape(mesh_desc->device_topology().dims().at(0), mesh_desc->device_topology().dims().at(1));
-        std::vector<chip_id_t> chip_ids(mesh_shape[0] * mesh_shape[1]);
-        std::iota(chip_ids.begin(), chip_ids.end(), 0);
-        this->mesh_to_chip_ids_.emplace(id, MeshContainer<chip_id_t>(mesh_shape, chip_ids));
-
-        // Fill in connectivity for Mesh
-        MeshCoordinateRange mesh_coord_range(mesh_shape);
-        this->intra_mesh_connectivity_[id].resize(mesh_shape[0] * mesh_shape[1]);
-        for (const auto& src_mesh_coord : mesh_coord_range) {
-            chip_id_t src_chip_id = src_mesh_coord[0] * mesh_shape[1] + src_mesh_coord[1];
-
-            this->intra_mesh_connectivity_[id][src_chip_id] =
-                this->get_valid_connections(src_mesh_coord, mesh_coord_range, fabric_type);
-        }
     }
 
     this->inter_mesh_connectivity_.resize(mgd2.all_meshes().size());

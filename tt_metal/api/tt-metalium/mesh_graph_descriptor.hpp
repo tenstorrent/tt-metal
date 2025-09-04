@@ -40,6 +40,7 @@ public:
     using ConnectionId = uint32_t;
 
     enum class NodeKind : uint8_t { Mesh = 0, Graph = 1, Device = 2 };
+    enum class RoutingDirection : uint8_t { N = 0, E = 1, S = 2, W = 3, C = 4, NONE = 5 };
 
     // NOTE: Instance Data and ConnectionData are subject to change as Physical discovery is implemented
     // These will be moved to Mesh Graph object once MGD 1.0 is deprecated
@@ -67,9 +68,13 @@ public:
         const std::uint32_t count;             // ethernet lanes per connection
         const proto::Policy policy;
         const bool directional;
+
         const GlobalNodeId parent_instance_id;
 
         const ConnectionId connection_id = generate_next_global_id();
+
+        // TODO: Remove after MGD 1.0 is deprecated
+        const RoutingDirection routing_direction;
 
         private:
             inline static ConnectionId generate_next_global_id() {
