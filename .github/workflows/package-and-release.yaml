@@ -1,4 +1,4 @@
-name: Package and release
+name: Package and release (dev wheels)
 on:
   workflow_dispatch:
     inputs:
@@ -7,9 +7,10 @@ on:
         required: false
         default: false
         type: boolean
-  push:
-    branches: ["stable"]
-
+  schedule:
+    # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
+    # dev testing and builds for beginning of work week
+    - cron: "0 0 * * *"
 
 permissions:
   actions: read
@@ -20,51 +21,14 @@ permissions:
   packages: write
   checks: write
 
-
-
-# Some explanation:
-# is-release-candidate is always true, unless the workflow is manually dispatched on a tag
-# should-create-release is used to avoid creating a duplicate release
-# if we are running on main branch, don't upload any artifacts or create a gh release
-# if we are promoting a release candidate, don't rerun the tests
-
 jobs:
-  release-precheck:
-    runs-on: ubuntu-latest
-    outputs:
-      is-release-candidate: ${{ steps.get-is-release-candidate.outputs.is-release-candidate }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Get is-release-candidate
-        id: get-is-release-candidate
-        run: |
-          # A workflow dispatch on a tag is considered a release run for us.
-          isReleaseCandidate=${{ !(github.ref_type == 'tag' && github.event_name == 'workflow_dispatch') }}
-          echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
-      - name: Get should-create-release
-        id: get-should-create-release
-        run: |
-          # Run once to check for errors
-          ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }}
-          shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate.outputs.is-release-candidate) && '--release-candidate' || '' }})
-          if [ "$shouldCreateRelease" != "true" ]; then
-            echo "should-create-release is false, no release needed. Exiting workflow."
-            exit 1
-          fi
-          echo "should-create-release is true, proceeding with release workflow."
-
   create-tag:
-    needs: release-precheck
     uses: ./.github/workflows/release-verify-or-create-tag.yaml
     with:
       fetch_depth: 0
       bump_each_commit: false
-      tag_type: ${{ needs.release-precheck.outputs.is-release-candidate == 'true' && 'rc' || '' }}
+      tag_type: dev
       dry_run: ${{ inputs.dry_run }}
-
 
   regression-testing:
     needs: create-tag
@@ -123,105 +87,39 @@ jobs:
           name: release-notes
           path: RELEASE_NOTES.txt
 
-  # Candidate for breaking up
-  create-and-upload-draft-release:
-    needs: [create-tag, create-release-notes, regression-testing]
-    # May accidentally create two releases without restricting to 1 job
-    concurrency: create_upload_draft_release
+  publish-wheels:
+    name: "Publish wheels to internal PyPI"
+    needs: [create-tag, regression-testing]
     runs-on: ubuntu-latest
-    if: ${{ github.ref != 'refs/heads/main' }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Create archive with submodules
-        uses: qmonnet/git-archive-all-action@791fb850881cf58b1d1fcc9b06c01940080bba0a
-        with:
-          output-files: tt-metalium.tar.gz
-      - name: Create VERSION
-        run: echo ${{ needs.create-tag.outputs.version }} > VERSION
-      - name : Download release notes
-        uses: actions/download-artifact@v4
-        with:
-          name: release-notes
-      - name : Download changelog
-        uses: actions/download-artifact@v4
-        with:
-          name: changelog
-      - name: Release (skipped for dry run)
-        if: ${{ !inputs.dry_run }}
-        uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
-        with:
-          tag_name: ${{ needs.create-tag.outputs.version }}
-          name: ${{ needs.create-tag.outputs.version }}
-          draft: false
-          prerelease: true
-          body_path: RELEASE_NOTES.txt
-          files: |
-            VERSION
-            CHANGELOG.txt
-            README.md
-            INSTALLING.md
-            models/docs/MODEL_UPDATES.md
-            tt-metalium.tar.gz
-          fail_on_unmatched_files: true
-
-  create-docker-release-image:
-    needs: [
-      regression-testing,
-      create-tag,
-      create-and-upload-draft-release,
-      release-precheck
-    ]
-    uses: ./.github/workflows/publish-release-image.yaml
-    secrets: inherit
-    if: github.ref != 'refs/heads/main'
-    with:
-      version: ${{ needs.create-tag.outputs.version }}
-      tag-latest:  ${{ needs.release-precheck.outputs.is-release-candidate != 'true' }}
-      wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
-      dry_run: ${{ inputs.dry_run }}
-
-  release-docs:
-    needs: [
-      regression-testing,
-      release-precheck,
-      create-tag,
-      create-and-upload-draft-release
-    ]
-    if: ${{ needs.release-precheck.outputs.is-release-candidate !='true' }}
-    uses: ./.github/workflows/docs-latest-public.yaml
-    with:
-      version: ${{ needs.create-tag.outputs.version }}
-      docker-image: ${{ needs.regression-testing.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.regression-testing.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
-      dry_run: ${{ inputs.dry_run }}
-    secrets: inherit
-
-  publish-to-pypi:
-    name: >-
-      Publish Python 🐍 distribution 📦 to PyPI
-    needs: [
-      regression-testing,
-      release-precheck,
-      create-tag,
-      create-and-upload-draft-release
-    ]
-    runs-on: ubuntu-latest
-    if: github.ref != 'refs/heads/main'
-    environment:
-      name: pypi
-      url: https://pypi.org/project/ttnn/
     permissions:
-      id-token: write  # IMPORTANT: mandatory for trusted publishing
+      id-token: write  # Required for AWS OIDC
     steps:
-    - name: Download all the dists
-      uses: actions/download-artifact@v4
-      with:
-        name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
-        path: dist/
-    - name: Publish distribution 📦 to PyPI (skipped for dry run)
-      if: ${{ !inputs.dry_run }}
-      uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.PYPI_ROLE }}
+          aws-region: ${{ secrets.PYPI_REGION }}
+
+      - name: Install s3pypi
+        run: |
+          pip install s3pypi
+
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
+          path: ./wheels
+
+      - name: Publish wheels to internal PyPI
+        if: ${{ !inputs.dry_run }}
+        run: |
+          found_wheel_files=$(find ./wheels -type f -name "*.whl" -exec realpath {} \;)
+          for wheel in $found_wheel_files; do
+            echo "Publishing wheel: $wheel"
+            s3pypi upload "$wheel" --put-root-index --bucket ${{ secrets.PYPI_BUCKET }}
+          done
