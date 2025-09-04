@@ -3,22 +3,27 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
+
 import pytest
 import torch
 import ttnn
-import math
+from diffusers.models.embeddings import (
+    CombinedTimestepGuidanceTextProjEmbeddings as TorchCombinedTimestepGuidanceTextProjEmbeddings,
+)
+from diffusers.models.transformers.transformer_mochi import MochiTransformer3DModel
 
-from ...utils.tensor import bf16_tensor
-from ...utils.check import assert_quality
+from ....stable_diffusion_35_large.reference import SD3Transformer2DModel as TorchSD3Transformer2DModel
 from ...layers.embeddings import (
-    TimestepEmbedding,
+    CombinedTimestepGuidanceTextProjEmbeddings,
+    MochiPatchEmbed,
+    PatchEmbed,
     PixartAlphaTextProjection,
     SD35CombinedTimestepTextProjEmbeddings,
-    PatchEmbed,
-    MochiPatchEmbed,
+    TimestepEmbedding,
 )
-from ....stable_diffusion_35_large.reference import SD3Transformer2DModel as TorchSD3Transformer2DModel
-from diffusers.models.transformers.transformer_mochi import MochiTransformer3DModel
+from ...utils.check import assert_quality
+from ...utils.tensor import bf16_tensor
 
 
 class TorchCombinedTimestepTextProjEmbeddings(torch.nn.Module):
@@ -291,6 +296,62 @@ def test_combined_timestep_text_proj_embeddings(
     assert_quality(
         torch_output, tt_output_torch, pcc=0.99984, relative_rmse=0.019
     )  # Slightly lower PCC due to sinusoidal ops
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    ("batch_size", "embedding_dim", "pooled_projection_dim"),
+    [
+        (1, 3072, 768),  # Flux.1 [schnell]
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_combined_timestep_guidance_text_proj_embeddings(
+    mesh_device: ttnn.MeshDevice,
+    batch_size: int,
+    embedding_dim: int,
+    pooled_projection_dim: int,
+) -> None:
+    # Create Torch model
+    torch_model = TorchCombinedTimestepGuidanceTextProjEmbeddings(embedding_dim, pooled_projection_dim)
+    torch_model.eval()
+
+    # Create TT model
+    tt_model = CombinedTimestepGuidanceTextProjEmbeddings(
+        embedding_dim=embedding_dim,
+        pooled_projection_dim=pooled_projection_dim,
+        mesh_device=mesh_device,
+    )
+    tt_model.load_state_dict(torch_model.state_dict())
+
+    # Create input tensors
+    torch.manual_seed(0)
+    timestep_tensor = torch.full([batch_size], fill_value=500)
+    guidance_tensor = torch.full([batch_size], fill_value=3)
+
+    pooled_projection_tensor = torch.randn([batch_size, pooled_projection_dim])
+
+    # Run torch model
+    torch_output = torch_model.forward(timestep_tensor, guidance_tensor, pooled_projection_tensor)
+
+    # Convert to TT tensors
+    timestep_4d = timestep_tensor.unsqueeze(0).unsqueeze(0).unsqueeze(-1)
+    guidance_4d = guidance_tensor.unsqueeze(0).unsqueeze(0).unsqueeze(-1)
+    pooled_4d = pooled_projection_tensor.unsqueeze(0).unsqueeze(0)
+    tt_timestep = bf16_tensor(timestep_4d, device=mesh_device)
+    tt_guidance = bf16_tensor(guidance_4d, device=mesh_device)
+    tt_pooled = bf16_tensor(pooled_4d, device=mesh_device)
+
+    # Run TT model
+    tt_output = tt_model(
+        timestep=tt_timestep,
+        guidance=tt_guidance,
+        pooled_projection=tt_pooled,
+    )
+
+    # Convert back to torch and compare
+    tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).squeeze(0)
+    assert_quality(torch_output, tt_output_torch, pcc=0.9924, relative_rmse=0.13)
 
 
 @pytest.mark.parametrize(
