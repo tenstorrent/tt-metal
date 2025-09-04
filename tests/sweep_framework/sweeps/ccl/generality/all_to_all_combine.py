@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 import ttnn
 
 from loguru import logger
-from tests.sweep_framework.sweeps.ccl.common import device_context, mesh_shape_iterator
+from tests.sweep_framework.sweep_utils.ccl_common import device_context, mesh_shape_iterator
 from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import run_all_to_all_combine_test
 
 
