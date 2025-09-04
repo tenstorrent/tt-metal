@@ -27,7 +27,7 @@ training_config:
 
 multihost_config:
   enabled: true
-  num_workers: 2
+  num_workers: 3
   socket_type: fabric
 
 eval_config:
@@ -38,4 +38,4 @@ eval_config:
 
 device_config:
   enable_ddp: true
-  mesh_shape: [1, 32]
+  mesh_shape: [1, 8]
