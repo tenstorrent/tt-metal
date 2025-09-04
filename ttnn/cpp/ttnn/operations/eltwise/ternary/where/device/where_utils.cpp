@@ -37,6 +37,10 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
                 reader_kernel = KernelName::ReaderColBcastTTS;
                 compute_kernel = KernelName::ComputeColBcastTTS;
                 writer_kernel = KernelName::WriterNoBcast;
+            } else if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
+                reader_kernel = KernelName::ReaderOuterBcastTTS;
+                compute_kernel = KernelName::ComputeNoBcastTTS;
+                writer_kernel = KernelName::WriterNoBcast;
             } else {
                 reader_kernel = KernelName::ReaderNoBcastTTS;
                 compute_kernel = KernelName::ComputeNoBcastTTS;
@@ -45,9 +49,15 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
             break;
 
         case WhereVariant::TST:
-            reader_kernel = KernelName::ReaderNoBcastTST;
-            compute_kernel = KernelName::ComputeNoBcastTST;
-            writer_kernel = KernelName::WriterNoBcast;
+            if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
+                reader_kernel = KernelName::ReaderOuterBcastTST;
+                compute_kernel = KernelName::ComputeNoBcastTST;
+                writer_kernel = KernelName::WriterNoBcast;
+            } else {
+                reader_kernel = KernelName::ReaderNoBcastTST;
+                compute_kernel = KernelName::ComputeNoBcastTST;
+                writer_kernel = KernelName::WriterNoBcast;
+            }
             break;
 
         case WhereVariant::TSS:
@@ -68,6 +78,10 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ReaderOuterBcastTTT: return fmt::format(dataflow, root, "ternary_reader_outerbcast_ttt.cpp");
         case KernelName::ReaderNoBcastTST: return fmt::format(dataflow, root, "ternary_reader_nobcast_tst_tts.cpp");
         case KernelName::ReaderNoBcastTTS: return fmt::format(dataflow, root, "ternary_reader_nobcast_tst_tts.cpp");
+        case KernelName::ReaderOuterBcastTTS:
+            return fmt::format(dataflow, root, "ternary_reader_outerbcast_tst_tts.cpp");
+        case KernelName::ReaderOuterBcastTST:
+            return fmt::format(dataflow, root, "ternary_reader_outerbcast_tst_tts.cpp");
         case KernelName::ReaderNoBcastTSS: return fmt::format(dataflow, root, "ternary_reader_nobcast_tss.cpp");
         case KernelName::ReaderColBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
@@ -345,6 +359,18 @@ WhereBroadcastType get_broadcast_type(
             (pred_h == true_h && pred_h == false_h)) {
             return WhereBroadcastType::COL_BCAST;
         }
+    }
+
+    return WhereBroadcastType::INVALID_BCAST;
+}
+
+WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& b_shape) {
+    if ((predicate_shape == b_shape)) {
+        return WhereBroadcastType::NONE;
+    }
+
+    if ((predicate_shape[-1] == b_shape[-1]) && (predicate_shape[-2] == b_shape[-2])) {
+        return WhereBroadcastType::OUTER_BCAST;
     }
 
     return WhereBroadcastType::INVALID_BCAST;

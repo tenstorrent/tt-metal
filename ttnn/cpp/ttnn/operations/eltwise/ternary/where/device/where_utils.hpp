@@ -21,6 +21,8 @@ enum class KernelName {
     ReaderColBcastTTT,
     ReaderColBcastTTS,
     ReaderOuterBcastTTT,
+    ReaderOuterBcastTTS,
+    ReaderOuterBcastTST,
     WriterNoBcast,
     ReaderRowBcastTTT,
     WriterColBcastTTT,
@@ -50,6 +52,7 @@ std::map<std::string, std::string> make_dataflow_defines(
 
 WhereBroadcastType get_broadcast_type(
     const ttnn::Shape& predicate_shape, const ttnn::Shape& value_true_shape, const ttnn::Shape& value_false_shape);
+WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& b_shape);
 
 // Overloaded version for TTS variant (tensor-tensor-scalar)
 WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& value_true_shape);
