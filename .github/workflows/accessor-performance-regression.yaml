@@ -68,7 +68,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     timeout-minutes: 60
     outputs:
-      baseline-artifact-name: ${{ steps.upload-baseline.outputs.artifact-name }}
+      baseline-artifact-name: baseline-performance-data-${{ github.run_id }}
 
     steps:
       - name: ⬇️ Checkout baseline branch
@@ -119,7 +119,6 @@ jobs:
           path: /__w/tt-metal/tt-metal/docker-job-baseline
 
   build-artifact:
-    needs: generate-baseline-performance
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -133,7 +132,7 @@ jobs:
 
   accessor-perf-regression-tests:
     name: "📊 Accessor Performance Regression Tests"
-    needs: build-artifact
+    needs: [build-artifact, generate-baseline-performance]
     runs-on: >-
       ${{
         (github.event.pull_request.head.repo.fork == true) && 'tt-ubuntu-2204-N150-stable'
@@ -174,7 +173,7 @@ jobs:
       - name: ⬇️ Download Baseline Performance Data
         uses: actions/download-artifact@v4
         with:
-          name: baseline-performance-data-${{ github.run_id }}
+          name: ${{ needs.generate-baseline-performance.outputs.baseline-artifact-name }}
           path: ./baseline-performance-data
 
       - name: 📊 Run Accessor Performance Regression Tests
