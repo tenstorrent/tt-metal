@@ -32,6 +32,20 @@ on:
     branches:
       - main # Builds on main will populate the shared ccache to speed up builds on branches
 
+concurrency:
+  # Groups to control cancelling of obsolete runs.
+  # main (or any protected branch): run_id (ie: never cancel other jobs)
+  # PRs: PR #
+  # Merge Queue: branch name; will be paired with the 'destroyed' trigger to cause a cancel when it leaves or moves in the queue.
+  #              See https://github.com/orgs/community/discussions/137976#discussioncomment-14004793
+  # All others: branch name (ie: one run per branch)
+  group: >-
+    ${{ github.workflow }}-
+    ${{ (github.ref_protected && github.run_id)
+        || github.event.pull_request.number
+        || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
   pull-requests: write
