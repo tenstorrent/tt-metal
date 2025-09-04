@@ -1280,10 +1280,9 @@ inline __attribute__((always_inline)) void noc_read_with_state(
     }
     if constexpr (send) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    }
-
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        noc_reads_num_issued[noc] += 1;
+        if constexpr (noc_mode == DM_DEDICATED_NOC) {
+            noc_reads_num_issued[noc] += 1;
+        }
     }
 }
 
@@ -1319,10 +1318,9 @@ inline __attribute__((always_inline)) void noc_read_with_state(
     }
     if constexpr (send) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    }
-
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        noc_reads_num_issued[noc] += 1;
+        if constexpr (noc_mode == DM_DEDICATED_NOC) {
+            noc_reads_num_issued[noc] += 1;
+        }
     }
 }
 

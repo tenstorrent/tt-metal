@@ -936,6 +936,9 @@ void noc_read_64bit_any_len(uint32_t src_noc_addr, uint64_t src_addr, uint32_t d
     // noc_read_state_init is unnecessary.
     if constexpr (set_src_noc_addr) {
         noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sNdL, CQ_NOC_send, CQ_NOC_WAIT>(noc_index, src_noc_addr, 0, 0, 0);
+    } else {
+        noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndl, CQ_NOC_send, CQ_NOC_WAIT>(
+            noc_index, 0, 0, 0, 0);
     }
     if (size > NOC_MAX_BURST_SIZE) {
         // Set length to max burst size.
@@ -948,10 +951,6 @@ void noc_read_64bit_any_len(uint32_t src_noc_addr, uint64_t src_addr, uint32_t d
             // Do a wait before either the next iteration or the final read.
             noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndl, CQ_NOC_send, CQ_NOC_WAIT>(noc_index, 0, 0, 0, 0);
         }
-    } else {
-        if constexpr (!set_src_noc_addr) {
-            noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndl, CQ_NOC_send, CQ_NOC_WAIT>(noc_index, 0, 0, 0, 0);
-        }
     }
     noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SnDL, CQ_NOC_SEND, CQ_NOC_wait>(noc_index, 0, src_addr, dst_addr, size);
 }
@@ -962,7 +961,7 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
 
     volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = (volatile CQPrefetchCmdLarge tt_l1_ptr*)cmd_ptr;
     uint32_t noc_xy_addr = cmd->relay_linear.noc_xy_addr;
-    uint32_t read_addr = cmd->relay_linear.addr;
+    uint64_t read_addr = cmd->relay_linear.addr;
     uint64_t wlength = cmd->relay_linear.length;
     // DPRINT << "relay_linear: " << cmd_ptr << " " << wlength << " " << read_addr << " " << noc_xy_addr << ENDL();
 
