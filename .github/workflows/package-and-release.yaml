@@ -1,6 +1,12 @@
 name: Package and release
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "If true, do not upload tag or draft release."
+        required: false
+        default: false
+        type: boolean
 
 
 permissions:
@@ -54,6 +60,8 @@ jobs:
       fetch_depth: 0
       bump_each_commit: false
       tag_type: ${{ needs.release-precheck.outputs.is-release-candidate == 'true' && 'rc' || '' }}
+      dry_run: ${{ inputs.dry_run }}
+
 
   regression-testing:
     needs: create-tag
@@ -150,9 +158,8 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: changelog
-      - name: Release
-        # A major release has not been tagged yet, so we need to do this to avoid
-        # Node 16 deprecation warning message
+      - name: Release (skipped for dry run)
+        if: ${{ !inputs.dry_run }}
         uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
         with:
           tag_name: ${{ needs.create-tag.outputs.version }}

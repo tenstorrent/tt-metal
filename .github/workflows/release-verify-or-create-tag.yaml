@@ -15,6 +15,10 @@ on:
         description: "Type of tag to create: 'rc' for release candidate, 'dev' for dev development, or '' for normal release"
         default: ""
         type: string
+      dry_run:
+        description: "If true, do not upload tag."
+        default: false
+        type: boolean
     outputs:
       version:
         description: "New version"
@@ -63,6 +67,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "$version"
       - name: Create tag
+        if: ${{ !inputs.dry_run }}
         uses: actions/github-script@v7.0.1
         with:
           script: |
