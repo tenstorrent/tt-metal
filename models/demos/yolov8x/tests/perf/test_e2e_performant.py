@@ -132,7 +132,7 @@ def test_run_yolov8x_performant(
         device,
         batch_size_per_device,
         model_location_generator,
-        expected_inference_throughput=47.5,
+        expected_inference_throughput=62,
     )
 
 
@@ -157,5 +157,5 @@ def test_run_yolov8x_performant_dp(
         mesh_device,
         batch_size_per_device,
         model_location_generator,
-        expected_inference_throughput=95,
+        expected_inference_throughput=121,
     )
