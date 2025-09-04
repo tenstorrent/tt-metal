@@ -60,6 +60,7 @@ class SweepsConfig:
     summary: bool = False
     run_contents: str = None
     arch_name: Optional[str] = None
+    debug: bool = False
 
 
 def create_config_from_args(args) -> SweepsConfig:
@@ -80,6 +81,7 @@ def create_config_from_args(args) -> SweepsConfig:
         skip_modules=args.skip_modules,
         skip_on_timeout=args.skip_on_timeout,
         summary=args.summary,
+        debug=args.debug,
     )
 
     if args.vector_source == "elastic" or args.result_dest == "elastic":
@@ -316,7 +318,8 @@ def run(test_module, input_queue, output_queue, config: SweepsConfig):
                     status, message = results
                     e2e_perf = None
             except Exception as e:
-                # logger.exception(e)
+                if config.debug:
+                    logger.exception(e)
                 status, message = False, str(e)
                 e2e_perf = None
             if config.measure_device_perf:
@@ -336,7 +339,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     timeout = get_timeout()
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
-    child_mode = not config.dry_run
+    child_mode = not config.dry_run or config.debug
     timeout_before_rejoin = 5
 
     if child_mode:
@@ -821,6 +824,13 @@ if __name__ == "__main__":
         action="store_true",
         required=False,
         help="Log a detailed execution or dry-run summary at the end of the run.",
+    )
+
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        required=False,
+        help="Run tests on main process and log test exceptions",
     )
 
     args = parser.parse_args(sys.argv[1:])

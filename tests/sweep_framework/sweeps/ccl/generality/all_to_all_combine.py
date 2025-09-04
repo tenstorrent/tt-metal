@@ -25,16 +25,16 @@ def _pd(val: int):
 parameters = {
     "suite_1": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
-        "fabric_config": [ttnn.FabricConfig.FABRIC_1D],
+        "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
         "input_shape": [
-            [_pd(1), 1, 32, 32],
-            [_pd(1), 1, 32, 1280],
-            [_pd(1), 1, 32, 31],
+            [_pd(1), 1, 8, 32],
+            [_pd(1), 1, 2, 1280],
+            [_pd(1), 1, 8, 31],
             [_pd(8), 1, 2, 7168],
             [_pd(16), 1, 2, 7168],
-            [_pd(1), 1, 32, 16384],
+            [_pd(1), 1, 2, 16384],
         ],
-        "experts": [_pd(i) for i in [2, 4, 8, 16]],
+        "experts": [_pd(i) for i in [2, 4, 8]],
         "select_experts_k": [2, 4, 8],
         "local_reduce": [False, True],
         "cluster_axis": [0, 1, None],
@@ -51,8 +51,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["select_experts_k"] > test_vector["experts"]:
         return True, "k greater than experts"
 
-    if test_vector["dim"] >= len(test_vector["input_shape"]):
-        return True, "Dim greater than rank"
     if (
         test_vector["topology"] == ttnn.Topology.Ring
         and test_vector["fabric_config"] != ttnn.FabricConfig.FABRIC_1D_RING
@@ -77,7 +75,6 @@ def run(
     cluster_axis,
     num_links,
     input_dtype,
-    layout,
     mem_config,
     num_iters,
     topology,
@@ -88,7 +85,7 @@ def run(
 
     logger.info(vars())
 
-    batch, _, seq, hidden = *input_shape
+    batch, _, seq, hidden = tuple(input_shape)
 
     with device_context(mesh_shape, fabric_config) as (device, device_err):
         assert tuple(device.shape) == mesh_shape
@@ -110,9 +107,7 @@ def run(
                 hidden_size=hidden,
                 num_iters=num_iters,
                 num_links=num_links,
-                warmup_iters=0,
-                trace_mode=False,
-                dtype=dtype,
+                dtype=input_dtype,
                 topology=topology,
                 input_memory_config=mem_config,
                 output_memory_config=mem_config,
@@ -121,6 +116,6 @@ def run(
             raise RuntimeError(f"Execution failed: {e}")
 
         except AssertionError as e:
-            return False, e, None
+            return False, e
 
-        return True, None, None
+        return True, None
