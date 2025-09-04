@@ -18,7 +18,14 @@ on:
           - ccl.line_all_gather
           - ccl.all_gather_n300
           - ccl.all_gather_n300_focused
+          - ccl.generality.all_broadcast
           - ccl.generality.all_gather
+          - ccl.generality.all_reduce
+          - ccl.generality.all_to_all_combine
+          - ccl.generality.all_to_all_dispatch
+          - ccl.generality.all_to_all
+          - ccl.generality.point_to_point
+          - ccl.generality.reduce_scatter
           - creation.zeros.zeros
           - creation.empty.empty
           - creation.zeros_like.zeros_like
