@@ -48,23 +48,23 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/global_semaphore.hpp>
+#include <chrono>
 using tt::DevicePool;
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
 
-void run_unicast_test_bw_chips(
-    BaseFabricFixture* fixture,
-    chip_id_t src_physical_device_id,
-    chip_id_t dst_physical_device_id,
-    uint32_t num_hops,
-    bool use_dram_dst = false);
+struct PerfPoint {
+    uint64_t bytes;  // p.tensor_bytes
+    double sec;
+    double ms;
+    double gbps;  // based on useful_bytes
+};
 
 struct PerfParams {
     uint32_t mesh_id = 0;       // mesh to use
     chip_id_t src_chip = 0;     // logical chip id in that mesh
     chip_id_t dst_chip = 1;     // logical chip id in that mesh
-    uint32_t num_hops = 1;      // 1 = direct neighbor, >1 = farther away
     bool use_dram_dst = false;  // false -> land in L1 on dst; true -> land in DRAM
     uint32_t tensor_bytes = 1024 * 1024;
     uint32_t page_size = 4096;
@@ -82,7 +82,7 @@ static inline tt::tt_metal::IDevice* find_device_by_id(chip_id_t phys_id) {
     return nullptr;
 }
 
-static inline void RunUnicastConnWithParams(BaseFabricFixture* fixture, const PerfParams& p) {
+static inline PerfPoint RunUnicastConnWithParams(BaseFabricFixture* fixture, const PerfParams& p) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};
@@ -94,8 +94,10 @@ static inline void RunUnicastConnWithParams(BaseFabricFixture* fixture, const Pe
     // Get IDevice*
     auto* src_dev = find_device_by_id(src_phys);
     auto* dst_dev = find_device_by_id(dst_phys);
-    ASSERT_NE(src_dev, nullptr);
-    ASSERT_NE(dst_dev, nullptr);
+    if (!src_dev || !dst_dev) {
+        ADD_FAILURE() << "Failed to find devices: src=" << src_phys << " dst=" << dst_phys;
+        return PerfPoint{};
+    }
 
     CoreCoord tx_xy = src_dev->worker_core_from_logical_core(p.sender_core);
     CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
@@ -143,8 +145,8 @@ static inline void RunUnicastConnWithParams(BaseFabricFixture* fixture, const Pe
     // ---------------- Sender program: READER (RISCV_0) + WRITER (RISCV_1) ----------------
     tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
 
-    // A small CB on the sender (2 pages capacity, 1-page page_size)
-    const uint32_t NUM_PAGES = 1;
+    // Compute how many pages we need to send for the requested tensor size.
+    const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
     const uint32_t CB_ID = tt::CBIndex::c_0;
     auto cb_cfg = tt::tt_metal::CircularBufferConfig(2 * p.page_size, {{CB_ID, tt::DataFormat::Float16}})
                       .set_page_size(CB_ID, p.page_size);
@@ -214,7 +216,12 @@ static inline void RunUnicastConnWithParams(BaseFabricFixture* fixture, const Pe
 
     // Append fabric connection RT args so WorkerToFabricEdmSender can open the link
     auto links = tt::tt_fabric::get_forwarding_link_indices(src, dst);
-    ASSERT_FALSE(links.empty());
+    if (links.empty()) {
+        ADD_FAILURE() << "No forwarding links from src(mesh=" << p.mesh_id << ",dev=" << p.src_chip
+                      << ") to dst(mesh=" << p.mesh_id << ",dev=" << p.dst_chip << ")";
+        return PerfPoint{};
+    }
+
     uint32_t link_idx = links[0];
     std::cout << "[host] forwarding links:";
     for (auto li : links) {
@@ -229,9 +236,31 @@ static inline void RunUnicastConnWithParams(BaseFabricFixture* fixture, const Pe
 
     // ---------------- Run order: receiver first (waits), then sender ----------------
     fixture->RunProgramNonblocking(dst_dev, receiver_prog);
+
+    auto t0 = std::chrono::steady_clock::now();
     fixture->RunProgramNonblocking(src_dev, sender_prog);
-    fixture->WaitForSingleProgramDone(src_dev, sender_prog);
     fixture->WaitForSingleProgramDone(dst_dev, receiver_prog);
+    auto t1 = std::chrono::steady_clock::now();
+
+    fixture->WaitForSingleProgramDone(src_dev, sender_prog);
+
+    // Compute E2E metrics
+    const double e2e_sec = std::chrono::duration<double>(t1 - t0).count();
+    const uint64_t bytes = static_cast<uint64_t>(p.tensor_bytes);
+    const double gb = static_cast<double>(bytes) / 1e9;
+    const double gbps = (e2e_sec > 0.0) ? (gb / e2e_sec) : 0.0;
+    const double ms = e2e_sec * 1000.0;
+
+    std::cout << "[perf] E2E: bytes=" << static_cast<uint64_t>(bytes) << " time=" << e2e_sec << " s"
+              << " (" << ms << " ms)"
+              << " throughput=" << gbps << " GB/s\n";
+
+    return PerfPoint{
+        .bytes = bytes,
+        .sec = e2e_sec,
+        .ms = ms,
+        .gbps = gbps,
+    };
 }
 
 TEST_F(Fabric2DFixture, UnicastConn_CodeControlled) {
@@ -239,12 +268,45 @@ TEST_F(Fabric2DFixture, UnicastConn_CodeControlled) {
     p.mesh_id = 0;
     p.src_chip = 0;
     p.dst_chip = 1;
-    p.num_hops = 1;
     p.use_dram_dst = false;
-    p.page_size = 4096;
-    p.tensor_bytes = p.page_size;
+    p.page_size = 2048;
+    p.tensor_bytes = 100 * p.page_size;
 
     RunUnicastConnWithParams(this, p);
+}
+
+TEST_F(Fabric2DFixture, UnicastConn_SweepTensorSize) {
+    PerfParams base;
+    base.mesh_id = 0;
+    base.src_chip = 0;
+    base.dst_chip = 1;
+    base.use_dram_dst = false;
+    base.page_size = 2048;
+    base.sender_core = {0, 0};
+    base.receiver_core = {0, 0};
+
+    // Choose sizes (multiples of page_size so useful==wire). Adjust as needed.
+    std::vector<uint32_t> sizes_bytes = {
+        1 * base.page_size,
+        2 * base.page_size,
+        4 * base.page_size,
+        8 * base.page_size,
+        16 * base.page_size,
+        32 * base.page_size,
+        64 * base.page_size,
+        128 * base.page_size,
+        256 * base.page_size};
+
+    // CSV header: bytes,ms,GBps
+    std::cout << "bytes,ms,gbps\n";
+
+    for (auto sz : sizes_bytes) {
+        PerfParams p = base;
+        p.tensor_bytes = sz;
+
+        auto r = RunUnicastConnWithParams(this, p);
+        std::cout << r.bytes << "," << r.ms << "," << r.gbps << "\n";
+    }
 }
 
 }  // namespace fabric_router_tests
