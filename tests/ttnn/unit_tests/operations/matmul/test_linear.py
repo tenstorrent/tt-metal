@@ -8,7 +8,7 @@ import ttnn
 
 from loguru import logger
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, assert_allclose
 from models.utility_functions import torch_random, is_wormhole_b0, skip_for_grayskull
 
 
@@ -499,7 +499,12 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
         assert False, f"mismatch in shape: torch: {torch_result.shape}, ttnn: {ttnn_result_torch.shape}"
 
     # Check values with PCC
-    assert_with_pcc(torch_result, ttnn_result_torch, 0.99)
+    if torch_result.shape.numel() == 1:
+        assert_allclose(
+            torch_result, ttnn_result_torch, atol=1e-4, rtol=0.02
+        )  # PCC is undefined for single-data points
+    else:
+        assert_with_pcc(torch_result, ttnn_result_torch, 0.99)
 
     # Allow some tolerance for numeric differences
     atol = rtol = 0.1

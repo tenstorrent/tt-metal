@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp
 from models.utility_functions import skip_for_grayskull
 from models.utility_functions import is_grayskull
 
@@ -26,7 +26,8 @@ def run_copy_test(N, C, H, W, layout, device):
 
     ttnn.copy(input, input_b)
     assert input_b.shape == input.shape
-    assert_with_pcc(ttnn.to_torch(input), ttnn.to_torch(input_b), 0.99)
+    # assert_with_pcc(ttnn.to_torch(input), ttnn.to_torch(input_b), 0.99)
+    assert_equal(ttnn.to_torch(input), ttnn.to_torch(input_b))
 
 
 @skip_for_grayskull()
@@ -50,7 +51,8 @@ def run_assign_test(N, C, H, W, memory_config, dtype, device):
     assert tensor.shape == input.shape
     assert tensor.dtype == dtype
     assert tensor.memory_config() == memory_config
-    assert_with_pcc(ttnn.to_torch(input), ttnn.to_torch(tensor), 0.99)
+    # assert_with_pcc(ttnn.to_torch(input), ttnn.to_torch(tensor), 0.99)
+    assert_with_ulp(input, tensor, ulp_threshold=0, allow_nonfinite=True)
 
 
 @skip_for_grayskull()
@@ -92,7 +94,8 @@ def run_assign_test_opt_tensor(N, C, H, W, memory_config, dtype, device):
     assert opt_tensor.shape == input.shape
     assert opt_tensor.dtype == dtype
     assert opt_tensor.memory_config() == memory_config
-    assert_with_pcc(ttnn.to_torch(input), ttnn.to_torch(opt_tensor), 0.99)
+    # assert_with_pcc(ttnn.to_torch(input), ttnn.to_torch(opt_tensor), 0.99)
+    assert_with_ulp(input, opt_tensor, ulp_threshold=0, allow_nonfinite=True)
 
 
 @skip_for_grayskull()

@@ -9,6 +9,7 @@ import pytest
 from models.utility_functions import comp_allclose_and_pcc
 from loguru import logger
 from models.utility_functions import is_wormhole_b0
+from tests.ttnn.utils_for_testing import assert_allclose
 
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
@@ -68,9 +69,9 @@ def run_moreh_softmax_test(
 
     assert list(ttnn_output.shape) == list(torch_output.shape)
 
-    passing, out = comp_allclose_and_pcc(torch_output, ttnn_output, rtol=rtol, atol=atol)
-    logger.debug(out)
-    assert passing
+    sum = torch.sum(torch_output, dim)
+    torch.testing.assert_close(sum, torch.ones_like(sum), rtol=rtol, atol=atol)
+    assert_allclose(torch_output, ttnn_output, rtol=rtol, atol=atol)
 
 
 def run_moreh_softmax_backward_test(

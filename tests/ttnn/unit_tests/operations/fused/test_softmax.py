@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose
 from models.utility_functions import skip_for_wormhole_b0, is_grayskull
 from models.utility_functions import torch_random
 
@@ -266,7 +266,9 @@ def test_softmax(device, batch_size, h, w, dim):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    sum = torch.sum(output_tensor, dim=dim)
+    assert_allclose(sum, torch.ones_like(sum), atol=1e-4, rtol=0.06)
+    assert_allclose(torch_output_tensor, output_tensor, atol=1e-4, rtol=0.09)
 
 
 def test_softmax_with_3D(device):

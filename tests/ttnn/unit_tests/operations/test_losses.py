@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
 
 
 @pytest.mark.parametrize(
@@ -47,7 +47,7 @@ def test_mse_loss(device, input_shapes, loss_mode):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert_allclose(torch_output_tensor, output_tensor, atol=1e-4, rtol=0.02)
 
 
 @pytest.mark.parametrize(
@@ -86,4 +86,5 @@ def test_l1_loss(device, input_shapes, loss_mode):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    # assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert_allclose(torch_output_tensor, output_tensor, atol=1e-4, rtol=0.02)

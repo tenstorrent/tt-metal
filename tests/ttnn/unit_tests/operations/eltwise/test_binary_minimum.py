@@ -345,7 +345,7 @@ def test_binary_min_fill_val_bf16(input_shapes, input_a_val, input_b_val, device
 
     # result = ttnn.to_torch(tt_result)
     # assert_with_pcc(golden, result, 0.999)
-    assert torch.equal(result, golden)
+    assert torch.equal(ttnn.to_torch(tt_result), golden)
 
 
 @pytest.mark.parametrize(

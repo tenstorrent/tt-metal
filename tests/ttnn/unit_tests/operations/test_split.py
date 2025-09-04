@@ -10,7 +10,7 @@ import torch
 
 import ttnn
 from models.utility_functions import comp_pcc
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_allclose
 
 layouts = [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT]
 dtypes = [torch.bfloat16, torch.float32]
@@ -43,7 +43,7 @@ def test_split(device, layout, dtype, shape, chunksize, dim):
             output.shape == torch_result.shape
         ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
-        assert_with_pcc(torch_result, output, 0.9999)
+        assert_allclose(torch_result, output, atol=1e-4, rtol=0.02)
 
 
 # test the very special case where we invoke a specialized kernel rather than use `ttnn::slice`
@@ -67,7 +67,7 @@ def test_split_last_dim_kernel(device, dtype):
             output.shape == torch_result.shape
         ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
-        assert_with_pcc(torch_result, output, 0.9999)
+        assert_allclose(torch_result, output, atol=1e-4, rtol=0.02)
 
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
@@ -90,4 +90,4 @@ def test_split_large_inner_dims(device, layout, dtype, shape, chunksize, dim):
             output.shape == torch_result.shape
         ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
-        assert_with_pcc(torch_result, output, 0.9999)
+        assert_allclose(torch_result, output, atol=1e-4, rtol=0.02)
