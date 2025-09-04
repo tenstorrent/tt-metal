@@ -16,7 +16,7 @@ from ...models.vae.vae_mochi import (
     Decoder as TtDecoder,
 )
 from ...parallel.manager import CCLManager
-from ...parallel.config import VAEParallelConfig, ParallelFactor
+from ...parallel.config import MochiVAEParallelConfig, ParallelFactor
 from loguru import logger
 from genmo.mochi_preview.vae.models import Decoder as RefDecoder
 from genmo.mochi_preview.vae.models import ResBlock as RefResBlock
@@ -25,7 +25,7 @@ from genmo.mochi_preview.vae.models import CausalUpsampleBlock as RefCausalUpsam
 from pathlib import Path
 
 
-def div_up(numerator, denominator):
+def get_padded_size(numerator, denominator):
     return ((numerator + denominator - 1) // denominator) * denominator
 
 
@@ -57,7 +57,7 @@ def vae_device_config(func):
     func = pytest.mark.parametrize(
         "mesh_device",
         [
-            {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
                 os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
             )
         ],
@@ -179,7 +179,7 @@ resblock_args = {
 }
 
 
-def create_random_resblock_models(mesh_device, mesh_axis, parallel_config, ccl_manager, **model_args):
+def create_random_resblock_models(mesh_device, parallel_config, ccl_manager, **model_args):
     """Initialize both reference and TT models."""
     # Create reference model
     reference_model = RefResBlock(**model_args)
@@ -187,7 +187,6 @@ def create_random_resblock_models(mesh_device, mesh_axis, parallel_config, ccl_m
     # Create TT model
     tt_model = TtResBlock(
         mesh_device=mesh_device,
-        mesh_axis=mesh_axis,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
         torch_ref=reference_model,
@@ -218,20 +217,20 @@ def create_random_resblock_models(mesh_device, mesh_axis, parallel_config, ccl_m
     ],
     ids=["s768", "s512", "s256", "s128", "m768", "m512", "m256", "m128", "l768", "l512", "l256", "l128"],
 )
-@pytest.mark.parametrize("divide_T", [8, 1], ids=["T8", "T1"])  # Emulate T fracturing
 @vae_device_config
-def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, divide_T):
+def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds):
     """Test complete forward pass of TtResBlock."""
-    T = T // divide_T
     block_args = resblock_args.copy()
     block_args["channels"] = C
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=1)
-    vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=8, mesh_axis=1))
+    vae_parallel_config = MochiVAEParallelConfig(
+        time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
+        hw_parallel=ParallelFactor(factor=mesh_device.shape[0], mesh_axis=0),
+    )
 
     reference_model, tt_model = create_random_resblock_models(
         mesh_device,
-        mesh_axis=None,
         parallel_config=vae_parallel_config,
         ccl_manager=ccl_manager,
         **block_args,
@@ -240,16 +239,32 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, divide_T):
     # Create input tensor
     torch_input = torch.randn(N, C, T, H, W)
     tt_input = torch_input.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
-    tt_input = torch.nn.functional.pad(
-        tt_input, pad=(0, 0, 0, 0, 0, 0, 0, div_up(T, mesh_device.get_num_devices()) - T)
-    )
+    if T % mesh_device.shape[vae_parallel_config.time_parallel.mesh_axis]:
+        tt_input = torch.nn.functional.pad(
+            tt_input,
+            pad=(
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                get_padded_size(T, mesh_device.shape[vae_parallel_config.time_parallel.mesh_axis]) - T,
+            ),
+        )
+    if W % mesh_device.shape[vae_parallel_config.hw_parallel.mesh_axis]:
+        tt_input = torch.nn.functional.pad(
+            tt_input,
+            pad=(0, 0, 0, 0, 0, get_padded_size(W, mesh_device.shape[vae_parallel_config.hw_parallel.mesh_axis]) - W),
+        )
     tt_input = ttnn.from_torch(
         tt_input,
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, 1]),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[3, 1]),
     )
     logger.info(f"TT input shape: {tt_input.shape}")
     logger.info("Run TtResBlock forward")
@@ -257,10 +272,10 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, divide_T):
     # Convert TT output to torch tensor
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[0, 1]),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[3, 1]),
     )
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
-    tt_output_torch = tt_output_torch[:, :, 0:T, :, :]
+    tt_output_torch = tt_output_torch[:, :, 0:T, :, 0:W]
 
     # Get reference output
     logger.info("Run RefResBlock forward")
@@ -500,7 +515,7 @@ def test_tt_upsample_forward(mesh_device, config, divide_T, reset_seeds, use_rea
     torch_input = torch.randn(N, C, T, H, W)
     tt_input = torch_input.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
     tt_input = torch.nn.functional.pad(
-        tt_input, pad=(0, 0, 0, 0, 0, 0, 0, div_up(T, mesh_device.get_num_devices()) - T)
+        tt_input, pad=(0, 0, 0, 0, 0, 0, 0, get_padded_size(T, mesh_device.get_num_devices()) - T)
     )
     tt_input = ttnn.from_torch(
         tt_input,
@@ -631,7 +646,7 @@ def test_tt_decoder_forward(mesh_device, config, divide_T, reset_seeds, use_real
     # Convert to TTNN format [N, T, H, W, C]
     tt_input = torch_input.permute(0, 2, 3, 4, 1)
     tt_input = torch.nn.functional.pad(
-        tt_input, pad=(0, 0, 0, 0, 0, 0, 0, div_up(T, mesh_device.get_num_devices()) - T)
+        tt_input, pad=(0, 0, 0, 0, 0, 0, 0, get_padded_size(T, mesh_device.get_num_devices()) - T)
     )
     tt_input = ttnn.from_torch(
         tt_input,
