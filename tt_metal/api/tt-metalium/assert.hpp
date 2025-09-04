@@ -33,6 +33,7 @@ std::ostream& operator<<(std::ostream& os, tt::OStreamJoin<A, B> const& join) {
 
 namespace tt::assert {
 
+// NOLINTBEGIN(cppcoreguidelines-no-malloc)
 static std::string demangle(const char* str) {
     size_t size = 0;
     int status = 0;
@@ -47,6 +48,7 @@ static std::string demangle(const char* str) {
     }
     return str;
 }
+// NOLINTEND(cppcoreguidelines-no-malloc)
 
 // https://www.fatalerrors.org/a/backtrace-function-and-assert-assertion-macro-encapsulation.html
 
@@ -56,6 +58,7 @@ static std::string demangle(const char* str) {
  * @param[in] size Maximum number of return layers
  * @param[in] skip Skip the number of layers at the top of the stack
  */
+// NOLINTBEGIN(cppcoreguidelines-no-malloc)
 inline std::vector<std::string> backtrace(int size = 64, int skip = 1) {
     std::vector<std::string> bt;
     void** array = (void**)malloc((sizeof(void*) * size));
@@ -73,6 +76,7 @@ inline std::vector<std::string> backtrace(int size = 64, int skip = 1) {
 
     return bt;
 }
+// NOLINTEND(cppcoreguidelines-no-malloc)
 
 /**
  * @brief String to get current stack information
