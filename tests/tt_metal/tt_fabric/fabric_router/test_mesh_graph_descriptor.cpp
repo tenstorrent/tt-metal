@@ -176,7 +176,34 @@ TEST(MeshGraphDescriptorTests, InvalidProtoExpressConnectionBounds) {
                 ::testing::HasSubstr("Express connection destination is out of bounds (Mesh: M0)"))));
 }
 
-// Removed: GraphTopology.channels() not present in schema; unknown fields are ignored
+TEST(MeshGraphDescriptorTests, InvalidGraphTopologyChannelCount) {
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 2 ] }
+        }
+        graph_descriptors: {
+            name: "G0"
+            type: "fabric"
+            instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            graph_topology: {
+                layout_type: ALL_TO_ALL
+                channels: { count: -1 }
+            }
+        }
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+                ::testing::HasSubstr("Graph topology channel count must be positive (Graph: G0)"))));
+}
 
 TEST(MeshGraphDescriptorTests, InvalidConnectionChannelCount) {
     std::string text_proto = R"proto(
