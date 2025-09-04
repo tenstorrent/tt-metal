@@ -371,26 +371,6 @@ def test_ttnn_semSeg(device):
     assert pcc_passed, f"PCC check failed: {pcc_message}"
 
 
-def run_and_compare(torch_model, ttnn_model, torch_features, ttnn_features, debug_stage):
-    print(f"\n--- Comparing at stage: {debug_stage} ---")
-
-    # Run PyTorch model for this stage
-    torch_out = torch_model.layers(torch_features)
-
-    # Run TTNN model for this stage
-    ttnn_out_tt = ttnn_model.layers(ttnn_features)
-
-    # Convert and compare
-    ttnn_out_torch = ttnn.to_torch(ttnn_out_tt).permute(0, 3, 1, 2)  # NHWC -> NCHW
-
-    # Use a slightly relaxed PCC for intermediate steps
-    passed, msg = assert_with_pcc(torch_out, ttnn_out_torch, pcc=0.98)
-    print(f"PCC Result: {msg}")
-
-    assert passed, f"Comparison FAILED at stage: {debug_stage}"
-    print(f"✅ Stage {debug_stage} PASSED")
-
-
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 # Add this to your test file and run it
 def test_ttnn_wholeSemSeg(device):
