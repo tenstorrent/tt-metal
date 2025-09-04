@@ -14,7 +14,6 @@
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/host_buffer/functions.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
-#include <ttnn/distributed/distributed_tensor_config.hpp>
 #include <ttnn/distributed/host_ccl.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
@@ -79,8 +78,7 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
             tensors.reserve(device_storage.coords.size());
             for (const auto& coord : device_storage.coords) {
                 DeviceStorage shard_storage(mesh_buffer, {coord});
-                tensors.push_back(Tensor(
-                    std::move(shard_storage), tensor.tensor_spec(), AllGatherTensor{}, tensor.tensor_topology()));
+                tensors.push_back(Tensor(std::move(shard_storage), tensor.tensor_spec(), tensor.tensor_topology()));
             }
             return tensors;
         } else {
@@ -108,11 +106,7 @@ Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShap
     }
 
     // TODO (#25340): Implement correct logic and add test for this
-    return Tensor(
-        HostStorage{std::move(distributed_host_buffer)},
-        reference_shard.tensor_spec(),
-        AllGatherTensor{},
-        TensorTopology{});
+    return Tensor(HostStorage{std::move(distributed_host_buffer)}, reference_shard.tensor_spec(), TensorTopology{});
 }
 
 Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards) {
@@ -145,10 +139,7 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards) {
     TT_FATAL(duplicate == coords.end(), "Found a tensor shard at duplicate coordinate {}", *duplicate);
     // TODO (#25340): Implement correct logic and add test for this
     return Tensor(
-        DeviceStorage(std::move(mesh_buffer), std::move(coords)),
-        reference_shard.tensor_spec(),
-        AllGatherTensor{},
-        TensorTopology{});
+        DeviceStorage(std::move(mesh_buffer), std::move(coords)), reference_shard.tensor_spec(), TensorTopology{});
 }
 
 }  // namespace ttnn::distributed
