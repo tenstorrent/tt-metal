@@ -318,8 +318,8 @@ void validate_fsd_against_gsd(
 
         for (const auto& conn : connections) {
             // Get board types from FSD for both connections independently
-            std::string board_type_a = "";
-            std::string board_type_b = "";
+            tt::umd::BoardType board_type_a = tt::umd::BoardType::UNKNOWN;
+            tt::umd::BoardType board_type_b = tt::umd::BoardType::UNKNOWN;
 
             // Find host_id for each connection by matching hostname
             uint32_t host_id_a = 0;
@@ -336,15 +336,11 @@ void validate_fsd_against_gsd(
             // Look up board types for each connection
             for (const auto& board_location : generated_fsd.board_types().board_locations()) {
                 if (board_location.host_id() == host_id_a && board_location.tray_id() == *conn.first.tray_id) {
-                    board_type_a = board_location.board_type();
+                    board_type_a = get_board_type_from_string(board_location.board_type());
                 }
                 if (board_location.host_id() == host_id_b && board_location.tray_id() == *conn.second.tray_id) {
-                    board_type_b = board_location.board_type();
+                    board_type_b = get_board_type_from_string(board_location.board_type());
                 }
-            }
-            if (board_type_a.empty() || board_type_b.empty()) {
-                throw std::runtime_error(
-                    "Board type not found for connection: " + conn.first.hostname + " <-> " + conn.second.hostname);
             }
 
             Board board_a = create_board(board_type_a);

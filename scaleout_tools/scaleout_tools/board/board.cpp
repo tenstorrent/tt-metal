@@ -431,12 +431,8 @@ private:
 };
 
 // Factory function to create boards by type (for backward compatibility)
-Board create_board(const std::string& board_name) {
-    auto board_type = enchantum::cast<tt::umd::BoardType>(board_name, ttsl::ascii_caseless_comp);
-    if (!board_type.has_value()) {
-        throw std::runtime_error("Invalid board type: " + board_name);
-    }
-    switch (*board_type) {
+Board create_board(tt::umd::BoardType board_type) {
+    switch (board_type) {
         case BoardType::N300: return N300();
         case BoardType::UBB: return WH_UBB();
         case BoardType::P300: return P300();
@@ -445,8 +441,16 @@ Board create_board(const std::string& board_name) {
         // TODO: Uncomment this once BH_UBB is finalized and has an enum value in BoardType
         // case BoardType::BH_UBB:
         //     return BH_UBB();
-        default: throw std::runtime_error("Unknown board type: " + board_name);
+        default: throw std::runtime_error("Unknown board type: " + std::string(enchantum::to_string(board_type)));
     }
+}
+
+tt::umd::BoardType get_board_type_from_string(const std::string& board_name) {
+    auto board_type = enchantum::cast<tt::umd::BoardType>(board_name, ttsl::ascii_caseless_comp);
+    if (!board_type.has_value()) {
+        throw std::runtime_error("Invalid board type: " + std::string(board_name));
+    }
+    return *board_type;
 }
 
 }  // namespace tt::scaleout_tools

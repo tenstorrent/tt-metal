@@ -62,7 +62,7 @@ Node build_node(
     HostId host_id,
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
     std::unordered_map<std::string, Node>& node_templates,
-    std::unordered_map<std::string, Board>& board_templates) {
+    std::unordered_map<tt::umd::BoardType, Board>& board_templates) {
     const std::string& node_type = node_descriptor_name;
     auto it = node_templates.find(node_type);
     if (it != node_templates.end()) {
@@ -79,7 +79,7 @@ Node build_node(
     // Create boards with internal connections marked (using cached boards)
     for (const auto& board_item : node_descriptor.boards().board()) {
         TrayId tray_id = TrayId(board_item.tray_id());
-        const std::string& board_type = board_item.board_type();
+        auto board_type = get_board_type_from_string(board_item.board_type());
 
         // Check cache first
         auto board_it = board_templates.find(board_type);
@@ -149,7 +149,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
     const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
     const std::string& instance_name,
     std::unordered_map<std::string, Node>& node_templates,
-    std::unordered_map<std::string, Board>& board_templates) {
+    std::unordered_map<tt::umd::BoardType, Board>& board_templates) {
     auto resolved = std::make_unique<ResolvedGraphInstance>();
     resolved->template_name = graph_instance.template_name();
     resolved->instance_name = instance_name;

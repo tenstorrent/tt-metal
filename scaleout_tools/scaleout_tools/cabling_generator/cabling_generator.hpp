@@ -10,6 +10,7 @@
 
 #include <tt_stl/strong_type.hpp>
 #include <scaleout_tools/board/board.hpp>
+#include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt::scaleout_tools {
 
@@ -122,7 +123,7 @@ private:
     void populate_boards_from_resolved_graph(const std::unique_ptr<ResolvedGraphInstance>& graph);
 
     // Caches for optimization
-    std::unordered_map<std::string, Board> board_templates_;
+    std::unordered_map<tt::umd::BoardType, Board> board_templates_;
     std::unordered_map<std::string, Node> node_templates_;  // Templates with host_id=0
 
     std::unique_ptr<ResolvedGraphInstance> root_instance_;
