@@ -210,8 +210,9 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     // Set the runtime_args_data sizing info based on the shared max
     for (auto& [kernel_handle, kernel] : kernels) {
         uint32_t dispatch_class = kernel->dispatch_class();
+        auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_handle);
         kernel->set_common_runtime_args_count(max_crtas[dispatch_class]);
-        crta_info[kernel_handle] = crta_info_by_dispatch_class[dispatch_class];
+        crta_info[device_local_kernel_handle] = crta_info_by_dispatch_class[dispatch_class];
     }
     // Set the kernel group common runtime arg offsets use in the launch message
     for (auto& kg : kernel_groups) {
@@ -689,7 +690,7 @@ BatchedTransfers assemble_runtime_args_commands(
                         continue;
                     }
                     const uint32_t crta_offset =
-                        program.get_program_config(index).crta_info.at(kernel_id.value()).offset;
+                        program.get_program_config(index).crta_info.at(device_local_kernel_handle).offset;
                     for (auto& transfer_info :
                          extract_dst_noc_multicast_info(device, kg->core_ranges.ranges(), CoreType::WORKER)) {
                         auto noc_xy_addr = device->get_noc_multicast_encoding(
