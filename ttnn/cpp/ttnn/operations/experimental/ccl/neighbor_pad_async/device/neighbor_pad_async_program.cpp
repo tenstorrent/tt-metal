@@ -37,85 +37,6 @@ namespace ttnn {
 
 using namespace ccl;
 
-static void print_tensor_slice(const ttnn::ccl::v2::TensorSlice& slice_v2) {
-    log_trace(tt::LogOp, "TensorSlice:");
-    log_trace(
-        tt::LogOp,
-        "  tensor_shape:        [w={}, z={}, y={}, x={}]",
-        slice_v2.tensor_shape.w,
-        slice_v2.tensor_shape.z,
-        slice_v2.tensor_shape.y,
-        slice_v2.tensor_shape.x);
-    log_trace(
-        tt::LogOp,
-        "  tensor_slice_shape:  [w={}, z={}, y={}, x={}]",
-        slice_v2.tensor_slice_shape.w,
-        slice_v2.tensor_slice_shape.z,
-        slice_v2.tensor_slice_shape.y,
-        slice_v2.tensor_slice_shape.x);
-    log_trace(
-        tt::LogOp,
-        "  tensor_slice_offset: [w={}, z={}, y={}, x={}]",
-        slice_v2.tensor_slice_offset.w,
-        slice_v2.tensor_slice_offset.z,
-        slice_v2.tensor_slice_offset.y,
-        slice_v2.tensor_slice_offset.x);
-    log_trace(
-        tt::LogOp,
-        "  worker_slice_shape:  [w={}, z={}, y={}, x={}]",
-        slice_v2.worker_slice_shape.w,
-        slice_v2.worker_slice_shape.z,
-        slice_v2.worker_slice_shape.y,
-        slice_v2.worker_slice_shape.x);
-    log_trace(
-        tt::LogOp,
-        "  worker_slice_offset: [w={}, z={}, y={}, x={}]",
-        slice_v2.worker_slice_offset.w,
-        slice_v2.worker_slice_offset.z,
-        slice_v2.worker_slice_offset.y,
-        slice_v2.worker_slice_offset.x);
-}
-
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
-    size_t num_links, size_t num_workers_per_link, IDevice* device) {
-    std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
-    CoreRangeSet sender_worker_core_range;
-    const size_t num_workers_preferred = num_workers_per_link * num_links;
-    const auto available_cores =
-        device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().at(0));
-    if (available_cores.num_cores() < num_workers_preferred) {
-        log_warning(
-            tt::LogOp,
-            "NeighborPad is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
-            "cores ({} per link and {} links) are made available but only {} are available. This may lead to "
-            "performance loss.",
-            num_workers_preferred,
-            num_workers_per_link,
-            num_links,
-            available_cores.num_cores());
-    }
-    for (const auto& cr : available_cores.ranges()) {
-        auto start = cr.start_coord;
-        auto end = cr.end_coord;
-        for (size_t y = start.y; y <= end.y; y++) {
-            for (size_t x = start.x; x <= end.x; x++) {
-                sender_worker_core_range =
-                    sender_worker_core_range.merge(CoreRangeSet(CoreRange(CoreCoord(x, y), CoreCoord(x, y))));
-                if (sender_worker_core_range.num_cores() == num_workers_preferred) {
-                    break;
-                }
-            }
-            if (sender_worker_core_range.num_cores() == num_workers_preferred) {
-                break;
-            }
-        }
-        if (sender_worker_core_range.num_cores() == num_workers_preferred) {
-            break;
-        }
-    }
-    return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
-}
-
 tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     const Tensor& input_tensor,
     IDevice* sender_device,
@@ -123,9 +44,9 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
     const uint32_t dim,
-    const uint32_t padding,
+    const uint32_t padding_left,
+    const uint32_t padding_right,
     const std::string padding_mode,
-    const bool direction,
     const GlobalSemaphore& final_semaphore,
     const GlobalSemaphore& barrier_semaphore,
     const uint32_t num_links,
@@ -148,9 +69,11 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
     uint32_t num_sticks_per_outer_dim = input_tensor_shape[1] * input_tensor_shape[2];
-    uint32_t outer_dim_size = input_tensor_shape[0];
-    bool is_first_device = direction ? !forward_device.has_value() : !backward_device.has_value();
-    bool is_last_device = direction ? !backward_device.has_value() : !forward_device.has_value();
+    uint32_t input_outer_dim_size = input_tensor_shape[0];
+    uint32_t output_outer_dim_size = output_tensor_shape[0];
+
+    bool is_first_device = !backward_device.has_value();
+    bool is_last_device = !forward_device.has_value();
 
     /****TODO BARRIER SEMAPHORE****/
     // auto [unicast_forward_args, unicast_backward_args] =
@@ -167,14 +90,14 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     /*******/
 
     // Get worker cores
-    CoreCoord core_grid(num_links, 1);
+    CoreCoord core_grid(num_links * 2, 1);
     auto
         [num_cores,
          worker_core_ranges,
          core_group_1,
          core_group_2,
          num_sticks_per_core_group_1,
-         num_sticks_per_core_group_2] = tt::tt_metal::split_work_to_cores(core_grid, num_sticks_per_outer_dim);
+         num_sticks_per_core_group_2] = tt::tt_metal::split_work_to_cores(core_grid, num_sticks_per_outer_dim * 2);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
@@ -205,103 +128,109 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     // KERNEL CREATION
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
+    uint32_t num_directions = 2;
     uint32_t stick_start_id = 0;
     for (uint32_t link = 0; link < num_links; link++) {
-        CoreCoord core = {link, 0};
-        CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
         uint32_t num_sticks_to_read = 0;
-        if (core_group_1.contains(core)) {
-            num_sticks_to_read = num_sticks_per_core_group_1;
-        } else {
-            num_sticks_to_read = num_sticks_per_core_group_2;
-        }
-
-        // Reader
-        auto reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
-        reader_kernel_config.compile_args = {
-            is_first_device,
-            is_last_device,
-            sender_cb_index  // cb_forward_id
-        };
-        TensorAccessorArgs(*input_buffer).append_to(reader_kernel_config.compile_args);
-        TensorAccessorArgs(*output_buffer).append_to(reader_kernel_config.compile_args);
-        auto worker_reader_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
-            "minimal_default_reader.cpp",
-            {core},
-            reader_kernel_config);
-        reader_kernel_ids.push_back(worker_reader_kernel_id);
-
-        std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),   // input_tensor_address
-            output_tensor.buffer()->address(),  // output_tensor_address
-            page_size,                          // stick_size
-            stick_start_id,                     // stick_start_id
-            outer_dim_size,                     // outer_dim_size
-            padding,                            // padding
-            num_sticks_to_read,                 // num_sticks_to_read
-            num_sticks_per_outer_dim,           // num_sticks_per_outer_dim
-            final_semaphore.address()           // out_ready_sem_bank_addr (absolute address)
-        };
-        tt::tt_metal::SetRuntimeArgs(program, worker_reader_kernel_id, {core}, reader_rt_args);
-
-        // Writer
-        auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
-        writer_kernel_config.compile_args = {
-            is_first_device,
-            is_last_device,
-            sender_cb_index,                  // cb_forward_id
-            reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
-            direction};
-        TensorAccessorArgs(*input_buffer).append_to(writer_kernel_config.compile_args);
-        TensorAccessorArgs(*output_buffer).append_to(writer_kernel_config.compile_args);
-        auto worker_writer_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
-            "minimal_default_writer.cpp",
-            {core},
-            writer_kernel_config);
-        writer_kernel_ids.push_back(worker_writer_kernel_id);
-
-        std::vector<uint32_t> writer_rt_args = {
-            input_tensor.buffer()->address(),   // input_tensor_address
-            output_tensor.buffer()->address(),  // output_tensor_address
-            page_size,                          // stick_size
-            stick_start_id,                     // stick_start_id
-            outer_dim_size,                     // outer_dim_size
-            padding,                            // padding
-            num_sticks_to_read,                 // num_sticks_to_read
-            num_sticks_per_outer_dim,           // num_sticks_per_outer_dim
-            virtual_core.x,                     // out_ready_sem_noc0_x
-            virtual_core.y,                     // out_ready_sem_noc0_y
-            final_semaphore.address()           // out_ready_sem_bank_addr (absolute address)
-        };
-        if (direction) {
-            writer_rt_args.push_back(false);
-            writer_rt_args.push_back(backward_device.has_value());
-            if (backward_device.has_value()) {
-                const auto src_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
-                const auto dst_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
+        // direction 0 means pad left (top), 1 means pad right (bottom)
+        for (uint32_t direction = 0; direction < num_directions; direction++) {
+            CoreCoord core = {link * num_directions + direction, 0};
+            CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
+            if (core_group_1.contains(core)) {
+                num_sticks_to_read = num_sticks_per_core_group_1;
+            } else {
+                num_sticks_to_read = num_sticks_per_core_group_2;
             }
-        } else {
-            writer_rt_args.push_back(forward_device.has_value());
-            if (forward_device.has_value()) {
-                const auto src_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
-                const auto dst_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
-            }
-            writer_rt_args.push_back(false);
-        }
-        tt::tt_metal::SetRuntimeArgs(program, worker_writer_kernel_id, {core}, writer_rt_args);
 
+            // Reader
+            auto reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
+            // When direction == 0, first_device is leftmost, when direction == 1, first_device is rightmost
+            reader_kernel_config.compile_args = {
+                direction ? is_last_device : is_first_device,
+                direction ? is_first_device : is_last_device,
+                sender_cb_index,  // cb_forward_id
+                direction};
+            TensorAccessorArgs(*input_buffer).append_to(reader_kernel_config.compile_args);
+            TensorAccessorArgs(*output_buffer).append_to(reader_kernel_config.compile_args);
+            auto worker_reader_kernel_id = tt::tt_metal::CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
+                "minimal_default_reader.cpp",
+                {core},
+                reader_kernel_config);
+            reader_kernel_ids.push_back(worker_reader_kernel_id);
+
+            std::vector<uint32_t> reader_rt_args = {
+                input_tensor.buffer()->address(),          // input_tensor_address
+                output_tensor.buffer()->address(),         // output_tensor_address
+                page_size,                                 // stick_size
+                stick_start_id,                            // stick_start_id
+                input_outer_dim_size,                      // input_outer_dim_size
+                direction ? padding_right : padding_left,  // padding
+                num_sticks_to_read,                        // num_sticks_to_read
+                num_sticks_per_outer_dim,                  // num_sticks_per_outer_dim
+                final_semaphore.address()                  // out_ready_sem_bank_addr (absolute address)
+            };
+            tt::tt_metal::SetRuntimeArgs(program, worker_reader_kernel_id, {core}, reader_rt_args);
+
+            // Writer
+            auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
+            writer_kernel_config.compile_args = {
+                direction ? is_last_device : is_first_device,
+                direction ? is_first_device : is_last_device,
+                sender_cb_index,                  // cb_forward_id
+                reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
+                direction};
+            TensorAccessorArgs(*input_buffer).append_to(writer_kernel_config.compile_args);
+            TensorAccessorArgs(*output_buffer).append_to(writer_kernel_config.compile_args);
+            auto worker_writer_kernel_id = tt::tt_metal::CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
+                "minimal_default_writer.cpp",
+                {core},
+                writer_kernel_config);
+            writer_kernel_ids.push_back(worker_writer_kernel_id);
+
+            std::vector<uint32_t> writer_rt_args = {
+                input_tensor.buffer()->address(),          // input_tensor_address
+                output_tensor.buffer()->address(),         // output_tensor_address
+                page_size,                                 // stick_size
+                stick_start_id,                            // stick_start_id
+                input_outer_dim_size,                      // input_outer_dim_size
+                output_outer_dim_size,                     // output_outer_dim_size
+                direction ? padding_right : padding_left,  // padding
+                padding_left,                              // padding left
+                num_sticks_to_read,                        // num_sticks_to_read
+                num_sticks_per_outer_dim,                  // num_sticks_per_outer_dim
+                virtual_core.x,                            // out_ready_sem_noc0_x
+                virtual_core.y,                            // out_ready_sem_noc0_y
+                final_semaphore.address()                  // out_ready_sem_bank_addr (absolute address)
+            };
+            if (direction) {
+                writer_rt_args.push_back(false);
+                writer_rt_args.push_back(backward_device.has_value());
+                if (backward_device.has_value()) {
+                    const auto src_fabric_node_id =
+                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+                    const auto dst_fabric_node_id =
+                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+                    tt::tt_fabric::append_fabric_connection_rt_args(
+                        src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
+                }
+            } else {
+                writer_rt_args.push_back(forward_device.has_value());
+                if (forward_device.has_value()) {
+                    const auto src_fabric_node_id =
+                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+                    const auto dst_fabric_node_id =
+                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+                    tt::tt_fabric::append_fabric_connection_rt_args(
+                        src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
+                }
+                writer_rt_args.push_back(false);
+            }
+            tt::tt_metal::SetRuntimeArgs(program, worker_writer_kernel_id, {core}, writer_rt_args);
+        }
         stick_start_id += num_sticks_to_read;
     }
 
@@ -333,7 +262,7 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
                 auto& worker_writer_runtime_args = writer_runtime_args[core.x][core.y];
                 worker_writer_runtime_args[0] = input.buffer()->address();
                 worker_writer_runtime_args[1] = output.buffer()->address();
-                worker_writer_runtime_args[10] = out_ready_semaphore.address();
+                worker_writer_runtime_args[12] = out_ready_semaphore.address();
 
                 // if (barrier_semaphore.has_value()) {
                 // 	worker_writer_sender_runtime_args[16] = barrier_semaphore.value().address();
