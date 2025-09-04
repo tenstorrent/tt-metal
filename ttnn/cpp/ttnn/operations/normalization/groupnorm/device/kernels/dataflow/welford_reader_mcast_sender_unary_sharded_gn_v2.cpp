@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "welford_combine.h"
 
 void kernel_main() {
     uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(0));
@@ -19,6 +20,12 @@ void kernel_main() {
     constexpr uint32_t datum_size_bytes = get_compile_time_arg_val(7);
     constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
     constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(9);
+
+    // These are numbers in absolute terms, on a per group, per batch without tiling
+    constexpr uint32_t num_cols_per_group = get_compile_time_arg_val(10);
+    constexpr uint32_t num_rows_per_group = get_compile_time_arg_val(11);
+
+    constexpr uint32_t TILE_WIDTH = 32;
 
     const bool has_mcast_first_group = get_arg_val<uint32_t>(0);
     const bool has_mcast_last_group = get_arg_val<uint32_t>(1);
@@ -171,39 +178,57 @@ void kernel_main() {
 
     for (uint32_t m = 0; m < num_batch_group; ++m) {
         // wait for local data ready
-        cb_wait_front(cb_ex_partial, 1);
-        cb_reserve_back(cb_ex_global, 1);
+        cb_wait_front(cb_ex_partial, 2);
+        cb_reserve_back(cb_ex_global, 2);
 
-        // TODO: First order combine in partial, copy it to global
-        // TODO: Put the value in cb_ex_global
+        // Read mean and variance arrays from cb_ex_partial, then combine using Welford
+        auto local_read_ptr = get_read_ptr(cb_ex_partial);
+        auto p_local_means = reinterpret_cast<volatile uint16_t*>(local_read_ptr);
+        auto p_local_vars = p_local_means + TILE_WIDTH * TILE_HEIGHT;
 
-        uint32_t l1_read_addr_ex_par = get_read_ptr(cb_ex_partial);
-        uint32_t l1_write_addr_external = get_write_ptr(cb_ex_global);
+        auto local_result =
+            combine_welford_stats<32, num_cols_per_group * num_rows_per_group / 32, 2>(p_local_means, p_local_vars);
+        DPRINT << "local combined mean: " << BF16(local_result.mean)
+               << " local combined var: " << BF16(local_result.variance) << " local count: " << local_result.count
+               << ENDL();
+
+        // Write this to cb_ex_global
+        auto global_means_ptr = get_write_ptr(cb_ex_global);
+        auto p_global_means = reinterpret_cast<volatile uint16_t*>(global_means_ptr);
+        auto global_vars_ptr = global_means_ptr + single_tile_size_bytes;
+        auto p_global_vars = reinterpret_cast<volatile uint16_t*>(global_vars_ptr);
+        p_global_means[0] = local_result.mean;
+        p_global_vars[0] = local_result.variance;
+
+        cb_pop_front(cb_ex_partial, 2);
 
         if constexpr (num_mcast_cores > 1) {
             // wait for all other cores data ready
             noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_mcast_cores - 1);
             noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
 
-            // read data from other cores
-            for (uint32_t i = 0; i < (num_mcast_cores - 1); ++i) {
-                uint64_t noc_addr_ex_par = get_noc_addr(noc_coord_x[i + 1], noc_coord_y[i + 1], l1_read_addr_ex_par);
-                noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, num_bytes_read);
+            for (uint32_t i = 1; i < num_mcast_cores; ++i) {
+                noc_async_read_one_packet(multicast_data_noc | global_means_ptr, global_means_ptr + i * 32, 32);
+                noc_async_read_one_packet(multicast_data_noc | global_vars_ptr, global_vars_ptr + i * 32, 32);
             }
+            noc_async_read_barrier();
         }
-        noc_async_read_barrier();
 
-        // TODO: Welford Combine here and write to cb_ex_global
-        // TODO: Then second order combine in global after copying data from other cores
-        cb_pop_front(cb_ex_partial, 1);
+        // Read mean and variance arrays from cb_ex_global, then combine using Welford
+        auto global_result = combine_welford_stats<num_mcast_cores, num_cols_per_group * num_rows_per_group, 16>(
+            p_global_means, p_global_vars);
+        DPRINT << "global combined mean: " << BF16(global_result.mean)
+               << " global combined var: " << BF16(global_result.variance) << ENDL();
 
-        // TODO: Welford Combine here and write to cb_ex_global (same place)
+        // Write this to cb_ex_global
+        p_global_means[0] = global_result.mean;
+        p_global_vars[0] = global_result.variance;
 
         // mcast to other cores
         if constexpr (num_mcast_cores > 1) {
             noc_async_write_multicast(
-                l1_write_addr_external,
-                multicast_data_noc | l1_write_addr_external,
+                global_means_ptr,
+                multicast_data_noc | global_means_ptr,
                 num_bytes_read,
                 num_mcast_cores_mid_group,
                 true);
@@ -212,8 +237,8 @@ void kernel_main() {
 
             if (has_mcast_first_group) {
                 noc_async_write_multicast(
-                    l1_write_addr_external,
-                    multicast_first_group_data_noc | l1_write_addr_external,
+                    global_means_ptr,
+                    multicast_first_group_data_noc | global_means_ptr,
                     num_bytes_read,
                     num_mcast_cores_first_group,
                     true);
@@ -226,8 +251,8 @@ void kernel_main() {
 
             if (has_mcast_last_group) {
                 noc_async_write_multicast(
-                    l1_write_addr_external,
-                    multicast_last_group_data_noc | l1_write_addr_external,
+                    global_means_ptr,
+                    multicast_last_group_data_noc | global_means_ptr,
                     num_bytes_read,
                     num_mcast_cores_last_group,
                     true);
@@ -239,7 +264,7 @@ void kernel_main() {
             }
             noc_async_write_barrier();
         }
-        cb_push_back(cb_ex_global, 1);
+        cb_push_back(cb_ex_global, 2);
     }
 
 #if defined(READER_REPACK) and defined(UNTILIZE_OUT)

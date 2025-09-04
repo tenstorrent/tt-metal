@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "welford_combine.h"
 
 void kernel_main() {
     uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(0));
@@ -17,6 +18,10 @@ void kernel_main() {
     const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(5);
     constexpr uint32_t per_core_M = get_compile_time_arg_val(6);
     constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(7);
+
+    // These are numbers in absolute terms, on a per group, per batch without tiling
+    constexpr uint32_t num_cols_per_group = get_compile_time_arg_val(8);
+    constexpr uint32_t num_rows_per_group = get_compile_time_arg_val(9);
 
     const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(0);
     const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(1);
@@ -33,6 +38,8 @@ void kernel_main() {
     constexpr uint32_t cb_repack = tt::CBIndex::c_11;
     constexpr uint32_t cb_repack_out = tt::CBIndex::c_12;
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
+
+    constexpr uint32_t TILE_WIDTH = 32;
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = get_read_ptr(cb_in0);
@@ -52,10 +59,23 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_batch_group; ++i) {
         // wait for local data ready
-        cb_wait_front(cb_ex_partial, 1);
-        cb_reserve_back(cb_ex_global, 1);
+        cb_reserve_back(cb_ex_global, 2);
+        cb_wait_front(cb_ex_partial, 2);
 
-        // First order combine in partial
+        // Read mean and variance arrays from cb_ex_partial, then combine using Welford
+        auto p_local_means = reinterpret_cast<volatile uint16_t*>(get_read_ptr(cb_ex_partial));
+        auto p_local_vars = p_local_means + TILE_WIDTH * TILE_HEIGHT;
+
+        auto local_result =
+            combine_welford_stats<32, num_cols_per_group * num_rows_per_group / 32, 2>(p_local_means, p_local_vars);
+        DPRINT << "local mean: " << BF16(local_result.mean) << " local var: " << BF16(local_result.variance)
+               << " local count: " << local_result.count << ENDL();
+
+        // Write this to cb_ex_global
+        auto p_global_means = reinterpret_cast<volatile uint16_t*>(get_write_ptr(cb_ex_global));
+        auto p_global_vars = p_global_means + TILE_WIDTH * TILE_HEIGHT;
+        p_global_means[0] = local_result.mean;
+        p_global_vars[0] = local_result.variance;
 
         // Signal to sender that our partial data is ready
         noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
@@ -65,8 +85,8 @@ void kernel_main() {
         noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
 
         // Push the global data to cb_ex_global
-        cb_push_back(cb_ex_global, 1);
-        cb_pop_front(cb_ex_partial, 1);
+        cb_push_back(cb_ex_global, 2);
+        cb_pop_front(cb_ex_partial, 2);
     }
 
 #if defined(READER_REPACK) and defined(UNTILIZE_OUT)

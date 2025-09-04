@@ -396,7 +396,6 @@ void kernel_main() {
                         noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_mcast_cores - 1);
                         noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
 
-                        // TODO: Read partial data from all other cores into this core's cb_ex_global
                         for (uint32_t i = 1; i < num_mcast_cores; i++) {
                             noc_async_read_one_packet(multicast_data_noc | global_means_ptr, global_means_ptr + i * 32, 32);
                             noc_async_read_one_packet(multicast_data_noc | global_vars_ptr, global_vars_ptr + i * 32, 32);
@@ -426,10 +425,9 @@ void kernel_main() {
 
                     if constexpr (num_mcast_cores > 1) {
                         // mcast to other cores
-                        uint32_t l1_read_addr_ex = get_write_ptr(cb_ex_global);
                         noc_async_write_multicast(
-                            l1_read_addr_ex,
-                            multicast_data_noc | l1_read_addr_ex,
+                            global_means_ptr,
+                            multicast_data_noc | global_means_ptr,
                             2 * single_tile_size_bytes,
                             num_mcast_cores_mid_group,
                             true);
@@ -441,8 +439,8 @@ void kernel_main() {
 
                         if (has_mcast_first_group) {
                             noc_async_write_multicast(
-                                l1_read_addr_ex,
-                                multicast_first_group_data_noc | l1_read_addr_ex,
+                                global_means_ptr,
+                                multicast_first_group_data_noc | global_means_ptr,
                                 2 * single_tile_size_bytes,
                                 num_mcast_cores_first_group,
                                 true);
@@ -455,8 +453,8 @@ void kernel_main() {
 
                         if (has_mcast_last_group) {
                             noc_async_write_multicast(
-                                l1_read_addr_ex,
-                                multicast_last_group_data_noc | l1_read_addr_ex,
+                                global_means_ptr,
+                                multicast_last_group_data_noc | global_means_ptr,
                                 2 * single_tile_size_bytes,
                                 num_mcast_cores_last_group,
                                 true);
