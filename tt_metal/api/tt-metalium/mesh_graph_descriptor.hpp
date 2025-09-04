@@ -141,8 +141,8 @@ private:
 
     // Descriptor fast lookup
     std::unique_ptr<const proto::MeshGraphDescriptor> proto_;
-    std::unordered_map<std::string, const proto::MeshDescriptor*> mesh_desc_by_name_;
-    std::unordered_map<std::string, const proto::GraphDescriptor*> graph_desc_by_name_;
+    std::unordered_map<std::string_view, const proto::MeshDescriptor*> mesh_desc_by_name_;
+    std::unordered_map<std::string_view, const proto::GraphDescriptor*> graph_desc_by_name_;
 
     // Global node table and typed stores
     std::unordered_map<GlobalNodeId, InstanceData> instances_;
@@ -150,7 +150,7 @@ private:
 
     // Indices
     std::unordered_map<std::string, std::vector<GlobalNodeId>> instances_by_name_;
-    std::unordered_map<std::string, std::vector<GlobalNodeId>> instances_by_type_;
+    std::unordered_map<std::string_view, std::vector<GlobalNodeId>> instances_by_type_;
     std::vector<GlobalNodeId> device_instances_;
     std::vector<GlobalNodeId> mesh_instances_;
     std::vector<GlobalNodeId> graph_instances_;
@@ -158,7 +158,7 @@ private:
 
     // Connections
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_instance_id_;
-    std::unordered_map<std::string_view, std::vector<ConnectionId>> connections_by_type_;
+    std::unordered_map<std::string, std::vector<ConnectionId>> connections_by_type_;
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
 
@@ -190,6 +190,8 @@ private:
 
     // Populate Connections
     void populate_connections();
+    void add_to_fast_lookups(const InstanceData& instance);
+    void add_connection_to_fast_lookups(const ConnectionData& connection, const std::string& type);
 
     void populate_intra_mesh_connections(GlobalNodeId mesh_id);
     void populate_intra_mesh_express_connections(GlobalNodeId mesh_id);
