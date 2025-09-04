@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <utility>
+#include <enchantum/enchantum.hpp>
 
 #include "buffer_types.hpp"
 #include "tt_metal/detail/reports/report_utils.hpp"
@@ -45,7 +46,7 @@ void write_headers(
     }
     l1_usage_summary_report << ", Largest Contiguous Free Block (B), Total Free L1 Space (B)\n";
     memory_usage_summary_report
-        << ", Total Allocatable Size (B), Total Allocated (B), Total Free (KB), Largest Free Block (KB)\n";
+        << ", Total Allocatable Size (B), Total Allocated (B), Total Free (B), Largest Free Block (B)\n";
 }
 
 void write_detailed_report_info(
@@ -81,8 +82,8 @@ void write_memory_usage(
     memory_usage_summary_report << "," << stats.total_allocatable_size_bytes << "," << stats.total_allocated_bytes
                                 << "," << stats.total_free_bytes << "," << stats.largest_free_block_bytes << "\n";
 
-    detailed_memory_usage_report << "," << (buffer_type == BufferType::DRAM ? "DRAM\n" : "L1\n");
-    detailed_memory_usage_report << ",Total allocatable (B):," << (stats.total_allocatable_size_bytes * num_banks)
+    detailed_memory_usage_report << "," << reflect::enum_name(buffer_type) << "\n"
+                                 << ",Total allocatable (B):," << (stats.total_allocatable_size_bytes * num_banks)
                                  << "\n"
                                  << ",Total allocated (B):," << (stats.total_allocated_bytes * num_banks) << "\n"
                                  << ",Total free (B):," << (stats.total_free_bytes * num_banks) << "\n";
@@ -104,6 +105,13 @@ void populate_reports(
 
     write_memory_usage(
         device, BufferType::L1, memory_usage_summary_report, detailed_memory_usage_report, l1_usage_summary_report);
+
+    write_memory_usage(
+        device,
+        BufferType::L1_SMALL,
+        memory_usage_summary_report,
+        detailed_memory_usage_report,
+        l1_usage_summary_report);
 }
 
 void MemoryReporter::flush_program_memory_usage(uint64_t program_id, const IDevice* device) {
