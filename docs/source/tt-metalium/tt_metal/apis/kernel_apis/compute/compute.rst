@@ -1,20 +1,49 @@
 Compute APIs
 ============
 
-This page will soon contain the summary of tt-metal concepts relevant for the usage of Compute API.
+This page contains a list of APIs avaliable in the compute kernels. These API govern differnt aspects of the compute kernel. Including
+
+* Synchronization between the 3 cores runing the compute kernel cooperatively
+* Perform the computation
+* Copying data between SRAM and compute engines
+
+Synchronization
+---------------
+.. toctree::
+
+  acquire_dst
+  release_dst
+  reg_api
+
+Register IO
+-----------
 
 .. toctree::
 
   copy_tile
   move_copy_tile
 
-  acquire_dst
-  release_dst
-  reg_api
+  cb_wait_front
+  cb_pop_front
+  cb_reserve_back
+  cb_push_back
+
+Compute
+-------
+
+Initialization
+~~~~~~~~~~~~~~
+
+.. toctree::
 
   init_functions
+  binary_op_init_funcs
 
-  abs_tile
+Compute (FPU/matrix engine)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. toctree::
+
   add_tiles
   sub_tiles
   mul_tiles
@@ -24,6 +53,29 @@ This page will soon contain the summary of tt-metal concepts relevant for the us
 
   matmul_tiles
   matmul_block
+  reduce_tile
+  transpose_wh_tile
+
+  tanh_tile
+  tan_tile
+  sin_tile
+  cos_tile
+  asin_tile
+  atan_tile
+  acos_tile
+  acosh_tile
+
+  tilize
+  untilize
+
+.. only:: not html
+
+Compute (SFPU/vector engine)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. toctree::
+
+  abs_tile
   exp_tile
   exp2_tile
   expm1_tile
@@ -50,16 +102,11 @@ This page will soon contain the summary of tt-metal concepts relevant for the us
   rsub_tile
   signbit_tile
   square_tile
-  reduce_tile
-  transpose_wh_tile
-
-  tanh_tile
-  tan_tile
-  sin_tile
-  cos_tile
-  asin_tile
-  atan_tile
-  acos_tile
+  ceil_tile
+  clamp_tile
+  cumsum_tile
+  div_binary_tile
+  celu_tile
 
   quant_tile
   requant_tile
@@ -76,15 +123,3 @@ This page will soon contain the summary of tt-metal concepts relevant for the us
   unary_lt_tile
   unary_max_tile
   unary_min_tile
-
-  cb_wait_front
-  cb_pop_front
-  cb_reserve_back
-  cb_push_back
-
-  binary_op_init_funcs
-
-  tilize
-  untilize
-
-.. only:: not html
