@@ -1078,7 +1078,7 @@ def test_demo_text(
         )
 
         # check measurements against CI performance targets -- for batch size 32
-        if global_batch_size == 32:
+        if "performance" in test_id and "ci-32" in test_id:
             logger.info(
                 f"Checking measurements against CI performance targets for batch size 32 of {model_name} on {tt_device_name}"
             )
