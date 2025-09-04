@@ -1007,7 +1007,7 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
             std::swap(nodes_copy[0], nodes_copy[i]);
 
             ConnectionData data{
-                .nodes = nodes,
+                .nodes = nodes_copy,
                 .count = connection.channels().count(),
                 .policy = connection.channels().policy(),
                 .directional = connection.directional(),

@@ -231,14 +231,14 @@ void MeshGraph::initialize_from_mgd2(const MeshGraphDescriptor& mgd2) {
     for (const auto & connection : mgd2.connections_by_type("MESH")) {
         const auto& connection_data = mgd2.get_connection(connection);
         const auto& src_instance = mgd2.get_instance(connection_data.nodes[0]);
+        const auto& dst_instance = mgd2.get_instance(connection_data.nodes[1]);
 
         const auto& mesh_instance = mgd2.get_instance(connection_data.parent_instance_id);
 
         const MeshId src_mesh_id = MeshId(mesh_instance.local_id);
 
-        const chip_id_t src_chip_id = mgd2.get_instance(connection_data.nodes[0]).local_id;
-        const chip_id_t dst_chip_id =
-            mgd2.get_instance(connection_data.nodes[1]).local_id;  // ONly expect one single dest chip
+        const chip_id_t src_chip_id = src_instance.local_id;
+        const chip_id_t dst_chip_id = dst_instance.local_id;  // ONly expect one single dest chip
 
         RouterEdge router_edge{
             .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
@@ -255,7 +255,57 @@ void MeshGraph::initialize_from_mgd2(const MeshGraphDescriptor& mgd2) {
 
     this->inter_mesh_connectivity_.resize(mgd2.all_meshes().size());
 
-    // Must use Fabric keyboard for graph descriptors in current version
+    // This is to make sure emtpy elements are filled
+    for (const auto& mesh : mgd2.all_meshes()) {
+        const auto& mesh_instance = mgd2.get_instance(mesh);
+        this->inter_mesh_connectivity_[mesh_instance.local_id].resize(mesh_instance.sub_instances.size());
+    }
+
+    for (const auto& connection : mgd2.connections_by_type("FABRIC")) {
+        const auto& connection_data = mgd2.get_connection(connection);
+
+        const auto& src_instance = mgd2.get_instance(connection_data.nodes[0]);
+        const auto& dst_instance = mgd2.get_instance(connection_data.nodes[1]);
+
+        const auto& src_mesh_instance = mgd2.get_instance(src_instance.hierarchy.back());
+        const auto& dst_mesh_instance = mgd2.get_instance(dst_instance.hierarchy.back());
+
+        const MeshId src_mesh_id = MeshId(src_mesh_instance.local_id);
+        const MeshId dst_mesh_id = MeshId(dst_mesh_instance.local_id);
+
+        const chip_id_t src_chip_id = src_instance.local_id;
+        const chip_id_t dst_chip_id = dst_instance.local_id;
+
+        if (src_mesh_id != dst_mesh_id) {
+            // Intermesh Connection
+            auto& edge = this->inter_mesh_connectivity_[*src_mesh_id][src_chip_id];
+            auto [it, is_inserted] = edge.insert(
+                {dst_mesh_id,
+                 RouterEdge{
+                     .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
+                     .connected_chip_ids = {dst_chip_id},
+                     .weight = 0}});
+            if (!is_inserted) {
+                it->second.connected_chip_ids.push_back(dst_chip_id);
+            }
+        } else {
+            // Intramesh Connection
+            auto& edge = this->intra_mesh_connectivity_[*src_mesh_id][src_chip_id];
+            auto [it, is_inserted] = edge.insert(
+                {dst_chip_id,
+                 RouterEdge{
+                     .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
+                     .connected_chip_ids = {dst_chip_id},
+                     .weight = 0}});
+            if (!is_inserted) {
+                it->second.connected_chip_ids.push_back(dst_chip_id);
+            }
+        }
+    }
+
+    // TODO:
+    // this->mesh_host_ranks_
+    // this->mesh_to_chip_ids_
 }
 
 void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_path) {
