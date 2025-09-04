@@ -1242,7 +1242,7 @@ def test_demo_text(
         if not json_config_file:
             # Get accuracy thresholds from PERF.md, unless the configuration is from a json
             min_top1_acc, min_top5_acc = get_accuracy_thresholds(
-                model_args,
+                model_args[0],
                 optimizations,
             )
             assert (
