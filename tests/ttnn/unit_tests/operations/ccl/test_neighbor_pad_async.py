@@ -19,7 +19,8 @@ def run_neighbor_pad_impl(
     num_devices,
     input_shape,
     dim,
-    padding,
+    padding_left,
+    padding_right,
     num_links,
     input_dtype,
     layout,
@@ -68,12 +69,24 @@ def run_neighbor_pad_impl(
         input_tensor = torch.rand(input_shape).bfloat16()
         chunks = torch.chunk(input_tensor, num_devices, dim)
         np_output_tensor = []
+        # pad left
         first_slice_front = torch.narrow(chunks[0], dim, 0, 1)
-        first_slice_front = torch.cat((first_slice_front, first_slice_front, chunks[0]), dim=dim)
-        np_output_tensor.append(first_slice_front)
+        first_slice = torch.cat((first_slice_front, chunks[0]), dim=dim)
+        np_output_tensor.append(first_slice)
+        for p in range(padding_left - 1):
+            np_output_tensor[0] = torch.cat((first_slice_front, np_output_tensor[0]), dim=dim)
         for k in range(1, num_devices):
-            prev_halo = torch.narrow(chunks[k - 1], dim, chunks[k - 1].shape[dim] - padding, padding)
+            prev_halo = torch.narrow(chunks[k - 1], dim, chunks[k - 1].shape[dim] - padding_left, padding_left)
             np_output_tensor.append(torch.cat((prev_halo, chunks[k]), dim=dim))
+
+        # pad right
+        last_slice_size = np_output_tensor[num_devices - 1].shape[dim]
+        last_slice_back = torch.narrow(np_output_tensor[num_devices - 1], dim, last_slice_size - 1, 1)
+        for p in range(padding_right):
+            np_output_tensor[num_devices - 1] = torch.cat((np_output_tensor[num_devices - 1], last_slice_back), dim=dim)
+        for k in range(0, num_devices - 1):
+            next_halo = torch.narrow(chunks[k + 1], dim, 0, padding_right)
+            np_output_tensor[k] = torch.cat((np_output_tensor[k], next_halo), dim=dim)
         np_output_tensor_goldens_list.append(torch.cat(np_output_tensor, dim=dim))
 
         input_tensor_mesh = ttnn.from_torch(
@@ -91,12 +104,12 @@ def run_neighbor_pad_impl(
     tt_neighbor_pad_out_tensor_list = []
 
     def run_op(i):
-        tt_neighbor_pad_out_tensor = ttnn.experimental.neighbor_pad_async(  # TODO update this with the right signature
+        tt_neighbor_pad_out_tensor = ttnn.experimental.neighbor_pad_async(
             input_tensor_mesh_list[i],
             dim=dim,
-            padding=padding,
+            padding_left=padding_left,
+            padding_right=padding_right,
             padding_mode="replicate",
-            direction=0,  # front
             cluster_axis=1,
             final_semaphore=ccl_semaphore_handles[i],
             barrier_semaphore=barrier_semaphore_handles[i],
@@ -165,9 +178,12 @@ def run_neighbor_pad_impl(
 )
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "num_devices, input_shape, dim, layout, input_dtype, padding",
+    "num_devices, input_shape, dim, layout, input_dtype, padding_left, padding_right",
     [
-        (8, [32, 60, 106, 768], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2),
+        (8, [32, 60, 106, 768], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0),
+        (8, [88, 120, 212, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0),
+        (8, [168, 240, 424, 256], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0),
+        (8, [168, 480, 848, 128], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0),
     ],
     ids=[
         "mochi_vae_1",
@@ -203,7 +219,8 @@ def test_neighbor_pad_async(
     num_devices,
     input_shape,
     dim,
-    padding,
+    padding_left,
+    padding_right,
     num_links,
     input_dtype,
     layout,
@@ -218,7 +235,8 @@ def test_neighbor_pad_async(
         num_devices=num_devices,
         input_shape=input_shape,
         dim=dim,
-        padding=padding,
+        padding_left=padding_left,
+        padding_right=padding_right,
         num_links=num_links,
         input_dtype=input_dtype,
         layout=layout,
