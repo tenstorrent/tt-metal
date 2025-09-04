@@ -93,8 +93,11 @@ def test_benchmark_copy_device_to_host_tensor(benchmark, device_id):
     device_tensor = ttnn.rand(DEFAULT_TENSOR_SIZE, dtype=DEFAULT_DTYPE, layout=DEFAULT_LAYOUT, device=device)
     host_tensor = ttnn.allocate_tensor_on_host(device_tensor.spec, device)
 
+    ttnn.synchronize_device(device)
+
     def run():
         ttnn.copy_device_to_host_tensor(device_tensor, host_tensor)
         ttnn.synchronize_device(device)
 
     benchmark(run)
+    ttnn.close_device(device)
