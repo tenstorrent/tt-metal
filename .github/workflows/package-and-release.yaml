@@ -180,12 +180,29 @@ jobs:
     needs: [
       regression-testing,
       create-tag,
-      create-and-upload-draft-release
+      create-and-upload-draft-release,
+      release-precheck
     ]
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
     if: github.ref != 'refs/heads/main'
     with:
       version: ${{ needs.create-tag.outputs.version }}
-      tag-latest:  ${{ needs.get-params.outputs.is-release-candidate != 'true' }}
+      tag-latest:  ${{ needs.release-precheck.outputs.is-release-candidate != 'true' }}
       wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
+
+  release-docs:
+    needs: [
+      regression-testing,
+      release-precheck,
+      create-tag,
+      create-and-upload-draft-release
+    ]
+    if: ${{ needs.release-precheck.outputs.is-release-candidate !='true' }}
+    uses: ./.github/workflows/docs-latest-public.yaml
+    with:
+      version: ${{ needs.create-tag.outputs.version }}
+      docker-image: ${{ needs.regression-testing.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.regression-testing.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
+    secrets: inherit
