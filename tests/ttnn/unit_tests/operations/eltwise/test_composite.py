@@ -86,8 +86,9 @@ def test_unary_composite_clamp_ttnn(input_shapes, min_val, max_val, device):
         output_tensor = ttnn.clamp(input_tensor1, min_tensor, max_tensor)
         golden_function = ttnn.get_golden_function(ttnn.clamp)
         golden_tensor = golden_function(in_data1, min, max)
-        comp_pass = compare_pcc([output_tensor], [golden_tensor])
-        assert comp_pass
+        # comp_pass = compare_pcc([output_tensor], [golden_tensor])
+        assert torch.equal(output_tensor, golden_tensor)
+        # assert comp_pass
 
 
 @pytest.mark.parametrize(

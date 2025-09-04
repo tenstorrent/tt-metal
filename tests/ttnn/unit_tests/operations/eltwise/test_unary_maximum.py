@@ -187,7 +187,8 @@ def test_unary_max_fill_val_bf16(input_shapes, input_val, scalar, device):
 
     tt_result = ttnn.maximum(tt_in, scalar)
     result = ttnn.to_torch(tt_result)
-    assert_with_pcc(golden, result, 0.999)
+    # assert_with_pcc(golden, result, 0.999)
+    assert torch.equal(golden, result)
 
 
 @pytest.mark.parametrize(
@@ -224,7 +225,8 @@ def test_unary_max_bf16(input_shapes, low, high, scalar, device):
 
     tt_result = ttnn.maximum(tt_in, scalar)
     result = ttnn.to_torch(tt_result)
-    assert_with_pcc(golden, result, 0.999)
+    # assert_with_pcc(golden, result, 0.999)
+    assert torch.equal(golden, result)
 
 
 @pytest.mark.parametrize(

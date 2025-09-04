@@ -50,10 +50,7 @@ def run_eltwise_logical_andi_tests(
     )
 
     # compare tt and golden outputs
-    success, pcc_value = comp_pcc(ref_value, x)
-    logger.debug(pcc_value)
-
-    assert success
+    assert torch.equal(x, ref_value)
 
 
 test_sweep_args = [

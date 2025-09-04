@@ -51,4 +51,5 @@ def test_round_new(shape, dtypes, decimal, device):
         output_tensor = ttnn.round(input_tensor, decimals=decimal)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
+    # assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
+    assert torch.equal(torch_output_tensor, output_tensor)

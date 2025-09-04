@@ -24,4 +24,5 @@ def test_nextafter(device, shape):
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.nextafter(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    # assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert torch.equal(torch_output_tensor, output_tensor)

@@ -340,7 +340,8 @@ def test_bitwise(device, ttnn_function):
     z_tt_out = ttnn_function(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_out)
 
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.9999
+    # status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.9999
+    assert torch.equal(tt_out, z_torch)
     assert status
 
 
@@ -354,8 +355,9 @@ def test_bitwise_left_shift(device):
     z_tt_out = ttnn.bitwise_left_shift(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_out)
 
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
-    assert status
+    # status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
+    assert torch.equal(tt_out, z_torch)
+    # assert status
 
 
 def test_bitwise_right_shift(device):
@@ -368,8 +370,9 @@ def test_bitwise_right_shift(device):
     z_tt_out = ttnn.bitwise_right_shift(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_out)
 
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
-    assert status
+    # status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
+    assert torch.equal(tt_out, z_torch)
+    # assert status
 
 
 @pytest.mark.parametrize(

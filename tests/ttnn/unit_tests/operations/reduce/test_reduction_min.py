@@ -29,7 +29,8 @@ def test_min(device, batch_size, h, w, dim, keepdim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    # assert_with_pcc(torch_output_tensor, output_tensor)
+    assert torch.equal(output_tensor, torch_output_tensor)
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -50,4 +51,5 @@ def test_min_global(device, batch_size, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
     output_tensor = output_tensor
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    # assert_with_pcc(torch_output_tensor, output_tensor)
+    assert torch.equal(output_tensor, torch_output_tensor)

@@ -344,7 +344,8 @@ def test_binary_max_fill_val_bf16(input_shapes, input_a_val, input_b_val, device
     tt_result = ttnn.maximum(tt_in_a, tt_in_b)
 
     result = ttnn.to_torch(tt_result)
-    assert_with_pcc(golden, result, 0.999)
+    # assert_with_pcc(golden, result, 0.999)
+    assert torch.equal(result, golden)
 
 
 @pytest.mark.parametrize(
@@ -390,7 +391,8 @@ def test_binary_max_bf16(input_shapes, low_a, high_a, low_b, high_b, device):
 
     tt_result = ttnn.maximum(tt_in_a, tt_in_b)
     result = ttnn.to_torch(tt_result)
-    assert_with_pcc(golden, result, 0.999)
+    # assert_with_pcc(golden, result, 0.999)
+    assert torch.equal(result, golden)
 
 
 @pytest.mark.parametrize(
@@ -488,7 +490,8 @@ def test_binary_max_bf16_bcast(input_shape_a, input_shape_b, low_a, high_a, low_
     )
     tt_result = ttnn.maximum(tt_in_a, tt_in_b, use_legacy=None)
     result = ttnn.to_torch(tt_result)
-    assert_with_pcc(golden, result, 0.999)
+    # assert_with_pcc(golden, result, 0.999)
+    assert torch.equal(result, golden)
 
 
 @pytest.mark.parametrize(

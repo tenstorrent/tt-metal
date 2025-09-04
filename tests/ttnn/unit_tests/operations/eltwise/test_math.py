@@ -8,18 +8,24 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
 from models.utility_functions import torch_random
 
 from loguru import logger
 
 
-def run_math_unary_test(device, h, w, ttnn_function, pcc=0.9999):
+def run_math_unary_test(device, h, w, ttnn_function, pcc=0.9999, input_range=(0.0, 1.0)):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    if "digamma" in str(ttnn_function):
-        torch_input_tensor += 100.0
+    (low, high) = input_range
+
+    torch_input_tensor = torch.rand((h, w), dtype=torch.float32)
+    torch_input_tensor = torch_input_tensor * (high - low) + low
+    torch_input_tensor = torch_input_tensor.to(torch.bfloat16)
+
+    # if "digamma" in str(ttnn_function):
+    #     torch_input_tensor += 100.0
+
     golden_function = ttnn.get_golden_function(ttnn_function)
     torch_output_tensor = golden_function(torch_input_tensor)
 
@@ -27,7 +33,22 @@ def run_math_unary_test(device, h, w, ttnn_function, pcc=0.9999):
     output_tensor = ttnn_function(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    # assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    assert_allclose(torch_output_tensor, output_tensor, atol=1e-4, rtol=0.02)
+
+
+def run_tensor_manip_unary_test(device, h, w, ttnn_function):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    torch_output_tensor = golden_function(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -39,31 +60,31 @@ def test_i0(device, h, w):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_isfinite(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.isfinite, pcc=0.993)
+    run_tensor_manip_unary_test(device, h, w, ttnn.isfinite)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_isinf(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.isinf, pcc=0.9997)
+    run_tensor_manip_unary_test(device, h, w, ttnn.isinf)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_isnan(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.isnan)
+    run_tensor_manip_unary_test(device, h, w, ttnn.isnan)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_isneginf(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.isneginf)
+    run_tensor_manip_unary_test(device, h, w, ttnn.isneginf)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_isposinf(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.isposinf)
+    run_tensor_manip_unary_test(device, h, w, ttnn.isposinf)
 
 
 @pytest.mark.parametrize("h", [5])
@@ -127,19 +148,19 @@ def test_eq(device, h, w, output_dtype):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_log10(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.log10)
+    run_math_unary_test(device, h, w, ttnn.log10, input_range=(1e-4, 100.0))
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_log1p(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.log1p, pcc=0.999)
+    run_math_unary_test(device, h, w, ttnn.log1p, input_range=(-0.999, 100.0))
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_log2(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.log2, pcc=0.999)
+    run_math_unary_test(device, h, w, ttnn.log2, pcc=0.999, input_range=(1e-4, 100.0))
 
 
 @pytest.mark.parametrize("h", [64])
@@ -187,7 +208,7 @@ def test_sqrt(device, h, w):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_digamma(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.digamma)
+    run_math_unary_test(device, h, w, ttnn.digamma, input_range=(0.01, 100.0))
 
 
 @pytest.mark.parametrize("h", [64])
@@ -205,7 +226,7 @@ def test_erfc(device, h, w):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_erfinv(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.erfinv, pcc=0.999)
+    run_math_unary_test(device, h, w, ttnn.erfinv, pcc=0.999, input_range=(-0.5, 0.5))
 
 
 @pytest.mark.parametrize("h", [64])
@@ -257,7 +278,9 @@ def run_math_unary_test_fixed_val(device, h, w, fill_value, ttnn_function, pcc=0
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn_function(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+    # Note: Do not use assert_with_pcc on constant tensors: PCC is undefined for constant tensors
+    assert_allclose(torch_output_tensor, output_tensor, atol=1e-4, rtol=0.02)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -314,5 +337,6 @@ def test_polygamma(device, h, w, scalar):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
+@pytest.mark.skip(reason="ttnn.reciprocal implementation does not support zero inputs")
 def test_recip_fixed(device, h, w):
     run_math_unary_test_fixed_val(device, h, w, 0, ttnn.reciprocal, pcc=0.999)

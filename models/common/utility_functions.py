@@ -577,15 +577,29 @@ def comp_pcc(golden, calculated, pcc=0.99):
     if golden.dtype == torch.bfloat16:
         golden = golden.type(torch.float32)
         calculated = calculated.type(torch.float32)
-    cal_pcc = np.min(
-        np.ma.corrcoef(
-            np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
-            np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
-        )
+
+    corr_matrix = np.corrcoef(
+        np.ma.masked_invalid(torch.squeeze(golden).detach().numpy().flatten()),
+        np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy().flatten()),
     )
 
-    if isinstance(cal_pcc, np.ma.core.MaskedConstant):
-        return True, 1.0
+    cal_pcc = corr_matrix[0, 1]
+
+    if not math.isfinite(cal_pcc):
+        golden_self_corr = math.isfinite(corr_matrix[0, 0])
+        calculated_self_corr = math.isfinite(corr_matrix[1, 1])
+
+        error_string = None
+        if not golden_self_corr and not calculated_self_corr:
+            error_string = "Golden and calculated tensors are constants"
+        elif not golden_self_corr:
+            error_string = "Golden tensor is constant"
+        else:
+            error_string = "Calculated tensor is constant"
+
+        logger.error(f"PCC is not finite: {error_string}")
+
+        return False, 0.0
 
     return cal_pcc >= pcc, cal_pcc
 

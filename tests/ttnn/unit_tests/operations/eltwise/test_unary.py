@@ -55,6 +55,22 @@ def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
+def run_equal_unary_test(device, h, w, ttnn_function, pcc=0.9999):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    torch_output_tensor = golden_function(torch_input_tensor, device=device)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.equal(torch_output_tensor, output_tensor)
+
+
 def run_unary_with_approx_mode_test(device, h, w, ttnn_function, vector_mode, approx_mode, pcc=0.9999):
     torch.manual_seed(0)
 
@@ -85,7 +101,12 @@ def run_unary_test_fixed(device, h, w, fill_value, ttnn_function, pcc=0.9999):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    # assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    print(f"golden function: {golden_function}")
+    print(f"torch_input_tensor: \n{torch_input_tensor}")
+    print(f"torch_output_tensor: \n{torch_output_tensor}")
+    print(f"output_tensor: \n{output_tensor}")
+    assert_allclose(torch_output_tensor, output_tensor, atol=1e-4, rtol=0.02)
 
 
 def run_identity_test(device, h, w, data_type):
@@ -365,7 +386,7 @@ def test_cosh(device, h, w):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_logical_not(device, h, w):
-    run_unary_test(device, h, w, ttnn.logical_not)
+    run_equal_unary_test(device, h, w, ttnn.logical_not)
 
 
 def run_unary_test_range(device, h, w, ttnn_function, pcc=0.9999):
@@ -446,7 +467,8 @@ def test_logit(device, h, w, scalar):
 
     output_tensor = ttnn.logit(input_tensor_a, eps=scalar)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+    assert_allclose(torch_output_tensor, output_tensor, atol=1e-4, rtol=0.02)
 
 
 @pytest.mark.parametrize("scalar", [0, 1.0, 2])
@@ -570,7 +592,9 @@ def test_unary_floor(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.floor)
     golden_tensor = golden_function(in_data1)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(golden_tensor, output_tensor, 0.999)
+    # assert_with_pcc(golden_tensor, output_tensor, 0.999)
+
+    assert torch.equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -588,7 +612,9 @@ def test_unary_ceil(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.ceil)
     golden_tensor = golden_function(in_data1)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(golden_tensor, output_tensor, 0.999)
+    # assert_with_pcc(golden_tensor, output_tensor, 0.999)
+
+    assert torch.equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [64])

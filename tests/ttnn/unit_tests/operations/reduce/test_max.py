@@ -29,7 +29,8 @@ def test_max(device, batch_size, h, w, dim):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    # assert_with_pcc(torch_output_tensor, output_tensor)
+    assert torch.equal(output_tensor, torch_output_tensor)
 
 
 @skip_for_grayskull("May fail on GS if run all the tests in this file. #17084")
@@ -52,7 +53,8 @@ def test_max_4d(device, batch_size1, batch_size2, h, w, dim):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    # assert_with_pcc(torch_output_tensor, output_tensor)
+    assert torch.equal(output_tensor, torch_output_tensor)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -72,7 +74,8 @@ def test_max_2d(device, h, w, dim):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    # assert_with_pcc(torch_output_tensor, output_tensor)
+    assert torch.equal(output_tensor, torch_output_tensor)
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -90,7 +93,8 @@ def test_max_global(device, batch_size, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
     output_tensor = output_tensor
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    # assert_with_pcc(torch_output_tensor, output_tensor)
+    assert torch.equal(output_tensor, torch_output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -132,4 +136,5 @@ def test_max_dim(device, input_shape_and_dim, keepdim):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    # assert_with_pcc(torch_output_tensor, output_tensor)
+    assert torch.equal(output_tensor, torch_output_tensor)

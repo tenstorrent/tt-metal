@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal, compare_pcc
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 
 @pytest.mark.parametrize(
@@ -30,8 +30,7 @@ def test_binary_gcd_int32(input_shapes, device):
     golden_tensor = golden_function(in_data1, in_data2)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-    assert pcc >= 0.99
+    assert_equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -51,8 +50,9 @@ def test_binary_gcd_ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.gcd)
     golden_tensor = golden_function(in_data1, in_data2)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    # comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    # assert comp_pass
+    assert_equal(golden_tensor, ttnn.to_torch(output_tensor))
 
 
 @pytest.mark.parametrize(
@@ -98,7 +98,7 @@ def test_binary_gcd_int32(input_shapes, low_a, high_a, low_b, high_b, device):
     )
     tt_result = ttnn.gcd(tt_in_a, tt_in_b)
     output_tensor = ttnn.to_torch(tt_result)
-    assert torch.equal(golden, output_tensor)
+    assert_equal(golden, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -140,7 +140,7 @@ def test_binary_gcd_fill_val_int32(input_shapes, input_a_val, input_b_val, devic
 
     tt_result = ttnn.gcd(tt_in_a, tt_in_b)
     output_tensor = ttnn.to_torch(tt_result)
-    assert torch.equal(golden, output_tensor)
+    assert_equal(golden, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -189,7 +189,7 @@ def test_binary_gcd_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low
     )
     tt_result = ttnn.gcd(tt_in_a, tt_in_b, use_legacy=None)
     output_tensor = ttnn.to_torch(tt_result)
-    assert torch.equal(golden, output_tensor)
+    assert_equal(golden, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -246,4 +246,4 @@ def test_binary_gcd_int32_opt(input_shapes, low_a, high_a, low_b, high_b, device
 
     ttnn.gcd(tt_in_a, tt_in_b, output_tensor=tt_out, queue_id=cq_id)
     output_tensor = ttnn.to_torch(tt_out)
-    assert torch.equal(golden, output_tensor)
+    assert_equal(golden, output_tensor)

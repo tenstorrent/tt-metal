@@ -343,8 +343,9 @@ def test_binary_min_fill_val_bf16(input_shapes, input_a_val, input_b_val, device
 
     tt_result = ttnn.minimum(tt_in_a, tt_in_b)
 
-    result = ttnn.to_torch(tt_result)
-    assert_with_pcc(golden, result, 0.999)
+    # result = ttnn.to_torch(tt_result)
+    # assert_with_pcc(golden, result, 0.999)
+    assert torch.equal(result, golden)
 
 
 @pytest.mark.parametrize(
@@ -390,7 +391,8 @@ def test_binary_min_bf16(input_shapes, low_a, high_a, low_b, high_b, device):
 
     tt_result = ttnn.minimum(tt_in_a, tt_in_b)
     result = ttnn.to_torch(tt_result)
-    assert_with_pcc(golden, result, 0.999)
+    # assert_with_pcc(golden, result, 0.999)
+    assert torch.equal(result, golden)
 
 
 @pytest.mark.parametrize(
@@ -438,8 +440,9 @@ def test_binary_min_fp32_bcast(input_shape_a, input_shape_b, low_a, high_a, low_
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tt_result = ttnn.minimum(tt_in_a, tt_in_b, use_legacy=None)
-    comp_pass = compare_equal([tt_result], [golden])
-    assert comp_pass
+    # comp_pass = compare_equal([tt_result], [golden])
+    # assert comp_pass
+    assert torch.equal(ttnn.to_torch(tt_result), golden)
 
 
 @pytest.mark.parametrize(
@@ -488,7 +491,8 @@ def test_binary_min_bf16_bcast(input_shape_a, input_shape_b, low_a, high_a, low_
     )
     tt_result = ttnn.minimum(tt_in_a, tt_in_b, use_legacy=None)
     result = ttnn.to_torch(tt_result)
-    assert_with_pcc(golden, result, 0.999)
+    # assert_with_pcc(golden, result, 0.999)
+    assert torch.equal(result, golden)
 
 
 @pytest.mark.parametrize(
@@ -544,5 +548,6 @@ def test_binary_min_fp32_opt(input_shapes, low_a, high_a, low_b, high_b, device)
     )
 
     ttnn.minimum(tt_in_a, tt_in_b, output_tensor=tt_out, queue_id=cq_id)
-    comp_pass = compare_equal([tt_out], [golden])
-    assert comp_pass
+    # comp_pass = compare_equal([tt_out], [golden])
+    # assert comp_pass
+    assert torch.equal(ttnn.to_torch(tt_out), golden)

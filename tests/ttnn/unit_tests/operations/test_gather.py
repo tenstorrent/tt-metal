@@ -48,7 +48,8 @@ def test_gather_general(input_shape, index_shape, dim, device):
     ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
 
     assert ttnn_gather.shape == index.shape
-    assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
+    # assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
+    assert torch.equal(torch_gather, ttnn.to_torch(ttnn_gather))
 
 
 @pytest.mark.parametrize(
@@ -79,7 +80,8 @@ def test_gather_preallocated_output(input_shape, index_shape, dim, device):
 
     assert ttnn_output.shape == index.shape
 
-    assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_output))
+    # assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_output))
+    assert torch.equal(torch_gather, ttnn.to_torch(ttnn_output))
 
 
 @pytest.mark.parametrize(
@@ -107,7 +109,8 @@ def test_gather_multicore_cases(input_shape, index_shape, dim, device):
     ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
 
     assert ttnn_gather.shape == index.shape
-    assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
+    # assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
+    assert torch.equal(torch_gather, ttnn.to_torch(ttnn_gather))
 
 
 @pytest.mark.parametrize(
@@ -136,7 +139,8 @@ def test_gather_datatype_cases(
     ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
 
     assert ttnn_gather.shape == index.shape
-    assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
+    # assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
+    assert torch.equal(torch_gather, ttnn.to_torch(ttnn_gather))
 
 
 @pytest.mark.parametrize(
@@ -169,7 +173,8 @@ def test_gather_long_tensor(input_shape, index_shape, dim, device):
     ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
 
     assert ttnn_gather.shape == index.shape
-    assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
+    # assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
+    assert torch.equal(torch_gather, ttnn.to_torch(ttnn_gather))
 
 
 @pytest.mark.parametrize(
@@ -196,4 +201,5 @@ def test_gather_cache_run(input_shape, index_shape, dim, runs, device):
     for _ in range(runs):
         ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
         assert ttnn_gather.shape == index.shape
-        assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
+        # assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
+        assert torch.equal(torch_gather, ttnn.to_torch(ttnn_gather))

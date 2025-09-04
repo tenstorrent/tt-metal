@@ -48,5 +48,6 @@ def test_abs(input_shape, device):
     result = ttnn.abs(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(result)
 
-    status, _ = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    assert status
+    # status, _ = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    # assert status
+    assert torch.equal(output_tensor, torch_output_tensor)
