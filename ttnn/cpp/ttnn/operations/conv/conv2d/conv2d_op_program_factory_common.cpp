@@ -24,16 +24,18 @@ uint32_t calculate_act_cb_size_with_reuse(
     const uint32_t output_image_width,
     const uint32_t padded_in_channels,
     const std::array<uint32_t, 2>& kernel_size,
-    const uint32_t input_tile_size) {
-    const uint32_t image_width_tiles =
-        (output_image_width + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;  // todo(sjovic): ceil
+    const uint32_t input_tile_size,
+    DataType input_datatype) {
+    const uint32_t image_width_tiles = tt::div_up(output_image_width, tt::constants::TILE_HEIGHT);
     const uint32_t reuse_loops = std::ceil(static_cast<float>(act_block_h_tiles) / image_width_tiles);
     const uint32_t image_width_mod_tile = output_image_width % tt::constants::TILE_HEIGHT;
     const uint32_t image_width_tile_leftover =
         image_width_mod_tile == 0 ? 0 : tt::constants::TILE_HEIGHT - image_width_mod_tile;
+    tt::DataFormat data_format = datatype_to_dataformat_converter(input_datatype);
+    const uint32_t dtype_size_bytes = datum_size(data_format);
     const uint32_t reuse_length = reuse_loops * padded_in_channels * kernel_size[1] *
-                                  (1 + image_width_tile_leftover * kernel_size[0]) * 2;  // halo outputs bfloat16
-    const uint32_t reuse_tiles = (reuse_length + input_tile_size - 1) / input_tile_size;
+                                  (1 + image_width_tile_leftover * kernel_size[0]) * dtype_size_bytes;
+    const uint32_t reuse_tiles = tt::div_up(reuse_length, input_tile_size);
 
     return image_width_tiles * act_block_w_tiles + reuse_tiles;
 }
@@ -97,7 +99,8 @@ std::vector<CBInfo> get_cb_info(
                 output_image_width,
                 padded_in_channels,
                 kernel_size,
-                input_tile_size);
+                input_tile_size,
+                input_datatype);
         }
     } else {
         // Calculate split reader parameters
@@ -115,14 +118,16 @@ std::vector<CBInfo> get_cb_info(
                 output_image_width,
                 padded_in_channels,
                 kernel_size,
-                input_tile_size);
+                input_tile_size,
+                input_datatype);
             act_block_split_num_tiles = calculate_act_cb_size_with_reuse(
                 act_block_h_nsubblocks_split_last,
                 block_config.act_block_w_ntiles,
                 output_image_width,
                 padded_in_channels,
                 kernel_size,
-                input_tile_size);
+                input_tile_size,
+                input_datatype);
         }
     }
 
@@ -153,8 +158,9 @@ std::vector<CBInfo> get_cb_info(
             per_core_out_matrix_width_ntiles *
             (is_1d_depthwise_conv ? block_config.act_block_h_ntiles : block_config.act_block_w_ntiles);
         if (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
-            if (num_blocks_act_h > 1 && !conv_config.enable_activation_reuse) {
-                // Fully buffered weights; if activation reuse is enabled, we already have full inner dim
+            // If activation reuse is enabled, we already have full inner dim
+            const bool enable_fully_buffered_weights = num_blocks_act_h > 1 && !conv_config.enable_activation_reuse;
+            if (enable_fully_buffered_weights) {
                 weight_block_num_tiles *= kernel_size[0];
             } else if (conv_config.enable_weights_double_buffer) {
                 weight_block_num_tiles *= 2;
