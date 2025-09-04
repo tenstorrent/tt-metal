@@ -124,12 +124,10 @@ inline void _llk_math_set_dvalid_()
 }
 
 /**
-* All the following functions are added to enable Math <-> Pack synchronization
-* on destination register due to dest dvalid issue:
-https://tenstorrent.atlassian.net/browse/TEN-888?atlOrigin=eyJpIjoiNDRkYzg5MTExMmUzNDVjZWI3Y2ZhYjk2MTM1MDc2YmUiLCJwIjoiaiJ9
-*
-* The following functions should be removed once the above issue is resolved
-*/
+ * All the following functions are added to enable Math <-> Pack synchronization
+ * on destination register due to dest dvalid issue:
+ * The following functions should be removed once the above issue is resolved
+ */
 template <DstSync DST>
 inline void _llk_math_pack_sync_init_()
 {

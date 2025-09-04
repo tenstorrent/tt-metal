@@ -165,12 +165,10 @@ inline void _llk_pack_set_l1_acc_(const bool l1_acc_en)
 }
 
 /**
-* All the following functions are added to enable Math <-> Pack synchronization
-* on destination register due to dest dvalid issue:
-https://tenstorrent.atlassian.net/browse/TEN-888?atlOrigin=eyJpIjoiNDRkYzg5MTExMmUzNDVjZWI3Y2ZhYjk2MTM1MDc2YmUiLCJwIjoiaiJ9
-*
-* The following functions should be removed once the above issue is resolved
-*/
+ * All the following functions are added to enable Math <-> Pack synchronization
+ * on destination register due to dest dvalid issue:
+ * The following functions should be removed once the above issue is resolved
+ */
 
 // wait until math is done and has produced something to pack
 inline void _llk_packer_wait_for_math_done_()

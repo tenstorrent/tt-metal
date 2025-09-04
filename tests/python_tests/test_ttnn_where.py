@@ -138,7 +138,7 @@ def test_ttnn_where(test_name, formats, dest_acc, mathop, test_case):
     src_B = extend_tensor(true_values, length=1024, dtype=dtype)
     src_C = extend_tensor(false_values, length=1024, dtype=dtype)
 
-    core_loc = "0,0"
+    location = "0,0"
     buffer_A_address = 0x1A000
     buffer_B_address = 0x1B000
     buffer_C_address = 0x1C000
@@ -155,9 +155,9 @@ def test_ttnn_where(test_name, formats, dest_acc, mathop, test_case):
         raise ValueError(f"Unsupported input format: {formats.input_format}")
 
     golden = generate_golden(src_A, src_B, src_C)
-    write_to_device(core_loc, buffer_A_address, pack_function_A(src_A))
-    write_to_device(core_loc, buffer_B_address, pack_function_B(src_B))
-    write_to_device(core_loc, buffer_C_address, pack_function_C(src_C))
+    write_to_device(location, buffer_A_address, pack_function_A(src_A))
+    write_to_device(location, buffer_B_address, pack_function_B(src_B))
+    write_to_device(location, buffer_C_address, pack_function_C(src_C))
 
     unpack_to_dest = formats.input_format.is_32_bit()
 
@@ -239,7 +239,7 @@ def test_ttnn_where_mcw(test_name, formats, dest_acc, mathop, height, width):
     T = T.flatten().to(format_dict[formats.input_format])
     F = F.flatten().to(format_dict[formats.input_format])
 
-    core_loc = "0,0"
+    location = "0,0"
     buffer_A_address = 0x1A000
     buffer_B_address = 0x1B000
     buffer_C_address = 0x1C000
@@ -256,9 +256,9 @@ def test_ttnn_where_mcw(test_name, formats, dest_acc, mathop, height, width):
         raise ValueError(f"Unsupported input format: {formats.input_format}")
 
     golden = generate_golden(C, T, F)
-    write_to_device(core_loc, buffer_A_address, pack_function_A(C))
-    write_to_device(core_loc, buffer_B_address, pack_function_B(T))
-    write_to_device(core_loc, buffer_C_address, pack_function_C(F))
+    write_to_device(location, buffer_A_address, pack_function_A(C))
+    write_to_device(location, buffer_B_address, pack_function_B(T))
+    write_to_device(location, buffer_C_address, pack_function_C(F))
 
     unpack_to_dest = formats.input_format.is_32_bit()
 

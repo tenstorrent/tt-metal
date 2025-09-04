@@ -76,7 +76,7 @@ def collect_results(
     formats: FormatConfig,
     tile_count: int,
     address: int = 0x1C000,
-    core_loc: str = "0,0",
+    location: str = "0,0",
     sfpu: bool = False,
     tile_dimensions=[32, 32],
     num_faces: int = 4,
@@ -89,17 +89,17 @@ def collect_results(
         formats.output_format.num_bytes_per_tile(tile_elements) * tile_count
     )
 
-    read_data = read_from_device(core_loc, address, num_bytes=read_bytes_cnt)
+    read_data = read_from_device(location, address, num_bytes=read_bytes_cnt)
     res_from_L1 = unpack_res_tiles(
         read_data, formats, tile_count=tile_count, sfpu=sfpu, num_faces=num_faces
     )
     return res_from_L1
 
 
-def perform_tensix_soft_reset(core_loc="0,0"):
+def perform_tensix_soft_reset(location="0,0"):
     context = check_context()
     device = context.devices[0]
-    chip_coordinate = OnChipCoordinate.create(core_loc, device=device)
+    chip_coordinate = OnChipCoordinate.create(location, device=device)
     noc_block = device.get_block(chip_coordinate)
     register_store = noc_block.get_register_store()
 
@@ -109,10 +109,10 @@ def perform_tensix_soft_reset(core_loc="0,0"):
     register_store.write_register("RISCV_DEBUG_REG_SOFT_RESET_0", soft_reset)
 
 
-def run_cores(cores: list[RiscCore], device_id=0, core_loc="0,0"):
+def run_cores(cores: list[RiscCore], device_id=0, location="0,0"):
     context = check_context()
     device = context.devices[device_id]
-    chip_coordinate = OnChipCoordinate.create(core_loc, device=device)
+    chip_coordinate = OnChipCoordinate.create(location, device=device)
     noc_block = device.get_block(chip_coordinate)
     register_store = noc_block.get_register_store()
 
@@ -125,10 +125,10 @@ def run_cores(cores: list[RiscCore], device_id=0, core_loc="0,0"):
     register_store.write_register("RISCV_DEBUG_REG_SOFT_RESET_0", soft_reset)
 
 
-def exalens_device_setup(chip_arch, device_id=0, core_loc="0,0"):
+def exalens_device_setup(chip_arch, device_id=0, location="0,0"):
     context = check_context()
     device = context.devices[device_id]
-    chip_coordinate = OnChipCoordinate.create(core_loc, device=device)
+    chip_coordinate = OnChipCoordinate.create(location, device=device)
     debug_tensix = TensixDebug(chip_coordinate, device_id, context)
     ops = debug_tensix.device.instructions
 
@@ -149,13 +149,13 @@ def exalens_device_setup(chip_arch, device_id=0, core_loc="0,0"):
     debug_tensix.inject_instruction(ops.TT_OP_SEMINIT(1, 0, 4), 0)
 
 
-def run_elf_files(testname, device_id=0, core_loc="0,0", boot_mode=BootMode.BRISC):
+def run_elf_files(testname, device_id=0, location="0,0", boot_mode=BootMode.BRISC):
     CHIP_ARCH = get_chip_architecture()
     LLK_HOME = os.environ.get("LLK_HOME")
     BUILD_DIR = Path(LLK_HOME) / "tests" / "build" / CHIP_ARCH.value
 
     # Perform soft reset
-    perform_tensix_soft_reset(core_loc)
+    perform_tensix_soft_reset(location)
 
     # Load TRISC ELF files
     trisc_names = ["unpack", "math", "pack"]
@@ -163,29 +163,29 @@ def run_elf_files(testname, device_id=0, core_loc="0,0", boot_mode=BootMode.BRIS
         elf_path = BUILD_DIR / "tests" / testname / "elf" / f"{trisc_name}.elf"
         load_elf(
             elf_file=str(elf_path.absolute()),
-            core_loc=core_loc,
+            location=location,
             risc_name=f"trisc{i}",
         )
 
     # Reset the profiler barrier
     TRISC_PROFILER_BARRIE_ADDRESS = 0x16AFF4
-    write_words_to_device(core_loc, TRISC_PROFILER_BARRIE_ADDRESS, [0, 0, 0])
+    write_words_to_device(location, TRISC_PROFILER_BARRIE_ADDRESS, [0, 0, 0])
 
     match boot_mode:
         case BootMode.BRISC:
             brisc_elf_path = BUILD_DIR / "shared" / "elf" / "brisc.elf"
             load_elf(
                 elf_file=str(brisc_elf_path.absolute()),
-                core_loc=core_loc,
+                location=location,
                 risc_name="brisc",
             )
-            run_cores([RiscCore.BRISC], device_id, core_loc)
+            run_cores([RiscCore.BRISC], device_id, location)
         case BootMode.TRISC:
-            run_cores([RiscCore.TRISC0], device_id, core_loc)
+            run_cores([RiscCore.TRISC0], device_id, location)
         case BootMode.EXALENS:
-            exalens_device_setup(CHIP_ARCH, device_id, core_loc)
+            exalens_device_setup(CHIP_ARCH, device_id, location)
             run_cores(
-                [RiscCore.TRISC0, RiscCore.TRISC1, RiscCore.TRISC2], device_id, core_loc
+                [RiscCore.TRISC0, RiscCore.TRISC1, RiscCore.TRISC2], device_id, location
             )
 
 
@@ -197,7 +197,7 @@ def write_stimuli_to_l1(
     stimuli_B_format: DataFormat,
     tile_count_A: int = 1,
     tile_count_B: int = None,
-    core_loc="0,0",
+    location="0,0",
     num_faces=4,
 ):
     """
@@ -211,7 +211,7 @@ def write_stimuli_to_l1(
         stimuli_B_format: DataFormat for matrix B
         tile_count_A: Number of tiles in matrix A
         tile_count_B: Number of tiles in matrix B
-        core_loc: Core location string
+        location: Core location string
 
     Returns:
         int: Address where result will be stored
@@ -270,7 +270,7 @@ def write_stimuli_to_l1(
             packed_data_list.append(packed_data)
 
         for addr, data in zip(addresses, packed_data_list):
-            write_to_device(core_loc, addr, data)
+            write_to_device(location, addr, data)
 
     write_matrix(
         buffer_A,
@@ -300,7 +300,7 @@ def write_stimuli_to_l1(
 def get_result_from_device(
     formats: FormatConfig,
     read_data_bytes: bytes,
-    core_loc: str = "0,0",
+    location: str = "0,0",
     sfpu: bool = False,
 ):
     # Dictionary of format to unpacking function mappings
@@ -362,12 +362,12 @@ def read_dest_register(dest_acc: DestAccumulation, num_tiles: int = 1):
     risc_id = 1  # we want to use TRISC 0 for reading the destination register
     noc_id = 0  # NOC ID for the device
     device_id = 0  # Device ID for the device
-    core_loc = "0,0"  # Core location in the format "tile_id,risc_id"
+    location = "0,0"  # Core location in the format "tile_id,risc_id"
     base_address = 0xFFBD8000
 
     context = check_context()
     validate_device_id(device_id, context)
-    coordinate = convert_coordinate(core_loc, device_id, context)
+    coordinate = convert_coordinate(location, device_id, context)
 
     if risc_id != 1:
         raise ValueError(
@@ -389,12 +389,12 @@ def read_dest_register(dest_acc: DestAccumulation, num_tiles: int = 1):
     return dest_reg
 
 
-def wait_until_tensix_complete(core_loc, mailbox_addr, timeout=30, max_backoff=5):
+def wait_until_tensix_complete(location, mailbox_addr, timeout=30, max_backoff=5):
     """
     Polls a value from the device with an exponential backoff timer and fails if it doesn't read 1 within the timeout.
 
     Args:
-        core_loc: The location of the core to poll.
+        location: The location of the core to poll.
         mailbox_addr: The mailbox address to read from.
         timeout: Maximum time to wait (in seconds) before timing out. Default is 30 seconds. If running on a simulator it is 600 seconds.
         max_backoff: Maximum backoff time (in seconds) between polls. Default is 5 seconds.
@@ -406,7 +406,7 @@ def wait_until_tensix_complete(core_loc, mailbox_addr, timeout=30, max_backoff=5
     backoff = 0.1  # Initial backoff time in seconds
 
     while time.time() - start_time < timeout:
-        if read_word_from_device(core_loc, mailbox_addr.value) == KERNEL_COMPLETE:
+        if read_word_from_device(location, mailbox_addr.value) == KERNEL_COMPLETE:
             return
 
         time.sleep(backoff)
@@ -420,16 +420,16 @@ def wait_until_tensix_complete(core_loc, mailbox_addr, timeout=30, max_backoff=5
     )
 
 
-def wait_for_tensix_operations_finished(core_loc: str = "0,0"):
-    wait_until_tensix_complete(core_loc, Mailbox.Packer)
-    wait_until_tensix_complete(core_loc, Mailbox.Math)
-    wait_until_tensix_complete(core_loc, Mailbox.Unpacker)
+def wait_for_tensix_operations_finished(location: str = "0,0"):
+    wait_until_tensix_complete(location, Mailbox.Packer)
+    wait_until_tensix_complete(location, Mailbox.Math)
+    wait_until_tensix_complete(location, Mailbox.Unpacker)
 
 
 def reset_mailboxes():
     """Reset all core mailboxes before each test."""
-    core_loc = "0, 0"
+    location = "0, 0"
     reset_value = 0  # Constant - indicates the TRISC kernel run status
     mailboxes = [Mailbox.Packer, Mailbox.Math, Mailbox.Unpacker]
     for mailbox in mailboxes:
-        write_words_to_device(core_loc=core_loc, addr=mailbox.value, data=reset_value)
+        write_words_to_device(location=location, addr=mailbox.value, data=reset_value)
