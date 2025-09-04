@@ -674,49 +674,54 @@ TEST_P(FabricLite, ReadArc) {
     std::vector<uint32_t> read_val;
     read_val.resize(100);
     // host_interface.read(read_val.data(), 16, dest_noc_addr);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        read_val.data(), 16, {1, virtual_worker.x, virtual_worker.y}, dest_noc_addr);
+    // tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+    //     read_val.data(), 16, {1, virtual_worker.x, virtual_worker.y}, dest_noc_addr);
 
-    log_info(
-        tt::LogTest,
-        "Read From Remote Worker (PCIE) {:#x} {:#x} {:#x} from arc address {:#x}. correct value {:#x}",
-        read_val[0],
-        read_val[1],
-        read_val[2],
-        dest_noc_addr,
-        correct_value);
+    // log_info(
+    //     tt::LogTest,
+    //     "Read From Remote Worker (PCIE) {:#x} {:#x} {:#x} from arc address {:#x}. correct value {:#x}",
+    //     read_val[0],
+    //     read_val[1],
+    //     read_val[2],
+    //     dest_noc_addr,
+    //     correct_value);
+
+    // read_val.clear();
+    // read_val.resize(100);
+    // tt::tt_metal::MetalContext::instance().get_cluster().read_core(read_val.data(), 16, {0, 8, 0}, test_addr);
+    // log_info(
+    //     tt::LogTest,
+    //     "Read From Remote Arc (PCIE) {:#x} {:#x} {:#x} from arc address {:#x}. correct value {:#x}",
+    //     read_val[0],
+    //     read_val[1],
+    //     read_val[2],
+    //     test_addr,
+    //     correct_value);
+
+    // read_val.clear();
+    // read_val.resize(100);
+    // host_interface.read(read_val.data(), 16, test_addr);
+    // log_info(
+    //     tt::LogTest,
+    //     "Read From Remote Arc (Lite Fabric) {:#x} {:#x} {:#x} from arc address {:#x}. correct value {:#x}",
+    //     read_val[0],
+    //     read_val[1],
+    //     read_val[2],
+    //     test_addr,
+    //     correct_value);
+
+    read_val.clear();
+    read_val.resize(100);
+    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        read_val.data(), 16, {0, virtual_worker.x, virtual_worker.y}, 0x70000);
+    log_info(tt::LogTest, "Read From Local Worker (PCIE) {:#x} {:#x} {:#x}", read_val[0], read_val[1], read_val[2]);
 
     read_val.clear();
     read_val.resize(100);
     tt::tt_metal::MetalContext::instance().get_cluster().read_core(read_val.data(), 16, {0, 8, 0}, test_addr);
     log_info(
         tt::LogTest,
-        "Read From Remote Arc (PCIE) {:#x} {:#x} {:#x} from arc address {:#x}. correct value {:#x}",
-        read_val[0],
-        read_val[1],
-        read_val[2],
-        test_addr,
-        correct_value);
-
-    read_val.clear();
-    read_val.resize(100);
-    host_interface.read(read_val.data(), 16, test_addr);
-    log_info(
-        tt::LogTest,
-        "Read From Remote Arc (Lite Fabric) {:#x} {:#x} {:#x} from arc address {:#x}. correct value {:#x}",
-        read_val[0],
-        read_val[1],
-        read_val[2],
-        test_addr,
-        correct_value);
-
-    read_val.clear();
-    read_val.resize(100);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        read_val.data(), 16, {0, virtual_worker.x, virtual_worker.y}, dest_noc_addr);
-    log_info(
-        tt::LogTest,
-        "Read From Local Worker (PCIE) {:#x} {:#x} {:#x} from arc address {:#x}. correct value {:#x}",
+        "Read From Local ARC (PCIE) {:#x} {:#x} {:#x} from arc address {:#x}. correct value {:#x}",
         read_val[0],
         read_val[1],
         read_val[2],
