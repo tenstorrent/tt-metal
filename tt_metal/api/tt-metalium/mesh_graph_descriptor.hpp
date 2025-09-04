@@ -82,7 +82,7 @@ public:
     ~MeshGraphDescriptor();
 
     // Debugging/inspection
-    void print_node(GlobalNodeId id, int indent_level = 0);
+    void print_node(const GlobalNodeId id, int indent_level = 0);
     void print_all_nodes();
 
     const InstanceData & top_level() const {
@@ -119,7 +119,7 @@ public:
         TT_FATAL(it != instances_by_type_.end(), "No instances found with type {}", type);
         return it->second;
     }
-    const std::vector<ConnectionId>& connections_by_instance_id(GlobalNodeId instance_id) const {
+    const std::vector<ConnectionId>& connections_by_instance_id(const GlobalNodeId instance_id) const {
         auto it = connections_by_instance_id_.find(instance_id);
         TT_FATAL(it != connections_by_instance_id_.end(), "No connections indexed for instance id {}", instance_id);
         return it->second;
@@ -129,20 +129,20 @@ public:
         TT_FATAL(it != connections_by_type_.end(), "No connections found for type {}", type);
         return it->second;
     }
-    const std::vector<ConnectionId>& connections_by_source_device_id(GlobalNodeId source_device_id) const {
+    const std::vector<ConnectionId>& connections_by_source_device_id(const GlobalNodeId source_device_id) const {
         auto it = connections_by_source_device_id_.find(source_device_id);
         TT_FATAL(it != connections_by_source_device_id_.end(), "No connections found for source device id {}", source_device_id);
         return it->second;
     }
-
+    
 
 private:
     const bool backwards_compatible_;
 
     // Descriptor fast lookup
     std::unique_ptr<const proto::MeshGraphDescriptor> proto_;
-    std::unordered_map<std::string_view, const proto::MeshDescriptor*> mesh_desc_by_name_;
-    std::unordered_map<std::string_view, const proto::GraphDescriptor*> graph_desc_by_name_;
+    std::unordered_map<std::string, const proto::MeshDescriptor*> mesh_desc_by_name_;
+    std::unordered_map<std::string, const proto::GraphDescriptor*> graph_desc_by_name_;
 
     // Global node table and typed stores
     std::unordered_map<GlobalNodeId, InstanceData> instances_;
@@ -150,7 +150,7 @@ private:
 
     // Indices
     std::unordered_map<std::string, std::vector<GlobalNodeId>> instances_by_name_;
-    std::unordered_map<std::string_view, std::vector<GlobalNodeId>> instances_by_type_;
+    std::unordered_map<std::string, std::vector<GlobalNodeId>> instances_by_type_;
     std::vector<GlobalNodeId> device_instances_;
     std::vector<GlobalNodeId> mesh_instances_;
     std::vector<GlobalNodeId> graph_instances_;
@@ -158,7 +158,7 @@ private:
 
     // Connections
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_instance_id_;
-    std::unordered_map<std::string, std::vector<ConnectionId>> connections_by_type_;
+    std::unordered_map<std::string_view, std::vector<ConnectionId>> connections_by_type_;
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
 
@@ -183,15 +183,13 @@ private:
     void populate_descriptors();
 
     // Populate Instances
-    GlobalNodeId populate_instance(const proto::NodeRef& node_ref, std::vector<GlobalNodeId>& hierarchy);
-    GlobalNodeId populate_mesh_instance(const proto::MeshRef& mesh_ref, std::vector<GlobalNodeId>& hierarchy);
-    GlobalNodeId populate_graph_instance(const proto::GraphRef& graph_ref, std::vector<GlobalNodeId>& hierarchy);
-    GlobalNodeId populate_device_instance(LocalNodeId local_id, std::vector<GlobalNodeId>& hierarchy);
+    const GlobalNodeId populate_instance(const proto::NodeRef& node_ref, std::vector<GlobalNodeId>& hierarchy);
+    const GlobalNodeId populate_mesh_instance(const proto::MeshRef& mesh_ref, std::vector<GlobalNodeId>& hierarchy);
+    const GlobalNodeId populate_graph_instance(const proto::GraphRef& graph_ref, std::vector<GlobalNodeId>& hierarchy);
+    const GlobalNodeId populate_device_instance(const LocalNodeId local_id, std::vector<GlobalNodeId>& hierarchy);
 
     // Populate Connections
     void populate_connections();
-    void add_to_fast_lookups(const InstanceData& instance);
-    void add_connection_to_fast_lookups(const ConnectionData& connection, const std::string& type);
 
     void populate_intra_mesh_connections(GlobalNodeId mesh_id);
     void populate_intra_mesh_express_connections(GlobalNodeId mesh_id);
@@ -199,8 +197,10 @@ private:
     void populate_inter_mesh_manual_connections(GlobalNodeId graph_id);
     void populate_inter_mesh_topology_connections(GlobalNodeId graph_id); // TODO: To be implemented in seperate PR
 
-    GlobalNodeId find_instance_by_ref(GlobalNodeId parent_instance_id, const proto::NodeRef& node_ref);
+    const GlobalNodeId find_instance_by_ref(const GlobalNodeId parent_instance_id, const proto::NodeRef& node_ref);
 
+    void add_to_fast_lookups(const InstanceData& instance);
+    void add_connection_to_fast_lookups(const ConnectionData& connection, const std::string& type);
 };
 
 }  // namespace tt::tt_fabric
