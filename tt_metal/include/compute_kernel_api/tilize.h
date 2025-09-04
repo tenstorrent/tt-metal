@@ -47,7 +47,7 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb) {
  * The same as tilize_init, but skips the packer configuration on blackhole in preparation to leave the
  * tilized result in DST without packing to an out CB
  *
- * Should only be used with *_no_pack variants
+ * Note: Should only be used with *_no_pack variants. Skips Low-Level API layer to enhance perf but limits use case.
  *
  * Return value: None
  *
@@ -146,7 +146,7 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
  * The same as tilize_init_short_with_dt, but skips part of the packer configuration on blackhole in
  * preparation to leave the tilized result in DST without packing to an out CB
  *
- * Should only be used with *_no_pack variants
+ * Note: Should only be used with *_no_pack variants. Skips Low-Level API layer to enhance perf but limits use case.
  *
  * Return value: None
  *
@@ -221,7 +221,7 @@ ALWI void tilize_block(
  * The same as tilize_block, but skips the packing step and MATH/PACK synchronization to leave the
  * tilized result in DST without packing to an out CB
  *
- * Should only be used with *_no_pack variants
+ * Note: Should only be used with *_no_pack variants. Skips Low-Level API layer to enhance perf but limits use case.
  *
  * Return value: None
  *
@@ -307,7 +307,7 @@ ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
  * The same as tilize_uninit, but skips the packer configuration on blackhole in preparation to leave
  * the tilized result in DST without packing to an out CB
  *
- * Should only be used with *_no_pack variants
+ * Note: Should only be used with *_no_pack variants. Skips Low-Level API layer to enhance perf but limits use case.
  *
  * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025
  * as a part of tt-metal#22904.
@@ -351,7 +351,7 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
  * The same as tilize_uninit_with_dt, but skips the packer configuration on blackhole in preparation to
  * leave the tilized result in DST without packing to an out CB
  *
- * Should only be used with *_no_pack variants
+ * Note: Should only be used with *_no_pack variants. Skips Low-Level API layer to enhance perf but limits use case.
  *
  * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025
  * as a part of tt-metal#22904.
