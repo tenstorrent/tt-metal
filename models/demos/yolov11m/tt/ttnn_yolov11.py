@@ -30,7 +30,7 @@ class TtnnYoloV11:
 
         self.c3k2_5 = TtnnC3k2(device, parameters.conv_args[13], parameters.model[13], is_bk_enabled=False, reshard=True)
         self.c3k2_6 = TtnnC3k2(device, parameters.conv_args[16], parameters.model[16], is_bk_enabled=False, reshard=True)
-        self.conv7 = TtnnConv(device, parameters.conv_args[17], parameters.model[17])
+        self.conv7 = TtnnConv(device, parameters.conv_args[17], parameters.model[17], deallocate_activation=True)
         self.c3k2_7 = TtnnC3k2(device, parameters.conv_args[19], parameters.model[19], is_bk_enabled=False, reshard=True)
         self.conv8 = TtnnConv(device, parameters.conv_args[20], parameters.model[20], deallocate_activation=True)
         self.c3k2_8 = TtnnC3k2(
@@ -104,7 +104,7 @@ class TtnnYoloV11:
         x = sharded_concat([x, x4], to_interleaved=False)
         ttnn.deallocate(x4)
         x = self.c3k2_6(self.device, x)
-        x16 = x
+        x16 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.conv7(self.device, x)
         x = sharded_concat_2(x, x13)
         ttnn.deallocate(x13)
