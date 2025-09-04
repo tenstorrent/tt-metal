@@ -22,13 +22,11 @@ class ResetUtil:
             self.args = command_parts[1:]
             return
 
-
         self.smi_options = ["tt-smi"]
         for smi_option in self.smi_options:
             executable = shutil.which(smi_option)
             logger.info(f"tt-smi executable: {executable}")
             if executable is not None:
-
                 self.command = executable
                 self.args = ["-r"]
 
