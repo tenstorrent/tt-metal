@@ -25,7 +25,9 @@ class TtCSPRepBiFPANNeck:
             conv_pth=parameters.reduce_layer0.block.conv,
             activation="relu",
         )
-        self.Bifusion0 = TtBiFusion(device, parameters.Bifusion0, model_params.Bifusion0)
+        self.Bifusion0 = TtBiFusion(
+            device, parameters.Bifusion0, model_params.Bifusion0, shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        )
         self.Rep_p4 = TtBepC3(device, parameters.Rep_p4, model_params.Rep_p4, n=12)
 
         self.reduce_layer1 = Yolov6l_Conv2D(
