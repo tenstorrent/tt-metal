@@ -182,6 +182,8 @@ uint8_t MeshDevice::num_hw_cqs() const {
 }
 
 bool MeshDevice::is_initialized() const {
+    // TODO: Revisit whether we can simplify this when `MeshDevice` initialization isn't so coupled
+    // with individual device initialization.
     if (!is_internal_state_initialized) {
         return false;
     }
