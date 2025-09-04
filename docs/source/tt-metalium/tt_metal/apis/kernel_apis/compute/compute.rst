@@ -61,52 +61,134 @@ Compute (FPU/matrix engine)
 Compute (SFPU/vector engine)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Element wise operations
-^^^^^^^^^^^^^^^^^^^^^^^
+Basic arithmetic operations
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. toctree::
 
+  add_binary_tile
+  sub_binary_tile
+  mul_binary_tile
+  div_binary_tile
+  rsub_tile
+  rsub_binary_tile
+  power_tile
+  power_binary_tile
+  square_tile
+  sqrt_tile
+  rsqrt_tile
+  recip_tile
   abs_tile
+  negative_tile
+  binop_with_scalar_tile
+  tiled_prod_tile
+
+Integer operations
+^^^^^^^^^^^^^^^^^^
+
+.. toctree::
+
+  add_int_tile
+  sub_int_tile
+  mul_int_tile
+  rsub_int32_tile
+  gcd_tile
+  lcm_tile
+  remainder_tile
+  fmod_tile
+
+Exponential and logarithmic functions
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. toctree::
+
   exp_tile
   exp2_tile
   expm1_tile
-  recip_tile
-  sign_tile
-  sqrt_tile
-  rsqrt_tile
   log_tile
+  log1p_tile
   log_with_base_tile
-  power_tile
-  rsub_tile
-  signbit_tile
-  square_tile
-  ceil_tile
-  clamp_tile
-  cumsum_tile
-  div_binary_tile
-  add_binary_tile
-  compute_kernel_hw_startup
-  isinf_tile
-  isnan_tile
-  i0_tile
-  logical_not_unary_tile
-  heaviside_tile
+  xlogy_binary_tile
+
+Comparison and logical operations
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. toctree::
+
+  unary_eq_tile
+  unary_ne_tile
+  unary_gt_tile
+  unary_ge_tile
+  unary_lt_tile
+  unary_le_tile
+  unary_max_tile
+  unary_min_tile
+  max_tile
+  binary_max_tile
+  binary_min_tile
   ltz_tile
-  eqz_tile
   lez_tile
   gtz_tile
   gez_tile
+  eqz_tile
   nez_tile
-  unary_ne_tile
-  unary_gt_tile
-  unary_lt_tile
-  unary_max_tile
-  unary_min_tile
-  gcd_tile
-  add_int_tile
+  logical_not_unary_tile
+  isinf_tile
+  isnan_tile
+  heaviside_tile
+
+Bitwise operations
+^^^^^^^^^^^^^^^^^^
+
+.. toctree::
+
+  bitwise_and_tile
+  bitwise_or_tile
+  bitwise_xor_tile
+  bitwise_not_tile
+  bitwise_and_binary_tile
+  bitwise_or_binary_tile
+  bitwise_xor_binary_tile
+  left_shift_tile
+  right_shift_tile
+  binary_shift_tile
+
+Rounding and ceiling functions
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. toctree::
+
+  ceil_tile
+  round_tile
+  clamp_tile
+  threshold_tile
+  sign_tile
+  signbit_tile
+
+Hyperbolic functions
+^^^^^^^^^^^^^^^^^^^^
+
+.. toctree::
+
   asinh_tile
   atanh_tile
-  binop_with_scalar_tile
+
+Special mathematical functions
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. toctree::
+
+  i0_tile
+  i1_tile
+  cumsum_tile
+  alt_complex_rotate90_tile
+
+Initialization and utilities
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. toctree::
+
+  compute_kernel_hw_startup
 
 Trigonometric functions
 ^^^^^^^^^^^^^^^^^^^^^^^
@@ -136,9 +218,29 @@ Activation functions
   gelu_tile
   sigmoid_tile
   celu_tile
+  silu_tile
+  prelu_tile
+  softplus_tile
+  softsign_tile
+  hardsigmoid_tile
+  hardtanh_tile
 
-Misc
-^^^^
+Data manipulation and processing
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. toctree::
+
+  fill_tile
+  identity_tile
+  mask_tile
+  where_tile
+  reshuffle_rows_tile
+  typecast_tile
+  dropout_tile
+  rand_tile
+
+Quantization operations
+^^^^^^^^^^^^^^^^^^^^^^^
 
 .. toctree::
 
