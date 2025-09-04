@@ -1140,6 +1140,7 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                 params.groups,
                 params.enable_bias,
                 params.compute_kernel_config);
+            log_debug(tt::LogOp, "Conv2D DRAM Auto Slice Selected Shard Layout: {}", conv_config.shard_layout);
         }
         ShardOrientation shard_orientation =
             conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
@@ -1164,14 +1165,19 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         ParallelConfig output_parallel_config = determine_output_parallel_config(
             parallel_config, params.compute_grid, params.out_channels, shard_orientation, params.mm_conv);
 
+        uint32_t padded_in_channels = tt::round_up(
+            params.in_channels, constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(parallel_config));
+        uint32_t padded_out_channels = tt::round_up(
+            params.out_channels,
+            constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(output_parallel_config));
+        ttnn::Shape folded_weights_shape(
+            {1, 1, padded_in_channels * params.kernel_size[0] * params.kernel_size[1], padded_out_channels});
         auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
             conv_config,
             params.compute_kernel_config,
             parallel_config,
             output_parallel_config,
-            tt::round_up(
-                params.in_channels,
-                tt::constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(parallel_config)),
+            padded_in_channels,
             params.out_channels,
             params.batch_size,
             output_slice_height,
@@ -1183,7 +1189,7 @@ uint32_t calculate_conv_dram_slice_L1_usage(
             params.compute_kernel_config,
             opt_conv_op_block_config,
             opt_conv_op_parallel_config,
-            params.weights_shape,
+            folded_weights_shape,
             params.kernel_size,
             conv_config,
             params.input_datatype,

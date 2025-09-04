@@ -177,7 +177,6 @@ def run_conv(
     torch_input_tensor_nchw = randomize_torch_tensor(
         torch_tensor_map, conv_input_shape, generate_positive_numbers=sqrt_act_function
     )
-    torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
     torch_weight_tensor = randomize_torch_tensor(
         torch_tensor_map, conv_weight_shape, generate_positive_numbers=sqrt_act_function
@@ -187,6 +186,12 @@ def run_conv(
         if has_bias
         else None
     )
+    # Scale down input and weights if input channels is large to reduce float accumulation errors
+    if input_channels > 1000:
+        torch_input_tensor_nchw = torch_input_tensor_nchw / 10
+        torch_weight_tensor = torch_weight_tensor / 10
+
+    torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
     torch_padded_input = torch.nn.functional.pad(
         torch_input_tensor_nchw,
