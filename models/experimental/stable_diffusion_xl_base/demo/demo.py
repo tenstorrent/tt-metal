@@ -34,6 +34,7 @@ def run_demo_inference(
 
     start_from, _ = evaluation_range
     torch.manual_seed(0)
+    os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
     if isinstance(prompts, str):
         prompts = [prompts]
