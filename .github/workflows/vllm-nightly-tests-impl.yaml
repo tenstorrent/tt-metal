@@ -294,12 +294,19 @@ jobs:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: ${{ matrix.test-group.co-owner-2-id }}
 
+      - name: Set artifact prefix
+        id: set-artifact-prefix
+        run: |
+          # Replace spaces with underscores
+          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' ' '_')
+          echo "prefix=vllm_output_${SAFE_NAME}_" >> $GITHUB_OUTPUT
+
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: docker-job/output/
-          prefix: "vllm_output_"
+          prefix: ${{ steps.set-artifact-prefix.outputs.prefix }}
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
