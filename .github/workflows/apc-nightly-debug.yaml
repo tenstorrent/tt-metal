@@ -27,4 +27,3 @@ jobs:
     with:
       build-type: RelWithDebInfo
       version: ${{ matrix.version }}
-      nightly: true
