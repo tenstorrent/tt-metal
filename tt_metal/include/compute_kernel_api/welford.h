@@ -26,13 +26,15 @@ namespace ckernel {
  * @tparam mean_dst_index    The index of the tile in DST register buffer containing the current running mean.
  *                           Must be less than the size of the DST register.
  *                           This tile can be left uninitialized when current_row is 0.
- * @tparam m2_dst_index     The index of the tile in DST register buffer containing the running m2.
+ * @tparam m2_dst_index     M2 is the short hand name for the sum of squares
+ *                          The index of the tile in DST register buffer containing the running m2.
  *                           Must be less than the size of the DST register.
  *                           This tile can be left uninitialized when current_row is 0.
- * @tparam reformat_dst_to_col_on_end      True: if final_row-current_row <= 32 then LLK converts dst1 and dst2 to
- * column vectors
+ * @tparam reformat_dst_to_col_on_end      True: if final_row-current_row <= 32 then LLK converts dst reg at tile offset
+ * 1 and dst reg at tile offset 2 to column vectors
  *
- * @tparam convert_M2_to_var_on_end      True: if final_row-current_row <= 32 then LLK converts M2 (dst2) to variance
+ * @tparam convert_M2_to_var_on_end      True: if final_row-current_row <= 32 then LLK converts M2 (dst reg at tile
+ * offset 2) to variance
  *
  * @param current_row     The current row index (starting from 0). Should follow 0 <= current_row <= 32 and current_row
  * <= final_row. When current_row is 0, the previous mean and m2 are ignored.
@@ -72,8 +74,8 @@ ALWI void welford_tile(uint32_t current_row, uint32_t final_row, uint32_t num_sk
 //  * This call is blocking and is only available on the compute engine.
 //  * This function converts m2 to variance and packs both mean and variance into the DST register.
 //  *
-//  * @param scale_factor The 1/scale factor is multiplied to the M2 value in dst2 to convert it to var and then stored
-//  in dst2.
+//  * @param scale_factor The 1/scale factor is multiplied to the M2 value in dst reg at tile offset 2 to convert it to
+//  var and then stored in dst reg at tile offset 2.
 //  *
 //  * @return None. Mean and variance tiles are updated in place. 32 values each are written to the DST register.
 //  *         All 32 values are written to the first face of the DST register. Each valid value is followed by an
