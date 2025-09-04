@@ -1,6 +1,11 @@
 import torch
 import torch.nn as nn
 import ttnn
+import pandas as pd
+from torch.utils.data import Dataset, DataLoader
+import torchvision.transforms as transforms
+import numpy as np
+from PIL import Image
 
 
 # --- Assume this is the PyTorch model class you defined and trained ---
@@ -41,7 +46,7 @@ print("✅ Tenstorrent device initialized.")
 torch_model = MLP()
 
 # Load the saved weights from your .pth file
-model_path = "your_model.pth"  # IMPORTANT: Change this to your file path
+model_path = "/home/ebanerjee/tt-metal/mnist_mlp_model_final.pth"  # IMPORTANT: Change this to your file path
 torch_model.load_state_dict(torch.load(model_path))
 
 # Set the model to evaluation mode. This is crucial as it disables dropout.
@@ -60,20 +65,20 @@ class TTNN_MLP:
         # Note: Weights for ttnn.linear must be transposed.
 
         # Layer 1
-        self.W1 = ttnn.from_torch(torch_model.fc1.weight.T, device=device, layout=ttnn.TILE_LAYOUT)
-        self.b1 = ttnn.from_torch(torch_model.fc1.bias, device=device, layout=ttnn.TILE_LAYOUT)
+        self.W1 = ttnn.from_torch(torch_model.fc1.weight.T, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        self.b1 = ttnn.from_torch(torch_model.fc1.bias, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
         # Layer 2
-        self.W2 = ttnn.from_torch(torch_model.fc2.weight.T, device=device, layout=ttnn.TILE_LAYOUT)
-        self.b2 = ttnn.from_torch(torch_model.fc2.bias, device=device, layout=ttnn.TILE_LAYOUT)
+        self.W2 = ttnn.from_torch(torch_model.fc2.weight.T, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        self.b2 = ttnn.from_torch(torch_model.fc2.bias, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
         # Layer 3
-        self.W3 = ttnn.from_torch(torch_model.fc3.weight.T, device=device, layout=ttnn.TILE_LAYOUT)
-        self.b3 = ttnn.from_torch(torch_model.fc3.bias, device=device, layout=ttnn.TILE_LAYOUT)
+        self.W3 = ttnn.from_torch(torch_model.fc3.weight.T, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        self.b3 = ttnn.from_torch(torch_model.fc3.bias, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
         # Output Layer 4
-        self.W4 = ttnn.from_torch(torch_model.fc4.weight.T, device=device, layout=ttnn.TILE_LAYOUT)
-        self.b4 = ttnn.from_torch(torch_model.fc4.bias, device=device, layout=ttnn.TILE_LAYOUT)
+        self.W4 = ttnn.from_torch(torch_model.fc4.weight.T, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        self.b4 = ttnn.from_torch(torch_model.fc4.bias, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
         print("✅ Weights and biases extracted and moved to Tenstorrent device.")
 
@@ -99,6 +104,56 @@ class TTNN_MLP:
         return x
 
 
+class MNISTDataset(Dataset):
+    """
+    Custom Dataset for MNIST CSV data.
+    Modified to accept torchvision transforms for data augmentation.
+    """
+
+    def __init__(self, dataframe, transform=None):
+        self.dataframe = dataframe
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.dataframe)
+
+    def __getitem__(self, idx):
+        # The first column is the label
+        label = self.dataframe.iloc[idx, 0]
+
+        # The rest are pixel values. Reshape to a 28x28 numpy array.
+        # Ensure dtype is uint8, which is what PIL expects for grayscale images.
+        image_np = self.dataframe.iloc[idx, 1:].values.astype(np.uint8).reshape(28, 28)
+
+        # Convert numpy array to a PIL Image
+        image_pil = Image.fromarray(image_np)
+
+        # Apply transformations if they are provided
+        if self.transform:
+            image = self.transform(image_pil)
+        else:
+            # If no transform is provided, just convert to tensor.
+            # ToTensor() also normalizes pixels from [0, 255] to [0.0, 1.0]
+            image = transforms.ToTensor()(image_pil)
+
+        # Ensure the label is a LongTensor as expected by CrossEntropyLoss
+        return image, torch.tensor(label, dtype=torch.long)
+
+
+try:
+    test_df = pd.read_csv("/home/ebanerjee/tt-metal/mnist_test.csv")
+    print("Successfully loaded test.csv")
+except FileNotFoundError:
+    print("Error: Could not find test.csv.")
+    exit()
+
+test_dataset = MNISTDataset(test_df)
+batch_size = 1
+
+
+test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False)
+
+
 # --- Step 4: Instantiate the TTNN Model ---
 ttnn_model = TTNN_MLP(torch_model, device)
 print("✅ TTNN model is ready for inference.")
@@ -106,22 +161,49 @@ print("✅ TTNN model is ready for inference.")
 # --- Step 5: Run Inference on the Tenstorrent Device ---
 # Create a random sample input tensor (e.g., one 28x28 image)
 # The input must have a batch size dimension.
-sample_input_torch = torch.randn(1, 28 * 28)
+
+
+correct = 0
+total = 0
 
 # Convert the torch tensor to a ttnn tensor and move it to the device
 # The layout must match what the operation expects (TILE_LAYOUT for linear).
-ttnn_input = ttnn.from_torch(sample_input_torch, layout=ttnn.TILE_LAYOUT, device=device)
 
-# Run the forward pass 🚀
-ttnn_output = ttnn_model(ttnn_input)
+for images, labels in test_loader:
+    single_image_tensor = images.view(images.shape[0], -1)
+    single_label_tensor = labels.view(labels.shape[0], -1)
 
-# Convert the result back to a torch tensor on the host to view it
-output_torch = ttnn.to_torch(ttnn_output)
+    ttnn_input = ttnn.from_torch(single_image_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
-print("\n--- Inference Results ---")
-print("Input shape:", sample_input_torch.shape)
-print("Output shape:", output_torch.shape)
-print("Output tensor (first 5 values):", output_torch[0, :5])
+    ttnn_output = ttnn_model(ttnn_input)
+
+    ttnn_output_row_major = ttnn.to_layout(ttnn_output, ttnn.ROW_MAJOR_LAYOUT)
+
+    ttnn_argmax = ttnn.argmax(ttnn_output_row_major)
+
+    torch_argmax = ttnn.to_torch(ttnn_argmax)
+
+    predicted_label = torch_argmax.item()
+
+    if predicted_label == single_label_tensor.item():
+        correct += 1
+    total += 1
+
+    print("\n\n\n--- Inference Results ---")
+    print(f"The predicted label for the {total}th image is {predicted_label}")
+    print(f"The actual label for the {total}th image is {single_label_tensor.item()}")
+    print("Input shape:", single_image_tensor.shape)
+    print("Output shape:", ttnn_output.shape)
+    print("Output tensor (first 10 values):", ttnn_output[0, :10])
+
+    if total > 100:
+        break
+
+accuracy = 100 * correct / total
+print("\n\n\n--------------------------------\n\n\n")
+print(f"\nAccuracy of the network on the test images: {accuracy:.2f} %")
+
+print("✅ Forward pass completed.")
 
 # --- Step 6: Close the device connection ---
 ttnn.close_device(device)
