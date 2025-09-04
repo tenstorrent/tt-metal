@@ -441,13 +441,13 @@ def test_multimodal_demo_text(
         base_model_name = model_args[0].base_model_name
         target_prefill_tok_s = {
             "N300_Llama-3.2-11B": 23,
-            "T3K_Llama-3.2-11B": 19.938479676476494,
+            "T3K_Llama-3.2-11B": 20,
             "T3K_Llama-3.2-90B": 3,
         }[f"{tt_device_name}_{base_model_name}"]
 
         target_decode_tok_s_u = {
             "N300_Llama-3.2-11B": 21.5,
-            "T3K_Llama-3.2-11B": 5.9049908143451,
+            "T3K_Llama-3.2-11B": 34.25,
             "T3K_Llama-3.2-90B": 6,
         }[f"{tt_device_name}_{base_model_name}"]
 
