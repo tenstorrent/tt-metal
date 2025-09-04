@@ -1,4 +1,4 @@
-name: "(TG) TG DeepSeek tests"
+name: "Galaxy DeepSeek tests"
 
 on:
   workflow_dispatch:
@@ -14,11 +14,12 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
-  TG-DeepSeek-tests:
+  Galaxy-DeepSeek-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/tg-deepseek-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-deepseek-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      topology: topology-6u
