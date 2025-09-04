@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -30,14 +30,9 @@ class TtnnUFLDv2:
         self.res_model = TtnnResnet34(conv_args, conv_pth.res_model, device=device)
         self.pool = TtnnUFLDV2Conv2D(conv_args.pool, conv_pth.pool, activation="", device=device)
 
-    def __call__(self, input, batch_size=1):
+    def __call__(self, input, batch_size=1, grid_size=(8, 8), tile_size=32):
         fea = self.res_model(input, batch_size=batch_size)
         fea, out_h, out_w = self.pool(fea)
-        if fea.is_sharded():
-            fea = ttnn.sharded_to_interleaved(fea, ttnn.L1_MEMORY_CONFIG)
-        fea = ttnn.permute(fea, (0, 1, 3, 2))
-        fea = ttnn.reshape(fea, (fea.shape[0], fea.shape[1], 1, fea.shape[2] * fea.shape[3]))
-        grid_size = (8, 8)
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -46,16 +41,28 @@ class TtnnUFLDv2:
                 )
             }
         )
-        shard_spec = ttnn.ShardSpec(shard_grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
-        width_sharded_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec
+        mem_config = ttnn.create_sharded_memory_config_(
+            ttnn.Shape([fea.shape[-2] * fea.shape[-1], tile_size]),
+            shard_grid,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            tile_layout=True,
         )
-        fea = ttnn.to_memory_config(fea, width_sharded_mem_config)
+        fea = ttnn.to_memory_config(fea, mem_config)
+        fea = ttnn.permute(fea, (0, 1, 3, 2))
+        fea = ttnn.reshape(fea, (fea.shape[0], fea.shape[1], 1, fea.shape[2] * fea.shape[3]))
+        compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
         out = ttnn.linear(
             fea,
             self.conv_pth.cls.linear_1.weight,
             bias=self.conv_pth.cls.linear_1.bias,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            compute_kernel_config=compute_config,
         )
         out = ttnn.relu(out)
         out = ttnn.linear(
@@ -63,5 +70,6 @@ class TtnnUFLDv2:
             self.conv_pth.cls.linear_2.weight,
             bias=self.conv_pth.cls.linear_2.bias,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            compute_kernel_config=compute_config,
         )
         return out
