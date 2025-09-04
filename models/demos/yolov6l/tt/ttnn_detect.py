@@ -121,7 +121,7 @@ class TtDetect:
             device=device,
             conv=model_params.proj_conv,
             conv_pth=parameters.proj_conv,
-            reshape=True,
+            return_height_width=True,
         )
 
         self.anchors = parameters.anchors
@@ -176,9 +176,21 @@ class TtDetect:
         reg_output_1 = ttnn.softmax(reg_output_1, -1)
         reg_output_2 = ttnn.softmax(reg_output_2, -1)
 
-        reg_output_0 = self.proj_conv(reg_output_0)
-        reg_output_1 = self.proj_conv(reg_output_1)
-        reg_output_2 = self.proj_conv(reg_output_2)
+        reg_output_0, h, w = self.proj_conv(reg_output_0)
+        reg_output_0 = ttnn.sharded_to_interleaved(reg_output_0, memory_config=ttnn.L1_MEMORY_CONFIG)
+        reg_output_0 = ttnn.reshape(
+            reg_output_0, (reg_output_0.shape[0], h, w, reg_output_0.shape[3]), memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        reg_output_1, h, w = self.proj_conv(reg_output_1)
+        reg_output_1 = ttnn.sharded_to_interleaved(reg_output_1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        reg_output_1 = ttnn.reshape(
+            reg_output_1, (reg_output_1.shape[0], h, w, reg_output_1.shape[3]), memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        reg_output_2, h, w = self.proj_conv(reg_output_2)
+        reg_output_2 = ttnn.sharded_to_interleaved(reg_output_2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        reg_output_2 = ttnn.reshape(
+            reg_output_2, (reg_output_2.shape[0], h, w, reg_output_2.shape[3]), memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
         cls_output_0 = ttnn.to_layout(cls_output_0, ttnn.TILE_LAYOUT)
         cls_output_1 = ttnn.to_layout(cls_output_1, ttnn.TILE_LAYOUT)
@@ -236,9 +248,6 @@ class TtDetect:
 
         bbox = ttnn.multiply(bbox, self.strides)
         output = ttnn.concat([bbox, self.ones_tensor, cls_score_list], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(bbox)
-        ttnn.deallocate(self.ones_tensor)
-        ttnn.deallocate(cls_score_list)
 
         if use_signpost:
             signpost(header="TtDetect End")
