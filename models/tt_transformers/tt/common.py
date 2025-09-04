@@ -218,6 +218,7 @@ def preprocess_inputs_prefill(
     decoding_pos = []
     prefill_lens = []
 
+    # Pad each prompt to the maximum length among all prompts.
     # To avoid issues, we keep track of the decoding position to decode correctly the user's prompt
     for i, encoded in enumerate(encoded_prompts):
         # Initial prefill tensors full of pad tokens

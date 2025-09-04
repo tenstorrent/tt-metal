@@ -133,9 +133,7 @@ def load_inputs(user_input, batch, instruct):
     return in_prompt
 
 
-def create_tt_page_table(
-    global_batch_size, data_parallel, paged_attention_config: PagedAttentionConfig, use_paged_kv_cache=False
-):
+def create_tt_page_table(global_batch_size, data_parallel, paged_attention_config: PagedAttentionConfig):
     page_table = None
 
     if paged_attention_config:
