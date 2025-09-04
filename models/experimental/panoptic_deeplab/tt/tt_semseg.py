@@ -134,11 +134,11 @@ class TtDeepLabV3PlusHead(nn.Module):
                 )
 
                 decoder_stage["project_conv"] = project_conv
-                decoder_stage["project_norm"] = get_ttnn_norm(norm, proj_out_ch, device)
+                decoder_stage["project_norm"] = get_ttnn_norm(norm, proj_out_ch, device, norm_params=None)
                 decoder_stage["fuse_conv_0"] = fuse_conv_0
-                decoder_stage["fuse_norm_0"] = get_ttnn_norm(norm, fuse_out_ch, device)
+                decoder_stage["fuse_norm_0"] = get_ttnn_norm(norm, fuse_out_ch, device, norm_params=None)
                 decoder_stage["fuse_conv_1"] = fuse_conv_1
-                decoder_stage["fuse_norm_1"] = get_ttnn_norm(norm, fuse_out_ch, device)
+                decoder_stage["fuse_norm_1"] = get_ttnn_norm(norm, fuse_out_ch, device, norm_params=None)
 
             self.decoder[feature_name] = decoder_stage
 
@@ -328,10 +328,10 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             return TtConv2d(parameters, stride=(stride, stride), padding=(padding, padding))
 
         self.head_0 = _create_tt_conv2d(panoptic_head_0_weight, decoder_out_ch, decoder_out_ch, 3, 1, 1, use_bias)
-        self.head_norm_0 = get_ttnn_norm(norm, decoder_out_ch, device)
+        self.head_norm_0 = get_ttnn_norm(norm, decoder_out_ch, device, norm_params=None)
 
         self.head_1 = _create_tt_conv2d(panoptic_head_1_weight, decoder_out_ch, head_channels, 3, 1, 1, use_bias)
-        self.head_norm_1 = get_ttnn_norm(norm, head_channels, device)
+        self.head_norm_1 = get_ttnn_norm(norm, head_channels, device, norm_params=None)
 
         self.predictor = _create_tt_conv2d(panoptic_predictor_weight, head_channels, num_classes, 1, 1, 0, True)
 
