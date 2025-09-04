@@ -42,6 +42,8 @@ public:
 
     std::vector<std::pair<DeviceAddr, DeviceAddr>> available_addresses(DeviceAddr size_bytes) const override;
 
+    std::vector<std::pair<DeviceAddr, size_t>> allocated_addresses() const override;
+
     std::optional<DeviceAddr> allocate(
         DeviceAddr size_bytes, bool bottom_up = true, DeviceAddr address_limit = 0) override;
 
@@ -78,6 +80,10 @@ private:
     inline static constexpr size_t n_alloc_table_buckets = 512;          // Number of buckets in the hash table
     inline static constexpr size_t n_alloc_table_init_bucket_size = 10;  // Initial size of each bucket
     std::vector<std::vector<std::pair<DeviceAddr, size_t>>> allocated_block_table_;
+
+    // Cache for allocated addresses to avoid recomputation on repeated calls.
+    // This must be mutable because allocated_addresses() is const.
+    mutable std::optional<std::vector<std::pair<DeviceAddr, size_t>>> allocated_addresses_cache_;
 
     // Size segregated list of free blocks. Idea comes from the TLSF paper, but instead of aiming for realtime
     // the goal there is to not look at small blocks when allocating large blocks. Which the naive free list

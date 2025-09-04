@@ -14,6 +14,7 @@
 #include <unordered_set>
 #include <vector>
 #include <algorithm>
+#include <functional>
 #include <tt_stl/small_vector.hpp>
 
 #include "algorithms/allocator_algorithm.hpp"
@@ -126,6 +127,10 @@ private:
     ttsl::SmallVector<std::unordered_set<DeviceAddr>> allocated_buffers_{};
     ttsl::SmallVector<std::unique_ptr<allocator::Algorithm>> allocators_{};
 
+    // Per-state cache: merged occupied ranges of all other states (size-independent)
+    ttsl::SmallVector<std::vector<std::pair<DeviceAddr, DeviceAddr>>> neighbors_occupied_cache_{};
+    ttsl::SmallVector<uint8_t> neighbors_occupied_cache_valid_{};  // 0 = invalid, 1 = valid
+
     // State-independent methods
     void validate_bank_id(uint32_t bank_id) const;
     void init_allocators_across_states(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset);
@@ -136,6 +141,9 @@ private:
     // State-dependent methods
     allocator::Algorithm* get_allocator_for_state(StateDependencies::StateId state);
     const allocator::Algorithm* get_allocator_for_state(StateDependencies::StateId state) const;
+
+    // Invalidate caches stored on states that depend on the given state (its neighbors)
+    void invalidate_neighbor_caches(StateDependencies::StateId changed_state);
 };
 
 }  // namespace tt_metal

@@ -98,6 +98,9 @@ void FreeListOpt::init() {
     block_is_allocated_.push_back(false);
     meta_block_is_allocated_.push_back(true);
     free_blocks_segregated_by_size_[get_size_segregated_index(max_size_bytes_)].push_back(0);
+
+    // Invalidate caches
+    allocated_addresses_cache_.reset();
 }
 
 std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bottom_up, DeviceAddr address_limit) {
@@ -254,6 +257,9 @@ size_t FreeListOpt::allocate_in_block(size_t block_index, DeviceAddr alloc_size,
     block_is_allocated_[block_index] = true;
     insert_block_to_alloc_table(block_address_[block_index], block_index);
 
+    // Invalidate caches as allocation state will change
+    allocated_addresses_cache_.reset();
+
     return block_index;
 }
 
@@ -328,6 +334,9 @@ void FreeListOpt::deallocate(DeviceAddr absolute_address) {
     }
     // Update the segregated list
     insert_block_to_segregated_list(block_index);
+
+    // Invalidate caches as allocation state will change
+    allocated_addresses_cache_.reset();
 }
 
 std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::available_addresses(DeviceAddr size_bytes) const {
@@ -345,6 +354,30 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::available_addresses(
         }
     }
     return addresses;
+}
+
+std::vector<std::pair<DeviceAddr, size_t>> FreeListOpt::allocated_addresses() const {
+    if (allocated_addresses_cache_.has_value()) {
+        return allocated_addresses_cache_.value();
+    }
+
+    std::vector<std::pair<DeviceAddr, size_t>> allocated_addresses;
+    allocated_addresses.reserve(block_address_.size());
+
+    for (size_t i = 0; i < block_address_.size(); i++) {
+        if (!meta_block_is_allocated_[i]) {
+            continue;
+        }
+        if (block_is_allocated_[i]) {
+            allocated_addresses.emplace_back(block_address_[i], static_cast<size_t>(block_size_[i]));
+        }
+    }
+
+    std::sort(allocated_addresses.begin(), allocated_addresses.end(), [](const auto& a, const auto& b) {
+        return a.first < b.first;
+    });
+    allocated_addresses_cache_ = allocated_addresses;
+    return allocated_addresses;
 }
 
 size_t FreeListOpt::alloc_meta_block(
@@ -544,6 +577,9 @@ void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
         block_address_[block_to_shrink] += shrink_size;
         insert_block_to_segregated_list(block_to_shrink);
     }
+
+    // Although shrink affects free space, invalidate to be safe
+    allocated_addresses_cache_.reset();
 }
 
 void FreeListOpt::reset_size() {
@@ -588,6 +624,9 @@ void FreeListOpt::reset_size() {
 
     max_size_bytes_ += shrink_size_;
     shrink_size_ = 0;
+
+    // Free space changed; invalidate to be safe
+    allocated_addresses_cache_.reset();
 }
 
 void FreeListOpt::insert_block_to_segregated_list(size_t block_index) {
