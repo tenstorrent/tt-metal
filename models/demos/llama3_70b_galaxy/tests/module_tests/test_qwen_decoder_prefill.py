@@ -181,6 +181,7 @@ def test_qwen_decoder_inference_prefill(
         tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(
             batch_size, max_seq_len, -1
         )  # [ batch_size, seq, hidden_dim]
+        breakpoint()
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
 
         logger.info(comp_allclose(ref_output, tt_output_torch))

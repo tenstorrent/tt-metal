@@ -5,7 +5,6 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import (
-    tt_sharded_distributed_rmsnorm,
     tt_distributed_rmsnorm,
 )
 
@@ -68,18 +67,27 @@ class DistributedNorm(LightweightModule):
                     x = ttnn.to_memory_config(x, self.gather_in_mem_cfg)
                     res = ttnn.to_memory_config(res, self.gather_in_mem_cfg) if res is not None else None
 
-                return tt_sharded_distributed_rmsnorm(
+                # return tt_sharded_distributed_rmsnorm(
+                #     x,
+                #     res,
+                #     epsilon=self.norm.eps,
+                #     gamma=self.norm.weight_distributed,
+                #     mesh_device=self.args.mesh_device,
+                #     ln_sharded_input_memcfg=self.gather_in_mem_cfg,
+                #     ln_sharded_progcfg=self.ln_prg_cfg,
+                #     ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
+                #     tt_ccl=self.tt_ccl,
+                #     output_mem_config=self.norm.output_mem_config,
+                #     ccl_topology=self.ccl_topology,
+                # )
+                return tt_distributed_rmsnorm(
                     x,
-                    res,
                     epsilon=self.norm.eps,
                     gamma=self.norm.weight_distributed,
                     mesh_device=self.args.mesh_device,
-                    ln_sharded_input_memcfg=self.gather_in_mem_cfg,
-                    ln_sharded_progcfg=self.ln_prg_cfg,
-                    ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
+                    # program_config=self.ln_prg_cfg,
+                    compute_kernel_config=self.ln_cfg,
                     tt_ccl=self.tt_ccl,
-                    output_mem_config=self.norm.output_mem_config,
-                    ccl_topology=self.ccl_topology,
                 )
             else:
                 return tt_distributed_rmsnorm(

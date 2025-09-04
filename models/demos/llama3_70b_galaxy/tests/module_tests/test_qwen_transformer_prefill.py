@@ -78,7 +78,7 @@ def test_qwen_transformer_inference_prefill(
 
     model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len, dummy_weights=False)
     model_args.use_prefetcher = False
-    model_args.n_layers = 1
+    model_args.n_layers = 3
     tokenizer = model_args.tokenizer
 
     logger.info("Loading weights...")

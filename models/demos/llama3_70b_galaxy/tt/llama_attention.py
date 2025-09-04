@@ -5,6 +5,7 @@
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.rmsnorm import RMSNorm
 
 
 class TtLlamaAttention(LightweightModule):
@@ -219,95 +220,95 @@ class TtLlamaAttention(LightweightModule):
         if f"{q_norm_str}.weight" in self.state_dict:
             self.qk_norm = True
 
-            #     # Memory configurations for QK norm
-            #     self.reshape_intermediate_q_mem_cfg = ttnn.create_sharded_memory_config(
-            #         shape=(64, 128),  # [1, 8, 8 (32), 128] ==> *[1, 1, 64, 128]* ==> [1, 1, 64, 32 * 4 = 128]
-            #         core_grid=ttnn.CoreRangeSet(
-            #             [
-            #                 ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))
-            #             ]  # This captures the fact that we are using 1 core (height sharded)
-            #         ),  # resharding tensor to 1 core
-            #         strategy=ttnn.ShardStrategy.HEIGHT,  # Literally stating to the device to perform height sharding
-            #         orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            #         use_height_and_width_as_shard_shape=True,
-            #     )
-            #     self.reshape_intermediate_k_mem_cfg = ttnn.create_sharded_memory_config(
-            #         shape=(64, 128),  # [1, 8, 8 (32), 128] ==> *[1, 1, 64, 128]* ==> [1, 1, 64, 32 * 4 = 128]
-            #         core_grid=ttnn.CoreRangeSet(
-            #             [
-            #                 ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0))
-            #             ]  # This captures the fact that we are using 1 core (height sharded)
-            #         ),  # resharding tensor to 1 core
-            #         strategy=ttnn.ShardStrategy.HEIGHT,  # Literally stating to the device to perform height sharding
-            #         orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            #         use_height_and_width_as_shard_shape=True,
-            #     )
+            # Memory configurations for QK norm
+            self.reshape_intermediate_q_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(64, 128),  # [1, 8, 8 (32), 128] ==> *[1, 1, 64, 128]* ==> [1, 1, 64, 32 * 4 = 128]
+                core_grid=ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))
+                    ]  # This captures the fact that we are using 1 core (height sharded)
+                ),  # resharding tensor to 1 core
+                strategy=ttnn.ShardStrategy.HEIGHT,  # Literally stating to the device to perform height sharding
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            self.reshape_intermediate_k_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(64, 128),  # [1, 8, 8 (32), 128] ==> *[1, 1, 64, 128]* ==> [1, 1, 64, 32 * 4 = 128]
+                core_grid=ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0))
+                    ]  # This captures the fact that we are using 1 core (height sharded)
+                ),  # resharding tensor to 1 core
+                strategy=ttnn.ShardStrategy.HEIGHT,  # Literally stating to the device to perform height sharding
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
 
-            #     self.reshape_output_q_mem_cfg = ttnn.create_sharded_memory_config(
-            #         shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
-            #         core_grid=ttnn.CoreRangeSet(
-            #             [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1))]
-            #         ),  # resharding tensor to cores
-            #         strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
-            #         orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            #         use_height_and_width_as_shard_shape=True,
-            #     )
+            self.reshape_output_q_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
+                core_grid=ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1))]
+                ),  # resharding tensor to cores
+                strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
 
-            #     self.reshape_output_k_mem_cfg = ttnn.create_sharded_memory_config(
-            #         shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
-            #         core_grid=ttnn.CoreRangeSet(
-            #             [ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 3))]
-            #         ),  # resharding tensor to cores
-            #         strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
-            #         orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            #         use_height_and_width_as_shard_shape=True,
-            #     )
+            self.reshape_output_k_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
+                core_grid=ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 3))]
+                ),  # resharding tensor to cores
+                strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
 
-            #     # Program configuration for norm
-            #     block_w = 128 // 4 // 32
-            #     # Find largest value <= 4 that evenly divides block_w
-            #     subblock_w = 1
-            #     while subblock_w > 0:
-            #         if block_w % subblock_w == 0:
-            #             break
-            #         subblock_w -= 1
-            #     self.norm_program_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            #         compute_with_storage_grid_size=[2, 2],
-            #         subblock_w=subblock_w,
-            #         block_h=2,  # 64 // 32
-            #         block_w=block_w,
-            #         inplace=False,
-            #     )
+            # Program configuration for norm
+            block_w = 128 // 4 // 32
+            # Find largest value <= 4 that evenly divides block_w
+            subblock_w = 1
+            while subblock_w > 0:
+                if block_w % subblock_w == 0:
+                    break
+                subblock_w -= 1
+            self.norm_program_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=[2, 2],
+                subblock_w=subblock_w,
+                block_h=2,  # 64 // 32
+                block_w=block_w,
+                inplace=False,
+            )
 
             # Create Q norm
-            # self.q_norm = RMSNorm(
-            #     device=self.mesh_device,
-            #     dim=self.head_dim,
-            #     state_dict=self.state_dict,
-            #     state_dict_prefix=None,
-            #     weight_dtype=ttnn.bfloat16,
-            #     weight_key=q_norm_str,
-            #     sharded_program_config=self.norm_program_cfg,
-            #     sharded_output_config=self.reshape_output_q_mem_cfg,
-            # )
+            self.q_norm = RMSNorm(
+                device=self.mesh_device,
+                dim=self.head_dim,
+                state_dict=self.state_dict,
+                state_dict_prefix=None,
+                weight_dtype=ttnn.bfloat16,
+                weight_key=q_norm_str,
+                sharded_program_config=self.norm_program_cfg,
+                sharded_output_config=self.reshape_output_q_mem_cfg,
+            )
 
-            # # Create K norm
-            # self.k_norm = RMSNorm(
-            #     device=self.mesh_device,
-            #     dim=self.head_dim,
-            #     state_dict=self.state_dict,
-            #     state_dict_prefix=None,
-            #     weight_dtype=ttnn.bfloat16,
-            #     weight_key=k_norm_str,
-            #     sharded_program_config=self.norm_program_cfg,
-            #     sharded_output_config=self.reshape_output_k_mem_cfg,
-            # )
+            # Create K norm
+            self.k_norm = RMSNorm(
+                device=self.mesh_device,
+                dim=self.head_dim,
+                state_dict=self.state_dict,
+                state_dict_prefix=None,
+                weight_dtype=ttnn.bfloat16,
+                weight_key=k_norm_str,
+                sharded_program_config=self.norm_program_cfg,
+                sharded_output_config=self.reshape_output_k_mem_cfg,
+            )
 
             self.q_norm_weight = self.state_dict[q_norm_str + ".weight"]
             self.k_norm_weight = self.state_dict[k_norm_str + ".weight"]
 
-        # else:
-        #     self.qk_norm = False
+        else:
+            self.qk_norm = False
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
@@ -420,81 +421,81 @@ class TtLlamaAttention(LightweightModule):
             rm_mem_cfg_q = q_heads_pre_rot_1BQD.memory_config()
             rm_mem_cfg_k = k_heads_pre_rot_1BKD.memory_config()
 
-            # # Reshape and prepare tensors for QK norm
-            # q_heads_pre_rot_1BQD = ttnn.to_memory_config(
-            #     q_heads_pre_rot_1BQD, memory_config=self.reshape_intermediate_q_mem_cfg
-            # )
-            # k_heads_pre_rot_1BKD = ttnn.to_memory_config(
-            #     k_heads_pre_rot_1BKD, memory_config=self.reshape_intermediate_k_mem_cfg
-            # )
-
-            # q_heads_pre_rot_1BQD = ttnn.reshape(
-            #     q_heads_pre_rot_1BQD, [1, 1, 64, 128]
-            # )  # [1, 8, 8, 128] => [1, 1, 64, 128]
-            # k_heads_pre_rot_1BKD = ttnn.reshape(
-            #     k_heads_pre_rot_1BKD, [1, 1, 64, 128]
-            # )  # [1, 8, 1 (8), 128]] => [1, 1, 64, 128]
-
-            # q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.TILE_LAYOUT)
-            # k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.TILE_LAYOUT)
-
-            # q_heads_pre_rot_1BQD = ttnn.to_memory_config(
-            #     q_heads_pre_rot_1BQD, memory_config=self.reshape_output_q_mem_cfg
-            # )
-            # k_heads_pre_rot_1BKD = ttnn.to_memory_config(
-            #     k_heads_pre_rot_1BKD, memory_config=self.reshape_output_k_mem_cfg
-            # )
-
-            # # Apply QK norm
-            # q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode", in_sharded=True, out_sharded=True)
-            # k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode", in_sharded=True, out_sharded=True)
-
-            # q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT)
-            # k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
-
-            # q_heads_pre_rot_1BQD = ttnn.reshape(q_heads_pre_rot_1BQD, [1, 8, 8, 128])
-            # k_heads_pre_rot_1BKD = ttnn.reshape(k_heads_pre_rot_1BKD, [1, 8, 8, 128])  # ==> [1, 8, 1 (8), 128]
-
-            # q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=rm_mem_cfg_q)
-            # k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=rm_mem_cfg_k)
-
-            inp_torch = ttnn.to_torch(
-                q_heads_pre_rot_1BQD,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 1), mesh_shape=(8, 4)),
+            # Reshape and prepare tensors for QK norm
+            q_heads_pre_rot_1BQD = ttnn.to_memory_config(
+                q_heads_pre_rot_1BQD, memory_config=self.reshape_intermediate_q_mem_cfg
             )
-            q_heads_pre_rot_1BQD_torch = inp_torch * torch.rsqrt(inp_torch.pow(2).mean(-1, keepdim=True) + 1e-6)
-            q_heads_pre_rot_1BQD_torch = q_heads_pre_rot_1BQD_torch * self.q_norm_weight
-            q_heads_pre_rot_1BQD = ttnn.from_torch(
-                q_heads_pre_rot_1BQD_torch,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device,
-                    dims=(2, 1),
-                    mesh_shape=(8, 4),
-                ),
-                memory_config=rm_mem_cfg_q,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.mesh_device,
+            k_heads_pre_rot_1BKD = ttnn.to_memory_config(
+                k_heads_pre_rot_1BKD, memory_config=self.reshape_intermediate_k_mem_cfg
             )
 
-            inp_torch = ttnn.to_torch(
-                k_heads_pre_rot_1BKD,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 1), mesh_shape=(8, 4)),
+            q_heads_pre_rot_1BQD = ttnn.reshape(
+                q_heads_pre_rot_1BQD, [1, 1, 64, 128]
+            )  # [1, 8, 8, 128] => [1, 1, 64, 128]
+            k_heads_pre_rot_1BKD = ttnn.reshape(
+                k_heads_pre_rot_1BKD, [1, 1, 64, 128]
+            )  # [1, 8, 1 (8), 128]] => [1, 1, 64, 128]
+
+            q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.TILE_LAYOUT)
+            k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.TILE_LAYOUT)
+
+            q_heads_pre_rot_1BQD = ttnn.to_memory_config(
+                q_heads_pre_rot_1BQD, memory_config=self.reshape_output_q_mem_cfg
             )
-            k_heads_pre_rot_1BKD_torch = inp_torch * torch.rsqrt(inp_torch.pow(2).mean(-1, keepdim=True) + 1e-6)
-            k_heads_pre_rot_1BKD_torch = k_heads_pre_rot_1BKD_torch * self.k_norm_weight
-            k_heads_pre_rot_1BKD = ttnn.from_torch(
-                k_heads_pre_rot_1BKD_torch,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device,
-                    dims=(2, 1),
-                    mesh_shape=(8, 4),
-                ),
-                memory_config=rm_mem_cfg_k,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.mesh_device,
+            k_heads_pre_rot_1BKD = ttnn.to_memory_config(
+                k_heads_pre_rot_1BKD, memory_config=self.reshape_output_k_mem_cfg
             )
+
+            # Apply QK norm
+            q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode", in_sharded=True, out_sharded=True)
+            k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode", in_sharded=True, out_sharded=True)
+
+            q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT)
+            k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
+
+            q_heads_pre_rot_1BQD = ttnn.reshape(q_heads_pre_rot_1BQD, [1, 8, 8, 128])
+            k_heads_pre_rot_1BKD = ttnn.reshape(k_heads_pre_rot_1BKD, [1, 8, 8, 128])  # ==> [1, 8, 1 (8), 128]
+
+            q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=rm_mem_cfg_q)
+            k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=rm_mem_cfg_k)
+
+            # inp_torch = ttnn.to_torch(
+            #     q_heads_pre_rot_1BQD,
+            #     mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 1), mesh_shape=(8, 4)),
+            # )
+            # q_heads_pre_rot_1BQD_torch = inp_torch * torch.rsqrt(inp_torch.pow(2).mean(-1, keepdim=True) + 1e-6)
+            # q_heads_pre_rot_1BQD_torch = q_heads_pre_rot_1BQD_torch * self.q_norm_weight
+            # q_heads_pre_rot_1BQD = ttnn.from_torch(
+            #     q_heads_pre_rot_1BQD_torch,
+            #     mesh_mapper=ttnn.ShardTensor2dMesh(
+            #         self.mesh_device,
+            #         dims=(2, 1),
+            #         mesh_shape=(8, 4),
+            #     ),
+            #     memory_config=rm_mem_cfg_q,
+            #     dtype=ttnn.bfloat16,
+            #     layout=ttnn.ROW_MAJOR_LAYOUT,
+            #     device=self.mesh_device,
+            # )
+
+            # inp_torch = ttnn.to_torch(
+            #     k_heads_pre_rot_1BKD,
+            #     mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 1), mesh_shape=(8, 4)),
+            # )
+            # k_heads_pre_rot_1BKD_torch = inp_torch * torch.rsqrt(inp_torch.pow(2).mean(-1, keepdim=True) + 1e-6)
+            # k_heads_pre_rot_1BKD_torch = k_heads_pre_rot_1BKD_torch * self.k_norm_weight
+            # k_heads_pre_rot_1BKD = ttnn.from_torch(
+            #     k_heads_pre_rot_1BKD_torch,
+            #     mesh_mapper=ttnn.ShardTensor2dMesh(
+            #         self.mesh_device,
+            #         dims=(2, 1),
+            #         mesh_shape=(8, 4),
+            #     ),
+            #     memory_config=rm_mem_cfg_k,
+            #     dtype=ttnn.bfloat16,
+            #     layout=ttnn.ROW_MAJOR_LAYOUT,
+            #     device=self.mesh_device,
+            # )
 
         # print("done create qkv heads")
         ttnn.deallocate(xqkv_fused_sharded)

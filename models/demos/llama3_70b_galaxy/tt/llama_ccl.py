@@ -540,10 +540,10 @@ class TT_CCL:
                 if not self.use_qwen_mlp
                 else {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                    "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                     "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF3": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
-                    "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                 }
             )
             for key, shape in buffers_dict.items():
@@ -581,15 +581,26 @@ class TT_CCL:
         for seqlen in self.support_seqlens:
             ag_persistent_buffers = {}
 
-            buffers_dict = {
-                "QKV": [(1, 1, seqlen, 1280)],
-                "WO": [(1, 1, seqlen, 2048)],
-                "FF1": [(1, 1, seqlen, 3584)],
-                "FF3": [(1, 1, seqlen, 3584)],
-                "FF2": [(1, 1, seqlen, 2048)],
-                "LAYERNORM": [(1, 1, seqlen, 128)],
-                # "SAMPLING": [(1, 1, 32, 128 * 1024)]
-            }
+            buffers_dict = (
+                {
+                    "QKV": [(1, 1, seqlen, 1280)],
+                    "WO": [(1, 1, seqlen, 2048)],
+                    "FF1": [(1, 1, seqlen, 3584)],
+                    "FF3": [(1, 1, seqlen, 3584)],
+                    "FF2": [(1, 1, seqlen, 2048)],
+                    "LAYERNORM": [(1, 1, seqlen, 128)],
+                    # "SAMPLING": [(1, 1, 32, 128 * 1024)]
+                }
+                if not self.use_qwen_mlp
+                else {
+                    "QKV": [(1, 1, seqlen, 1280)],
+                    "WO": [(1, 1, seqlen, 1280)],
+                    "FF1": [(1, 1, seqlen, 3200)],
+                    "FF3": [(1, 1, seqlen, 3200)],
+                    "FF2": [(1, 1, seqlen, 1280)],
+                    "LAYERNORM": [(1, 1, seqlen, 128)],
+                }
+            )
             for key, shape in buffers_dict.items():
                 tt_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),
@@ -1188,29 +1199,71 @@ def tt_distributed_rmsnorm(
     mesh_device,
     compute_kernel_config,
     tt_ccl=None,
+    program_config=None,
+    memory_config=None,
 ):
     use_2d_grid = inp.shape[-2] == 128
     # Run distributed rmsnorm part 1
-    tt_stats = ttnn.rms_norm_pre_all_gather(
-        inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, use_2d_core_grid=use_2d_grid
+    if program_config is not None:
+        core_grid_ln, grid_offset = (10, 2), ttnn.CoreCoord(1, 0)
+        core_range = ttnn.CoreRange(
+            grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
+        )
+        inp = ttnn.to_memory_config(inp, ttnn.DRAM_MEMORY_CONFIG)
+        inp = ttnn.typecast(inp, ttnn.bfloat16, sub_core_grids=core_range)
+    tt_stats = (
+        ttnn.rms_norm_pre_all_gather(
+            inp,
+            compute_kernel_config=compute_kernel_config,
+            program_config=program_config,
+            dtype=ttnn.bfloat16,
+            use_2d_core_grid=use_2d_grid,
+        )
+        if program_config is not None
+        else ttnn.rms_norm_pre_all_gather(
+            inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, use_2d_core_grid=use_2d_grid
+        )
     )
     padded_shape = (1, 1, inp.shape[-2], 32)
-
-    tt_stats = ttnn.to_memory_config(tt_stats, memory_config=tt_stats.memory_config(), dtype=ttnn.bfloat16)
-    tt_stats_gathered = tt_ccl.line_all_gather(
-        tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="LAYERNORM"
+    # tt_stats_gathered = tt_ccl.line_all_gather(
+    #     tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="LAYERNORM"
+    # )
+    tt_stats_gathered = (
+        tt_ccl.line_all_gather(
+            tt_stats,
+            dim=3,
+            cluster_axis=1,
+            num_links=1,
+            memory_config=tt_ccl.all_gather_buffers.get("LAYERNORM", None).memory_config(),
+            buffer_key="LAYERNORM",
+        )
+        if program_config is not None
+        else tt_ccl.line_all_gather(
+            tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="LAYERNORM"
+        )
     )
 
     tt_stats.deallocate(True)
 
     # Run distributed rmsnorm part 2
-    tt_out = ttnn.rms_norm_post_all_gather(
-        inp,
-        tt_stats_gathered,
-        epsilon=epsilon,
-        weight=gamma,
-        compute_kernel_config=compute_kernel_config,
-        use_2d_core_grid=use_2d_grid,
+    tt_out = (
+        ttnn.rms_norm_post_all_gather(
+            inp,
+            tt_stats_gathered,
+            epsilon=epsilon,
+            weight=gamma,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            use_2d_core_grid=use_2d_grid,
+        )
+        if program_config is not None
+        else ttnn.rms_norm_post_all_gather(
+            inp,
+            tt_stats_gathered,
+            epsilon=epsilon,
+            weight=gamma,
+            compute_kernel_config=compute_kernel_config,
+        )
     )
 
     # tt_stats_gathered.deallocate(True)

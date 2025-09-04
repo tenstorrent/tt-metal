@@ -29,7 +29,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "weights, layers, iterations",
     [
-        ("instruct", 64, 2000),
+        ("instruct", 3, 2000),
     ],
     ids=["quick"],
 )
@@ -122,7 +122,7 @@ def test_qwen_model_ttt_inference(
 
     model_name = {
         (80): "qwen3_70b",
-        (64): "qwen3_1layer",
+        (3): "qwen3_1layer",
     }[(layers if layers is not None else model_args.n_layers)]
 
     # Define minimum PCC for each iteration
@@ -262,7 +262,6 @@ def test_qwen_model_ttt_inference(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
-        temperature=temperature,
         tt_ccl=tt_model.tt_ccl,
     )
     logger.info("Qwen Model and caches loaded.")
@@ -326,7 +325,7 @@ def test_qwen_model_ttt_inference(
             )
 
             # Sampling
-            tt_out_tok = tt_sampling(tt_out[0], top_k, top_p, seed)
+            tt_out_tok = tt_sampling(tt_out[0], seed)
             tt_decode_input = tt_embd(tt_out_tok)
 
             # Convert ttnn tensor to torch tensor
