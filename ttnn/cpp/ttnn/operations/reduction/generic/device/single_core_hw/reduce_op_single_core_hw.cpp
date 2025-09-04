@@ -73,7 +73,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
             .set_page_size(output_cb_index, dst_single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    bfloat16 bfloat_scaler_value = bfloat16(scaler);
+    bfloat16 bfloat_scaler_value = bfloat16::truncate(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
