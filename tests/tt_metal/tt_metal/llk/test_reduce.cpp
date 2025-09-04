@@ -149,7 +149,9 @@ void add_reader_writer_kernels(
         case ReduceDim::H: {
             bfloat16 bfloat_scaler_value = bfloat16(scaler);
             uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-            std::vector<uint32_t> reader_compile_args = {(std::uint32_t)true, packed_scaler_value};
+            std::vector<uint32_t> reader_compile_args = {};
+            tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_compile_args);
+            reader_compile_args.push_back(packed_scaler_value);
             std::map<std::string, std::string> reader_defines = {{"REDUCE_SCALER", "1"}};
 
             auto unary_reader_kernel = tt_metal::CreateKernel(
