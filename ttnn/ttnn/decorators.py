@@ -369,8 +369,8 @@ class FastOperation:
 
     def __call__(self, *function_args, **function_kwargs):
         cq_id = None
-        if "cq_id" in function_kwargs:
-            cq_id = function_kwargs.pop("cq_id")
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
 
         if cq_id is None:
             result = self.function(*function_args, **function_kwargs)
@@ -558,8 +558,8 @@ class Operation:
                     return decorated_function(*function_args, **function_kwargs)
 
                 cq_id = None
-                if "cq_id" in function_kwargs:
-                    cq_id = function_kwargs.pop("cq_id")
+                if "queue_id" in function_kwargs:
+                    cq_id = function_kwargs.pop("queue_id")
 
                 for hook in PRE_OPERATION_HOOKS:
                     hook_return_value = hook(self, function_args, function_kwargs)
