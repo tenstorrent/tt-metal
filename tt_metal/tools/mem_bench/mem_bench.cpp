@@ -543,35 +543,7 @@ bool has_flag(const std::vector<std::string>& input_args, const std::string& fla
 }
 
 int main(int argc, char* argv[]) {
-    std::vector<std::string> input_args(argv, argv + argc);
-    if (has_flag(input_args, "--help")) {
-        print_help();
-        return 0;
-    }
-
-    // Force TT_METAL options
-    setenv("TT_METAL_SLOW_DISPATCH_MODE", "true", true);
-    setenv("TT_METAL_CLEAR_L1", "1", true);
-    // May be overridden by the user
-    setenv("TT_LOGGER_LEVEL", "FATAL", false);
-
-    char arg0_default[] = "benchmark";
-    char* args_default = arg0_default;
-    if (!argv) {
-        argc = 1;
-        argv = &args_default;
-    }
-
-    // Run basic benchmarks
-    register_basic_benchmark_suite();
-
-    // Run all benchmarks
-    if (has_flag(input_args, "--full")) {
-        register_full_benchmark_suite();
-    }
-
-    ::benchmark::Initialize(&argc, argv);
-    ::benchmark::RunSpecifiedBenchmarks();
-    ::benchmark::Shutdown();
+    auto devices = tt::tt_metal::detail::CreateDevices({0});
+    tt::tt_metal::detail::CloseDevices(devices);
     return 0;
 }
