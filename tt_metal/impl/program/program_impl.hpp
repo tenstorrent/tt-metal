@@ -68,8 +68,8 @@ struct KernelGroup {
     // rta_sizes is indexed by dispatch class
     std::vector<uint32_t> rta_sizes;
     uint32_t total_rta_size{};
-    uint32_t kernel_text_offsets[NUM_PROCESSORS_PER_CORE_TYPE]{};
-    uint32_t kernel_bin_sizes[NUM_PROCESSORS_PER_CORE_TYPE]{};
+    // kernel_text_offsets is indexed by processor index within core.
+    std::vector<uint32_t> kernel_text_offsets;
     launch_msg_t launch_msg{};
     go_msg_t go_msg{};
 
