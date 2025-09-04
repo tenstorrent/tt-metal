@@ -10,8 +10,9 @@ import os
 import pathlib
 import importlib
 import datetime as dt
-from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
+
+# from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
+# from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
 
 # import ttnn
 from multiprocessing import Process
@@ -31,10 +32,9 @@ import subprocess
 from dataclasses import dataclass
 from typing import Optional
 from framework.result_destination import ResultDestinationFactory
-from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
 from sweep_utils.roofline_utils import get_updated_message
 from framework.device_fixtures import default_device
+from time import sleep
 
 
 @dataclass
@@ -160,11 +160,11 @@ def get_all_modules():
         yield sweep_name
 
 
-def get_timeout(test_module):
-    try:
-        timeout = test_module.TIMEOUT
-    except:
-        timeout = 30
+def get_timeout():
+    # try:
+    #     timeout = test_module.TIMEOUT
+    # except:
+    timeout = 30
     return timeout
 
 
@@ -301,49 +301,65 @@ def device_context(test_module, output_queue):
         return
 
 
-def run(test_module, input_queue, output_queue, config: SweepsConfig):
-    with device_context(test_module, output_queue) as (device, device_name):
-        while True:
-            try:
+def run(module_name, input_queue, output_queue, config: SweepsConfig):
+    test_module = importlib.import_module("sweeps." + module_name)
+    device_generator = get_devices(test_module)
+    try:
+        device, device_name = next(device_generator)
+        logger.info(f"Opened device configuration, {device_name}.")
+    except AssertionError as e:
+        output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None])
+        return
+    try:
+        try:
+            while True:
                 test_vector = input_queue.get(block=True, timeout=1)
-            except Empty:
-                logger.info("Test suite complete")
-                return
-            test_vector = deserialize_vector_structured(test_vector)
-            try:
-                results = test_module.run(**test_vector, device=device)
-                if type(results) == list:
-                    status, message = results[0]
-                    e2e_perf = results[1] / 1000000  # Nanoseconds to milliseconds
-                else:
-                    status, message = results
+                test_vector = deserialize_vector_structured(test_vector)
+                try:
+                    results = test_module.run(**test_vector, device=device)
+                    if type(results) == list:
+                        status, message = results[0]
+                        e2e_perf = results[1] / 1000000  # Nanoseconds to milliseconds
+                    else:
+                        status, message = results
+                        e2e_perf = None
+                except Exception as e:
+                    status, message = False, str(e)
                     e2e_perf = None
-            except Exception as e:
-                # logger.exception(e)
-                status, message = False, str(e)
-                e2e_perf = None
-            if config.measure_device_perf:
-                perf_result = gather_single_test_perf(device, status)
-                message = get_updated_message(message, perf_result)
-                output_queue.put([status, message, e2e_perf, perf_result])
-            else:
-                output_queue.put([status, message, e2e_perf, None])
+                if config.measure_device_perf:
+                    perf_result = gather_single_test_perf(device, status)
+                    message = get_updated_message(message, perf_result)
+                    output_queue.put([status, message, e2e_perf, perf_result])
+                else:
+                    output_queue.put([status, message, e2e_perf, None])
+        except Empty as e:
+            # Queue timeout - normal completion when no more test vectors
+            pass
+    finally:
+        # Always close the device when exiting the run function
+        try:
+            # Run teardown in mesh_device_fixture
+            next(device_generator)
+        except StopIteration:
+            logger.info(f"Closed device configuration, {device_name}.")
+        except Exception as e:
+            logger.warning(f"Error during device cleanup: {e}")
 
 
-def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig):
+def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig):
     # runs a single suite in a test vector
     results = []
     input_queue = Queue()
     output_queue = Queue()
     p = None
-    timeout = get_timeout(test_module)
+    timeout = get_timeout()
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
-    child_mode = (not config.vector_id) and (not config.dry_run)
+    child_mode = not config.dry_run
     timeout_before_rejoin = 5
 
     if child_mode:
-        p = Process(target=run, args=(test_module, input_queue, output_queue, config))
+        p = Process(target=run, args=(module_name, input_queue, output_queue, config))
         p.start()
 
     for i, test_vector in enumerate(test_vectors):
@@ -376,24 +392,29 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                     # Ensure a worker process is running if we're in child mode
                     child_mode = (len(test_vectors) > 1) and (not config.dry_run)
                     if child_mode and (p is None or not p.is_alive()):
-                        p = Process(target=run, args=(test_module, input_queue, output_queue, config))
+                        p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                        p.start()
+                    # Ensure a worker process is running if we're in child mode
+                    child_mode = (len(test_vectors) > 1) and (not config.dry_run)
+                    if child_mode and (p is None or not p.is_alive()):
+                        p = Process(target=run, args=(module_name, input_queue, output_queue, config))
                         p.start()
                     input_queue.put(test_vector)
                     if p is None:
                         logger.info(
                             "Executing test (first run, e2e perf is enabled) on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
                         )
-                        run(test_module, input_queue, output_queue, config)
+                        run(module_name, input_queue, output_queue, config)
                     output_queue.get(block=True, timeout=timeout)
                 if child_mode and (p is None or not p.is_alive()):
-                    p = Process(target=run, args=(test_module, input_queue, output_queue, config))
+                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
                     p.start()
                 input_queue.put(test_vector)
                 if p is None:
                     logger.info(
                         "Executing test on parent process for debug purposes because there is only one test vector. Hang detection and handling is disabled."
                     )
-                    run(test_module, input_queue, output_queue, config)
+                    run(module_name, input_queue, output_queue, config)
                 response = output_queue.get(block=True, timeout=timeout)
                 status, message, e2e_perf, device_perf = (
                     response[0],
@@ -439,7 +460,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
             except Empty as e:
                 if p:
                     logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
-                    p.terminate()
+                    p.kill()
                     p.join(timeout_before_rejoin)  # Wait for graceful process termination
                     if p.is_alive():
                         logger.error(f"Child process {p.pid} did not terminate, killing it.")
@@ -447,6 +468,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                         p.join()
                     p = None
                     reset_util.reset()
+                    sleep(15)
 
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
@@ -481,7 +503,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                     break
                 else:
                     logger.info("Continuing with remaining tests in suite despite timeout.")
-                    p = Process(target=run, args=(test_module, input_queue, output_queue, config))
+                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
                     p.start()
                     # Continue to the next test vector without breaking
 
@@ -575,7 +597,7 @@ def run_sweeps(
     module_pbar = pbar_manager.counter(total=len(module_names), desc="Modules", leave=False)
     try:
         for module_name in module_names:
-            test_module = importlib.import_module("sweeps." + module_name)
+            # test_module = importlib.import_module("sweeps." + module_name)
             if config.suite_name:
                 # Filter to only the specified suite
                 all_suites = vector_source.get_available_suites(module_name)
@@ -608,9 +630,7 @@ def run_sweeps(
                     logger.warning(f"No vectors found for module {module_name}, suite {suite}")
                     continue
                 header_info, test_vectors = sanitize_inputs(vectors)
-                results = execute_suite(
-                    test_module, test_vectors, pbar_manager, suite, module_name, header_info, config
-                )
+                results = execute_suite(test_vectors, pbar_manager, suite, module_name, header_info, config)
 
                 suite_end_time = dt.datetime.now()
                 logger.info(f"Completed tests for module {module_name}, suite {suite}.")
