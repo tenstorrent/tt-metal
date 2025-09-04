@@ -56,10 +56,12 @@
 
    ```bash
    python sample_tracer.py --model yolov8s --input-shape 1 3 640 640
+   python sample_tracer.py --model yolov12x  --input-shape 1 3 4320 7680 --disable-torch-summary --no-infer
    ```
 
    - Replace `yolov8s` with any supported model from the `allowed_modes` list (defined in `sample_tracer.py`).
    - Specify input shapes using the `--input-shape` argument (e.g., `1 3 640 640` for batch size 1, 3 channels, and 640x640 resolution).
+   - Run with --disable-torch-summary and --no-infer for a faster run without generating summary on the CLI
 
 4. Outputs saved in the current working directory:
    - **`graph.py`**: Executable PyTorch code representing the traced model.
