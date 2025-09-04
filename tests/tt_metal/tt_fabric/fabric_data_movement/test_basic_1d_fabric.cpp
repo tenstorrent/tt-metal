@@ -2130,16 +2130,15 @@ void FabricUnicastCommon(
     }
 
     std::vector<std::shared_ptr<tt_metal::distributed::MeshDevice>> receiver_devices;
-    std::vector<chip_id_t> first_hop_phys_chip_ids;
+    std::vector<FabricNodeId> dest_fabric_node_ids;
     receiver_devices.reserve(dir_configs.size());
-    first_hop_phys_chip_ids.reserve(dir_configs.size());
     for (auto [dir, num_hops] : dir_configs) {
         // pick destination device at the num_hops-th neighbor
         uint32_t dst_index = num_hops - 1;
         auto dst_physical_device_id = physical_end_device_ids_by_dir[dir][dst_index];
         receiver_devices.push_back(fixture->get_device(dst_physical_device_id));
         // connection is to first hop for each direction
-        first_hop_phys_chip_ids.push_back(physical_end_device_ids_by_dir[dir][0]);
+        dest_fabric_node_ids.push_back(tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_physical_device_id));
     }
     auto sender_device = fixture->get_device(src_physical_device_id);
     CoreCoord receiver_virtual_core = receiver_devices.back()->worker_core_from_logical_core(receiver_logical_core);
@@ -2186,14 +2185,13 @@ void FabricUnicastCommon(
         sender_runtime_args.push_back(num_hops);
     }
 
-    std::vector<tt::tt_fabric::FabricNodeId> next_hop_nodes;
-    next_hop_nodes.reserve(first_hop_phys_chip_ids.size());
-    for (auto phys : first_hop_phys_chip_ids) {
-        next_hop_nodes.push_back(tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(phys));
-    }
-
     append_routing_plane_connection_manager_rt_args(
-        src_fabric_node_id, next_hop_nodes, sender_program, sender_kernel, {sender_logical_core}, sender_runtime_args);
+        src_fabric_node_id,
+        dest_fabric_node_ids,
+        sender_program,
+        sender_kernel,
+        {sender_logical_core},
+        sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
     std::unordered_map<std::shared_ptr<tt_metal::distributed::MeshDevice>, tt_metal::Program> receiver_programs;
@@ -2299,14 +2297,14 @@ void FabricMulticastCommon(
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
 
     // Adjust lists to start from start_distance for each direction
-    std::vector<chip_id_t> first_hop_phys_chip_ids;
+    std::vector<FabricNodeId> dest_fabric_node_ids;
     for (auto [dir, start_distance, range] : dir_configs) {
-        first_hop_phys_chip_ids.push_back(physical_end_device_ids_by_dir[dir][0]);
         physical_end_device_ids_by_dir[dir] = std::vector(
             physical_end_device_ids_by_dir[dir].begin() + (start_distance - 1),
             physical_end_device_ids_by_dir[dir].end());
         end_fabric_node_ids_by_dir[dir] = std::vector(
             end_fabric_node_ids_by_dir[dir].begin() + (start_distance - 1), end_fabric_node_ids_by_dir[dir].end());
+        dest_fabric_node_ids.push_back(end_fabric_node_ids_by_dir[dir][0]);
     }
 
     // Choose a receiver device to compute RX core coords (use last device from first configured dir)
@@ -2358,14 +2356,13 @@ void FabricMulticastCommon(
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = compile_time_args});
 
-    std::vector<tt::tt_fabric::FabricNodeId> next_hop_nodes;
-    next_hop_nodes.reserve(first_hop_phys_chip_ids.size());
-    for (auto phys : first_hop_phys_chip_ids) {
-        next_hop_nodes.push_back(tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(phys));
-    }
-
     append_routing_plane_connection_manager_rt_args(
-        src_fabric_node_id, next_hop_nodes, sender_program, sender_kernel, {sender_logical_core}, sender_runtime_args);
+        src_fabric_node_id,
+        dest_fabric_node_ids,
+        sender_program,
+        sender_kernel,
+        {sender_logical_core},
+        sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
