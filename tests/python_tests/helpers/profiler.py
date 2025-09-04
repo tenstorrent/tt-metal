@@ -217,11 +217,11 @@ class Profiler:
         return Profiler._parse_buffers(Profiler._load_buffers(), meta)
 
     @staticmethod
-    def _load_buffers(core_loc="0,0", word_count=BUFFER_LENGTH):
+    def _load_buffers(location="0,0", word_count=BUFFER_LENGTH):
         """Load profiler buffers from device memory for each thread."""
         return [
             read_words_from_device(
-                core_loc=core_loc, addr=buffer_address, word_count=word_count
+                location=location, addr=buffer_address, word_count=word_count
             )
             for buffer_address in Profiler.THREAD_BUFFER
         ]

@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-// More details:
-// https://yyz-tensix-gitlab.local.tenstorrent.com/tensix-hw/the-wiki/-/wikis/marco/notes_april_2023#understanding-the-risc-debug-registers-not-to-be-confused-with-the-risc-debug-registers
 
 #include "tensix.h" //RISCV_DEBUG macros
 

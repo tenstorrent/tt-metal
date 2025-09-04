@@ -8,13 +8,6 @@
 
 #ifdef HAVE_RISCV_VECTOR
 
-// RISC-V vector spec:
-//  https://objects.githubusercontent.com/github-production-release-asset-2e65be/142581105/ae32fdb4-65a0-46ce-ae5e-ebecc7bf6617?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIWNJYAX4CSVEH53A%2F20220214%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20220214T135155Z&X-Amz-Expires=300&X-Amz-Signature=24565ca1a97c3cc25e14341e4983971e08c89a79f4283cbcf2aebabf63710c36&X-Amz-SignedHeaders=host&actor_id=0&key_id=0&repo_id=142581105&response-content-disposition=attachment%3B%20filename%3Driscv-v-spec-1.0.pdf&response-content-type=application%2Foctet-stream
-//
-// Also, here is my personal write-up:
-//
-//  https://yyz-gitlab.local.tenstorrent.com/tenstorrent/tensix/-/wikis/marco/notes_february_2022#writing-some-vector-risc-dest-tests
-
 // First-class enum types to get smarter template type deduction
 
 enum vreg
