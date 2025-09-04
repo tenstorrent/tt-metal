@@ -4,8 +4,10 @@ Compute APIs
 This page contains a list of APIs avaliable in the compute kernels. These API govern differnt aspects of the compute kernel. Including
 
 * Synchronization between the 3 cores runing the compute kernel cooperatively
+* Copying data between SRAM and registers that the compute engines use
 * Perform the computation
-* Copying data between SRAM and compute engines
+
+To undeerstand what parameters to pass to these functions and what they mean, please refer to the :ref:`Compute Engines and Data Flow within Tensix<compute_engines_and_dataflow_within_tensix>` documentation for more details.
 
 Synchronization
 ---------------
@@ -14,16 +16,6 @@ Synchronization
   acquire_dst
   release_dst
   reg_api
-
-Register IO
------------
-
-.. toctree::
-
-  cb_wait_front
-  cb_pop_front
-  cb_reserve_back
-  cb_push_back
 
 Compute
 -------
