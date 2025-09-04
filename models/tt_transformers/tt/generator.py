@@ -55,6 +55,9 @@ class Generator:
         self.tokenizer = tokenizer
         self.formatter = formatter
         self.data_parallel = len(self.model)
+        self.prefill_trace_ids = {}
+        self.prefill_trace_inputs = {}
+        self.prefill_trace_outputs = {}
         self.prev_page_table = None
 
     # Note: This function is called by vLLM
@@ -65,6 +68,7 @@ class Generator:
         kv_cache=None,
         prompt_lens=None,
         empty_slots=None,
+        enable_trace=False,
         **kwargs,
     ):
         if page_table is not None:
@@ -109,15 +113,19 @@ class Generator:
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
 
-            logits = self.prefill_forward_single_user_text(
-                prefill_ids,
-                page_table=page_table_user,
-                user_id=group_user_id,
-                last_token_idx=last_token_idx,
-                kv_cache=model_kv_cache,
-                model_id=model_id,
-                **local_kwargs,
-            )
+            if enable_trace:
+                logits = self._easy_trace_prefill()
+            else:
+                logits = self.prefill_forward_single_user_text(
+                    prefill_ids,
+                    page_table=page_table_user,
+                    user_id=group_user_id,
+                    last_token_idx=last_token_idx,
+                    kv_cache=model_kv_cache,
+                    model_id=model_id,
+                    **local_kwargs,
+                )
+
             out_list.append(logits)
 
         for idx, out in enumerate(out_list):
@@ -226,6 +234,105 @@ class Generator:
                 kv_cache=kv_cache,
             )
             return tt_logits
+
+    def _easy_trace_prefill(
+        self,
+        tokens,
+        last_token_idx,
+        prefill_seq_len,
+        page_table=None,
+        kv_cache=None,
+        user_id=0,
+        tt_out_logits_saved=None,
+    ):
+        """
+        Tracing is easy! Just call this method and we'll handle tracing for you.
+        """
+        if not self.prefill_trace_ids.get(prefill_seq_len, None):
+            trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
+                tokens,
+                last_token_idx,
+                page_table=page_table,
+                kv_cache=kv_cache,
+            )
+            self.prefill_trace_ids[prefill_seq_len] = trace_id
+            self.prefill_trace_inputs[prefill_seq_len] = device_inputs
+            self.prefill_trace_outputs[prefill_seq_len] = tt_out_trace
+
+        logger.info("Executing prefill trace")
+        return self._prefill_forward_trace_text(
+            self.prefill_trace_ids[prefill_seq_len],
+            self.prefill_trace_inputs[prefill_seq_len],
+            self.prefill_trace_outputs[prefill_seq_len],
+            tokens,
+            user_id,
+            page_table=page_table,
+        )
+
+    def _capture_trace_prefill(
+        self,
+        tokens,
+        last_token_idx,
+        page_table=None,
+        kv_cache=None,
+    ):
+        """
+        Captures a trace for the decode_forward method.
+        """
+
+        # Get inputs ready for trace run
+        host_inputs = self.model.prepare_prefill_inputs_host(tokens, page_table=page_table)
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
+
+        tt_out_trace = self.model.ttnn_prefill_forward(
+            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx
+        )
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info("Done Compiling Model")
+
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
+        tt_out_trace = self.model.ttnn_prefill_forward(
+            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx
+        )
+
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
+
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
+        tt_out_trace = self.model.ttnn_prefill_forward(
+            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx
+        )
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info("Done Capturing Prefill Trace")
+        return trace_id, tt_out_trace, *device_inputs
+
+    def _prefill_forward_trace_text(
+        self,
+        trace_id,
+        device_inputs,
+        tt_out_trace,
+        tokens,
+        user_id,
+        page_table=None,
+    ):
+        """
+        Executes the trace for the decode_forward method but does not read back outputs.
+        """
+        host_inputs = self.model.prepare_prefill_inputs_host(tokens, user_id, page_table)
+
+        device_inputs = copy_host_to_device(
+            host_tensors=host_inputs,
+            device_tensors=device_inputs,
+        )
+
+        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+
+        return tt_out_trace
 
     # Note: This function is called by vLLM
     def decode_forward_text(
