@@ -937,14 +937,45 @@ INPUT                  = tt_metal/hw/inc/compile_time_args.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/elu.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/relu.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/i0.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/i1.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/reverseops.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/isinf_isnan.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/logical_not_noti.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/trigonometry.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/rounding.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/activations.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/clamp.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/trigonometric.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/binop_with_scalar.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/fill.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/fmod.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/rounding.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/identity.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/negative.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/dropout.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/typecast.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/prelu.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/softplus.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/softsign.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/hardtanh.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/rand.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/isinf_isnan.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/left_shift.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/right_shift.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/remainder.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/threshold.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/where.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/log1p.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/comp.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/bitwise_or.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/bitwise_and.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/bitwise_xor.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/bitwise_not.h \
                          tt_metal/include/compute_kernel_api/bcast.h \
                          tt_metal/include/compute_kernel_api/cb_api.h \
                          tt_metal/include/compute_kernel_api/compute_kernel_hw_startup.h \
                          tt_metal/include/compute_kernel_api/eltwise_binary.h \
+                         tt_metal/include/compute_kernel_api/eltwise_binary_sfpu.h \
                          tt_metal/include/compute_kernel_api/matmul.h \
                          tt_metal/include/compute_kernel_api/pack.h \
                          tt_metal/include/compute_kernel_api/pack_untilize.h \
@@ -956,6 +987,19 @@ INPUT                  = tt_metal/hw/inc/compile_time_args.h \
                          tt_metal/include/compute_kernel_api/tilize.h \
                          tt_metal/include/compute_kernel_api/transpose_wh.h \
                          tt_metal/include/compute_kernel_api/untilize.h \
+                         tt_metal/include/compute_kernel_api/cumsum.h \
+                         tt_metal/include/compute_kernel_api/add_int_sfpu.h \
+                         tt_metal/include/compute_kernel_api/binop_with_scalar.h \
+                         tt_metal/include/compute_kernel_api/gcd.h \
+                         tt_metal/include/compute_kernel_api/xlogy.h \
+                         tt_metal/include/compute_kernel_api/lcm.h \
+                         tt_metal/include/compute_kernel_api/mask.h \
+                         tt_metal/include/compute_kernel_api/reshuffle.h \
+                         tt_metal/include/compute_kernel_api/binary_shift.h \
+                         tt_metal/include/compute_kernel_api/binary_max_min.h \
+                         tt_metal/include/compute_kernel_api/binary_bitwise_sfpu.h \
+                         tt_metal/include/compute_kernel_api/sub_int_sfpu.h \
+                         tt_metal/include/compute_kernel_api/mul_int_sfpu.h \
                          tt_metal/include/compute_kernel_api.h \
                          tt_metal/impl/kernels/kernel_args.hpp \
                          tt_metal/include/tt_metal/metal.hpp \
