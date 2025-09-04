@@ -13,7 +13,9 @@
 namespace ttnn {
 
 void NeighborPadAsync::validate_with_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {}
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    TT_FATAL(this->dim < 3, "Error, neighbor pad currently only supports padding non last dim, provided {}", this->dim);
+}
 
 std::vector<ttnn::TensorSpec> NeighborPadAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
