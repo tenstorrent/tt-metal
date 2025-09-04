@@ -27,7 +27,6 @@ class TtnnYoloV11:
         self.c3k2_4 = TtnnC3k2(device, parameters.conv_args[8], parameters.model[8], is_bk_enabled=False)
         self.sppf = TtnnSPPF(device, parameters.conv_args[9], parameters.model[9])
         self.c2psa = TtnnC2PSA(device, parameters.conv_args[10], parameters.model[10])
-        import pdb; pdb.set_trace()
 
         self.c3k2_5 = TtnnC3k2(device, parameters.conv_args[13], parameters.model[13], is_bk_enabled=False, reshard=True)
         self.c3k2_6 = TtnnC3k2(device, parameters.conv_args[16], parameters.model[16], is_bk_enabled=True, reshard=True)
