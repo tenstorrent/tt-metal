@@ -31,8 +31,6 @@ class TtBottleRep:
             conv=model_params.conv2.block.conv,
             conv_pth=parameters.conv2.block.conv,
             shard_layout=shard_layout,
-            act_block_h=True,
-            act_blocks=32,
             activation="silu",
             return_height_width=True,
             deallocate_activation=True,
