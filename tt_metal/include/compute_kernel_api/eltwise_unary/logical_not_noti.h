@@ -41,6 +41,10 @@ ALWI void logical_not_unary_tile_uint32(uint32_t idst) {
     MATH(SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS(logical_not_unary, APPROX, sfpi::vUInt, uint16_t, idst));
 }
 
+ALWI void logical_not_unary_tile_uint16(uint32_t idst) {
+    MATH((SFPU_UNARY_NO_PARAM_KERNEL(logical_not_unary_uint16, RC, APPROX, idst)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
