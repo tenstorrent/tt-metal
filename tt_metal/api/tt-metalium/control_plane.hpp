@@ -20,6 +20,12 @@
 #include <memory>
 #include <vector>
 
+namespace tt::tt_metal {
+
+class PhysicalSystemDescriptor;
+
+}  // namespace tt::tt_metal
+
 namespace tt::tt_fabric {
 
 class FabricContext;
@@ -222,6 +228,8 @@ private:
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
 
+    std::map<FabricNodeId, std::unordered_map<chan_id_t, RoutingDirection>> exit_node_directions_;
+
     // map[phys_chip_id] has a vector of (eth_core, channel) pairs used for intermesh routing
     // TODO: remove once UMD can provide all intermesh links
     std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>> intermesh_eth_links_;
@@ -299,6 +307,9 @@ private:
     // Initialize internal map of physical chip_id to intermesh ethernet links
     void initialize_intermesh_eth_links();
 
+    void assign_direction_to_fabric_eth_chan(
+        const FabricNodeId& fabric_node_id, chan_id_t chan_id, RoutingDirection direction);
+
     void assign_direction_to_fabric_eth_core(
         const FabricNodeId& fabric_node_id, const CoreCoord& eth_core, RoutingDirection direction);
 
@@ -310,6 +321,15 @@ private:
     // Returns std::nullopt if not in multi-host context
     LocalMeshBinding initialize_local_mesh_binding();
 
+    void generate_intermesh_connectivity();
+
+    PortIdTable generate_exit_node_port_id_table();
+
+    void exchange_exit_node_port_id_tables(PortIdTable& port_id_table, uint32_t my_rank, const std::string& my_host);
+
+    std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>>
+    pair_logical_intermesh_ports(PortIdTable& port_id_table, uint32_t my_rank, const std::string& my_host);
+
     std::unique_ptr<FabricContext> fabric_context_;
     LocalMeshBinding local_mesh_binding_;
 
@@ -318,6 +338,7 @@ private:
         distributed_contexts_;
 
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> host_local_context_;
+    std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
 };
 
 }  // namespace tt::tt_fabric

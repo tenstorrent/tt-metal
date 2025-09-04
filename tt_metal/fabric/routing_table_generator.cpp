@@ -311,6 +311,14 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
     }
 }
 
+void RoutingTableGenerator::load_intermesh_connections(
+    const std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>>&
+        intermesh_connections) {
+    this->mesh_graph->load_intermesh_connections(intermesh_connections);
+    this->generate_intermesh_routing_table(
+        this->mesh_graph->get_inter_mesh_connectivity(), this->mesh_graph->get_intra_mesh_connectivity());
+}
+
 void RoutingTableGenerator::print_routing_tables() const {
     std::stringstream ss;
     ss << "Routing Table Generator: IntraMesh Routing Tables" << std::endl;

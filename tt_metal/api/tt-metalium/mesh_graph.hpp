@@ -139,6 +139,15 @@ public:
     static std::filesystem::path get_mesh_graph_descriptor_path_for_cluster_type(
         tt::tt_metal::ClusterType cluster_type, const std::string& root_dir);
 
+    const std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>>& get_requested_intermesh_connections()
+        const;
+
+    const std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>>& get_mesh_edge_ports_to_chip_id() const;
+
+    void load_intermesh_connections(
+        const std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>>&
+            intermesh_connections);
+
 private:
     void validate_mesh_id(MeshId mesh_id) const;
     std::unordered_map<chip_id_t, RouterEdge> get_valid_connections(
@@ -147,12 +156,6 @@ private:
         const std::string& mesh_graph_desc_file_path,
         std::optional<std::map<FabricNodeId, chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping,
         std::shared_ptr<tt_metal::PhysicalSystemDescriptor> physical_system_descriptor);
-
-    void initialize_intermesh_mapping(
-        std::optional<std::map<FabricNodeId, chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping,
-        std::shared_ptr<tt_metal::PhysicalSystemDescriptor> physical_system_descriptor,
-        const std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>>& mesh_edge_ports_to_chip_id,
-        const std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>>& requested_connections);
 
     void add_to_connectivity(
         MeshId src_mesh_id,
@@ -172,6 +175,8 @@ private:
 
     static const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
         cluster_type_to_mesh_graph_descriptor;
+    std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>> mesh_edge_ports_to_chip_id_;
+    std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>> requested_intermesh_connections_;
 };
 
 }  // namespace tt::tt_fabric

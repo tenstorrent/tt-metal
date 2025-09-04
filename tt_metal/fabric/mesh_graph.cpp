@@ -176,208 +176,10 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
     return valid_connections;
 }
 
-void MeshGraph::initialize_intermesh_mapping(
-    std::optional<std::map<FabricNodeId, chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping,
-    std::shared_ptr<tt_metal::PhysicalSystemDescriptor> physical_system_descriptor,
-    const std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>>& mesh_edge_ports_to_chip_id,
-    const std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>>& requested_connections) {
-    using namespace tt::tt_metal::distributed::multihost;
-    const auto& my_host = physical_system_descriptor->my_host_name();
-    const auto my_rank = physical_system_descriptor->get_rank_for_hostname(my_host);
-    const auto my_mesh_id =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_logical_node_ids().at(Rank{my_rank}).first;
-
-    PortIdTable port_id_table;
-    std::unordered_set<std::string> assigned_port_tags;
-    port_id_table[my_mesh_id] = {};
-
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto chip_unique_ids = cluster.get_unique_chip_ids();
-
-    for (const auto& neighbor_host : physical_system_descriptor->get_host_neighbors(my_host)) {
-        auto neighbor_rank = physical_system_descriptor->get_rank_for_hostname(neighbor_host);
-        auto neighbor_mesh_id = tt::tt_metal::MetalContext::instance()
-                                    .get_control_plane()
-                                    .get_logical_node_ids()
-                                    .at(Rank{neighbor_rank})
-                                    .first;
-        if (requested_connections.find(*my_mesh_id) == requested_connections.end() ||
-            requested_connections.at(*my_mesh_id).find(*neighbor_mesh_id) ==
-                requested_connections.at(*my_mesh_id).end()) {
-            // No connections between these 2 meshes are specified, skip
-            continue;
-        }
-
-        // Get all exit nodes between my host and neighbor host
-        const auto& exit_nodes = physical_system_descriptor->get_connecting_exit_nodes(my_host, neighbor_host);
-        auto num_requested_chans = requested_connections.at(*my_mesh_id).at(*neighbor_mesh_id);
-        TT_FATAL(
-            exit_nodes.size() >= num_requested_chans,
-            "Requested {} channels between {} and {}, but only have {} physical links",
-            num_requested_chans,
-            *my_mesh_id,
-            *neighbor_mesh_id,
-            exit_nodes.size());
-
-        // Determine a valid Direction and Port for each exit node
-        // Step 1: Determine which Fabric Node ID each exit node belongs to (assert if exit node is not on edge)
-        // Step 2: Compute associative connection hash for the exit node
-        // Step 3: Assign an unused direction and logical chan id on that exit node
-        // Step 4: Add logical mapping and hash to the port_id_table for the neighbor mesh
-        // Step 5: Serialize and forward port id table to controller host
-        // Step 6: Pair logical ports across meshes on controller host
-        for (const auto& exit_node : exit_nodes) {
-            // Step 1
-            FabricNodeId exit_node_fabric_node_id(MeshId{0}, 0);
-            for (const auto& [physical_chip_id, unique_id] : chip_unique_ids) {
-                // TODO: We can maintain a map of unique_id to physical_chip_id for faster lookup
-                if (unique_id == *(exit_node.src_exit_node)) {
-                    // TODO: This is a double lookup, we can maintain a map of unique_id to fabric_node_id for faster
-                    // lookup
-                    for (const auto& [fabric_node_id, chip] :
-                         logical_mesh_chip_id_to_physical_chip_id_mapping.value()) {
-                        if (chip == physical_chip_id) {
-                            exit_node_fabric_node_id = fabric_node_id;
-                            break;
-                        }
-                    }
-                }
-            }
-            // Step 2
-            // Associative connection hash
-            auto assoc_connection_hash = std::hash<tt::tt_metal::ExitNodeConnection>{}(exit_node);
-            TT_FATAL(exit_node_fabric_node_id.mesh_id == my_mesh_id, "MeshGraph: Exit node is not on my mesh");
-            auto exit_node_chip = exit_node_fabric_node_id.chip_id;
-            for (const auto& [port_id, chip_id] : mesh_edge_ports_to_chip_id[*my_mesh_id]) {
-                if (chip_id == exit_node_chip) {
-                    auto port_direction = port_id.first;
-                    auto logical_chan_id = port_id.second;
-                    auto port_tag = std::string(enchantum::to_string(port_direction)) + std::to_string(logical_chan_id);
-                    // Assign this tag to the exit node if it is not already assigned
-                    if (assigned_port_tags.find(port_tag) == assigned_port_tags.end()) {
-                        // Step 3
-                        assigned_port_tags.insert(port_tag);
-                        // Step 4
-                        port_id_table[my_mesh_id][neighbor_mesh_id].push_back(
-                            PortIdentifier{port_tag, assoc_connection_hash});
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    // Step 5
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    std::size_t serialized_table_size = 0;
-    std::vector<uint8_t> serialized_table;
-    if (my_rank != 0) {
-        serialized_table = serialize_to_bytes(port_id_table);
-        serialized_table_size = serialized_table.size();
-        distributed_context.send(
-            tt::stl::Span<std::byte>(
-                reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
-            Rank{0},
-            Tag{0});
-        distributed_context.send(
-            tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
-            Rank{0},
-            Tag{0});
-    } else {
-        for (const auto& hostname : physical_system_descriptor->get_all_hostnames()) {
-            if (hostname == my_host) {
-                continue;
-            }
-            auto peer_rank = physical_system_descriptor->get_rank_for_hostname(hostname);
-            distributed_context.recv(
-                tt::stl::Span<std::byte>(
-                    reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
-                Rank{peer_rank},
-                Tag{0});
-            serialized_table.resize(serialized_table_size);
-            distributed_context.recv(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
-                Rank{peer_rank},
-                Tag{0});
-            auto peer_port_id_table = deserialize_port_id_table_from_bytes(serialized_table);
-            TT_FATAL(
-                peer_port_id_table.size() == 1, "MeshGraph: Expecting peer port id table to have exactly one mesh");
-            port_id_table[peer_port_id_table.begin()->first] = std::move(peer_port_id_table.begin()->second);
-        }
-    }
-    distributed_context.barrier();
-    // Step 6
-    std::vector<uint8_t> serialized_connections;
-    std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>> resolved_connections;
-    if (my_rank == 0) {
-        std::set<std::pair<uint32_t, uint32_t>> processed_neighbors;
-
-        for (const auto& [src_mesh, port_identifiers] : port_id_table) {
-            for (const auto& [dest_mesh, src_ports] : port_identifiers) {
-                if (processed_neighbors.find({*dest_mesh, *src_mesh}) != processed_neighbors.end()) {
-                    // Connections for these neighbors have already been setup - skip
-                    continue;
-                }
-                std::size_t num_ports_assigned = 0;
-                std::size_t num_ports_requested = requested_connections.at(*src_mesh).at(*dest_mesh);
-
-                const auto& dest_ports = port_id_table[dest_mesh][src_mesh];
-                // Iterate over src ports. For each src port, determine which dst port it connects to
-                for (const auto& src_port : src_ports) {
-                    if (num_ports_assigned == num_ports_requested) {
-                        break;
-                    }
-                    const auto& connection_hash = src_port.connection_hash;
-                    for (const auto& dest_port : dest_ports) {
-                        if (dest_port.connection_hash == connection_hash) {
-                            std::cout << "Connecting: " << *src_mesh << " " << src_port.port_tag << " and "
-                                      << *dest_mesh << " " << dest_port.port_tag << std::endl;
-                            resolved_connections.push_back(
-                                {{*src_mesh, src_port.port_tag}, {*dest_mesh, dest_port.port_tag}});
-                            resolved_connections.push_back(
-                                {{*dest_mesh, dest_port.port_tag}, {*src_mesh, src_port.port_tag}});
-                            num_ports_assigned++;
-                            break;
-                        }
-                    }
-                }
-                processed_neighbors.insert({*src_mesh, *dest_mesh});
-            }
-        }
-        for (const auto& hostname : physical_system_descriptor->get_all_hostnames()) {
-            if (hostname == my_host) {
-                continue;
-            }
-            auto peer_rank = physical_system_descriptor->get_rank_for_hostname(hostname);
-            serialized_connections = serialize_connections_table_to_bytes(resolved_connections);
-            serialized_table_size = serialized_connections.size();
-            distributed_context.send(
-                tt::stl::Span<std::byte>(
-                    reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
-                Rank{peer_rank},
-                Tag{0});
-            distributed_context.send(
-                tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_connections.data(), serialized_connections.size())),
-                Rank{peer_rank},
-                Tag{0});
-        }
-    } else {
-        distributed_context.recv(
-            tt::stl::Span<std::byte>(
-                reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
-            Rank{0},
-            Tag{0});
-        serialized_connections.resize(serialized_table_size);
-        distributed_context.recv(
-            tt::stl::as_writable_bytes(
-                tt::stl::Span<uint8_t>(serialized_connections.data(), serialized_connections.size())),
-            Rank{0},
-            Tag{0});
-        resolved_connections = deserialize_connections_table_from_bytes(serialized_connections);
-    }
-    distributed_context.barrier();
-    for (const auto& connection : resolved_connections) {
+void MeshGraph::load_intermesh_connections(
+    const std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>>&
+        intermesh_connections) {
+    for (const auto& connection : intermesh_connections) {
         auto src_mesh = std::get<0>(connection).first;
         auto dst_mesh = std::get<1>(connection).first;
         auto src_port = std::get<0>(connection).second;
@@ -388,10 +190,21 @@ void MeshGraph::initialize_intermesh_mapping(
         auto dst_port_dir = enchantum::cast<RoutingDirection>(dst_port.substr(0, 1), ttsl::ascii_caseless_comp).value();
         port_id_t src_port_id = {src_port_dir, src_chan};
         port_id_t dst_port_id = {dst_port_dir, dst_chan};
-        auto src_chip = mesh_edge_ports_to_chip_id[src_mesh].at(src_port_id);
-        auto dst_chip = mesh_edge_ports_to_chip_id[dst_mesh].at(dst_port_id);
+        auto src_chip = mesh_edge_ports_to_chip_id_[src_mesh].at(src_port_id);
+
+        auto dst_chip = mesh_edge_ports_to_chip_id_[dst_mesh].at(dst_port_id);
         this->add_to_connectivity(MeshId{src_mesh}, src_chip, MeshId{dst_mesh}, dst_chip, src_port_dir);
     }
+}
+
+const std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>>&
+MeshGraph::get_requested_intermesh_connections() const {
+    return requested_intermesh_connections_;
+}
+
+const std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>>& MeshGraph::get_mesh_edge_ports_to_chip_id()
+    const {
+    return mesh_edge_ports_to_chip_id_;
 }
 
 void MeshGraph::initialize_from_yaml(
@@ -448,7 +261,6 @@ void MeshGraph::initialize_from_yaml(
         board_name_to_topology[board_name] = {col_size, row_size};
     }
     // Loop over Meshes, populate intra mesh
-    std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>> mesh_edge_ports_to_chip_id;
     for (const auto& mesh : yaml["Mesh"]) {
         std::string mesh_board = mesh["board"].as<std::string>();
         MeshId mesh_id{mesh["id"].as<std::uint32_t>()};
@@ -460,7 +272,7 @@ void MeshGraph::initialize_from_yaml(
             while (this->mesh_host_ranks_.size() <= *mesh_id) {
                 this->mesh_host_ranks_.emplace_back(MeshShape{1, 1}, MeshHostRankId{0});
             }
-            mesh_edge_ports_to_chip_id.resize(*mesh_id + 1);
+            mesh_edge_ports_to_chip_id_.resize(*mesh_id + 1);
         }
         TT_FATAL(
             board_name_to_topology.find(mesh_board) != board_name_to_topology.end(),
@@ -565,50 +377,41 @@ void MeshGraph::initialize_from_yaml(
         std::uint32_t chan_id = 0;
         for (std::uint32_t chip_id = 0; chip_id < mesh_ew_size; chip_id++) {
             for (std::uint32_t i = 0; i < this->chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id[*mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
+                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
             }
         }
         // South, start from SW corner
         chan_id = 0;
         for (std::uint32_t chip_id = (mesh_size - mesh_ew_size); chip_id < mesh_size; chip_id++) {
             for (std::uint32_t i = 0; i < this->chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id[*mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
+                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
             }
         }
         // East, start from NE corner
         chan_id = 0;
         for (std::uint32_t chip_id = (mesh_ew_size - 1); chip_id < mesh_size; chip_id += mesh_ew_size) {
             for (std::uint32_t i = 0; i < this->chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id[*mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
+                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
             }
         }
         // WEST, start from NW corner
         chan_id = 0;
         for (std::uint32_t chip_id = 0; chip_id < mesh_size; chip_id += mesh_ew_size) {
             for (std::uint32_t i = 0; i < this->chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id[*mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
+                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
             }
         }
     }
     std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>> connections;
-    if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
-        std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>> requested_connections;
-        for (const auto& connection : yaml["Graph"]) {
-            auto src_mesh_str = connection[0].as<std::string>();
-            auto dst_mesh_str = connection[1].as<std::string>();
-            auto num_chans = connection[2].as<uint32_t>();
-            auto src_mesh = static_cast<uint32_t>(std::stoul(src_mesh_str.substr(1, src_mesh_str.size() - 1)));
-            auto dst_mesh = static_cast<uint32_t>(std::stoul(dst_mesh_str.substr(1, dst_mesh_str.size() - 1)));
-            requested_connections[src_mesh][dst_mesh] = num_chans;
-            requested_connections[dst_mesh][src_mesh] = num_chans;
-            std::cout << "requested connections: " << src_mesh << " " << dst_mesh << " " << num_chans << std::endl;
-        }
-        initialize_intermesh_mapping(
-            logical_mesh_chip_id_to_physical_chip_id_mapping,
-            physical_system_descriptor,
-            mesh_edge_ports_to_chip_id,
-            requested_connections);
-        return;
+
+    for (const auto& connection : yaml["Graph"]) {
+        auto src_mesh_str = connection[0].as<std::string>();
+        auto dst_mesh_str = connection[1].as<std::string>();
+        auto num_chans = connection[2].as<uint32_t>();
+        auto src_mesh = static_cast<uint32_t>(std::stoul(src_mesh_str.substr(1, src_mesh_str.size() - 1)));
+        auto dst_mesh = static_cast<uint32_t>(std::stoul(dst_mesh_str.substr(1, dst_mesh_str.size() - 1)));
+        requested_intermesh_connections_[src_mesh][dst_mesh] = num_chans;
+        requested_intermesh_connections_[dst_mesh][src_mesh] = num_chans;
     }
 }
 

@@ -47,6 +47,8 @@
 #include "tt_metal/fabric/serialization/intermesh_link_table.hpp"
 #include "tt_stl/small_vector.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include "tt_metal/fabric/serialization/port_id_table.hpp"
+#include "tt_metal/fabric/serialization/connections_table.hpp"
 
 namespace tt::tt_fabric {
 
@@ -452,11 +454,238 @@ void ControlPlane::initialize_distributed_contexts() {
     global_context->barrier();
 }
 
+PortIdTable ControlPlane::generate_exit_node_port_id_table() {
+    // Step 1 for Auto Intermesh Link Generation
+    //  - Determine which Logical Meshes the user has requested to connect
+    //  - Query the exit nodes that exist between the associated physical meshes
+    //  - Determine which FabricNode each exit node is on
+    //  -
+    const auto& mesh_graph = this->routing_table_generator_->mesh_graph;
+    const auto& mesh_edge_ports_to_chip_id = mesh_graph->get_mesh_edge_ports_to_chip_id();
+    const auto& requested_intermesh_connections = mesh_graph->get_requested_intermesh_connections();
+    const auto& physical_system_descriptor = this->physical_system_descriptor_;
+    const auto& my_host = physical_system_descriptor->my_host_name();
+    const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
+    const auto& logical_mesh_chip_id_to_physical_chip_id_mapping =
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_;
+
+    // Track the Logical Ethernet Ports connecting to all neighbors of my_mesh
+    PortIdTable port_id_table;
+    // Track Direction and Logical Ports already assigned for intermesh links
+    std::unordered_set<std::string> assigned_port_tags;
+    port_id_table[my_mesh_id] = {};
+
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto chip_unique_ids = cluster.get_unique_chip_ids();
+
+    for (const auto& neighbor_host : physical_system_descriptor->get_host_neighbors(my_host)) {
+        auto neighbor_host_rank = physical_system_descriptor->get_rank_for_hostname(neighbor_host);
+        auto neighbor_mesh_id =
+            this->logical_node_ids_.at(tt::tt_metal::distributed::multihost::Rank{neighbor_host_rank}).first;
+
+        if (requested_intermesh_connections.find(*my_mesh_id) == requested_intermesh_connections.end() ||
+            requested_intermesh_connections.at(*my_mesh_id).find(*neighbor_mesh_id) ==
+                requested_intermesh_connections.at(*my_mesh_id).end()) {
+            // No connections between these 2 meshes are specified, skip
+            continue;
+        }
+
+        auto num_requested_chans = requested_intermesh_connections.at(*my_mesh_id).at(*neighbor_mesh_id);
+        const auto& exit_nodes = physical_system_descriptor->get_connecting_exit_nodes(my_host, neighbor_host);
+        TT_FATAL(
+            exit_nodes.size() >= num_requested_chans,
+            "Requested {} channels between {} and {}, but only have {} physical links",
+            num_requested_chans,
+            *my_mesh_id,
+            *neighbor_mesh_id,
+            exit_nodes.size());
+
+        for (const auto& exit_node : exit_nodes) {
+            // Determine which Fabric Node ID each exit node belongs to
+            FabricNodeId exit_node_fabric_node_id(MeshId{0}, 0);
+            for (const auto& [physical_chip_id, unique_id] : chip_unique_ids) {
+                // TODO: We can maintain a map of unique_id to physical_chip_id for faster lookup
+                if (unique_id == *(exit_node.src_exit_node)) {
+                    // TODO: This is a double lookup, we can maintain a map of unique_id to fabric_node_id for faster
+                    // lookup
+                    for (const auto& [fabric_node_id, chip] : logical_mesh_chip_id_to_physical_chip_id_mapping) {
+                        if (chip == physical_chip_id) {
+                            exit_node_fabric_node_id = fabric_node_id;
+                            break;
+                        }
+                    }
+                }
+            }
+            TT_FATAL(exit_node_fabric_node_id.mesh_id == my_mesh_id, "Exit node is not on my mesh");
+
+            auto assoc_connection_hash = std::hash<tt::tt_metal::ExitNodeConnection>{}(exit_node);
+            auto src_eth_chan = exit_node.eth_conn.src_chan;
+            auto exit_node_chip = exit_node_fabric_node_id.chip_id;
+            for (const auto& [port_id, chip_id] : mesh_edge_ports_to_chip_id[*my_mesh_id]) {
+                if (exit_node_chip == chip_id) {
+                    auto port_direction = port_id.first;
+                    auto logical_chan_id = port_id.second;
+                    auto port_tag = std::string(enchantum::to_string(port_direction)) + std::to_string(logical_chan_id);
+                    // Assign this tag to the exit node if it is not already assigned
+                    if (assigned_port_tags.find(port_tag) == assigned_port_tags.end()) {
+                        assigned_port_tags.insert(port_tag);
+                        port_id_table[my_mesh_id][neighbor_mesh_id].push_back(
+                            PortIdentifier{port_tag, assoc_connection_hash});
+                        exit_node_directions_[exit_node_fabric_node_id][src_eth_chan] = port_direction;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    return port_id_table;
+}
+
+void ControlPlane::exchange_exit_node_port_id_tables(
+    PortIdTable& port_id_table, uint32_t my_rank, const std::string& my_host) {
+    using namespace tt::tt_metal::distributed::multihost;
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    const auto& physical_system_descriptor = this->physical_system_descriptor_;
+    std::size_t serialized_table_size = 0;
+    std::vector<uint8_t> serialized_table;
+    if (my_rank != 0) {
+        serialized_table = serialize_to_bytes(port_id_table);
+        serialized_table_size = serialized_table.size();
+        distributed_context.send(
+            tt::stl::Span<std::byte>(
+                reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
+            Rank{0},
+            Tag{0});
+        distributed_context.send(
+            tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
+            Rank{0},
+            Tag{0});
+    } else {
+        for (const auto& hostname : physical_system_descriptor->get_all_hostnames()) {
+            if (hostname == my_host) {
+                continue;
+            }
+            auto peer_rank = physical_system_descriptor->get_rank_for_hostname(hostname);
+            distributed_context.recv(
+                tt::stl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
+                Rank{peer_rank},
+                Tag{0});
+            serialized_table.resize(serialized_table_size);
+            distributed_context.recv(
+                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_table.data(), serialized_table.size())),
+                Rank{peer_rank},
+                Tag{0});
+            auto peer_port_id_table = deserialize_port_id_table_from_bytes(serialized_table);
+            TT_FATAL(
+                peer_port_id_table.size() == 1, "MeshGraph: Expecting peer port id table to have exactly one mesh");
+            port_id_table[peer_port_id_table.begin()->first] = std::move(peer_port_id_table.begin()->second);
+        }
+    }
+    distributed_context.barrier();
+}
+
+std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>>
+ControlPlane::pair_logical_intermesh_ports(PortIdTable& port_id_table, uint32_t my_rank, const std::string& my_host) {
+    using namespace tt::tt_metal::distributed::multihost;
+    std::vector<uint8_t> serialized_connections;
+    const auto& physical_system_descriptor = this->physical_system_descriptor_;
+    std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>> intermesh_connections;
+
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    uint32_t serialized_table_size = 0;
+
+    const auto& mesh_graph = this->routing_table_generator_->mesh_graph;
+    const auto& requested_intermesh_connections = mesh_graph->get_requested_intermesh_connections();
+
+    if (my_rank == 0) {
+        std::set<std::pair<uint32_t, uint32_t>> processed_neighbors;
+
+        for (const auto& [src_mesh, port_identifiers] : port_id_table) {
+            for (const auto& [dest_mesh, src_ports] : port_identifiers) {
+                if (processed_neighbors.find({*dest_mesh, *src_mesh}) != processed_neighbors.end()) {
+                    // Connections for these neighbors have already been setup - skip
+                    continue;
+                }
+                std::size_t num_ports_assigned = 0;
+                std::size_t num_ports_requested = requested_intermesh_connections.at(*src_mesh).at(*dest_mesh);
+
+                const auto& dest_ports = port_id_table[dest_mesh][src_mesh];
+                // Iterate over src ports. For each src port, determine which dst port it connects to
+                for (const auto& src_port : src_ports) {
+                    if (num_ports_assigned == num_ports_requested) {
+                        break;
+                    }
+                    const auto& connection_hash = src_port.connection_hash;
+                    for (const auto& dest_port : dest_ports) {
+                        if (dest_port.connection_hash == connection_hash) {
+                            std::cout << "Connecting: " << *src_mesh << " " << src_port.port_tag << " and "
+                                      << *dest_mesh << " " << dest_port.port_tag << std::endl;
+                            intermesh_connections.push_back(
+                                {{*src_mesh, src_port.port_tag}, {*dest_mesh, dest_port.port_tag}});
+                            intermesh_connections.push_back(
+                                {{*dest_mesh, dest_port.port_tag}, {*src_mesh, src_port.port_tag}});
+                            num_ports_assigned++;
+                            break;
+                        }
+                    }
+                }
+                processed_neighbors.insert({*src_mesh, *dest_mesh});
+            }
+        }
+        for (const auto& hostname : physical_system_descriptor->get_all_hostnames()) {
+            if (hostname == my_host) {
+                continue;
+            }
+            auto peer_rank = physical_system_descriptor->get_rank_for_hostname(hostname);
+            serialized_connections = serialize_connections_table_to_bytes(intermesh_connections);
+            serialized_table_size = serialized_connections.size();
+            distributed_context.send(
+                tt::stl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
+                Rank{peer_rank},
+                Tag{0});
+            distributed_context.send(
+                tt::stl::as_writable_bytes(
+                    tt::stl::Span<uint8_t>(serialized_connections.data(), serialized_connections.size())),
+                Rank{peer_rank},
+                Tag{0});
+        }
+    } else {
+        distributed_context.recv(
+            tt::stl::Span<std::byte>(
+                reinterpret_cast<std::byte*>(&serialized_table_size), sizeof(serialized_table_size)),
+            Rank{0},
+            Tag{0});
+        serialized_connections.resize(serialized_table_size);
+        distributed_context.recv(
+            tt::stl::as_writable_bytes(
+                tt::stl::Span<uint8_t>(serialized_connections.data(), serialized_connections.size())),
+            Rank{0},
+            Tag{0});
+        intermesh_connections = deserialize_connections_table_from_bytes(serialized_connections);
+    }
+    distributed_context.barrier();
+    return intermesh_connections;
+}
+
+void ControlPlane::generate_intermesh_connectivity() {
+    const auto& physical_system_descriptor = this->physical_system_descriptor_;
+    const auto& my_host = physical_system_descriptor->my_host_name();
+    const auto my_rank = physical_system_descriptor->get_rank_for_hostname(my_host);
+
+    auto exit_node_port_id_table = this->generate_exit_node_port_id_table();
+    this->exchange_exit_node_port_id_tables(exit_node_port_id_table, my_rank, my_host);
+    auto intermesh_connections = this->pair_logical_intermesh_ports(exit_node_port_id_table, my_rank, my_host);
+    this->routing_table_generator_->load_intermesh_connections(intermesh_connections);
+}
+
 void ControlPlane::init_control_plane(
     const std::string& mesh_graph_desc_file,
     std::optional<std::reference_wrapper<const std::map<FabricNodeId, chip_id_t>>>
         logical_mesh_chip_id_to_physical_chip_id_mapping) {
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
+    this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>();
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
     mesh_graph_desc_file_ = mesh_graph_desc_file;
     this->initialize_distributed_contexts();
@@ -469,6 +698,9 @@ void ControlPlane::init_control_plane(
     } else {
         this->load_physical_chip_mapping(get_logical_chip_to_physical_chip_mapping(mesh_graph_desc_file));
     }
+
+    this->generate_intermesh_connectivity();
+
     this->initialize_intermesh_eth_links();
     this->generate_local_intermesh_link_table();
 }
@@ -934,8 +1166,6 @@ size_t ControlPlane::get_num_live_routing_planes(
 void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
     tt::tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode) {
     auto physical_system_descriptor = std::make_shared<tt_metal::PhysicalSystemDescriptor>();
-    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(
-        mesh_graph_desc_file_, this->logical_mesh_chip_id_to_physical_chip_id_mapping_, physical_system_descriptor);
 
     this->intra_mesh_routing_tables_.clear();
     this->inter_mesh_routing_tables_.clear();
@@ -1045,7 +1275,11 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
             }
         }
     }
-
+    // for (const auto& [exit_node_fabric_node_id, exit_node_directions] : this->exit_node_directions_) {
+    //     for (const auto& [src_eth_chan, port_direction] : exit_node_directions) {
+    //         this->assign_direction_to_fabric_eth_chan(exit_node_fabric_node_id, src_eth_chan, port_direction);
+    //     }
+    // }
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < inter_mesh_connectivity.size(); mesh_id_val++) {
         MeshId mesh_id{mesh_id_val};
@@ -2012,16 +2246,13 @@ void ControlPlane::exchange_intermesh_link_tables() {
     }
 }
 
-void ControlPlane::assign_direction_to_fabric_eth_core(
-    const FabricNodeId& fabric_node_id, const CoreCoord& eth_core, RoutingDirection direction) {
+void ControlPlane::assign_direction_to_fabric_eth_chan(
+    const FabricNodeId& fabric_node_id, chan_id_t chan_id, RoutingDirection direction) {
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
+    // TODO: get_fabric_ethernet_channels accounts for down links, but we should manage down links in control plane
     auto fabric_router_channels_on_chip =
         tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(physical_chip_id);
-    // TODO: get_fabric_ethernet_channels accounts for down links, but we should manage down links in control plane
-    auto chan_id = tt::tt_metal::MetalContext::instance()
-                       .get_cluster()
-                       .get_soc_desc(physical_chip_id)
-                       .logical_eth_core_to_chan_map.at(eth_core);
+
     // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
     if (fabric_router_channels_on_chip.contains(chan_id)) {
         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[direction].push_back(chan_id);
@@ -2033,6 +2264,16 @@ void ControlPlane::assign_direction_to_fabric_eth_core(
             fabric_node_id.chip_id,
             chan_id);
     }
+}
+
+void ControlPlane::assign_direction_to_fabric_eth_core(
+    const FabricNodeId& fabric_node_id, const CoreCoord& eth_core, RoutingDirection direction) {
+    auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
+    auto chan_id = tt::tt_metal::MetalContext::instance()
+                       .get_cluster()
+                       .get_soc_desc(physical_chip_id)
+                       .logical_eth_core_to_chan_map.at(eth_core);
+    this->assign_direction_to_fabric_eth_chan(fabric_node_id, chan_id, direction);
 }
 
 void ControlPlane::assign_intermesh_link_directions_to_local_host(const FabricNodeId& fabric_node_id) {
