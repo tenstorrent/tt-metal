@@ -1166,10 +1166,11 @@ uint32_t calculate_conv_dram_slice_L1_usage(
             parallel_config, params.compute_grid, params.out_channels, shard_orientation, params.mm_conv);
 
         uint32_t padded_in_channels = tt::round_up(
-            params.in_channels, constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(parallel_config));
+            params.in_channels,
+            tt::constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(parallel_config));
         uint32_t padded_out_channels = tt::round_up(
             params.out_channels,
-            constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(output_parallel_config));
+            tt::constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(output_parallel_config));
         ttnn::Shape folded_weights_shape(
             {1, 1, padded_in_channels * params.kernel_size[0] * params.kernel_size[1], padded_out_channels});
         auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
