@@ -12,17 +12,21 @@ void kernel_main() {
     constexpr uint32_t tile_height = 32;
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t padded_X_size = get_arg_val<uint32_t>(1);
-    const uint32_t start_stick_id = get_arg_val<uint32_t>(2);
-    const uint32_t n_block_reps = get_arg_val<uint32_t>(3);
+    const uint32_t unpadded_X_size = get_arg_val<uint32_t>(1);
+    const uint32_t padded_X_size = get_arg_val<uint32_t>(2);
+    const uint32_t start_stick_id = get_arg_val<uint32_t>(3);
+    const uint32_t n_block_reps = get_arg_val<uint32_t>(4);
 
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+    constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(3) == 1;
 
     const uint32_t num_tiles_per_row = padded_X_size >> (FLOAT32_DTYPE ? 7 : 6);
 
-    const auto s = TensorAccessor(dst_args, dst_addr, unpadded_X_size);
+    constexpr bool stick_size_is_power_of_two = get_compile_time_arg_val(1) == 1;
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
+
+    const auto s = get_interleaved_addr_gen<dst_is_dram, stick_size_is_power_of_two>(
+        dst_addr, unpadded_X_size, log_base_2_of_page_size);
 
     auto pop_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
@@ -50,7 +54,7 @@ void kernel_main() {
     };
 
     uint32_t stick_id = start_stick_id;
-    uint32_t rt_arg_idx = 4;
+    uint32_t rt_arg_idx = 5;
     uint32_t count = 1;
     constexpr int32_t n_mixed_idx = 1;
     constexpr int32_t n_pad_idx = 2;

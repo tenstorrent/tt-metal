@@ -44,6 +44,23 @@ jobs:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set Python version (nodot) by OS
+        id: set_python_version_nodot
+        run: |
+          if [[ "${{ matrix.os }}" == "ubuntu-22.04" ]]; then
+            PYTHON_VERSION_NODOT="cp310"
+          elif [[ "${{ matrix.os }}" == "ubuntu-24.04" ]]; then
+            PYTHON_VERSION_NODOT="cp312"
+          else
+            echo "Unsupported OS: ${{ matrix.os }}"
+            exit 1
+          fi
+          echo "PYTHON_VERSION_NODOT=$PYTHON_VERSION_NODOT" >> $GITHUB_OUTPUT
+      - name: Generate wheels name
+        id: generate-wheels-name
+        run: |
+          WHEELS_NAME="eager-dist-${{ steps.set_python_version_nodot.outputs.PYTHON_VERSION_NODOT }}-${{ matrix.os }}-any"
+          echo "WHEELS_NAME=$WHEELS_NAME" >> $GITHUB_OUTPUT
       - name: Download wheels
         uses: actions/download-artifact@v4
         with:

@@ -6,9 +6,7 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    constexpr uint32_t bytes_per_tile_row = get_compile_time_arg_val(0);
-    constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(1);
-    constexpr auto src_args = TensorAccessorArgs<2>();
+    constexpr uint32_t bytes_per_tile_row = get_compile_time_arg_val(3);
 
     // Constexpr
     constexpr uint32_t cb_id_in0 = 0;
@@ -23,13 +21,14 @@ void kernel_main() {
     const uint32_t padded_Y_diff_blocks = get_arg_val<uint32_t>(6);
     const uint32_t num_leftover_Y = get_arg_val<uint32_t>(7);
     const uint32_t num_unpadded_X = get_arg_val<uint32_t>(8);
-    const uint32_t padded_X_size = get_arg_val<uint32_t>(9);
-    const uint32_t pad_value = get_arg_val<uint32_t>(10);
-    const uint32_t num_blocks_w_input = get_arg_val<uint32_t>(11);
-    const uint32_t num_blocks_w_output = get_arg_val<uint32_t>(12);
-    const uint32_t num_blocks_w_diff = get_arg_val<uint32_t>(13);
-    const uint32_t block_row_size = get_arg_val<uint32_t>(14);
-    const uint32_t block_row_leftover_size = get_arg_val<uint32_t>(15);
+    const uint32_t unpadded_X_size = get_arg_val<uint32_t>(9);
+    const uint32_t padded_X_size = get_arg_val<uint32_t>(10);
+    const uint32_t pad_value = get_arg_val<uint32_t>(11);
+    const uint32_t num_blocks_w_input = get_arg_val<uint32_t>(12);
+    const uint32_t num_blocks_w_output = get_arg_val<uint32_t>(13);
+    const uint32_t num_blocks_w_diff = get_arg_val<uint32_t>(14);
+    const uint32_t block_row_size = get_arg_val<uint32_t>(15);
+    const uint32_t block_row_leftover_size = get_arg_val<uint32_t>(16);
 
     // TODO(agrebenisan): This isn't good... here we are assuming
     // that the stick size dictates tiles c, but stick size
@@ -38,7 +37,17 @@ void kernel_main() {
     const uint32_t num_tiles_block_c =
         block_row_size / bytes_per_tile_row;  // Assuming 2 bytes per datum, there are 64 bytes per tile row
 
-    const auto s = TensorAccessor(src_args, src_addr, unpadded_X_size);
+    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(1) == 1;
+#if (stick_size_is_pow2)
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
+    const InterleavedPow2AddrGen<src0_is_dram> s = {
+        .bank_base_address = src_addr,
+        .log_base_2_of_page_size = log_base_2_of_page_size  // TODO(AP): refactor
+    };
+#else
+    const InterleavedAddrGen<src0_is_dram> s = {.bank_base_address = src_addr, .page_size = unpadded_X_size};
+#endif
 
     uint32_t stick_id = 0;
 

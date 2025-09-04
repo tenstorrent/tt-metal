@@ -11,31 +11,34 @@ void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
 
     // compile-time args
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t output_stick_size = get_compile_time_arg_val(1);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(2);
-    constexpr uint32_t num_blocks_across_height = get_compile_time_arg_val(3);
-    constexpr uint32_t num_output_columns_of_blocks = get_compile_time_arg_val(4);
-    constexpr uint32_t num_blocks_per_output_column_row = get_compile_time_arg_val(5);
-    constexpr uint32_t num_tiles_per_output_block = get_compile_time_arg_val(6);
-    constexpr uint32_t output_single_block_width_size = get_compile_time_arg_val(7);
+    constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
+    constexpr uint32_t output_stick_size = get_compile_time_arg_val(2);
+    constexpr bool output_stick_size_is_power_of_two = get_compile_time_arg_val(3) == 1;
+    constexpr uint32_t output_log_base_2_of_page_size = get_compile_time_arg_val(4);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(5);
+    constexpr uint32_t num_blocks_across_height = get_compile_time_arg_val(6);
+    constexpr uint32_t num_output_columns_of_blocks = get_compile_time_arg_val(7);
+    constexpr uint32_t num_blocks_per_output_column_row = get_compile_time_arg_val(8);
+    constexpr uint32_t num_tiles_per_output_block = get_compile_time_arg_val(9);
+    constexpr uint32_t output_single_block_width_size = get_compile_time_arg_val(10);
 
 #ifdef SHARDED
     using tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(8),    // Memory layout
-        get_compile_time_arg_val(9),    // The number of sharding cores
-        get_compile_time_arg_val(10),   // The page size we offset each write to
-        get_compile_time_arg_val(11),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(12),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(13),   // pages_per_shard_x
-        get_compile_time_arg_val(14)>;  // pages_per_shard_y
+        get_compile_time_arg_val(11),   // Memory layout
+        get_compile_time_arg_val(12),   // The number of sharding cores
+        get_compile_time_arg_val(13),   // The page size we offset each write to
+        get_compile_time_arg_val(14),   // The number of pages in each sharding row not including padding pages
+        get_compile_time_arg_val(15),   // This defines times when contiguous pages can't be calculated
+        get_compile_time_arg_val(16),   // pages_per_shard_x
+        get_compile_time_arg_val(17)>;  // pages_per_shard_y
 
     const auto [mapping_table, rt_increment] =
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(1));
     experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};
 #else
-    constexpr auto dst_args = TensorAccessorArgs<8>();
-    const auto s = TensorAccessor(dst_args, dst_addr, output_stick_size);
+    const auto s = get_interleaved_addr_gen<dst_is_dram, output_stick_size_is_power_of_two>(
+        dst_addr, output_stick_size, output_log_base_2_of_page_size);
 #endif
 
     uint64_t base_dst_noc_addr[tile_height];
