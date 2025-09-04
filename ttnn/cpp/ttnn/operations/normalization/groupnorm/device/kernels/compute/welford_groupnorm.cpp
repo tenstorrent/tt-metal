@@ -287,10 +287,11 @@ void MAIN {
                         for (uint32_t w = 0; w < subblock_w; ++w) {
                             uint32_t index = w + index_subblock_w_offset + index_h_offset;
                             uint32_t index_mask = w + index_subblock_w_offset;
-                            transpose_wh_init_short(cb_in0);
 #ifdef TILIZE_IN
+                            transpose_wh_init_short(cb_in);
                             transpose_wh_tile(cb_in, index, 0);
 #else
+                            transpose_wh_init_short(cb_in0);
                             transpose_wh_tile(cb_in0, index, 0);
 #endif
 
