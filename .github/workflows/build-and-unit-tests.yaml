@@ -75,7 +75,6 @@ jobs:
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_SLOW_DISPATCH_MODE: 1
         TT_METAL_HOME: /work
-        NIGHTLY: ${{ inputs.nightly }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -97,7 +96,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           mkdir -p generated/test_reports
-          if [ "${NIGHTLY}" = "true" ]; then
+          if [ "${{ inputs.nightly }}" = "true" ]; then
             GTEST_FILTER=""
           else
             GTEST_FILTER='--gtest_filter=*-*NIGHTLY_*'
