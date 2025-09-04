@@ -207,9 +207,17 @@ class TtDetect:
             [cls_output_0, cls_output_1, cls_output_2], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG
         )
 
+        ttnn.deallocate(cls_output_0)
+        ttnn.deallocate(cls_output_1)
+        ttnn.deallocate(cls_output_2)
+
         reg_dist_list = ttnn.concat(
             [reg_output_0, reg_output_1, reg_output_2], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG
         )
+        ttnn.deallocate(reg_output_0)
+        ttnn.deallocate(reg_output_1)
+        ttnn.deallocate(reg_output_2)
+
         reg_dist_list = ttnn.permute(reg_dist_list, (0, 2, 1))
 
         c1, c2 = reg_dist_list[:, :, :2], reg_dist_list[:, :, 2:4]
@@ -222,9 +230,14 @@ class TtDetect:
         c_xy = ttnn.div(c_xy, 2)
         wh = x2y2 - x1y1
         bbox = ttnn.concat([c_xy, wh], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(c_xy)
+        ttnn.deallocate(wh)
 
         bbox = ttnn.multiply(bbox, self.strides)
         output = ttnn.concat([bbox, self.ones_tensor, cls_score_list], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(bbox)
+        ttnn.deallocate(self.ones_tensor)
+        ttnn.deallocate(cls_score_list)
 
         if use_signpost:
             signpost(header="TtDetect End")

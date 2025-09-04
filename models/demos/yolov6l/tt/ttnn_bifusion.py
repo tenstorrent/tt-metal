@@ -74,6 +74,9 @@ class TtBiFusion:
             use_height_and_width_as_shard_shape=True,
         )
         output = ttnn.concat([conv_t, conv1, downsample], dim=-1, memory_config=output_sharded_memory_config)
+        ttnn.deallocate(conv_t)
+        ttnn.deallocate(conv1)
+        ttnn.deallocate(downsample)
         output, out_h, out_w = self.cv3(output)
         if use_signpost:
             signpost(header="TtBiFusion End")

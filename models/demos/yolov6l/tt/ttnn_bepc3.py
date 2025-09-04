@@ -41,6 +41,7 @@ class TtBepC3:
             conv_pth=parameters.cv2.block.conv,
             shard_layout=shard_layout_cv2 if shard_layout == None else shard_layout,
             activation="silu",
+            deallocate_activation=True,
         )
         self.cv3 = Yolov6l_Conv2D(
             device=device,

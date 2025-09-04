@@ -32,6 +32,7 @@ class TtSppf:
             conv_pth=parameters.cv2.block.conv,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             activation="silu",
+            deallocate_activation=True,
         )
 
     def __call__(self, x):
