@@ -5,13 +5,17 @@
 #pragma once
 
 #include "gtest/gtest.h"
-#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <hostdevcommon/common_values.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/control_plane.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -42,11 +46,14 @@ class ControlPlaneFixture : public ::testing::Test {
 class BaseFabricFixture : public ::testing::Test {
 public:
     inline static tt::ARCH arch_;
-    inline static std::map<chip_id_t, tt::tt_metal::IDevice*> devices_map_;
-    inline static std::vector<tt::tt_metal::IDevice*> devices_;
+    inline static std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_map_;
+    inline static std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     inline static bool slow_dispatch_;
 
-    const std::vector<tt::tt_metal::IDevice*>& get_devices() const { return devices_; }
+    const std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& get_devices() const { return devices_; }
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& get_device(chip_id_t id) const {
+        return devices_map_.at(id);
+    }
 
     void SetUp() override {
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -79,14 +86,21 @@ public:
             tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
             num_routing_planes,
             fabric_tensix_config);
-        devices_map_ = tt::tt_metal::detail::CreateDevices(ids);
+        const auto& dispatch_core_config =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        devices_map_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
+            ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config, {}, DEFAULT_WORKER_L1_SIZE);
         for (auto& [id, device] : devices_map_) {
             devices_.push_back(device);
         }
     }
 
     static void DoTearDownTestSuite() {
-        tt::tt_metal::detail::CloseDevices(devices_map_);
+        for (auto& [id, device] : devices_map_) {
+            device->close();
+        }
+        devices_map_.clear();
+        devices_.clear();
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
     }
 
@@ -94,23 +108,33 @@ public:
 
     static void TearDownTestSuite() { TT_THROW("TearDownTestSuite not implemented in BaseFabricFixture"); }
 
-    void RunProgramNonblocking(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
+    void RunProgramNonblocking(
+        std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
-            tt::tt_metal::detail::LaunchProgram(device, program, false);
+            tt::tt_metal::detail::LaunchProgram(device->get_devices()[0], program, false);
         } else {
-            tt::tt_metal::CommandQueue& cq = device->command_queue();
-            tt::tt_metal::EnqueueProgram(cq, program, false);
+            tt::tt_metal::distributed::MeshCommandQueue& cq = device->mesh_command_queue();
+            // Create a mesh workload from the program
+            auto& program_copy = program;
+            auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+            tt::tt_metal::distributed::AddProgramToMeshWorkload(
+                mesh_workload,
+                std::move(program_copy),
+                tt::tt_metal::distributed::MeshCoordinateRange(
+                    tt::tt_metal::distributed::MeshCoordinate(0, 0), tt::tt_metal::distributed::MeshCoordinate(0, 0)));
+            tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
         }
     }
 
-    void WaitForSingleProgramDone(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
+    void WaitForSingleProgramDone(
+        std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
             // Wait for the program to finish
-            tt::tt_metal::detail::WaitProgramDone(device, program);
+            tt::tt_metal::detail::WaitProgramDone(device->get_devices()[0], program);
         } else {
             // Wait for all programs on cq to finish
-            tt::tt_metal::CommandQueue& cq = device->command_queue();
-            tt::tt_metal::Finish(cq);
+            tt::tt_metal::distributed::MeshCommandQueue& cq = device->mesh_command_queue();
+            tt::tt_metal::distributed::Finish(cq);
         }
     }
 };

@@ -243,8 +243,12 @@ void Hal::initialize_bh() {
     this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::HOST)] =
         std::lcm(PCIE_ALIGNMENT, PCIE_ALIGNMENT);
 
-    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr) {
+    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr, bool has_shared_local_mem) {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
+            // For RISC0 we have a shared local memory with base firmware so offset by that
+            // if (has_shared_local_mem) {
+            //     addr -= MEM_ERISC_BASE_FW_LOCAL_SIZE;
+            // }
             // Move addresses in the local memory range to l1 (copied by kernel)
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
         }
@@ -279,9 +283,23 @@ void Hal::initialize_bh() {
     this->noc_ucast_addr_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_UNICAST_ADDR_Y(addr); };
     this->noc_local_addr_func_ = [](uint64_t addr) -> uint64_t { return NOC_LOCAL_ADDR(addr); };
 
-    this->eth_fw_arg_addr_func_ = [&](uint32_t arg_index) -> uint32_t {
-        return get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_FW_MAILBOX) +
-               offsetof(blackhole::EthFwMailbox, arg) + arg_index * sizeof(((blackhole::EthFwMailbox*)0)->arg[0]);
+    this->eth_fw_arg_addr_func_ = [&](int mailbox_index, uint32_t arg_index) -> uint32_t {
+        // +1 because of the message
+        uint32_t mailbox_base =
+            MEM_SYSENG_ETH_MAILBOX_ADDR + (mailbox_index * (MEM_SYSENG_ETH_MAILBOX_NUM_ARGS + 1) * sizeof(uint32_t));
+        return mailbox_base + offsetof(blackhole::EthFwMailbox, arg) +
+               (arg_index * sizeof(((blackhole::EthFwMailbox*)0)->arg[0]));
+    };
+
+    this->device_features_func_ = [](DispatchFeature feature) -> bool {
+        switch (feature) {
+            case DispatchFeature::ETH_MAILBOX_API: return true;
+            // Active eth kernel config buffer is not needed until 2 ERISCs
+            case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
+            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
+            default: TT_THROW("Invalid Blackhole dispatch feature {}", static_cast<int>(feature));
+        }
     };
 
     this->num_nocs_ = NUM_NOCS;
