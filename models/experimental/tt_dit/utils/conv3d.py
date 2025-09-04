@@ -51,6 +51,65 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, stride, padding, p
     )
 
 
+def count_convs(obj):
+    """
+    Recursively count the total number of WanCausalConv3d instances in a class and its attributes.
+
+    Args:
+        obj: The object/class to search through
+
+    Returns:
+        int: Total count of WanCausalConv3d instances found
+    """
+    count = 0
+    visited = set()
+
+    def _count_recursive(current_obj):
+        nonlocal count, visited
+
+        # Avoid infinite recursion by tracking visited objects
+        obj_id = id(current_obj)
+        if obj_id in visited:
+            return
+        visited.add(obj_id)
+
+        # Check if current object is a WanCausalConv3d instance
+        if hasattr(current_obj, "__class__") and current_obj.__class__.__name__ == "WanCausalConv3d":
+            count += 1
+            return
+
+        # Handle different types of objects
+        if hasattr(current_obj, "__dict__"):
+            # For objects with attributes, check each attribute
+            for attr_name in dir(current_obj):
+                # Skip private/magic methods and properties that might cause issues
+                if attr_name.startswith("_") or attr_name in ["training", "device"]:
+                    continue
+
+                try:
+                    attr_value = getattr(current_obj, attr_name)
+                    # Skip methods and functions
+                    if callable(attr_value) and not hasattr(attr_value, "__dict__"):
+                        continue
+                    _count_recursive(attr_value)
+                except (AttributeError, RuntimeError, TypeError):
+                    # Skip attributes that can't be accessed safely
+                    continue
+
+        elif isinstance(current_obj, (list, tuple)):
+            # Handle lists and tuples
+            for item in current_obj:
+                _count_recursive(item)
+
+        elif isinstance(current_obj, dict):
+            # Handle dictionaries
+            for value in current_obj.values():
+                _count_recursive(value)
+
+    _count_recursive(obj)
+    return count
+
+
 def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=16):
     """Prepare weights and bias for TTNN."""
     C_in = weight.shape[1]
