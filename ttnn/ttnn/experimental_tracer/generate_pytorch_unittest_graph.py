@@ -142,10 +142,26 @@ class CatUnittest(UnitTestOperation):
     @staticmethod
     def parse_from_operation(operation: Operation) -> Optional["CatUnittest"]:
         if operation.function_call_name == "torch.ops.aten.cat":
-            cat_op = operation.to_operation(AtenCat)
-            # Extract dimension from args if available
-            dim = cat_op.args[1] if len(cat_op.args) > 1 else None
-            return CatUnittest(cat_op.input_shapes, dim)
+            try:
+                cat_op = operation.to_operation(AtenCat)
+                dim = cat_op.args[1] if len(cat_op.args) > 1 else None
+
+                # Use input_shapes if available, otherwise derive from output_shapes
+                input_shapes = cat_op.input_shapes
+                if not input_shapes and operation.output_shapes and hasattr(operation, "args"):
+                    tensor_list = operation.args[0] if operation.args else []
+                    if isinstance(tensor_list, list) and len(tensor_list) >= 2:
+                        output_shape = (
+                            operation.output_shapes[0]
+                            if isinstance(operation.output_shapes, list)
+                            else next(iter(operation.output_shapes.values()), None)
+                        )
+                        if output_shape and hasattr(output_shape, "__iter__"):
+                            input_shapes = {i: list(output_shape) for i in range(len(tensor_list))}
+
+                return CatUnittest(input_shapes, dim)
+            except Exception:
+                return None
         return None
 
     def generate_code(self, indent="") -> str:
@@ -481,36 +497,81 @@ def test_mul_tensor(device, input_shape_a, input_shape_b, dtype, layout):
 
 class CatGroupUnittest(UnitTestOperation):
     def __init__(self, cat_ops_list: List[Dict[str, Any]]):
-        self.cat_ops_list = [op for op in cat_ops_list if op is not None and "input_shapes" in op]
-        # Process input shapes for cat operations
-        processed_ops = []
-        for op in self.cat_ops_list:
-            input_shapes = op["input_shapes"]
-            if input_shapes and len(input_shapes) >= 2:
-                # Convert torch.Size to list for all inputs
-                processed_shapes = {}
-                for k, v in input_shapes.items():
-                    if isinstance(v, torch.Size):
-                        processed_shapes[k] = list(v)
-                        # Normalize to 4D
-                        if len(processed_shapes[k]) == 1:
-                            processed_shapes[k] = [1, 1, 1] + processed_shapes[k]
-                        elif len(processed_shapes[k]) == 2:
-                            processed_shapes[k] = [1, 1] + processed_shapes[k]
-                        elif len(processed_shapes[k]) == 3:
-                            processed_shapes[k] = [1] + processed_shapes[k]
-                processed_ops.append({"input_shapes": processed_shapes, "dim": op.get("dim", -1)})
-        self.cat_ops_list = processed_ops
+        self.cat_ops_list = self._process_cat_operations(cat_ops_list)
         HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def _normalize_shape_to_4d(shape: List[int]) -> List[int]:
+        """Normalize a tensor shape to 4D by padding with 1s at the beginning."""
+        if len(shape) == 1:
+            return [1, 1, 1] + shape
+        elif len(shape) == 2:
+            return [1, 1] + shape
+        elif len(shape) == 3:
+            return [1] + shape
+        else:
+            return shape
+
+    @staticmethod
+    def _convert_shape_to_list(shape: Any) -> Optional[List[int]]:
+        """Convert various shape formats to a list of integers."""
+        if isinstance(shape, torch.Size):
+            return list(shape)
+        elif isinstance(shape, (list, tuple)):
+            return list(shape)
+        else:
+            return None
+
+    def _process_cat_operations(self, cat_ops_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Process and normalize cat operations."""
+        valid_ops = [op for op in cat_ops_list if op is not None and "input_shapes" in op]
+        processed_ops = []
+
+        for op in valid_ops:
+            input_shapes = op["input_shapes"]
+            if not input_shapes or len(input_shapes) < 2:
+                continue
+
+            processed_shapes = {}
+            for k, v in input_shapes.items():
+                shape_list = self._convert_shape_to_list(v)
+                if shape_list is not None:
+                    processed_shapes[k] = self._normalize_shape_to_4d(shape_list)
+
+            if processed_shapes:
+                processed_ops.append({"input_shapes": processed_shapes, "dim": op.get("dim", -1)})
+
+        return processed_ops
+
+    def _generate_parameter_tuples(self) -> List[str]:
+        """Generate parameter tuples for the test."""
+        param_tuples = []
+        for op in self.cat_ops_list:
+            input_shapes = op.get("input_shapes", {})
+            if not input_shapes:
+                continue
+
+            # Extract shapes in sorted order
+            shapes = [input_shapes[key] for key in sorted(input_shapes.keys()) if isinstance(key, int)]
+
+            if len(shapes) >= 2:  # Need at least 2 tensors for concat
+                dim = op.get("dim", -1)
+                param_tuples.append(f"        ({shapes}, {dim})")
+
+        # Remove duplicates while preserving order
+        return list(dict.fromkeys(param_tuples))  # Preserves order, removes duplicates
 
     def generate_code(self) -> str:
         """Generate the code for this cat unit test operation."""
+        param_tuples = self._generate_parameter_tuples()
+        params_str = ",\n".join(param_tuples) if param_tuples else "        ([[1, 1, 1, 32], [1, 1, 1, 32]], -1)"
+
         return f"""
 
 @pytest.mark.parametrize(
     "tensor_shapes, cat_dim",
     (
-{''.join(set(f'        ([{op["input_shapes"][0]}, {op["input_shapes"][1]}], {op["dim"]}),' for op in self.cat_ops_list if 0 in op["input_shapes"] and 1 in op["input_shapes"]))}
+{params_str},
     )
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
@@ -660,11 +721,12 @@ class CatCombiner(UnitTestOperationCombiner):
         if not operations:
             raise ValueError("No operations to combine.")
 
-        combined_ops = [
-            {"input_shapes": cat_op.input_shapes, "dim": cat_op.dim}
-            for cat_op in operations
-            if isinstance(cat_op, CatUnittest)
-        ]
+        combined_ops = []
+        for cat_op in operations:
+            if isinstance(cat_op, CatUnittest):
+                # If input_shapes are empty, we'll let CatGroupUnittest handle it
+                combined_ops.append({"input_shapes": cat_op.input_shapes, "dim": cat_op.dim})
+
         return CatGroupUnittest(combined_ops)
 
 
