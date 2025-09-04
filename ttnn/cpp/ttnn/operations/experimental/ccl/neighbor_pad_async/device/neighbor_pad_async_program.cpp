@@ -68,9 +68,16 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
-    uint32_t num_sticks_per_outer_dim = input_tensor_shape[1] * input_tensor_shape[2];
-    uint32_t input_outer_dim_size = input_tensor_shape[0];
-    uint32_t output_outer_dim_size = output_tensor_shape[0];
+    uint32_t num_sticks_per_halo_dim = 1;
+    for (int d = dim + 1; d < input_tensor_shape.size() - 1; d++) {
+        num_sticks_per_halo_dim *= input_tensor_shape[d];
+    }
+    uint32_t input_halo_dim_size = input_tensor_shape[dim];
+    uint32_t output_halo_dim_size = output_tensor_shape[dim];
+    uint32_t outer_dim_size = 1;
+    for (int d = 0; d < dim; d++) {
+        outer_dim_size *= input_tensor_shape[d];
+    }
 
     bool is_first_device = !backward_device.has_value();
     bool is_last_device = !forward_device.has_value();
@@ -97,7 +104,7 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
          core_group_1,
          core_group_2,
          num_sticks_per_core_group_1,
-         num_sticks_per_core_group_2] = tt::tt_metal::split_work_to_cores(core_grid, num_sticks_per_outer_dim * 2);
+         num_sticks_per_core_group_2] = tt::tt_metal::split_work_to_cores(core_grid, num_sticks_per_halo_dim * 2);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
@@ -165,10 +172,11 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
                 output_tensor.buffer()->address(),         // output_tensor_address
                 page_size,                                 // stick_size
                 stick_start_id,                            // stick_start_id
-                input_outer_dim_size,                      // input_outer_dim_size
+                input_halo_dim_size,                       // input_halo_dim_size
+                outer_dim_size,                            // outer_dim_size
                 direction ? padding_right : padding_left,  // padding
                 num_sticks_to_read,                        // num_sticks_to_read
-                num_sticks_per_outer_dim,                  // num_sticks_per_outer_dim
+                num_sticks_per_halo_dim,                   // num_sticks_per_halo_dim
                 final_semaphore.address()                  // out_ready_sem_bank_addr (absolute address)
             };
             tt::tt_metal::SetRuntimeArgs(program, worker_reader_kernel_id, {core}, reader_rt_args);
@@ -181,7 +189,6 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
                 sender_cb_index,                  // cb_forward_id
                 reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
                 direction};
-            TensorAccessorArgs(*input_buffer).append_to(writer_kernel_config.compile_args);
             TensorAccessorArgs(*output_buffer).append_to(writer_kernel_config.compile_args);
             auto worker_writer_kernel_id = tt::tt_metal::CreateKernel(
                 program,
@@ -196,12 +203,13 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
                 output_tensor.buffer()->address(),         // output_tensor_address
                 page_size,                                 // stick_size
                 stick_start_id,                            // stick_start_id
-                input_outer_dim_size,                      // input_outer_dim_size
-                output_outer_dim_size,                     // output_outer_dim_size
+                input_halo_dim_size,                       // input_halo_dim_size
+                output_halo_dim_size,                      // output_halo_dim_size
+                outer_dim_size,                            // outer_dim_size
                 direction ? padding_right : padding_left,  // padding
                 padding_left,                              // padding left
                 num_sticks_to_read,                        // num_sticks_to_read
-                num_sticks_per_outer_dim,                  // num_sticks_per_outer_dim
+                num_sticks_per_halo_dim,                   // num_sticks_per_halo_dim
                 virtual_core.x,                            // out_ready_sem_noc0_x
                 virtual_core.y,                            // out_ready_sem_noc0_y
                 final_semaphore.address()                  // out_ready_sem_bank_addr (absolute address)
