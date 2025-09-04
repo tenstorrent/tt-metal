@@ -21,8 +21,9 @@ def test_yolov5x(device, reset_seeds, model_location_generator):
         ttnn.CoreGrid(x=8, y=8),
         ttnn.ShardStrategy.HEIGHT,
     )
-    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-    ttnn_input = ttnn_input.to(device, input_mem_config)
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_mem_config
+    )
 
     torch_model = load_torch_model(model_location_generator)
     torch_model = torch_model.model

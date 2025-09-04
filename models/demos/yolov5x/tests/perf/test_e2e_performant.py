@@ -8,9 +8,9 @@ import pytest
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.yolov5x.common import YOLOV5X_L1_SMALL_SIZE
 from models.demos.yolov5x.runner.performant_runner import YOLOv5xPerformantRunner
-from models.common.utility_functions import run_for_wormhole_b0
 
 
 @pytest.mark.parametrize(
@@ -48,15 +48,16 @@ def test_e2e_performant(
     )
     performant_runner._capture_yolov5x_trace_2cqs()
     inference_times = []
-    for _ in range(10):
-        t0 = time.time()
+    num_iter = 10
+    t0 = time.time()
+    for _ in range(num_iter):
         _ = performant_runner.run()
-        t1 = time.time()
-        inference_times.append(t1 - t0)
+    ttnn.synchronize_device(device)
+    t1 = time.time()
 
     performant_runner.release()
 
-    inference_time_avg = round(sum(inference_times) / len(inference_times), 6)
+    inference_time_avg = round((t1 - t0) / num_iter, 6)
     logger.info(
         f"ttnn_yolov5x_batch_size: {batch_size}, resolution: {resolution}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size/inference_time_avg)}"
     )
