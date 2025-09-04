@@ -409,6 +409,7 @@ class Generator:
             page_table=tt_page_table,
             kv_cache=kv_cache,
             tt_out_logits_saved=tt_out_logits_saved,
+            is_cur_pos_sharded=is_cur_pos_sharded,
         )
         return tt_tok
 
@@ -438,7 +439,12 @@ class Generator:
         # Save the buffer addresses for preallocated tensors
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         tt_out_tok = self.model.ttnn_decode_forward(
-            tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt, kv_cache=kv_cache
+            tokens_tt,
+            current_pos_tt,
+            rope_idxs_tt,
+            page_table_tt,
+            kv_cache=kv_cache,
+            is_cur_pos_sharded=is_cur_pos_sharded,
         )
 
         # Try allocating our persistent tensors here and verifying it matches the address that trace captured
