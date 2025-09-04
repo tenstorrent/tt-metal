@@ -1,4 +1,4 @@
-name: "zzz Galaxy Quick tests"
+name: "[internal]Galaxy Quick tests"
 
 on:
   workflow_call:
