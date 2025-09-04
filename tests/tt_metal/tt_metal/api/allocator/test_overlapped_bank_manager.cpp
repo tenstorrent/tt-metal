@@ -4,7 +4,6 @@
 
 #include <gtest/gtest.h>
 #include "gmock/gmock.h"
-#include <cstddef>
 #include <cstdint>
 #include <tt-metalium/allocator.hpp>
 #include <vector>
@@ -17,9 +16,6 @@
 #include <tt-metalium/metal_soc_descriptor.h>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/allocator/bank_manager.hpp"
-#include <unordered_map>
-#include <algorithm>
-#include <numeric>
 
 namespace overlapped_bank_manager_tests {
 struct StateDependenciesParam {
@@ -709,4 +705,91 @@ TEST(OverlappedAllocator, OverlappedAllocationsWithUnalignedSizesTopDown) {
         std::nullopt,
         StateId{0});
     EXPECT_EQ(alloc0_addr1, alloc2_addr0 - alloc_size_2K);
+}
+
+TEST(OverlappedAllocator, OverlappedAllocationsFromBothSides) {
+    // Two independent allocators (0 and 1); allocator 2 overlaps both 0 and 1
+    const uint64_t total_size = 1024 * 1024;
+    const uint32_t alignment = 1024;
+    BankManager::StateDependencies deps{{{StateId{0}, {StateId{2}}}, {StateId{1}, {StateId{2}}}}};
+    BankManager bank_manager = get_bank_manager_with_state_dependencies(total_size, alignment, deps);
+    const uint32_t bank_id = 0;
+
+    // Hard-coded allocation sizes
+    const uint32_t alloc_size_1K = 1024;
+    const uint32_t alloc_size_2K = 2048;
+    const uint32_t alloc_size_half_of_total_size = total_size / 2;
+
+    const auto alloc0_addr0 = bank_manager.allocate_buffer(
+        alloc_size_half_of_total_size,
+        alloc_size_half_of_total_size,
+        /*bottom_up=*/true,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        StateId{0});
+    const auto alloc0_addr1 = bank_manager.allocate_buffer(
+        alloc_size_1K,
+        alloc_size_1K,
+        /*bottom_up=*/true,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        StateId{0});
+    const auto alloc1_addr0 = bank_manager.allocate_buffer(
+        alloc_size_2K,
+        alloc_size_2K,
+        /*bottom_up=*/false,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        StateId{1});
+    const auto alloc1_addr1 = bank_manager.allocate_buffer(
+        alloc_size_half_of_total_size,
+        alloc_size_half_of_total_size,
+        /*bottom_up=*/false,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        StateId{1});
+
+    // Try to allocate in state 2 (overlapped) which should fail due to no available space
+    EXPECT_THAT(
+        [&]() {
+            bank_manager.allocate_buffer(
+                alloc_size_1K,
+                alloc_size_1K,
+                /*bottom_up=*/true,
+                CoreRangeSet(std::vector<CoreRange>{}),
+                std::nullopt,
+                StateId{2});
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Out of Memory: Not enough space after considering dependencies to allocate 1024 B "
+                                 "DRAM across 1 banks (1024 B per bank)")));
+
+    bank_manager.deallocate_buffer(alloc1_addr1, StateId{1});
+    const auto alloc2_addr0 = bank_manager.allocate_buffer(
+        alloc_size_1K,
+        alloc_size_1K,
+        /*bottom_up=*/true,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        StateId{2});
+    EXPECT_EQ(alloc2_addr0, alloc0_addr1 + alloc_size_1K);
+
+    const auto alloc2_addr1 = bank_manager.allocate_buffer(
+        alloc_size_1K,
+        alloc_size_1K,
+        /*bottom_up=*/false,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        StateId{2});
+    EXPECT_EQ(alloc2_addr1, alloc1_addr0 - alloc_size_1K);
+
+    bank_manager.deallocate_buffer(alloc0_addr0, StateId{0});
+    const auto alloc2_addr2 = bank_manager.allocate_buffer(
+        alloc_size_half_of_total_size,
+        alloc_size_half_of_total_size,
+        /*bottom_up=*/false,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        StateId{2});
+    EXPECT_EQ(alloc2_addr2, alloc0_addr1 - alloc_size_half_of_total_size);
 }
