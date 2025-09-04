@@ -890,9 +890,8 @@ bool MeshDevice::initialize(
     size_t /*worker_l1_size*/,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     bool /*minimal*/) {
-    if (this->is_initialized()) {
-        return true;
-    }
+    TT_FATAL(!this->is_initialized(), "MeshDevice is already initialized!");
+
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
     auto sub_devices = {
