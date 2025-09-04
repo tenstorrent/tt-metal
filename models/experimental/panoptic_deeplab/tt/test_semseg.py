@@ -86,7 +86,7 @@ def test_deeplabv3():
         # len(in_features) = 3 decoder channels needed
         decoder_channels=[256, 256, 256],
         common_stride=common_stride,
-        norm="LN",
+        norm="SyncBN",
         # train_size should match the final output for correct ASPP global pooling
         train_size=final_output_size,
         num_classes=None,
@@ -197,7 +197,7 @@ def test_semSeg():
         train_size=final_output_size,
         use_depthwise_separable_conv=False,
         # --- Parameters for this specific Panoptic head ---
-        norm="LN",
+        norm="SyncBN",
         head_channels=128,
         loss_weight=1.0,
         loss_type="cross_entropy",
@@ -234,7 +234,7 @@ def test_semSeg():
     ), f"Shape mismatch! Expected {expected_shape}, but got {predictions.shape}"
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
 def test_ttnn_semSeg(device):
     """
     Compares the TTNN implementation of PanopticDeepLabSemSegHead against the
@@ -285,6 +285,17 @@ def test_ttnn_semSeg(device):
         "res3": res3_shape,
         "res5": res5_shape,
     }
+    # Create weight dictionaries that match the current implementation
+    # We need different fusion weights for res2 and res3 stages with correct input channel dimensions
+    w_res2_fuse0 = torch.randn(256, 304, 3, 3, dtype=torch.bfloat16)  # 304 = 48 (res2 proj) + 256 (from res3)
+    w_res2_fuse1 = torch.randn(256, 256, 3, 3, dtype=torch.bfloat16)
+    w_res3_fuse0 = torch.randn(256, 304, 3, 3, dtype=torch.bfloat16)  # 304 = 48 (res3 proj) + 256 (from ASPP)
+    w_res3_fuse1 = torch.randn(256, 256, 3, 3, dtype=torch.bfloat16)
+
+    project_conv_weights = {"res2": w_res2_proj, "res3": w_res3_proj}
+    fuse_conv_0_weights = {"res2": w_res2_fuse0, "res3": w_res3_fuse0}
+    fuse_conv_1_weights = {"res2": w_res2_fuse1, "res3": w_res3_fuse1}
+
     # --- Instantiate and run PyTorch model ---
     torch_model = PanopticDeepLabSemSegHead(
         input_shape=input_shape_pytorch,
@@ -294,7 +305,7 @@ def test_ttnn_semSeg(device):
         decoder_channels=[256, 256, 256],
         common_stride=common_stride,
         train_size=final_output_size,
-        norm="LN",
+        norm="SyncBN",
         head_channels=128,
         loss_weight=1.0,
         loss_type="cross_entropy",
@@ -305,10 +316,9 @@ def test_ttnn_semSeg(device):
         shared_weight_tensor_kernel1=w_aspp_k1,
         shared_weight_tensor_kernel3=w_aspp_k3,
         shared_weight_tensor_kernel1_output5=w_aspp_k1_out5,
-        shared_fuse_conv_0_weight=w_shared_fuse0,
-        shared_fuse_conv_1_weight=w_shared_fuse1,
-        res3_project_conv_weight=w_res3_proj,
-        res2_project_conv_weight=w_res2_proj,
+        project_conv_weights=project_conv_weights,
+        fuse_conv_0_weights=fuse_conv_0_weights,
+        fuse_conv_1_weights=fuse_conv_1_weights,
         panoptic_head_0_weight=w_panoptic_head_0,
         panoptic_head_1_weight=w_panoptic_head_1,
         panoptic_predictor_weight=w_panoptic_predictor,
@@ -340,17 +350,16 @@ def test_ttnn_semSeg(device):
         decoder_channels=[256, 256, 256],
         common_stride=common_stride,
         train_size=final_output_size,
-        norm="LN",
+        norm="SyncBN",
         head_channels=128,
         num_classes=num_classes,
         # Pass all the same shared weights
         shared_weight_tensor_kernel1=w_aspp_k1,
         shared_weight_tensor_kernel3=w_aspp_k3,
         shared_weight_tensor_kernel1_output5=w_aspp_k1_out5,
-        shared_fuse_conv_0_weight=w_shared_fuse0,
-        shared_fuse_conv_1_weight=w_shared_fuse1,
-        res3_project_conv_weight=w_res3_proj,
-        res2_project_conv_weight=w_res2_proj,
+        project_conv_weights=project_conv_weights,
+        fuse_conv_0_weights=fuse_conv_0_weights,
+        fuse_conv_1_weights=fuse_conv_1_weights,
         panoptic_head_0_weight=w_panoptic_head_0,
         panoptic_head_1_weight=w_panoptic_head_1,
         panoptic_predictor_weight=w_panoptic_predictor,
@@ -371,7 +380,7 @@ def test_ttnn_semSeg(device):
     assert pcc_passed, f"PCC check failed: {pcc_message}"
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
 # Add this to your test file and run it
 def test_ttnn_wholeSemSeg(device):
     compute_grid = device.compute_with_storage_grid_size()
@@ -448,7 +457,7 @@ def test_ttnn_wholeSemSeg(device):
         decoder_channels=target_decoder_channels,
         common_stride=common_stride,
         train_size=final_output_size,
-        norm="LN",
+        norm="SyncBN",
         head_channels=target_head_channels,
         loss_weight=1.0,
         loss_type="cross_entropy",
@@ -493,7 +502,7 @@ def test_ttnn_wholeSemSeg(device):
         decoder_channels=target_decoder_channels,
         common_stride=common_stride,
         train_size=final_output_size,
-        norm="LN",
+        norm="SyncBN",
         head_channels=target_head_channels,
         num_classes=num_classes,
         shared_weight_tensor_kernel1=w_aspp_k1,

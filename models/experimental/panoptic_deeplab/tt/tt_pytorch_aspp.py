@@ -44,16 +44,9 @@ def get_norm(norm, out_channels):
         if len(norm) == 0:
             return None
         norm = {
-            # "BN": BatchNorm2d,
-            # # Fixed in https://github.com/pytorch/pytorch/pull/36382
-            # "SyncBN": NaiveSyncBatchNorm if env.TORCH_VERSION <= (1, 5) else nn.SyncBatchNorm,
-            # "FrozenBN": FrozenBatchNorm2d,
-            # "GN": lambda channels: nn.GroupNorm(32, channels),
-            # # for debugging:
-            # "nnSyncBN": nn.SyncBatchNorm,
-            # "naiveSyncBN": NaiveSyncBatchNorm,
-            # # expose stats_mode N as an option to caller, required for zero-len inputs
-            # "naiveSyncBN_N": lambda channels: NaiveSyncBatchNorm(channels, stats_mode="N"),
+            "BN": lambda channels: nn.BatchNorm2d(channels),
+            "SyncBN": lambda channels: nn.SyncBatchNorm(channels),
+            "GN": lambda channels: nn.GroupNorm(32, channels),
             "LN": lambda channels: LayerNorm(channels),
         }[norm]
     return norm(out_channels)
