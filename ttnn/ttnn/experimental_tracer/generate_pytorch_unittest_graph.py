@@ -992,21 +992,36 @@ def test_bmm(device, input_shape_a, input_shape_b, dtype):
 
 class NativeBatchNormGroupUnittest(UnitTestOperation):
     def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
-        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
-        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 1]
-        self.input_shape_list = [
-            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
-        ]
+        self.input_shape_list = self._process_batch_norm_shapes(input_shapes_list)
         HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def _process_batch_norm_shapes(self, input_shapes_list: List[Optional[Dict[int, Any]]]) -> List[List[int]]:
+        """Process and normalize batch norm shapes to ensure they're all 4D."""
+        shapes = []
+        for shape_dict in input_shapes_list:
+            if shape_dict and 0 in shape_dict:
+                shape = list(shape_dict[0]) if isinstance(shape_dict[0], torch.Size) else list(shape_dict[0])
+                # Normalize to 4D [N, C, H, W] by padding with 1s
+                shape = ([1] * (4 - len(shape)) + shape) if len(shape) < 4 else shape[-4:]
+                if len(shape) == 4:
+                    shapes.append(shape)
+
+        # Remove duplicates while preserving order
+        unique_shapes = [list(s) for s in dict.fromkeys(tuple(s) for s in shapes)]
+        return unique_shapes if unique_shapes else [[1, 32, 64, 64]]
 
     def generate_code(self) -> str:
         """Generate the code for this batch norm unit test operation."""
+        # Generate parameter tuples properly
+        shape_tuples = [f"        {shape}" for shape in self.input_shape_list]
+        shapes_str = ",\n".join(shape_tuples) if shape_tuples else "        [1, 32, 64, 64]"
+
         return f"""
 
 @pytest.mark.parametrize(
     "input_shape",
     (
-{''.join(set(f'        {shape[0]},' for shape in self.input_shape_list if 0 in shape))}
+{shapes_str},
     )
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -1024,11 +1039,11 @@ def test_native_batch_norm(device, input_shape, dtype):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
 
-    # Create batch norm parameters
-    weight = torch.ones(num_features, dtype=torch.bfloat16)
-    bias = torch.zeros(num_features, dtype=torch.bfloat16)
-    running_mean = torch.zeros(num_features, dtype=torch.bfloat16)
-    running_var = torch.ones(num_features, dtype=torch.bfloat16)
+    # Create batch norm parameters - reshape to 4D for TTNN compatibility
+    weight = torch.ones(num_features, dtype=torch.bfloat16).reshape(1, num_features, 1, 1)
+    bias = torch.zeros(num_features, dtype=torch.bfloat16).reshape(1, num_features, 1, 1)
+    running_mean = torch.zeros(num_features, dtype=torch.bfloat16).reshape(1, num_features, 1, 1)
+    running_var = torch.ones(num_features, dtype=torch.bfloat16).reshape(1, num_features, 1, 1)
 
     # Convert parameters to ttnn tensors
     ttnn_weight = ttnn.from_torch(weight, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
