@@ -27,7 +27,6 @@ Checks: >
   -bugprone-unchecked-optional-access,
   -bugprone-unhandled-self-assignment,
   -bugprone-unused-local-non-trivial-variable,
-  -bugprone-unused-raii,
   -bugprone-use-after-move,
   -cert-arr39-c,
   -cert-dcl16-c,
