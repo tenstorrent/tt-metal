@@ -91,17 +91,18 @@ def run_reduce_scatter_impl(
     ]
     rs_output_shape = rs_input_shape[:]
     rs_output_shape[dim] //= num_devices
-    persistent_output_buffers = [
-        ttnn.from_torch(
-            torch.zeros(rs_output_shape),
-            device=t3k_mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=rs_input_dtype,
-            memory_config=mem_config_rs,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(t3k_mesh_device),
-        )
-        for _ in range(num_iters)
-    ]
+    if use_persistent_buffers:
+        persistent_output_buffers = [
+            ttnn.from_torch(
+                torch.zeros(rs_output_shape),
+                device=t3k_mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=rs_input_dtype,
+                memory_config=mem_config_rs,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(t3k_mesh_device),
+            )
+            for _ in range(num_iters)
+        ]
 
     logger.info("Done creating persistent buffers")
 

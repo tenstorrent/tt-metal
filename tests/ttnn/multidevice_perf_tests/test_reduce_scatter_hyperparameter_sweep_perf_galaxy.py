@@ -40,7 +40,7 @@ def test_reduce_scatter_chunk_perf():
 
     chunks_per_sync_list = CHUNKS_PER_SYNC
     num_workers_per_link_list = WORKERS_PER_LINK
-    topology_list = ["linear"]
+    topology_list = ["ring"]
     start_time = time.time()
     results_subdir = f"ReduceScatter_{start_time}"
     os.makedirs(results_subdir, exist_ok=True)

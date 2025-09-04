@@ -6,14 +6,29 @@ import pytest
 import ttnn
 
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
+import math
 
 
 # (num_devices, num_links, rs_input_shape, dim)
 CONFIGS = [
-    # (4, 1, [1, 1, 22528, 3072], 3),
-    # (2, 1, [1, 1, 11264, 3072], 3),
-    # (2,4,[1, 1, 5632, 3072],3),
-    # (8,4,[1, 1, 11264, 3072],3),
+    (4, 1, [1, 1, 22528, 3072], 3),
+    (2, 1, [1, 1, 11264, 3072], 3),
+    (2, 4, [1, 1, 5632, 3072], 3),
+    # (8, 4, [1, 1, 71680, 3072], 3),
+    # (8,4,[1, 1, 63488, 3072],3),
+    # (8,4,[1, 1, 55296, 3072],3),
+    # (8,4,[1, 1, 47104, 3072],3),
+    # (8,4,[1, 1, 38912, 3072],3),
+    # (8,4,[1, 1, 34816, 3072],3),
+    # (8,4,[1, 1, 30720, 3072],3),
+    # (8,4,[1, 1, 18432, 3072],3),
+    # (8,4,[1, 1, 17408, 3072],3),
+    # (8,4,[1, 1, 16384, 3072],3),
+    # (8,4,[1, 1, 15360, 3072],3),
+    # (8,4,[1, 1, 14336, 3072],3),
+    # (8,4,[1, 1, 13312, 3072],3),
+    # (8,4,[1, 1, 12288, 3072],3),
+    (8, 4, [1, 1, 11264, 3072], 3),
     # (8,4,[1, 1, 10752, 3072],3),
     # (8,4,[1, 1, 10240, 3072],3),
     # (8,4,[1, 1, 9728, 3072],3),
@@ -48,20 +63,20 @@ CONFIGS = [
     # (8,4,[1, 1, 3968, 3072],3),
     # (8,4,[1, 1, 3840, 3072],3),
     # (8,4,[1, 1, 3712, 3072],3),
-    (8, 4, [1, 1, 3072, 3072], 3),
-    (8, 4, [1, 1, 2048, 3072], 3),
-    (8, 4, [1, 1, 1024, 3072], 3),
-    # (4,4,[1, 1, 5632, 3072],3),
-    # (2,1,[1, 1, 128, 1536],3),
-    # (4,1,[1, 1, 128, 1536],3),
-    # (2,4,[1, 1, 128, 1536],3),
-    # (4,4,[1, 1, 128, 1536],3),
+    # (8, 4, [1, 1, 3072, 3072], 3),
+    # (8, 4, [1, 1, 2048, 3072], 3),
+    # (8, 4, [1, 1, 1024, 3072], 3),
+    (4, 4, [1, 1, 5632, 3072], 3),
+    (2, 1, [1, 1, 128, 1536], 3),
+    (4, 1, [1, 1, 128, 1536], 3),
+    (2, 4, [1, 1, 128, 1536], 3),
+    (4, 4, [1, 1, 128, 1536], 3),
     # (8,4,[1, 1, 128, 1536],3),
 ]
 
 CONFIGS_IDS = [f"rs_input_shape{i}_" for i in range(len(CONFIGS))]
 
-WORKERS_PER_LINK = [4, 8]
+WORKERS_PER_LINK = [None, "OPTIMIZED"]
 WORKERS_PER_LINK_IDS = [f"{worker}-workers" for worker in WORKERS_PER_LINK]
 
 CHUNKS_PER_SYNC = [None]
@@ -87,7 +102,7 @@ TOPOLOGY = ["ring", "linear"]
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 15),
+        (True, 10),
     ],
     ids=["perf"],
 )
@@ -136,6 +151,27 @@ def test_reduce_scatter_chunks_per_sync(
     else:
         pytest.skip("Unsupported number of devices")
 
+    if num_workers_per_link is "OPTIMIZED":
+        elements = math.prod(rs_input_shape)
+        total_bytes = elements * 2
+
+        data_moved_MB = (
+            total_bytes * ((num_devices - 1) / num_devices) / num_links / (2 if rs_topology == "ring" else 1)
+        )
+
+        if rs_topology == "ring":
+            if data_moved_MB > 50:
+                num_workers_per_link = 8
+            elif data_moved_MB < 1:
+                num_workers_per_link = 2
+            else:
+                num_workers_per_link = 4
+        else:
+            if data_moved_MB < 4:
+                num_workers_per_link = 4
+            else:
+                num_workers_per_link = 8
+
     run_reduce_scatter_impl(
         submesh_device,
         num_devices,
@@ -154,4 +190,5 @@ def test_reduce_scatter_chunks_per_sync(
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=None,
         verify_output=False,
+        use_persistent_buffers=False,
     )
