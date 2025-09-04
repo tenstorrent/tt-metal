@@ -1,4 +1,4 @@
-name: "Galaxy Quick"
+name: "(Galaxy) Quick"
 
 on:
   workflow_dispatch:
@@ -19,10 +19,10 @@ jobs:
       build-wheel: true
       version: 22.04
 
-  tg-quick-test:
+  galaxy-quick-test:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/tg-quick.yaml
+    uses: ./.github/workflows/galaxy-quick-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
