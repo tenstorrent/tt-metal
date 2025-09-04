@@ -24,7 +24,6 @@ class TtBottleRep:
             conv_pth=parameters.conv1.block.conv,
             shard_layout=shard_layout,
             activation="silu",
-            activation_dtype=ttnn.bfloat16,
         )
         self.cv2 = Yolov6l_Conv2D(
             device=device,
