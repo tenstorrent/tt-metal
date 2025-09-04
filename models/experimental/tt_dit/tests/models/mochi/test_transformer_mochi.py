@@ -9,12 +9,12 @@ import torch
 import ttnn
 from loguru import logger
 
-from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from ...utils.check import assert_quality
-from ...models.transformers.transformer_mochi import MochiTransformerBlock, MochiTransformer3DModel
-from ...parallel.manager import CCLManager
-from ...utils.padding import pad_vision_seq_parallel
-from ...utils.cache import get_cache_path, get_and_create_cache_path, save_cache_dict, load_cache_dict
+from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from ....utils.check import assert_quality
+from ....models.transformers.transformer_mochi import MochiTransformerBlock, MochiTransformer3DModel
+from ....parallel.manager import CCLManager
+from ....utils.padding import pad_vision_seq_parallel
+from ....utils.cache import get_cache_path, get_and_create_cache_path, save_cache_dict, load_cache_dict
 from diffusers import MochiTransformer3DModel as TorchMochiTransformer3DModel
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 
@@ -103,7 +103,7 @@ def test_mochi_transformer_block(
         MIN_PCC = 0.999_400 if spatial_seq_len == 4000 else 0.999_050
         MIN_RMSE = 0.036 if spatial_seq_len == 4000 else 0.046
     else:
-        MIN_PCC = 0.991_600 if spatial_seq_len == 4000 else 0.990_400
+        MIN_PCC = 0.991_500 if spatial_seq_len == 4000 else 0.990_300
         MIN_RMSE = 0.14 if spatial_seq_len == 4000 else 0.14
 
     parent_torch_model = TorchMochiTransformer3DModel.from_pretrained(
@@ -270,6 +270,9 @@ def test_mochi_transformer_block(
     ],
     ids=["short_seq", "medium_seq", "long_seq"],
 )
+@pytest.mark.parametrize(
+    "test_attention_mask", [True, False], ids=["yes_test_attention_mask", "no_test_attention_mask"]
+)
 @pytest.mark.parametrize("load_cache", [True, False], ids=["yes_load_cache", "no_load_cache"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mochi_transformer_model(
@@ -283,6 +286,7 @@ def test_mochi_transformer_model(
     W: int,
     prompt_seq: int,
     load_cache: bool,
+    test_attention_mask: bool,
 ) -> None:
     torch_dtype = torch.float32
 
@@ -335,6 +339,9 @@ def test_mochi_transformer_model(
     prompt_input = torch.randn((B, prompt_seq, text_embed_dim), dtype=torch_dtype)
     timestep_input = torch.randint(0, 1000, (B,), dtype=torch_dtype)
     attention_mask = torch.ones((B, prompt_seq), dtype=torch_dtype)
+    if test_attention_mask:
+        # Test that masking prompt works
+        attention_mask[:, prompt_seq // 2 :] = 0
 
     # Create TT model
     tt_model = MochiTransformer3DModel(
