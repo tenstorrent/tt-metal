@@ -2,10 +2,10 @@ project(scaleout_tools)
 
 include(protobuf)
 set(PROTO_SCHEMAS
-    ${CMAKE_CURRENT_SOURCE_DIR}/scaleout_tools/factory_system_descriptor/schemas/factory_system_descriptor.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/scaleout_tools/cabling_descriptor/schemas/node_config.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/scaleout_tools/cabling_descriptor/schemas/cluster_config.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/scaleout_tools/deployment_descriptor/schemas/deployment.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/schemas/factory_system_descriptor.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/cabling_descriptor/schemas/node_config.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/cabling_descriptor/schemas/cluster_config.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/deployment_descriptor/schemas/deployment.proto
 )
 
 set(GENERATED_PROTO_SRCS)
@@ -25,15 +25,15 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
-            scaleout_tools/board/board.hpp
-            scaleout_tools/cabling_generator/cabling_generator.hpp
-            scaleout_tools/connector/connector.hpp
-            scaleout_tools/factory_system_descriptor/utils.hpp
+            board/board.hpp
+            cabling_generator/cabling_generator.hpp
+            connector/connector.hpp
+            factory_system_descriptor/utils.hpp
     PRIVATE
-        scaleout_tools/board/board.cpp
-        scaleout_tools/cabling_generator/cabling_generator.cpp
-        scaleout_tools/connector/connector.cpp
-        scaleout_tools/factory_system_descriptor/utils.cpp
+        board/board.cpp
+        cabling_generator/cabling_generator.cpp
+        connector/connector.cpp
+        factory_system_descriptor/utils.cpp
         ${GENERATED_PROTO_SRCS}
 )
 
@@ -59,7 +59,3 @@ target_compile_features(scaleout_tools PUBLIC cxx_std_20)
 target_precompile_headers(scaleout_tools REUSE_FROM TT::CommonPCH)
 
 install(TARGETS scaleout_tools EXPORT Metalium LIBRARY COMPONENT metalium-runtime FILE_SET api COMPONENT metalium-dev)
-
-if(TT_METAL_BUILD_TESTS)
-    add_subdirectory(tests)
-endif()

@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include <scaleout_tools/board/board.hpp>
+#include <board/board.hpp>
 
 namespace tt::scaleout_tools {
 
