@@ -42,6 +42,10 @@ tt::stl::Span<std::byte> HostBuffer::view_bytes() & noexcept { return view_; }
 
 tt::stl::Span<const std::byte> HostBuffer::view_bytes() const& noexcept { return view_; }
 
+void HostBuffer::set_pinned_memory(std::shared_ptr<PinnedMemory> pinned_memory) { pinned_memory_ = pinned_memory; }
+
+std::shared_ptr<PinnedMemory> HostBuffer::get_pinned_memory() const { return pinned_memory_; }
+
 bool operator==(const HostBuffer& a, const HostBuffer& b) noexcept {
     auto a_view = a.view_bytes();
     auto b_view = b.view_bytes();
