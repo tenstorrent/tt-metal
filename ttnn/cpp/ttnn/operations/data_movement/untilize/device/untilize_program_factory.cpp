@@ -106,14 +106,8 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
         all_cores,
         ReaderDataMovementConfig(reader_ct_args));
 
-    bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
-    bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
-    std::vector<uint32_t> writer_ct_args = {
-        (uint32_t)out_is_dram,
-        (uint32_t)stick_size_is_power_of_two,
-        (uint32_t)log2_stick_size,
-    };
+    std::vector<uint32_t> writer_ct_args = {stick_size};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
 
     auto writer_kernel_id = CreateKernel(
         program,
@@ -170,7 +164,6 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
         const std::array writer_rt_args = {
             dst_buffer->address(),               // dst_addr
             nsticks_per_core,                    // nsticks
-            stick_size,                          // block_size_nbytes
             ntiles_per_core,                     // ntiles_per_core
             TILE_WIDTH * output.element_size(),  // tile_width_size
             std::uint32_t{0},                    // start stick id = 0, since parallelizing on height
@@ -292,14 +285,8 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
         all_cores,
         ReaderDataMovementConfig(reader_ct_args));
 
-    bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
-    bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
-    std::vector<uint32_t> writer_ct_args = {
-        (uint32_t)out_is_dram,
-        (uint32_t)stick_size_is_power_of_two,
-        (uint32_t)log2_stick_size,
-    };
+    std::vector<uint32_t> writer_ct_args = {stick_size};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
 
     auto unary_writer_kernel_id = CreateKernel(
         program,
@@ -383,7 +370,6 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
         const std::array writer_rt_args = {
             dst_buffer->address(),               // dst_addr
             nsticks_per_core,                    // nsticks
-            stick_size,                          // block_size_nbytes
             ntiles_per_core,                     // ntiles_per_core
             TILE_WIDTH * output.element_size(),  // tile_width_size
             std::uint32_t{0},                    // start stick id = 0, since parallelizing on height
@@ -587,23 +573,15 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
         ReaderDataMovementConfig(reader_compile_time_args));
 
     // writer
-
-    uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t stick_size = row_size_bytes;
-    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
-
     uint32_t total_num_rows = output.logical_shape()[-2];
-    std::map<std::string, std::string> writer_defines = {
-        {"STICK_SIZE_IS_POW2", std::to_string((uint32_t)(stick_size_is_power_of_two))}};
-
+    std::vector<uint32_t> writer_ct_args = {total_num_rows, third_dim, TILE_HEIGHT, row_size_bytes};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
         "writer_unary_stick_layout_wh_multicore.cpp",
         all_cores,
-        WriterDataMovementConfig(
-            {out_is_dram, log2_stick_size, total_num_rows, third_dim, TILE_HEIGHT}, writer_defines));
+        WriterDataMovementConfig(writer_ct_args));
 
     // compute
     bool use_pack_kernel = true;
@@ -694,7 +672,6 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
         //  writer runtime args
         std::vector<uint32_t> writer_rt_args = {
             dst_buffer->address(),
-            row_size_bytes,
             TILE_WIDTH * el_size * single_block_size_row_arg,
             start_row_id,
             start_column_id,
@@ -1046,11 +1023,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     } else {
         // Interleaved input
-        bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
-        std::vector<uint32_t> reader_compile_time_args = {
-            (uint32_t)src0_is_dram,
-            (uint32_t)src0_cb_index,
-        };
+        std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
+        TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
         unary_reader_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
@@ -1077,11 +1051,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
     uint32_t num_cols_per_input_block = num_tiles_per_input_block * tile_width;
     uint32_t num_cols_per_output_block = tensor_width / output_num_blocks_across_width;
     std::vector<uint32_t> writer_compile_time_args = {
-        (uint32_t)output_is_dram,
         (uint32_t)output_cb_index,
         (uint32_t)output_stick_size,
-        (uint32_t)output_stick_size_is_power_of_two,
-        (uint32_t)output_log_base_2_of_page_size,
         (uint32_t)tile_height,
         (uint32_t)num_tiles_per_input_block,
         (uint32_t)output_num_blocks_across_width,
@@ -1091,6 +1062,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
     };
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
+    } else {
+        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     }
 
     // Writer kernel
@@ -1410,13 +1383,11 @@ operation::ProgramWithCallbacks untilize_single_core(
     }
 
     // Reader compile-time args
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {
-        (uint32_t)src0_is_dram,
-        (uint32_t)src0_cb_index,
-    };
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(a, reader_compile_time_args);
+    } else {
+        TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     }
 
     // Tilized reader
@@ -1428,15 +1399,9 @@ operation::ProgramWithCallbacks untilize_single_core(
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_compute_defines));
 
     // Writer compile-time args
-    bool output_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool stick_size_is_power_of_two = is_power_of_two_at_least_32(output_stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::bit_width(output_stick_size) - 1) : 0;
     std::vector<uint32_t> writer_compile_time_args = {
-        (uint32_t)output_is_dram,
         (uint32_t)output_cb_index,
         (uint32_t)output_stick_size,
-        (uint32_t)stick_size_is_power_of_two,
-        (uint32_t)log2_stick_size,
         (uint32_t)tile_height,
         (uint32_t)num_blocks_across_height,
         (uint32_t)num_columns_of_blocks,
@@ -1446,6 +1411,8 @@ operation::ProgramWithCallbacks untilize_single_core(
     };
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
+    } else {
+        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     }
 
     // Untilized writer

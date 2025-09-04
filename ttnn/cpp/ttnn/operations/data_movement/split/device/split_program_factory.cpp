@@ -5,6 +5,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
@@ -146,32 +147,27 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     uint32_t z_stride_read = num_tiles_per_z;
     uint32_t y_stride_read = per_core_tiles_y * num_cores_y;
 
-    std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)tile_dtype_is_bfloat16,
-                                                      // by default in dram
-                                                      (std::uint32_t)in0_is_dram,
-
-                                                      // READER COMPILE TIME ARGS
+    std::vector<uint32_t> reader_compile_time_args = {// READER COMPILE TIME ARGS
                                                       (std::uint32_t)(z / num_cores_z),
                                                       (std::uint32_t)per_core_tiles_x,  // out_num_tiles_per_tensor
                                                       (std::uint32_t)per_core_tiles_y,  // out_num_tiles_per_tensor
                                                       (std::uint32_t)z_stride_read,
                                                       (std::uint32_t)y_stride_read};
+    TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
 
     uint32_t z_stride_write = num_tiles_per_z / num_chunks;
     uint32_t y_stride_write = per_core_tiles_y * (num_cores_c / num_chunks);
-    std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)tile_dtype_is_bfloat16,
-                                                      (std::uint32_t)out_is_dram,
+    std::vector<uint32_t> writer_compile_time_args = {
+        (std::uint32_t)per_core_tiles_x,  // out_num_tiles_per_tensor
+        (std::uint32_t)per_core_tiles_y,  // out_num_tiles_per_tensor
 
-                                                      (std::uint32_t)per_core_tiles_x,  // out_num_tiles_per_tensor
-                                                      (std::uint32_t)per_core_tiles_y,  // out_num_tiles_per_tensor
-
-                                                      (std::uint32_t)(z / num_cores_z),
-                                                      (std::uint32_t)z_stride_write,
-                                                      (std::uint32_t)y_stride_write
+        (std::uint32_t)(z / num_cores_z),
+        (std::uint32_t)z_stride_write,
+        (std::uint32_t)y_stride_write
 
     };
+    TensorAccessorArgs(*out0_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(*out1_buffer).append_to(writer_compile_time_args);
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

@@ -122,7 +122,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         padded_Y_diff_blocks,
         num_leftover_Y,
         output_x,
-        unpadded_stick_size,
         padded_stick_size,
         num_blocks_w_input,
         num_blocks_w_output,
@@ -133,17 +132,12 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     std::vector<uint32_t> reader_compile_time_args;
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
-    bool out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    uint32_t stick_size = unpadded_stick_size;
-    bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)out_is_dram,
-        (std::uint32_t)stick_size_is_power_of_two,
-        (std::uint32_t)log2_stick_size,
         (std::uint32_t)((
             input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32 or
-            input_cb_data_format == tt::DataFormat::Int32))};
+            input_cb_data_format == tt::DataFormat::Int32)),
+        unpadded_stick_size};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -356,23 +350,15 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
         ReaderDataMovementConfig(reader_compile_time_args));
 
     // writer
-
-    uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t stick_size = unpadded_row_size_bytes;
-    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
-
     uint32_t total_num_rows = output.logical_shape()[-2];
-    std::map<std::string, std::string> writer_defines = {
-        {"STICK_SIZE_IS_POW2", std::to_string((uint32_t)(stick_size_is_power_of_two))}};
-
+    std::vector<uint32_t> writer_ct_args = {total_num_rows, third_dim, TILE_HEIGHT, unpadded_row_size_bytes};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
         "writer_unary_stick_layout_wh_multicore.cpp",
         all_cores,
-        WriterDataMovementConfig(
-            {out_is_dram, log2_stick_size, total_num_rows, third_dim, TILE_HEIGHT}, writer_defines));
+        WriterDataMovementConfig(writer_ct_args));
 
     // compute
     bool use_pack_kernel = true;
@@ -463,7 +449,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
         //  writer runtime args
         std::vector<uint32_t> writer_rt_args = {
             dst_buffer->address(),
-            unpadded_row_size_bytes,
             TILE_WIDTH * el_size * single_block_size_row_arg,
             start_row_id,
             start_column_id,
@@ -581,21 +566,16 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
         ReaderDataMovementConfig(reader_compile_time_args));
 
     // writer
-
-    uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t stick_size = unpadded_row_size_bytes;
-    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
-
     uint32_t total_num_rows = output.logical_shape()[-2];
 
+    std::vector<uint32_t> writer_ct_args = {total_num_rows, ncores, third_dim, TILE_WIDTH, unpadded_row_size_bytes};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
         "writer_unary_stick_layout_col_multicore.cpp",
         all_cores,
-        WriterDataMovementConfig(
-            {out_is_dram, stick_size_is_power_of_two, log2_stick_size, total_num_rows, ncores, third_dim, TILE_WIDTH}));
+        WriterDataMovementConfig(writer_ct_args));
 
     // compute
 
@@ -636,7 +616,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
         //  writer runtime args
         std::vector<uint32_t> writer_rt_args = {
             dst_buffer->address(),
-            unpadded_row_size_bytes,
             i,
             size_per_row_per_block,
             number_blocks_per_core,
@@ -761,24 +740,18 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
 
     /** writer
      */
-
-    uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t stick_size = unpadded_row_size_bytes;
-    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
-
+    std::vector<uint32_t> writer_ct_args = {
+        (std::uint32_t)(input_cb_data_format == tt::DataFormat::Float32 or
+                        input_cb_data_format == tt::DataFormat::UInt32 or
+                        input_cb_data_format == tt::DataFormat::Int32),
+        unpadded_row_size_bytes};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_multicore.cpp",
         all_cores,
-        WriterDataMovementConfig(
-            {out_is_dram,
-             stick_size_is_power_of_two,
-             log2_stick_size,
-             (std::uint32_t)(input_cb_data_format == tt::DataFormat::Float32 or
-                             input_cb_data_format == tt::DataFormat::UInt32 or
-                             input_cb_data_format == tt::DataFormat::Int32)}));
+        WriterDataMovementConfig(writer_ct_args));
 
     /** compute
      */
@@ -829,7 +802,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
         // writer runtime args
         std::vector<uint32_t> writer_rt_args = {
             dst_buffer->address(),
-            unpadded_row_size_bytes,
             padded_row_size_bytes,
             row_start_id,
             static_cast<unsigned int>(assignment.size()),
