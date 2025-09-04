@@ -40,15 +40,15 @@ enum class PortType {
 };
 
 struct AsicChannel {
-    uint32_t asic_location;
-    ChanId channel_id;
+    uint32_t asic_location = 0;
+    ChanId channel_id{0};
 
     auto operator<=>(const AsicChannel& other) const = default;
 };
 
 struct Port {
-    PortType port_type;
-    PortId port_id;
+    PortType port_type = PortType::TRACE;
+    PortId port_id{0};
 };
 
 class Board {
@@ -87,7 +87,7 @@ protected:
     std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>> internal_connections_;
 
     std::unordered_map<AsicChannel, Port> asic_to_port_map_;
-    tt::umd::BoardType board_type_;
+    tt::umd::BoardType board_type_ = tt::umd::BoardType::UNKNOWN;
     std::unordered_set<uint32_t> asic_locations_;
 };
 

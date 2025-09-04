@@ -29,13 +29,13 @@ struct Host {
     std::string hostname;
     std::string hall;
     std::string aisle;
-    uint32_t rack;
-    uint32_t shelf_u;
+    uint32_t rack = 0;
+    uint32_t shelf_u = 0;
 };
 
 struct LogicalChannelEndpoint {
-    HostId host_id;
-    TrayId tray_id;
+    HostId host_id{0};
+    TrayId tray_id{0};
     AsicChannel asic_channel;
 
     auto operator<=>(const LogicalChannelEndpoint& other) const = default;
@@ -43,9 +43,9 @@ struct LogicalChannelEndpoint {
 
 struct PhysicalChannelEndpoint {
     std::string hostname;
-    TrayId tray_id;
-    uint32_t asic_location;
-    tt::scaleout_tools::ChanId channel_id;
+    TrayId tray_id{0};
+    uint32_t asic_location = 0;
+    ChanId channel_id{0};
 
     auto operator<=>(const PhysicalChannelEndpoint& other) const = default;
 };
@@ -53,10 +53,10 @@ struct PhysicalChannelEndpoint {
 struct PhysicalPortEndpoint {
     std::string hostname;
     std::string aisle;
-    uint32_t rack;
-    uint32_t shelf_u;
-    PortType port_type;
-    PortId port_id;
+    uint32_t rack = 0;
+    uint32_t shelf_u = 0;
+    PortType port_type = PortType::QSFP;
+    PortId port_id{0};
 
     auto operator<=>(const PhysicalPortEndpoint& other) const = default;
 };
@@ -70,7 +70,7 @@ using PhysicalChannelConnection = std::pair<PhysicalChannelEndpoint, PhysicalCha
 
 struct Node {
     std::unordered_map<TrayId, Board> boards;
-    HostId host_id = HostId(0);
+    HostId host_id{0};
     // Board-to-board connections within this node: PortType -> [(tray_id, port_id) <-> (tray_id, port_id)]
     using PortEndpoint = std::pair<TrayId, PortId>;
     using PortConnection = std::pair<PortEndpoint, PortEndpoint>;
