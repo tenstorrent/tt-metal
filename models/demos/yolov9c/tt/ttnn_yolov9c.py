@@ -6,6 +6,7 @@ import math
 
 import ttnn
 from models.experimental.yolo_common.yolo_utils import concat, determine_num_cores, get_core_grid_from_num_cores
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 def interleaved_to_sharded(x):
@@ -51,6 +52,9 @@ class TtYOLOv9cConv2D:
         deallocate_activation=False,
         conv_transpose=False,
         enable_autopad=False,
+        core_count=None,
+        override_sharding_config=False,
+        enable_weights_double_buffer=False,
     ):
         self.is_detect = is_detect
         self.is_dfl = is_dfl
@@ -68,23 +72,35 @@ class TtYOLOv9cConv2D:
         self.output_padding = conv.output_padding if conv_transpose else None
         self.enable_autopad = enable_autopad
         self.activation_dtype = activation_dtype
+        self.core_count = core_count
+        self.override_sharding_config = override_sharding_config
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
-            math_approx_mode=False,
+            math_approx_mode=True,
         )
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
-            enable_act_double_buffer=False,
-            enable_split_reader=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=enable_weights_double_buffer,
+            enable_split_reader=True,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
         )
+        if self.core_count is not None:
+            shard_grid = get_shard_grid_from_num_cores(self.core_count, device)
+
+            self.conv_config.core_grid = shard_grid
+            self.conv_config.override_sharding_config = True
+
+        if self.override_sharding_config:
+            self.override_sharding_config = True
+
         if config_override is None and conv.in_channels == 3:
             config_override = {"act_block_h": 64}
         if config_override and "act_block_h" in config_override:
@@ -239,6 +255,7 @@ class TtnnRepncspelan4:
             activation="silu",
             shard_layout=shard_layout,
             use_1d_systolic_array=use_1d_systolic_array,
+            enable_weights_double_buffer=True,
         )
         self.k1 = TtnnRepcsp(device, parameter.cv2[0], conv_pt.cv2[0])
         self.k2 = TtYOLOv9cConv2D(
@@ -248,7 +265,13 @@ class TtnnRepncspelan4:
         self.k4 = TtYOLOv9cConv2D(
             device=device, conv=parameter.cv3[1].conv, conv_pth=conv_pt.cv3[1].conv, activation="silu"
         )
-        self.cv4 = TtYOLOv9cConv2D(device=device, conv=parameter.cv4.conv, conv_pth=conv_pt.cv4.conv, activation="silu")
+        self.cv4 = TtYOLOv9cConv2D(
+            device=device,
+            conv=parameter.cv4.conv,
+            conv_pth=conv_pt.cv4.conv,
+            activation="silu",
+            enable_weights_double_buffer=True,
+        )
 
     def __call__(self, x):
         x = self.cv1(x)
@@ -286,6 +309,7 @@ class TtnnADown:
             conv_pth=conv_pt.cv1.conv,
             activation="silu",
             use_1d_systolic_array=use_1d_systolic_array,
+            core_count=64,
         )
         self.cv2 = TtYOLOv9cConv2D(
             device=device,
@@ -407,6 +431,7 @@ class TtnnDetect:
             conv_pth=conv_pt.cv2[0][0].conv,
             activation="silu",
             is_detect=True,
+            enable_weights_double_buffer=True,
         )
         self.cv2_0_1 = TtYOLOv9cConv2D(
             device=device,
@@ -414,9 +439,14 @@ class TtnnDetect:
             conv_pth=conv_pt.cv2[0][1].conv,
             activation="silu",
             is_detect=True,
+            enable_weights_double_buffer=True,
         )
         self.cv2_0_2 = TtYOLOv9cConv2D(
-            conv=parameter.cv2[0][2], conv_pth=conv_pt.cv2[0][2], device=device, is_detect=True
+            conv=parameter.cv2[0][2],
+            conv_pth=conv_pt.cv2[0][2],
+            device=device,
+            is_detect=True,
+            enable_weights_double_buffer=True,
         )
 
         self.cv2_1_0 = TtYOLOv9cConv2D(
@@ -425,6 +455,7 @@ class TtnnDetect:
             conv_pth=conv_pt.cv2[1][0].conv,
             activation="silu",
             is_detect=True,
+            enable_weights_double_buffer=True,
         )
         self.cv2_1_1 = TtYOLOv9cConv2D(
             device=device,
@@ -432,9 +463,14 @@ class TtnnDetect:
             conv_pth=conv_pt.cv2[1][1].conv,
             activation="silu",
             is_detect=True,
+            enable_weights_double_buffer=True,
         )
         self.cv2_1_2 = TtYOLOv9cConv2D(
-            conv=parameter.cv2[1][2], conv_pth=conv_pt.cv2[1][2], device=device, is_detect=True
+            conv=parameter.cv2[1][2],
+            conv_pth=conv_pt.cv2[1][2],
+            device=device,
+            is_detect=True,
+            enable_weights_double_buffer=True,
         )
 
         self.cv2_2_0 = TtYOLOv9cConv2D(
@@ -443,6 +479,7 @@ class TtnnDetect:
             conv_pth=conv_pt.cv2[2][0].conv,
             activation="silu",
             is_detect=True,
+            enable_weights_double_buffer=True,
         )
         self.cv2_2_1 = TtYOLOv9cConv2D(
             device=device,
@@ -450,9 +487,14 @@ class TtnnDetect:
             conv_pth=conv_pt.cv2[2][1].conv,
             activation="silu",
             is_detect=True,
+            enable_weights_double_buffer=True,
         )
         self.cv2_2_2 = TtYOLOv9cConv2D(
-            conv=parameter.cv2[2][2], conv_pth=conv_pt.cv2[2][2], device=device, is_detect=True
+            conv=parameter.cv2[2][2],
+            conv_pth=conv_pt.cv2[2][2],
+            device=device,
+            is_detect=True,
+            enable_weights_double_buffer=True,
         )
 
         self.cv3_0_0 = TtYOLOv9cConv2D(
@@ -461,6 +503,7 @@ class TtnnDetect:
             conv_pth=conv_pt.cv3[0][0].conv,
             activation="silu",
             is_detect=True,
+            enable_weights_double_buffer=True,
         )
         self.cv3_0_1 = TtYOLOv9cConv2D(
             device=device,
@@ -468,9 +511,14 @@ class TtnnDetect:
             conv_pth=conv_pt.cv3[0][1].conv,
             activation="silu",
             is_detect=True,
+            enable_weights_double_buffer=True,
         )
         self.cv3_0_2 = TtYOLOv9cConv2D(
-            conv=parameter.cv3[0][2], conv_pth=conv_pt.cv3[0][2], device=device, is_detect=True
+            conv=parameter.cv3[0][2],
+            conv_pth=conv_pt.cv3[0][2],
+            device=device,
+            is_detect=True,
+            enable_weights_double_buffer=True,
         )
 
         self.cv3_1_0 = TtYOLOv9cConv2D(
@@ -479,6 +527,7 @@ class TtnnDetect:
             conv_pth=conv_pt.cv3[1][0].conv,
             activation="silu",
             is_detect=True,
+            enable_weights_double_buffer=True,
         )
         self.cv3_1_1 = TtYOLOv9cConv2D(
             device=device,
@@ -486,9 +535,14 @@ class TtnnDetect:
             conv_pth=conv_pt.cv3[1][1].conv,
             activation="silu",
             is_detect=True,
+            enable_weights_double_buffer=True,
         )
         self.cv3_1_2 = TtYOLOv9cConv2D(
-            conv=parameter.cv3[1][2], conv_pth=conv_pt.cv3[1][2], device=device, is_detect=True
+            conv=parameter.cv3[1][2],
+            conv_pth=conv_pt.cv3[1][2],
+            device=device,
+            is_detect=True,
+            enable_weights_double_buffer=True,
         )
 
         self.cv3_2_0 = TtYOLOv9cConv2D(
@@ -497,6 +551,7 @@ class TtnnDetect:
             conv_pth=conv_pt.cv3[2][0].conv,
             activation="silu",
             is_detect=True,
+            enable_weights_double_buffer=True,
         )
         self.cv3_2_1 = TtYOLOv9cConv2D(
             device=device,
@@ -504,11 +559,22 @@ class TtnnDetect:
             conv_pth=conv_pt.cv3[2][1].conv,
             activation="silu",
             is_detect=True,
+            enable_weights_double_buffer=True,
         )
         self.cv3_2_2 = TtYOLOv9cConv2D(
-            conv=parameter.cv3[2][2], conv_pth=conv_pt.cv3[2][2], device=device, is_detect=True
+            conv=parameter.cv3[2][2],
+            conv_pth=conv_pt.cv3[2][2],
+            device=device,
+            is_detect=True,
+            enable_weights_double_buffer=True,
         )
-        self.dfl = TtYOLOv9cConv2D(conv=parameter.dfl.conv, conv_pth=conv_pt.dfl.conv, device=device, is_dfl=True)
+        self.dfl = TtYOLOv9cConv2D(
+            conv=parameter.dfl.conv,
+            conv_pth=conv_pt.dfl.conv,
+            device=device,
+            is_dfl=True,
+            enable_weights_double_buffer=True,
+        )
         self.anchors = conv_pt.anchors
         self.strides = conv_pt.strides
 
@@ -557,26 +623,25 @@ class TtnnDetect:
 
         ya = ttnn.permute(ya, (0, 2, 1))
         ya = ttnn.reshape(ya, (ya.shape[0], 4, 16, ya.shape[2]))
-        ya = ttnn.permute(ya, (0, 2, 1, 3))
 
-        ya = ttnn.to_layout(ya, ttnn.TILE_LAYOUT)
-        ya = ttnn.softmax(ya, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ya = ttnn.permute(ya, (0, 2, 3, 1))
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+        ya = ttnn.softmax(ya, dim=2, compute_kernel_config=compute_kernel_config)
+        ya = ttnn.permute(ya, (0, 1, 3, 2))
 
         c = self.dfl(ya)
 
         if c.is_sharded():
             c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        c = ttnn.to_layout(c, layout=ttnn.ROW_MAJOR_LAYOUT)
-
         c = ttnn.permute(c, (0, 3, 1, 2))
         c = ttnn.reshape(c, (c.shape[0], 1, 4, int(c.shape[3] / 4)))
         c = ttnn.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))
         c1, c2 = c[:, :2, :], c[:, 2:4, :]
-
-        c1 = ttnn.to_layout(c1, layout=ttnn.TILE_LAYOUT)
-        c2 = ttnn.to_layout(c2, layout=ttnn.TILE_LAYOUT)
 
         c1 = self.anchors - c1
         c2 = self.anchors + c2
@@ -593,7 +658,6 @@ class TtnnDetect:
         z = ttnn.multiply(z, self.strides, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         yb = ttnn.permute(yb, (0, 2, 1))
-        yb = ttnn.to_layout(yb, ttnn.TILE_LAYOUT)
         yb = ttnn.sigmoid(yb)
 
         out = concat(1, False, z, yb)
@@ -702,8 +766,9 @@ class YoloV9:
             conv=parameters.conv_args[0].conv,
             conv_pth=parameters.model[0].conv,
             activation="silu",
-            config_override={"act_block_h": 32},
             deallocate_activation=True,
+            core_count=64,
+            enable_weights_double_buffer=True,
         )  # 0
         self.conv2 = TtYOLOv9cConv2D(
             device=device,
