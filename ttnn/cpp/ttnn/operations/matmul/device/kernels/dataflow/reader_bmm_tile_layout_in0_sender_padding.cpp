@@ -155,20 +155,19 @@ void kernel_main() {
 
         for (uint32_t bB = 0; bB < batchB_lim; ++bB) {
             if constexpr (batchB > 0) {
-                const auto is_batch_valid =
-                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[bB] != 0;
+                volatile auto is_batch_valid =
+                    ((reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity))[bB]) != 0;
 
                 if constexpr (get_batch_from_reader) {
 #ifndef SKIP_MCAST
                     // First broadcast this to other cores
                     noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
-                    noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, is_batch_valid ? VALID : IGNORE_BATCH);
-                    ckernel::wait(100);
                     noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
-                    ckernel::wait(400);
+                    noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, is_batch_valid ? VALID : IGNORE_BATCH);
+                    ckernel::wait(500);
                     noc_semaphore_set_multicast(
                         in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);
-                    ckernel::wait(1);
+                    noc_async_writes_flushed();
                     // Reset the semaphore value to VALID
                     noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, VALID);
 #endif
