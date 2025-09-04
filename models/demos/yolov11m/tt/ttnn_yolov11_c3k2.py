@@ -17,7 +17,6 @@ class TtnnC3k2:
         if is_bk_enabled:
             self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1, reshard=reshard)
             self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)
-            import pdb; pdb.set_trace()
             self.k = TtnnBottleneck(device, parameter[0], conv_pt.m[0])
         else:
             self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1, reshard=reshard)
