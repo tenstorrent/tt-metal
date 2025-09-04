@@ -331,40 +331,6 @@ WhereBroadcastType get_broadcast_type(
         tt::LogOp, "TST broadcast detection - predicate shape: {}, false shape: {}", predicate_shape, false_shape);
     log_debug(tt::LogOp, "same_width: {}, same_height: {}", same_width, same_height);
 
-    // Check for outer broadcast first: if last two dimensions match exactly,
-    // it's outer broadcast (broadcasting in dimensions beyond -2)
-    if (same_height && same_width) {
-        // For outer broadcast, we need to check if the shapes are compatible
-        int pred_rank = predicate_shape.rank();
-        int false_rank = false_shape.rank();
-        int min_rank = std::min(pred_rank, false_rank);
-        bool can_broadcast = true;
-
-        // Check dimensions from the end
-        for (int i = 0; i < min_rank; ++i) {
-            int pred_dim = predicate_shape[pred_rank - 1 - i];
-            int false_dim = false_shape[false_rank - 1 - i];
-
-            // For outer broadcast, we only need exact match in the last 2 dims (already checked)
-            // For other dims, standard broadcast rules apply (dims must be equal or 1)
-            if (i >= 2) {  // Checking dims beyond height and width
-                if (pred_dim != false_dim && pred_dim != 1 && false_dim != 1) {
-                    can_broadcast = false;
-                    break;
-                }
-            }
-        }
-
-        // If one tensor has more dimensions, those dimensions can be any value (implicit broadcast)
-        // This is the standard broadcasting rule where missing dimensions are treated as 1
-        if (can_broadcast) {
-            log_debug(tt::LogOp, "Detected OUTER_BCAST for TST");
-            return WhereBroadcastType::OUTER_BCAST;
-        } else {
-            log_debug(tt::LogOp, "OUTER_BCAST compatibility check failed for TST");
-        }
-    }
-
     // Get dimension sizes
     auto pred_w = predicate_shape[-1];
     auto false_w = false_shape[-1];
