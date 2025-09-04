@@ -33,6 +33,7 @@ class TtCSPBepBackbone:
             conv=model_params.ERBlock_2[0].block.conv,
             conv_pth=parameters.ERBlock_2[0].block.conv,
             activation="silu",
+            deallocate_activation=True,
         )
         self.erblock2_1 = TtBepC3(
             device,
