@@ -84,10 +84,7 @@ class Yolov11Conv2D:
         kernel_size = [self.kernel_size[0], self.kernel_size[1]]
         stride = [self.stride[0], self.stride[1]]
         padding = [self.padding[0], self.padding[1]]
-        print(f"DEBUG Yolov11Conv2D: Input shape = {x.shape}")
-        print(f"DEBUG Yolov11Conv2D: Weight shape = {self.weight.shape}")
-        print(f"DEBUG Yolov11Conv2D: in_channels = {self.in_channels}, out_channels = {self.out_channels}")
-        print(f"DEBUG Yolov11Conv2D: input_height = {input_height}, input_width = {input_width}")
+
         [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,

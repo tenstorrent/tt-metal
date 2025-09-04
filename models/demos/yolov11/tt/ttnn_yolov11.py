@@ -72,7 +72,6 @@ class TtnnYoloV11:
             x = ttnn.interleaved_to_sharded(x, shardspec)
         x = ttnn.upsample(x, scale_factor=2, memory_config=x.memory_config())
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
-        import pdb; pdb.set_trace()
         x = sharded_concat_2(x, x6)
         ttnn.deallocate(x6)
         x = self.c3k2_5(self.device, x)
