@@ -115,6 +115,8 @@ void py_module(py::module& module) {
         &ttnn::operations::core::from_device,
         py::arg("tensor"),
         py::arg("blocking") = true,
+        py::kw_only(),
+        py::arg("queue_id") = ttnn::DefaultQueueId,
         R"doc(
             Copy tensor from device to host.
 

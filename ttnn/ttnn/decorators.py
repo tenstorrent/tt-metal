@@ -114,7 +114,7 @@ def command_queue(cq_id: int):
     Example:
         with ttnn.command_queue(1):
             result = ttnn.some_operation(tensor)  # Will use cq_id 1
-            result2 = ttnn.other_operation(tensor, cq_id=0)  # Will use cq_id 0 (overrides context)
+            result2 = ttnn.other_operation(tensor, queue_id=0)  # Will use cq_id 0 (overrides context)
     """
     if cq_id is None:
         raise ValueError("cq_id cannot be None in command_queue context")
@@ -371,6 +371,8 @@ class FastOperation:
         cq_id = None
         if "queue_id" in function_kwargs:
             cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
 
         if cq_id is None:
             result = self.function(*function_args, **function_kwargs)
@@ -560,6 +562,8 @@ class Operation:
                 cq_id = None
                 if "queue_id" in function_kwargs:
                     cq_id = function_kwargs.pop("queue_id")
+                elif "cq_id" in function_kwargs:
+                    cq_id = function_kwargs.pop("cq_id")
 
                 for hook in PRE_OPERATION_HOOKS:
                     hook_return_value = hook(self, function_args, function_kwargs)
