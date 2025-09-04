@@ -183,7 +183,7 @@ std::optional<std::pair<uint64_t, chip_id_t>> PinnedMemoryImpl::get_noc_addr(chi
     if (!noc_addr_opt.has_value()) {
         return std::nullopt;
     }
-    fmt::println(stderr, "noc_addr_opt: {}", noc_addr_opt.value());
+    //fmt::println(stderr, "noc_addr_opt: {}", noc_addr_opt.value());
 
     // Return NOC address and the MMIO device ID where it's usable from
     return std::make_pair(noc_addr_opt.value() + static_cast<uint64_t>(host_offset_), mmio_device_id);
