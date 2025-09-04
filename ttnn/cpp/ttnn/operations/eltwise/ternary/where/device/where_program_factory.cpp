@@ -954,15 +954,16 @@ void WhereDeviceOperation::WhereProgramFactory::override_runtime_arguments(
         broadcast_type = get_broadcast_type(
             predicate_tensor.logical_shape(),
             value_true_tensor.value().logical_shape(),
-            value_false_tensor.value().logical_shape());
+            value_false_tensor.value().logical_shape(),
+            WhereVariant::TTT);
     }
     if (operation_attributes.where_variant == WhereVariant::TTS) {
-        broadcast_type =
-            get_broadcast_type(predicate_tensor.logical_shape(), value_true_tensor.value().logical_shape());
+        broadcast_type = get_broadcast_type(
+            predicate_tensor.logical_shape(), value_true_tensor.value().logical_shape(), WhereVariant::TTS);
     }
     if (operation_attributes.where_variant == WhereVariant::TST) {
-        broadcast_type =
-            get_broadcast_type(predicate_tensor.logical_shape(), value_false_tensor.value().logical_shape());
+        broadcast_type = get_broadcast_type(
+            predicate_tensor.logical_shape(), WhereVariant::TST, value_false_tensor.value().logical_shape());
     }
 
     CMAKE_UNIQUE_NAMESPACE::set_or_update_runtime_arguments(
