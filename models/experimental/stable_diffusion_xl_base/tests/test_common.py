@@ -516,8 +516,6 @@ def run_tt_image_gen(
     profiler.start("image_gen")
     profiler.start("denoising_loop")
 
-    ag_semaphore_count = 0
-
     for i, _ in tqdm(enumerate(tt_timesteps), total=len(tt_timesteps)):
         unet_outputs = []
         if tid is None or capture_trace:
@@ -542,14 +540,13 @@ def run_tt_image_gen(
                     noise_pred,
                     dim=0,
                     persistent_output_tensor=persistent_buffer,
-                    multi_device_global_semaphore=semaphores[ag_semaphore_count % len(semaphores)],
+                    multi_device_global_semaphore=semaphores,
                     num_links=1,
                     cluster_axis=0,
                     mesh_device=ttnn_device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     topology=ttnn.Topology.Linear,
                 )
-                ag_semaphore_count += 1
                 noise_pred = noise_pred[..., :4]
                 noise_pred_uncond, noise_pred_text = ttnn.unsqueeze(noise_pred[0], 0), ttnn.unsqueeze(noise_pred[1], 0)
             else:
