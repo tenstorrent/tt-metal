@@ -330,5 +330,62 @@ TEST_F(Fabric2DFixture, UnicastConn_SweepTensorSize) {
     std::cout << "[perf] wrote " << results.size() << " points -> " << csv_name << "\n";
 }
 
+TEST_F(Fabric2DFixture, UnicastConn_HeatmapDstCore) {
+    PerfParams base;
+    base.mesh_id = 0;
+    base.src_chip = 0;
+    base.dst_chip = 1;
+    base.use_dram_dst = false;
+    base.page_size = 2048;
+    base.sender_core = {0, 0};
+    base.receiver_core = {0, 0};
+    base.tensor_bytes = 64 * base.page_size;
+
+    // Discover available worker cores on the destination device
+    const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
+    tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{base.mesh_id}, base.dst_chip};
+    chip_id_t dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
+    auto* dst_dev = find_device_by_id(dst_phys);
+    ASSERT_NE(dst_dev, nullptr);
+
+    auto dst_workers =
+        dst_dev->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::SubDeviceId{0});
+
+    // CSV: (x,y,ms,gbps)
+    std::filesystem::create_directories("artifacts");
+    const auto ts =
+        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    const std::string csv_name = fmt::format(
+        "artifacts/unicast_dstcore_heatmap_m{}_s{}_d{}_p{}_B{}_t{}.csv",
+        base.mesh_id,
+        base.src_chip,
+        base.dst_chip,
+        base.page_size,
+        base.tensor_bytes,
+        ts);
+
+    std::ofstream ofs(csv_name);
+    ofs << std::fixed << std::setprecision(6);
+    ofs << "x,y,ms,gbps\n";
+
+    // Iterate each rectangular CoreRange, then each CoreCoord within it
+    for (const auto& rect : dst_workers.ranges()) {
+        for (auto it = rect.begin(); it != rect.end(); ++it) {
+            CoreCoord rc = *it;  // logical dest worker core (x,y)
+            PerfParams p = base;
+            p.receiver_core = rc;
+
+            // per-core warmup
+            (void)RunUnicastConnWithParams(this, p);
+
+            auto r = RunUnicastConnWithParams(this, p);
+            ofs << rc.x << "," << rc.y << "," << r.ms << "," << r.gbps << "\n";
+        }
+    }
+
+    ofs.close();
+    std::cout << "[perf] wrote heatmap CSV -> " << csv_name << "\n";
+}
+
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric
