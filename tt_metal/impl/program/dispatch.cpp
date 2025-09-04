@@ -120,8 +120,6 @@ DispatchWriteOffsets get_dispatch_write_offset(HalProgrammableCoreType core_type
     }
 }
 
-};  // namespace
-
 uint32_t configure_rta_offsets_for_kernel_groups(
     uint32_t programmable_core_type_index,
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
@@ -217,6 +215,8 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     }
     return total_crta_size;
 }
+
+};  // namespace
 
 uint32_t finalize_rt_args(
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
