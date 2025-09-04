@@ -46,6 +46,8 @@ def golden_global_avg_pool2d(input_tensor: ttnn.Tensor):
 
 
 ttnn.attach_golden_function(ttnn.global_avg_pool2d, golden_global_avg_pool2d)
+
+
 def prepare_grid_sample_grid(*args, **kwargs):
     """
     Precomputes grid sample data for optimized kernel execution.

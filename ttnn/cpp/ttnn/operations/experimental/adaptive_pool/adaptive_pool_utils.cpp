@@ -11,6 +11,8 @@
 namespace ttnn {
 namespace operations::experimental::adaptive_pool {
 
+// Kernels dimension (width or height) can be only uniform and give correct result by padding the border elements
+// Therefore for feasibility of making kernels uniform we need to make sure that the middle elements already are
 bool are_middle_kernels_uniform(const std::vector<uint32_t>& kernels) {
     if (kernels.size() <= 2) {
         return true;
@@ -26,7 +28,9 @@ bool are_middle_kernels_uniform(const std::vector<uint32_t>& kernels) {
     return true;
 }
 
-std::pair<std::vector<uint32_t>, std::vector<uint32_t>> analyze_adaptive_kernels(
+// Helper function designed to generate the kernel sizes for each output elements the same way it is
+// calculated in pytorch implementation
+std::pair<std::vector<uint32_t>, std::vector<uint32_t>> calculate_actual_kernel_patterns(
     uint32_t input_h, uint32_t input_w, uint32_t output_h, uint32_t output_w) {
     std::vector<uint32_t> h_kernels, w_kernels;
 
@@ -47,12 +51,37 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> analyze_adaptive_kernels
     return {h_kernels, w_kernels};
 }
 
+// Helper function designed to generate the stride values for each output elements the same way it is
+// calculated in pytorch implementation
+std::vector<uint32_t> calculate_actual_stride_patterns(
+    uint32_t input_size,
+    uint32_t output_size,
+    uint32_t kernel_size,
+    uint32_t stride,
+    uint32_t pad_before,
+    uint32_t pad_after) {
+    std::vector<uint32_t> actual_strides;
+
+    // Calculate the actual start positions in the padded input for each output
+    for (uint32_t out_idx = 1; out_idx < output_size; out_idx++) {
+        uint32_t prev_start = (out_idx - 1) * stride;
+        uint32_t curr_start = out_idx * stride;
+        actual_strides.push_back(curr_start - prev_start);
+    }
+
+    return actual_strides;
+}
+
+// Adaptive pool params carry the information which is needed by pool2d but not given as arguments of the adaptive pool
+// op This function calculates the kernel sizes the same way they would be produced by pytorch, analyzes the possibility
+// to make them uniform with padding if possible and needed, padds the input tesnor and then for the padded tensor
+// calculates strides to check if those would be uniform as well
 AdaptivePoolingParams calculate_adaptive_pool_params(
     uint32_t input_h, uint32_t input_w, uint32_t output_h, uint32_t output_w) {
     AdaptivePoolingParams params = {};
 
     // Get kernel patterns
-    auto [h_kernels, w_kernels] = analyze_adaptive_kernels(input_h, input_w, output_h, output_w);
+    auto [h_kernels, w_kernels] = calculate_actual_kernel_patterns(input_h, input_w, output_h, output_w);
 
     // Calculate basic uniform parameters
     uint32_t base_stride_h = input_h / output_h;
@@ -148,48 +177,15 @@ bool are_borders_correctable_with_padding(const std::vector<uint32_t>& kernels) 
     return (first <= middle_value) && (last <= middle_value);
 }
 
-// Calculate actual stride pattern between consecutive output positions (like PyTorch)
-std::vector<uint32_t> calculate_stride_pattern(uint32_t input_size, uint32_t output_size) {
-    std::vector<uint32_t> strides;
-
-    for (uint32_t out_idx = 1; out_idx < output_size; out_idx++) {
-        uint32_t prev_start = ((out_idx - 1) * input_size) / output_size;
-        uint32_t curr_start = (out_idx * input_size) / output_size;
-        strides.push_back(curr_start - prev_start);
-    }
-
-    return strides;
-}
-
-// Calculate the actual stride pattern that the fixed pooling parameters will produce
-std::vector<uint32_t> calculate_actual_pooling_strides(
-    uint32_t input_size,
-    uint32_t output_size,
-    uint32_t kernel_size,
-    uint32_t stride,
-    uint32_t pad_before,
-    uint32_t pad_after) {
-    std::vector<uint32_t> actual_strides;
-
-    // Calculate the actual start positions in the padded input for each output
-    for (uint32_t out_idx = 1; out_idx < output_size; out_idx++) {
-        uint32_t prev_start = (out_idx - 1) * stride;
-        uint32_t curr_start = out_idx * stride;
-        actual_strides.push_back(curr_start - prev_start);
-    }
-
-    return actual_strides;
-}
-
 // Check if the calculated pooling parameters produce uniform behavior
 bool validate_pooling_params_uniformity(
     const AdaptivePoolingParams& params, uint32_t input_h, uint32_t input_w, uint32_t output_h, uint32_t output_w) {
     // Check height dimension
-    auto h_actual_strides = calculate_actual_pooling_strides(
+    auto h_actual_strides = calculate_actual_stride_patterns(
         input_h, output_h, params.kernel_size[0], params.stride[0], params.padding[0], params.padding[1]);
 
     // Check width dimension
-    auto w_actual_strides = calculate_actual_pooling_strides(
+    auto w_actual_strides = calculate_actual_stride_patterns(
         input_w, output_w, params.kernel_size[1], params.stride[1], params.padding[2], params.padding[3]);
 
     // All strides should be exactly the same (since we're using fixed stride)
@@ -210,7 +206,7 @@ bool validate_pooling_params_uniformity(
 
 // Validation function to check if adaptive pooling approach is feasible
 void validate_adaptive_pool_feasibility(uint32_t input_h, uint32_t input_w, uint32_t output_h, uint32_t output_w) {
-    auto [h_kernels, w_kernels] = analyze_adaptive_kernels(input_h, input_w, output_h, output_w);
+    auto [h_kernels, w_kernels] = calculate_actual_kernel_patterns(input_h, input_w, output_h, output_w);
 
     // Check kernel pattern correctability
     bool h_uniform_middle = are_middle_kernels_uniform(h_kernels);
