@@ -221,7 +221,7 @@ class ContextParallelConv3d:
             # pad_front = context_size // 2
             # pad_back = context_size - pad_front
 
-        if self.mesh_device.get_num_devices() == 1:
+        if self.parallel_config.time_parallel.factor == 1:
             # Single-device padding
             x_pad_NTHWC = self._causal_pad_input(x_NTHWC, pad_front, pad_back)
         else:
@@ -229,7 +229,7 @@ class ContextParallelConv3d:
             # Pad on first device
             halo_tensor = ttnn.squeeze(x_NTHWC, 0)
             halo_tensor = vae_neighbor_pad(
-                self.ccl_manager, halo_tensor, cluster_axis=1, dim=0, context_size=2, direction=0
+                self.ccl_manager, halo_tensor, cluster_axis=1, dim=0, padding_left=2, padding_right=0
             )
             x_pad_NTHWC = ttnn.unsqueeze(halo_tensor, 0)
 
