@@ -41,6 +41,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: ${{ inputs.fetch_depth }}
+          fetch-tags: true
       - uses: paulhatch/semantic-version@v5.4.0
         id: get-next-semantic-base-version
         with:
