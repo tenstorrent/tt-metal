@@ -17,6 +17,21 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
+
+  bh-nightly:
+    needs: build-artifact
+    uses: ./.github/workflows/blackhole-nightly-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        card_type: ["P100", "P150"]  # Cannot use P150b yet because CIv2 is using LFC and not MLPerf
+    secrets: inherit
+    with:
+      runner-label: ${{ matrix.card_type }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
   blackhole-multi-card-demo-tests:
     needs: build-artifact
     secrets: inherit
