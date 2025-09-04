@@ -303,3 +303,6 @@ dockerfile/upstream_test_images/ @tenstorrent/metalium-developers-infra
 
 # tt-train
 tt-train/** @dmakoviichuk-tt @rfurko-tt @ayerofieiev-tt
+
+# tt-telemetry
+tt_telemetry/** @btrzynadlowski-tt
