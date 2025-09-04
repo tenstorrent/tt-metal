@@ -1,4 +1,4 @@
-name: "[internal] TG nightly tests impl"
+name: "[internal] Galaxy nightly tests impl"
 
 on:
   workflow_call:
@@ -19,7 +19,7 @@ on:
       topology:
         required: false
         type: string
-        default: "config-tg"
+        default: "topology-6u"
 
 jobs:
   tg-nightly-tests:
