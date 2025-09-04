@@ -7,6 +7,10 @@ on:
         required: false
         default: false
         type: boolean
+  schedule:
+    # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
+    # dev testing and builds for beginning of work week
+    - cron: "0 0 * * *"
   push:
     branches: ["stable"]
 
@@ -62,7 +66,8 @@ jobs:
     with:
       fetch_depth: 0
       bump_each_commit: false
-      tag_type: ${{ needs.release-precheck.outputs.is-release-candidate == 'true' && 'rc' || '' }}
+      # Set tag_type to 'rc' for release candidate, '' for release, and 'dev' for all other branches
+      tag_type: ${{ (github.ref == 'refs/heads/stable') && (needs.release-precheck.outputs.is-release-candidate == 'true' && 'rc' || '') || 'dev' }}
       dry_run: ${{ inputs.dry_run }}
 
 
@@ -129,7 +134,7 @@ jobs:
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: ${{ github.ref != 'refs/heads/main' }}
+    if: ${{ github.ref == 'refs/heads/stable' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -176,7 +181,7 @@ jobs:
     ]
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
-    if: github.ref != 'refs/heads/main'
+    if: github.ref == 'refs/heads/stable'
     with:
       version: ${{ needs.create-tag.outputs.version }}
       tag-latest:  ${{ needs.release-precheck.outputs.is-release-candidate != 'true' }}
@@ -200,6 +205,43 @@ jobs:
       dry_run: ${{ inputs.dry_run }}
     secrets: inherit
 
+  publish-wheels:
+    name: "Publish wheels to internal PyPI"
+    needs: [create-tag, regression-testing]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.PYPI_ROLE }}
+          aws-region: ${{ secrets.PYPI_REGION }}
+
+      - name: Install s3pypi
+        run: |
+          pip install s3pypi
+
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
+          path: ./wheels
+
+      - name: Publish wheels to internal PyPI
+        if: ${{ !inputs.dry_run }}
+        run: |
+          found_wheel_files=$(find ./wheels -type f -name "*.whl" -exec realpath {} \;)
+          for wheel in $found_wheel_files; do
+            echo "Publishing wheel: $wheel"
+            s3pypi upload "$wheel" --put-root-index --bucket ${{ secrets.PYPI_BUCKET }}
+          done
+
   publish-to-pypi:
     name: >-
       Publish Python 🐍 distribution 📦 to PyPI
@@ -210,7 +252,7 @@ jobs:
       create-and-upload-draft-release
     ]
     runs-on: ubuntu-latest
-    if: github.ref != 'refs/heads/main'
+    if: github.ref == 'refs/heads/stable'
     environment:
       name: pypi
       url: https://pypi.org/project/ttnn/
