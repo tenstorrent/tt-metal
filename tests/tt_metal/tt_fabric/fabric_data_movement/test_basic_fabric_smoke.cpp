@@ -46,7 +46,7 @@ struct WorkerMemMap {
 };
 
 // Utility function reused across tests to get address params
-WorkerMemMap generate_worker_mem_map(tt_metal::IDevice* device, Topology topology) {
+WorkerMemMap generate_worker_mem_map(std::shared_ptr<tt_metal::distributed::MeshDevice> device, Topology topology) {
     constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
     constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
     constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
@@ -82,11 +82,11 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     }
 
     // Use first two devices for simple smoke test
-    auto* sender_device = devices[0];
-    auto* receiver_device = devices[1];
+    auto sender_device = devices[0];
+    auto receiver_device = devices[1];
 
-    auto src_physical_device_id = sender_device->id();
-    auto dst_physical_device_id = receiver_device->id();
+    auto src_physical_device_id = sender_device->get_devices()[0]->id();
+    auto dst_physical_device_id = receiver_device->get_devices()[0]->id();
 
     auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
     auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
@@ -187,7 +187,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     std::vector<uint32_t> receiver_status;
 
     tt_metal::detail::ReadFromDeviceL1(
-        sender_device,
+        sender_device->get_devices()[0],
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -195,7 +195,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
         CoreType::WORKER);
 
     tt_metal::detail::ReadFromDeviceL1(
-        receiver_device,
+        receiver_device->get_devices()[0],
         receiver_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
