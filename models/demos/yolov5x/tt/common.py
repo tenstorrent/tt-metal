@@ -16,8 +16,9 @@ def deallocate_tensors(*tensors):
 
 def interleaved_to_sharded(x):
     x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+    x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
     nhw = x.shape[0] * x.shape[1] * x.shape[2]
-    num_cores = determine_num_cores(nhw, int(math.sqrt(x.shape[2])))
+    num_cores = determine_num_cores(nhw, x.shape[2])
     core_grid = get_core_grid_from_num_cores(num_cores)
     shardspec = ttnn.create_sharded_memory_config_(
         x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR

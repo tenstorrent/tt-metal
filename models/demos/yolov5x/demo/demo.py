@@ -31,7 +31,7 @@ from models.utility_functions import disable_persistent_kernel_cache, run_for_wo
 @pytest.mark.parametrize(
     "source",
     [
-        "models/demos/yolov5x/demo/images/giraffe.jpg",
+        "models/demos/yolov5x/demo/images/bus.jpg",
     ],
 )
 @pytest.mark.parametrize(
