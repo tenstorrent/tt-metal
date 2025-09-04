@@ -554,10 +554,10 @@ class TT_CCL:
                 if not self.use_qwen_mlp
                 else {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                    "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                     "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF3": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
-                    "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                 }
             )
             for key, shape in buffers_dict.items():
@@ -1223,12 +1223,20 @@ def tt_distributed_rmsnorm(
     use_2d_grid = False
 
     # Run distributed rmsnorm part 1
+    if program_config is not None:
+        core_grid_ln, grid_offset = (10, 2), ttnn.CoreCoord(1, 0)
+        core_range = ttnn.CoreRange(
+            grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
+        )
+        inp = ttnn.to_memory_config(inp, ttnn.DRAM_MEMORY_CONFIG)
+        inp = ttnn.typecast(inp, ttnn.bfloat16, sub_core_grids=core_range)
     tt_stats = (
         ttnn.rms_norm_pre_all_gather(
             inp,
             compute_kernel_config=compute_kernel_config,
             program_config=program_config,
             dtype=ttnn.bfloat16,
+            use_2d_core_grid=use_2d_grid,
         )
         if program_config is not None
         else ttnn.rms_norm_pre_all_gather(
@@ -1237,10 +1245,22 @@ def tt_distributed_rmsnorm(
     )
 
     padded_shape = (1, 1, inp.shape[-2], 32)
-
-    tt_stats = ttnn.to_memory_config(tt_stats, memory_config=tt_stats.memory_config(), dtype=ttnn.bfloat16)
-    tt_stats_gathered = tt_ccl.line_all_gather(
-        tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="LAYERNORM"
+    # tt_stats_gathered = tt_ccl.line_all_gather(
+    #     tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="LAYERNORM"
+    # )
+    tt_stats_gathered = (
+        tt_ccl.line_all_gather(
+            tt_stats,
+            dim=3,
+            cluster_axis=1,
+            num_links=1,
+            memory_config=tt_ccl.all_gather_buffers.get("LAYERNORM", None).memory_config(),
+            buffer_key="LAYERNORM",
+        )
+        if program_config is not None
+        else tt_ccl.line_all_gather(
+            tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="LAYERNORM"
+        )
     )
     tt_stats.deallocate(True)
 
