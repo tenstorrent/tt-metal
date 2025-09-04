@@ -499,7 +499,7 @@ PortIdTable ControlPlane::generate_exit_node_port_id_table() {
             *my_mesh_id,
             *neighbor_mesh_id,
             exit_nodes.size());
-
+        std::unordered_map<uint64_t, RoutingDirection> curr_exit_node_direction;
         for (const auto& exit_node : exit_nodes) {
             // Determine which Fabric Node ID each exit node belongs to
             FabricNodeId exit_node_fabric_node_id(MeshId{0}, 0);
@@ -519,6 +519,7 @@ PortIdTable ControlPlane::generate_exit_node_port_id_table() {
             TT_FATAL(exit_node_fabric_node_id.mesh_id == my_mesh_id, "Exit node is not on my mesh");
 
             auto assoc_connection_hash = std::hash<tt::tt_metal::ExitNodeConnection>{}(exit_node);
+            auto exit_node_hash = (*exit_node.src_exit_node) + (*exit_node.dst_exit_node);
             auto src_eth_chan = exit_node.eth_conn.src_chan;
             auto exit_node_chip = exit_node_fabric_node_id.chip_id;
             for (const auto& [port_id, chip_id] : mesh_edge_ports_to_chip_id[*my_mesh_id]) {
@@ -527,11 +528,16 @@ PortIdTable ControlPlane::generate_exit_node_port_id_table() {
                     auto logical_chan_id = port_id.second;
                     auto port_tag = std::string(enchantum::to_string(port_direction)) + std::to_string(logical_chan_id);
                     // Assign this tag to the exit node if it is not already assigned
-                    if (assigned_port_tags.find(port_tag) == assigned_port_tags.end()) {
+                    bool valid_direction =
+                        curr_exit_node_direction.find(exit_node_hash) == curr_exit_node_direction.end() ||
+                        curr_exit_node_direction.at(exit_node_hash) == port_direction;
+                    if (assigned_port_tags.find(port_tag) == assigned_port_tags.end() && valid_direction) {
                         assigned_port_tags.insert(port_tag);
                         port_id_table[my_mesh_id][neighbor_mesh_id].push_back(
                             PortIdentifier{port_tag, assoc_connection_hash});
                         exit_node_directions_[exit_node_fabric_node_id][src_eth_chan] = port_direction;
+                        logical_port_to_eth_chan_[exit_node_fabric_node_id][port_tag] = src_eth_chan;
+                        curr_exit_node_direction[exit_node_hash] = port_direction;
                         break;
                     }
                 }
@@ -621,6 +627,7 @@ ControlPlane::pair_logical_intermesh_ports(PortIdTable& port_id_table, uint32_t 
                         if (dest_port.connection_hash == connection_hash) {
                             std::cout << "Connecting: " << *src_mesh << " " << src_port.port_tag << " and "
                                       << *dest_mesh << " " << dest_port.port_tag << std::endl;
+
                             intermesh_connections.push_back(
                                 {{*src_mesh, src_port.port_tag}, {*dest_mesh, dest_port.port_tag}});
                             intermesh_connections.push_back(
@@ -666,6 +673,22 @@ ControlPlane::pair_logical_intermesh_ports(PortIdTable& port_id_table, uint32_t 
         intermesh_connections = deserialize_connections_table_from_bytes(serialized_connections);
     }
     distributed_context.barrier();
+
+    const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
+    std::set<std::string> active_logical_ports;
+    for (const auto& connection : intermesh_connections) {
+        if (std::get<0>(connection).first == *my_mesh_id) {
+            active_logical_ports.insert(std::get<0>(connection).second);
+        }
+    }
+
+    for (const auto& [exit_node, port] : logical_port_to_eth_chan_) {
+        for (const auto& [port_tag, physical_chan] : port) {
+            if (active_logical_ports.find(port_tag) == active_logical_ports.end()) {
+                exit_node_directions_.at(exit_node).erase(physical_chan);
+            }
+        }
+    }
     return intermesh_connections;
 }
 
@@ -1275,25 +1298,11 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
             }
         }
     }
-    // for (const auto& [exit_node_fabric_node_id, exit_node_directions] : this->exit_node_directions_) {
-    //     for (const auto& [src_eth_chan, port_direction] : exit_node_directions) {
-    //         this->assign_direction_to_fabric_eth_chan(exit_node_fabric_node_id, src_eth_chan, port_direction);
-    //     }
-    // }
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    for (std::uint32_t mesh_id_val = 0; mesh_id_val < inter_mesh_connectivity.size(); mesh_id_val++) {
-        MeshId mesh_id{mesh_id_val};
-        if (this->is_local_mesh(mesh_id)) {
-            const auto& local_mesh_chip_id_container =
-                this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
-            for (const auto& [_, fabric_chip_id] : local_mesh_chip_id_container) {
-                const auto fabric_node_id = FabricNodeId(mesh_id, fabric_chip_id);
-                if (*(distributed_context.size()) > 1) {
-                    this->assign_intermesh_link_directions_to_remote_host(fabric_node_id);
-                } else {
-                    this->assign_intermesh_link_directions_to_local_host(fabric_node_id);
-                }
-            }
+    for (const auto& [exit_node_fabric_node_id, exit_node_directions] : this->exit_node_directions_) {
+        for (const auto& [src_eth_chan, port_direction] : exit_node_directions) {
+            std::cout << "Assigning direction to " << exit_node_fabric_node_id << " for eth chan " << +src_eth_chan
+                      << " in direction " << static_cast<int>(port_direction) << std::endl;
+            this->assign_direction_to_fabric_eth_chan(exit_node_fabric_node_id, src_eth_chan, port_direction);
         }
     }
     this->initialize_dynamic_routing_plane_counts(intra_mesh_connectivity, fabric_config, reliability_mode);
@@ -2341,9 +2350,8 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
         }
         if (intermesh_routing_direction != RoutingDirection::NONE) {
             auto& direction_to_channel_map = router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
-            std::cout << "Assigning intermesh link direction to local host: "
-                      << static_cast<uint32_t>(intermesh_routing_direction) << " and channel: " << +eth_chan
-                      << " Fabric Node ID: " << fabric_node_id << std::endl;
+            std::cout << "Assigning direction to " << fabric_node_id << " for eth chan " << +eth_chan
+                      << " in direction " << static_cast<int>(intermesh_routing_direction) << std::endl;
             direction_to_channel_map[intermesh_routing_direction].push_back(eth_chan);
         }
     }

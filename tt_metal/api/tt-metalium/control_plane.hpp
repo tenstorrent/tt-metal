@@ -229,7 +229,7 @@ private:
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
 
     std::map<FabricNodeId, std::unordered_map<chan_id_t, RoutingDirection>> exit_node_directions_;
-
+    std::map<FabricNodeId, std::unordered_map<std::string, chan_id_t>> logical_port_to_eth_chan_;
     // map[phys_chip_id] has a vector of (eth_core, channel) pairs used for intermesh routing
     // TODO: remove once UMD can provide all intermesh links
     std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>> intermesh_eth_links_;
