@@ -18,10 +18,12 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/untilize.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "compute_common.hpp"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/untilize.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 
@@ -166,9 +168,12 @@ void MAIN {
         tilize_uninit(cb_q_rm, cb_q_in);
         cb_push_back(cb_q_in, q_chunk_tiles);
         cb_pop_front(cb_q_rm, q_chunk_tiles);
-        mm_init_short(cb_q_in, cb_k_in);
+        matmul_init(cb_q_in, cb_k_in);
     } else {
-        mm_init(cb_q_in, cb_k_in, cb_qk_im);
+        // Hardware startup - common MMIO configurations
+        compute_kernel_hw_startup(cb_q_in, cb_k_in, cb_qk_im);
+        // Initialize matmul operation
+        matmul_init(cb_q_in, cb_k_in);
     }
     cb_wait_front(cb_q_in, q_chunk_tiles);
 

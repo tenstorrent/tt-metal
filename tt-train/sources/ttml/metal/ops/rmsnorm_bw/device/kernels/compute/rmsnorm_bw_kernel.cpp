@@ -4,6 +4,7 @@
 
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/cb_api.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
@@ -201,8 +202,8 @@ inline void compute_scale(const uint32_t row) {
     // NOTE: Currently, there is a bug in reduce_tile that causes precision issues. To avoid this, we use a
     // workaround of matmul with appropriate scale. Once the bug is fixed, we can switch back to reduce_tile.
     reconfig_data_format(cb_scale_idx, cb_mat_mul_reduce);
-    mm_init(cb_scale_idx, cb_mat_mul_reduce, cb_scale_idx, 0);
-    matmul_tiles(
+    matmul_init(cb_scale_idx, cb_mat_mul_reduce, 0);
+    matmul_tile(
         cb_scale_idx,
         cb_mat_mul_reduce,
         /* tile_idx */ 0,
@@ -280,8 +281,8 @@ inline void compute_scale(const uint32_t row) {
     // NOTE: Currently, there is a bug in reduce_tile that causes precision issues. To avoid this, we use a
     // workaround of matmul with appropriate scale. Once the bug is fixed, we can switch back to reduce_tile.
     reconfig_data_format(cb_scale_idx, cb_mat_mul_reduce);
-    mm_init(cb_scale_idx, cb_mat_mul_reduce, cb_scale_idx, 0);
-    matmul_tiles(
+    matmul_init(cb_scale_idx, cb_mat_mul_reduce, 0);
+    matmul_tile(
         cb_scale_idx,
         cb_mat_mul_reduce,
         /* tile_idx */ 0,

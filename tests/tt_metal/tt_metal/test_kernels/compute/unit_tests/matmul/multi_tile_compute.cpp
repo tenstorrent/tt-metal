@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 #include "compute_kernel_api.h"
 
 namespace NAMESPACE {
@@ -22,7 +23,11 @@ void MAIN {
 
     // we are looking at block
     // out = in0[r x k]*in1[k x c]
-    mm_init(in0_cb, in1_cb, out_cb);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(in0_cb, in1_cb, out_cb);
+
+    // Initialize matmul operation
+    matmul_init(in0_cb, in1_cb);
     acquire_dst();
 
     uint32_t out_tile_index = 0;
@@ -35,7 +40,7 @@ void MAIN {
             for (uint32_t k = 0; k < in0_k; k++) {
                 int in0_tile_index = in0_index_r_offset + k;
                 int in1_tile_index = in1_index_c_offset + c;
-                matmul_tiles(in0_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index, transpose);
+                matmul_tile(in0_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index, transpose);
                 in1_index_c_offset += k;
             }
             out_tile_index++;

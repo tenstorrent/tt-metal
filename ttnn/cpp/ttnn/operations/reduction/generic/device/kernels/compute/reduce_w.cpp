@@ -8,6 +8,7 @@
 #include "compute_kernel_api/reduce.h"
 #else
 #include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 #endif
 
 namespace NAMESPACE {
@@ -21,7 +22,11 @@ void MAIN {
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
     reduce_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
 #else
-    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
+
+    // Initialize matmul operation
+    matmul_init(tt::CBIndex::c_0, tt::CBIndex::c_2);
 #endif
 
     cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader
@@ -39,7 +44,7 @@ void MAIN {
 #ifndef REDUCE_ROW_SUM_VIA_MM
                 reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
 #else
-                matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, 0, false);
+                matmul_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, 0, false);
 #endif
                 cb_pop_front(tt::CBIndex::c_0, onetile);
             }

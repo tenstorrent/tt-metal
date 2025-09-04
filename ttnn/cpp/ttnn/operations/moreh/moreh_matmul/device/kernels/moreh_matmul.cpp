@@ -5,6 +5,7 @@
 // Implemented based on bmm.cpp
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 #include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
@@ -198,7 +199,11 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
     bool need_other_mask_w,
     bool is_scalar_bias) {
     // TODO: checking required when the input cb format and intermediate cb format are different.
-    mm_init(cb_in0, cb_in1, cb_out0);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
+
+    // Initialize matmul operation
+    matmul_init(cb_in0, cb_in1);
     if (transpose_input || transpose_other) {
         transpose_wh_init(cb_in0, cb_out0);
     }
@@ -285,11 +290,12 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
                 cb_wait_front(mm_src1, onetile);
             }
 
-            mm_init_short(mm_src0, mm_src1);
+            matmul_init(mm_src0, mm_src1);
+
 #if defined FP32_DEST_ACC_EN
             reconfig_data_format(mm_src0, mm_src1);
 #endif
-            matmul_tiles(mm_src0, mm_src1, 0, 0, 0, false);
+            matmul_tile(mm_src0, mm_src1, 0, 0, 0, false);
             tile_regs_commit();
 
             cb_pop_front(cb_in0, onetile);
@@ -323,13 +329,17 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
 }
 
 FORCE_INLINE void matmul(uint32_t num_output_tiles, uint32_t Kt) {
-    mm_init(cb_in0, cb_in1, cb_out0);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
+
+    // Initialize matmul operation
+    matmul_init(cb_in0, cb_in1);
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
         tile_regs_acquire();
         for (uint32_t kt = 0; kt < Kt; kt++) {
             cb_wait_front(cb_in0, onetile);
             cb_wait_front(cb_in1, onetile);
-            matmul_tiles(cb_in0, cb_in1, 0, 0, 0, false);
+            matmul_tile(cb_in0, cb_in1, 0, 0, 0, false);
             cb_pop_front(cb_in0, onetile);
             cb_pop_front(cb_in1, onetile);
         }

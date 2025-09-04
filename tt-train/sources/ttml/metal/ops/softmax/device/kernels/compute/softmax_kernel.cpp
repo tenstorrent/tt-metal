@@ -15,6 +15,7 @@
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/common.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
@@ -353,9 +354,9 @@ void reduce_sum_exp_x() {
     // reduce_uninit();
 
     // We used matmul_tiles instead of reduce_tile, because reduce_tile causes a loss of precision. The same issue has
-    // been observed in moreh’s ops.
-    mm_init(cb_exp_sum_before_reduction, cb_mat_mul_reduce, cb_exp_sum_after_reduction, 0);
-    matmul_tiles(
+    // been observed in moreh's ops.
+    matmul_init(cb_exp_sum_before_reduction, cb_mat_mul_reduce, 0);
+    matmul_tile(
         cb_exp_sum_before_reduction, cb_mat_mul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduction_register, 0);
 
     recip_tile_init();

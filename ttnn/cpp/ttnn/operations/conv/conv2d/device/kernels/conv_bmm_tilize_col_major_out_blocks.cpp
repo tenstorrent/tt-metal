@@ -9,6 +9,7 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 // #include "debug/dprint.h"
 #include "compute_kernel_api/untilize.h"
 
@@ -132,7 +133,12 @@ void MAIN {
     constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks;
 #endif
 
-    mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(mm_in0_cb_id, in1_cb_id, out_cb_id);
+
+    // Initialize matmul block operation
+    matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+    // mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
@@ -170,7 +176,7 @@ void MAIN {
 
                         tilize_in(in0_pretilize_cb_id, in0_block_w, reader_num_h_subblocks, tilized_in0_cb_id);
 
-                        mm_block_init_short_with_both_dt(
+                        matmul_block_init_reconfig_data_format(
                             in0_cb_id,
                             in1_cb_id,
                             in0_pretilize_cb_id,
@@ -197,7 +203,7 @@ void MAIN {
                         in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
 #endif
 
-                    mm_block_init_short_with_both_dt(
+                    matmul_block_init_reconfig_data_format(
                         mm_in0_cb_id,
                         in1_cb_id,
                         in0_cb_id,
@@ -241,7 +247,7 @@ void MAIN {
 
                             cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
                             // Reconfigure srcA back
-                            mm_block_init_short_with_dt(
+                            matmul_block_init_reconfig_data_format_srca(
                                 mm_in0_cb_id,
                                 in1_cb_id,
                                 matmul_partials_cb,

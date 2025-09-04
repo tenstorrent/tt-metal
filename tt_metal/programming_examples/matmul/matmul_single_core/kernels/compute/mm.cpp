@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 #include "hostdevcommon/kernel_structs.h"
 
 using std::uint32_t;
@@ -45,9 +46,11 @@ void MAIN {
     constexpr tt::CBIndex cb_in1 = tt::CBIndex::c_1;
     constexpr tt::CBIndex cb_out = tt::CBIndex::c_16;
 
-    // Setup the FPU (matrix engine) for the matmul operation. And specify the input
-    // and output circular buffers.
-    mm_init(cb_in0, cb_in1, cb_out);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out);
+
+    // Setup the FPU (matrix engine) for the matmul operation.
+    matmul_init(cb_in0, cb_in1);
 
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile
@@ -62,7 +65,7 @@ void MAIN {
 
                 // Perform the matrix multiplication for the current tile.
                 // NOTE: This function also accumulates the result into the destination tile.
-                matmul_tiles(cb_in0, cb_in1, 0, 0, 0, false);
+                matmul_tile(cb_in0, cb_in1, 0, 0, 0, false);
 
                 // Mark the input tiles as used by popping them from the front of the circular buffers.
                 cb_pop_front(cb_in0, 1);
