@@ -58,7 +58,7 @@ tt_metal/impl/allocator/ @abhullar-tt @tt-aho
 tt_metal/impl/buffers/ @abhullar-tt @jbaumanTT @cfjchu @omilyutin-tt @sminakov-tt @TT-BrianLiu
 tt_metal/impl/context/ @jbaumanTT @aliuTT @cfjchu @omilyutin-tt
 tt_metal/impl/data_format/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT
-tt_metal/impl/debug/ @pgkeller @abhullar-tt @ruizhangTT @vvukomanovicTT
+tt_metal/impl/debug/ @pgkeller @abhullar-tt @ruizhangTT @tt-vjovanovic
 tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @cfjchu @omilyutin-tt
 tt_metal/impl/dispatch/ @pgkeller @jbaumanTT @nhuang-tt @mpiseTT @tt-asaigal @tt-aho
 tt_metal/impl/event @jbaumanTT @nhuang-tt @mpiseTT @tt-asaigal @tt-aho
