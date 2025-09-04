@@ -65,6 +65,51 @@ class TokenAccuracy:
         return accuracy_top1, accuracy_top5
 
 
+def get_accuracy_thresholds(model_args, optimizations):
+    """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
+    # Read PERF.md
+    perf_file = "models/tt_transformers/PERF.md"
+    with open(perf_file, "r") as f:
+        content = f.read()
+
+    # Split into sections based on optimization mode
+    sections = content.split("## ")
+    if callable(optimizations):
+        optimizations = optimizations(model_args)
+    first_decoder_conf = optimizations.decoder_optimizations[0]
+    target_section = next(s for s in sections if s.lower().startswith(f"{first_decoder_conf.__name__}\n"))
+
+    # Parse the table and find the row for our model and device
+    # Potential lines have the form "| Llama-3.1-8b    | T3K    | 91        | 99        | 49.8          |"
+    base_model_name = model_args.base_model_name
+    device_name = model_args.device_name
+    correct_line = (
+        lambda line: "|" in line
+        and base_model_name.lower() in line.split("|")[1].strip().lower()
+        and device_name.lower() in line.split("|")[2].strip().lower()
+        and not "(DP=".lower() in line.lower()  # ignore DP/HP report for now
+    )
+    rows = [
+        line.split("|")[1:]  # Each row starts with a separator
+        for line in target_section.split("\n")
+        if correct_line(line)
+    ]
+    if not rows:
+        raise ValueError(
+            f"Could not find accuracy data for {base_model_name} on {device_name} in {optimizations.__name__} mode"
+        )
+
+    assert (
+        len(rows) == 1
+    ), f"Found multiple rows for {base_model_name} on {device_name} in {optimizations.__name__} mode in PERF.md"
+    row = rows[0]
+    top1_acc = float(row[2].strip())
+    top5_acc = float(row[3].strip())
+
+    # Allow for rounding
+    return top1_acc - 0.5, top5_acc - 0.5
+
+
 def load_and_cache_context(context_url, cache_dir, max_length=None):
     cache_file = cache_dir / hashlib.md5(context_url.encode()).hexdigest()
 
@@ -1189,3 +1234,20 @@ def test_demo_text(
                 logger.warning(
                     f"No CI performance targets found for {model_device_key}. Skipping performance verification."
                 )
+    if token_accuracy:
+        total_top1_acc = round(acc[0])
+        total_top5_acc = round(acc[1])
+        logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
+
+        if not json_config_file:
+            # Get accuracy thresholds from PERF.md, unless the configuration is from a json
+            min_top1_acc, min_top5_acc = get_accuracy_thresholds(
+                model_args,
+                optimizations,
+            )
+            assert (
+                total_top1_acc >= min_top1_acc
+            ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
+            assert (
+                total_top5_acc >= min_top5_acc
+            ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
