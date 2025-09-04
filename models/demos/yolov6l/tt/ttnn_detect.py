@@ -34,6 +34,7 @@ class TtDetect:
             conv=model_params.stems[2].block.conv,
             conv_pth=parameters.stems[2].block.conv,
             activation="silu",
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
 
         self.cls_convs_0 = Yolov6l_Conv2D(
