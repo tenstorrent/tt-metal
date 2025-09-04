@@ -31,6 +31,8 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
 #include "hostdevcommon/fabric_common.h"
 
+#include "tests/tt_metal/tt_fabric/feature_bringup/kernels/fabric_elastic_channels.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -312,7 +314,7 @@ FORCE_INLINE void send_next_data(
     tt::tt_fabric::EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
         sender_worker_interface,
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
-    tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, RECEIVER_NUM_BUFFERS>& receiver_buffer_channel,
+    tt::tt_fabric::BufferSlotIterator<PACKET_HEADER_TYPE, CHANNEL_BUFFER_SIZE_BYTES, RECEIVER_NUM_BUFFERS>& receiver_buffer_channel,
     PerfTelemetryRecorder& perf_telemetry_recorder) {
     auto& remote_receiver_buffer_index = outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
     auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
@@ -329,7 +331,7 @@ FORCE_INLINE void send_next_data(
 
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
     size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
-    auto dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
+    auto dest_addr = receiver_buffer_channel.get_address();
     pkt_header->src_ch_id = sender_channel_index;
 
     if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
@@ -352,8 +354,7 @@ FORCE_INLINE void send_next_data(
     // TODO: Put in fn
     remote_receiver_buffer_index =
         BufferIndex{wrap_increment<RECEIVER_NUM_BUFFERS>(remote_receiver_buffer_index.get())};
-    receiver_buffer_channel.set_cached_next_buffer_slot_addr(
-        receiver_buffer_channel.get_buffer_address(remote_receiver_buffer_index));
+    receiver_buffer_channel.goto_next();
     sender_buffer_channel.set_cached_next_buffer_slot_addr(
         sender_buffer_channel.get_buffer_address(local_sender_write_counter.get_buffer_index()));
     remote_receiver_num_free_slots--;
@@ -382,11 +383,11 @@ FORCE_INLINE void receiver_send_received_ack(
     // decoupling of those jobs yet to separate pointrers
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
     BufferIndex receiver_buffer_index,
-    const tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, RECEIVER_NUM_BUFFERS>& local_receiver_buffer_channel) {
+    const tt::tt_fabric::BufferSlotIterator<PACKET_HEADER_TYPE, CHANNEL_BUFFER_SIZE_BYTES, RECEIVER_NUM_BUFFERS>& local_receiver_buffer_channel) {
     // Set the acknowledgement bits
     invalidate_l1_cache();
     volatile tt_l1_ptr auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
-        local_receiver_buffer_channel.get_buffer_address(receiver_buffer_index));
+        local_receiver_buffer_channel.get_address());
     const auto src_id = pkt_header->src_ch_id;
 
     while (internal_::eth_txq_is_busy(receiver_txq_id)) {
@@ -1435,7 +1436,7 @@ void run_sender_channel_step_impl(
     tt::tt_fabric::EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
         local_sender_channel_worker_interface,
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
-    tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, RECEIVER_NUM_BUFFERS>& remote_receiver_channel,
+    tt::tt_fabric::BufferSlotIterator<PACKET_HEADER_TYPE, CHANNEL_BUFFER_SIZE_BYTES, RECEIVER_NUM_BUFFERS>& remote_receiver_channel,
     PacketHeaderRecorder<PACKET_HEADER_TYPE>& packet_header_recorder,
     bool& channel_connection_established,
     uint32_t sender_channel_free_slots_stream_id,
@@ -1587,7 +1588,7 @@ template <
     uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
     uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>
 void run_receiver_channel_step_impl(
-    tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, RECEIVER_NUM_BUFFERS>& local_receiver_channel,
+    tt::tt_fabric::BufferSlotIterator<PACKET_HEADER_TYPE, CHANNEL_BUFFER_SIZE_BYTES, RECEIVER_NUM_BUFFERS>& local_receiver_channel,
     std::array<tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
         downstream_edm_interfaces_vc0,
     tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_interface_vc1,
@@ -1618,7 +1619,7 @@ void run_receiver_channel_step_impl(
         invalidate_l1_cache();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
         tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
-            local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
+            reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(local_receiver_channel.get_address()));
 
         ROUTING_FIELDS_TYPE cached_routing_fields;
 #if !defined(FABRIC_2D) || !defined(DYNAMIC_ROUTING_ENABLED)
@@ -1698,6 +1699,7 @@ void run_receiver_channel_step_impl(
                 }
             }
             wr_sent_counter.increment();
+            local_receiver_channel.goto_next();
             // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
         }
@@ -2481,12 +2483,12 @@ void kernel_main() {
 
     // create the remote receiver channel buffers with input array of number of buffers
     auto remote_receiver_channels =
-        tt::tt_fabric::EthChannelBuffers<PACKET_HEADER_TYPE, REMOTE_RECEIVER_NUM_BUFFERS_ARRAY>::make(
+        tt::tt_fabric::BufferSlotIterators<PACKET_HEADER_TYPE, CHANNEL_BUFFER_SIZE_BYTES, REMOTE_RECEIVER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
 
     // create the local receiver channel buffers with input array of number of buffers
     auto local_receiver_channels =
-        tt::tt_fabric::EthChannelBuffers<PACKET_HEADER_TYPE, RECEIVER_NUM_BUFFERS_ARRAY>::make(
+        tt::tt_fabric::BufferSlotIterators<PACKET_HEADER_TYPE, CHANNEL_BUFFER_SIZE_BYTES, RECEIVER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
 
     // create the sender channel buffers with input array of number of buffers
@@ -2649,18 +2651,10 @@ void kernel_main() {
     }
 
     // initialize the local receiver channel buffers
-    local_receiver_channels.init(
-        local_receiver_buffer_addresses.data(),
-        channel_buffer_size,
-        sizeof(PACKET_HEADER_TYPE),
-        receiver_channel_base_id);
+    local_receiver_channels.init(local_receiver_buffer_addresses.data());
 
     // initialize the remote receiver channel buffers
-    remote_receiver_channels.init(
-        remote_receiver_buffer_addresses.data(),
-        channel_buffer_size,
-        sizeof(PACKET_HEADER_TYPE),
-        receiver_channel_base_id);
+    remote_receiver_channels.init(remote_receiver_buffer_addresses.data());
 
     // initialize the local sender channel worker interfaces
     local_sender_channels.init(

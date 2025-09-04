@@ -133,6 +133,7 @@ constexpr size_t worker_info_offset_past_connection_semaphore = 32;
 // then the total amount of buffering for that
 constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
 constexpr bool vc1_has_different_downstream_dest = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
+constexpr size_t CHANNEL_BUFFER_SIZE_BYTES = channel_buffer_size;// + sizeof(PACKET_HEADER_TYPE);
 
 constexpr size_t SENDER_NUM_BUFFERS_IDX = MAIN_CT_ARGS_START_IDX + 10;
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY =

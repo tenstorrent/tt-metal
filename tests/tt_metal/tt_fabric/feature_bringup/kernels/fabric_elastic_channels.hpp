@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <limits>
+#include <tuple>
 
 namespace tt::tt_fabric {
 
@@ -161,6 +162,69 @@ struct BarrelIterator {
     FORCE_INLINE T get_current_value() const { return *(base_ptr + current_idx); }
     FORCE_INLINE void increment() { current_idx = wrap_increment<SIZE, T>(); }
 };
+
+template <typename T, size_t SLOT_SIZE_BYTES, uint8_t NUM_SLOTS>
+struct BufferSlotIterator {
+    static constexpr size_t NUM_SLOTS_M1 = NUM_SLOTS - 1;
+    static constexpr size_t LAST_SLOT_START = NUM_SLOTS_M1 * SLOT_SIZE_BYTES;
+    static constexpr size_t FULL_BUFFER_SIZE = NUM_SLOTS * SLOT_SIZE_BYTES;
+
+    uint32_t base_addr;
+    uint32_t current_addr;
+    uint32_t last_slot_addr;
+
+    explicit BufferSlotIterator()=default;
+
+    void init(uint32_t base_addr) {
+        this->base_addr = base_addr;
+        this->current_addr = base_addr;
+        this->last_slot_addr = base_addr + (FULL_BUFFER_SIZE - SLOT_SIZE_BYTES);
+    }
+
+    FORCE_INLINE uint32_t get_address() const { return current_addr; }
+    FORCE_INLINE T get_pointer() const { return reinterpret_cast<T*>(current_addr); }
+
+    FORCE_INLINE void goto_next() {
+        bool last = current_addr == last_slot_addr;
+        current_addr = current_addr + SLOT_SIZE_BYTES - last * FULL_BUFFER_SIZE;
+    }
+};
+
+
+// A tuple of EthChannelBuffer
+template <typename HEADER_TYPE, size_t SLOT_SIZE_BYTES, size_t... BufferSizes>
+struct BufferSlotIteratorsTuple {
+    std::tuple<tt::tt_fabric::BufferSlotIterator<HEADER_TYPE, SLOT_SIZE_BYTES, BufferSizes>...> channel_iterators;
+
+    explicit BufferSlotIteratorsTuple() = default;
+
+    void init(const size_t channel_base_address[]) {
+        size_t idx = 0;
+
+        std::apply(
+            [&](auto&... chans) {
+                ((chans.init(channel_base_address[idx]),
+                  ++idx),
+                 ...);
+            },
+            channel_iterators);
+    }
+
+    template <size_t I>
+    auto& get() {
+        return std::get<I>(channel_iterators);
+    }
+};
+
+// Provide a simple builder that expands an array of sizes into the tuple type
+template <typename HEADER_TYPE, size_t SLOT_SIZE_BYTES, auto& BufferSizes>
+struct BufferSlotIterators {
+    template <size_t... Is>
+    static auto make(std::index_sequence<Is...>) {
+        return BufferSlotIteratorsTuple<HEADER_TYPE, SLOT_SIZE_BYTES, BufferSizes[Is]...>{};
+    }
+};
+ 
 
 template <size_t N_CHUNKS, size_t CHUNK_N_PKTS>
 struct ChannelBuffersPool {
