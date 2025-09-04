@@ -20,9 +20,81 @@ def get_ttnn_activation(activation_name: str):
         raise NotImplementedError(f"Activation '{activation_name}' not supported in ttnn.")
 
 
-def get_ttnn_norm(norm_name: str, num_channels: int, device):
-    """Returns a ttnn normalization function."""
-    if norm_name.lower() == "gn":
+def get_ttnn_norm(norm_name: str, num_channels: int, device, norm_params: dict = None):
+    """
+    Returns a ttnn normalization function.
+
+    Args:
+        norm_name: Type of normalization ('BN'/'SyncBN', 'GN', 'LN', or '')
+        num_channels: Number of channels to normalize
+        device: TTNN device
+        norm_params: Optional dictionary with pre-trained normalization parameters
+                    Expected keys: 'weight', 'bias', 'running_mean', 'running_var'
+    """
+    if norm_name.lower() in ["bn", "syncbn", "batchnorm"]:
+        # BatchNorm / SyncBN implementation
+        if norm_params is not None:
+            # Use provided pre-trained parameters - shape should be (1, num_channels, 1, 1) for NCHW format
+            weight = ttnn.from_torch(
+                norm_params.get("weight", torch.ones(num_channels, dtype=torch.bfloat16)).view(1, -1, 1, 1),
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+            )
+            bias = ttnn.from_torch(
+                norm_params.get("bias", torch.zeros(num_channels, dtype=torch.bfloat16)).view(1, -1, 1, 1),
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+            )
+            running_mean = ttnn.from_torch(
+                norm_params.get("running_mean", torch.zeros(num_channels, dtype=torch.bfloat16)).view(1, -1, 1, 1),
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+            )
+            running_var = ttnn.from_torch(
+                norm_params.get("running_var", torch.ones(num_channels, dtype=torch.bfloat16)).view(1, -1, 1, 1),
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+            )
+        else:
+            # Default initialization - shape should be (1, num_channels, 1, 1) for NCHW format
+            weight = ttnn.ones((1, num_channels, 1, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+            bias = ttnn.zeros((1, num_channels, 1, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+            running_mean = ttnn.zeros(
+                (1, num_channels, 1, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+            )
+            running_var = ttnn.ones(
+                (1, num_channels, 1, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+            )
+
+        def batch_norm_fn(x):
+            # TTNN batch norm expects NCHW format and running statistics for inference mode
+            # Follow the same pattern as the ResNet implementation
+
+            # Convert from NHWC to NCHW for batch_norm
+            x_nchw = ttnn.permute(x, (0, 3, 1, 2))
+
+            # Apply batch normalization
+            x_normed = ttnn.batch_norm(
+                x_nchw,
+                running_mean=running_mean,
+                running_var=running_var,
+                weight=weight,
+                bias=bias,
+                eps=1e-5,
+                training=False,
+            )
+
+            # Convert back to NHWC
+            x_nhwc = ttnn.permute(x_normed, (0, 2, 3, 1))
+
+            return x_nhwc
+
+        return batch_norm_fn
+    elif norm_name.lower() == "gn":
         num_groups = 32
         weight = ttnn.ones((1, 1, 1, num_channels), device=device, layout=ttnn.TILE_LAYOUT)
         bias = ttnn.zeros((1, 1, 1, num_channels), device=device, layout=ttnn.TILE_LAYOUT)
@@ -35,7 +107,9 @@ def get_ttnn_norm(norm_name: str, num_channels: int, device):
     elif norm_name == "":
         return lambda x: x  # No-op
     else:
-        raise NotImplementedError(f"Normalization '{norm_name}' not supported.")
+        raise NotImplementedError(
+            f"Normalization '{norm_name}' not supported. Supported: 'BN'/'SyncBN', 'GN', 'LN', or '' (none)."
+        )
 
 
 class TtASPP(nn.Module):
@@ -98,7 +172,7 @@ class TtASPP(nn.Module):
             channel_slice_num=1,
             bias=use_bias,
         )
-        norm_func = get_ttnn_norm(norm, out_channels, device=self.device)
+        norm_func = get_ttnn_norm(norm, out_channels, device=self.device, norm_params=None)
         self.conv_branches.append((conv, norm_func))
 
         channel_slices = [2, 4, 8]
@@ -116,7 +190,7 @@ class TtASPP(nn.Module):
                 channel_slice_num=channel_slice_num,
                 bias=use_bias,
             )
-            norm_func = get_ttnn_norm(norm, out_channels, device=self.device)
+            norm_func = get_ttnn_norm(norm, out_channels, device=self.device, norm_params=None)
             self.conv_branches.append((conv, norm_func))
 
         # Global pooling conv
@@ -142,7 +216,7 @@ class TtASPP(nn.Module):
             isProjectConv=True,
         )
 
-        self.project_norm = get_ttnn_norm(norm, out_channels, device=self.device)
+        self.project_norm = get_ttnn_norm(norm, out_channels, device=self.device, norm_params=None)
 
     def forward(self, x):
         input_shape = x.shape

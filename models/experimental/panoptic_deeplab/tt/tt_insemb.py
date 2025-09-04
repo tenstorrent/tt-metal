@@ -82,16 +82,16 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
 
         # --- Kreiranje Center Prediction grane ---
         self.center_head_0 = _create_tt_conv2d(center_head_0_weight, decoder_out_ch, decoder_out_ch, 3, 1, 1, use_bias)
-        self.center_head_norm_0 = get_ttnn_norm(norm, decoder_out_ch, device)
+        self.center_head_norm_0 = get_ttnn_norm(norm, decoder_out_ch, device, norm_params=None)
         self.center_head_1 = _create_tt_conv2d(center_head_1_weight, decoder_out_ch, head_channels, 3, 1, 1, use_bias)
-        self.center_head_norm_1 = get_ttnn_norm(norm, head_channels, device)
+        self.center_head_norm_1 = get_ttnn_norm(norm, head_channels, device, norm_params=None)
         self.center_predictor = _create_tt_conv2d(center_predictor_weight, head_channels, 1, 1, 1, 0, True)
 
         # --- Kreiranje Offset Prediction grane ---
         self.offset_head_0 = _create_tt_conv2d(offset_head_0_weight, decoder_out_ch, decoder_out_ch, 3, 1, 1, use_bias)
-        self.offset_head_norm_0 = get_ttnn_norm(norm, decoder_out_ch, device)
+        self.offset_head_norm_0 = get_ttnn_norm(norm, decoder_out_ch, device, norm_params=None)
         self.offset_head_1 = _create_tt_conv2d(offset_head_1_weight, decoder_out_ch, head_channels, 3, 1, 1, use_bias)
-        self.offset_head_norm_1 = get_ttnn_norm(norm, head_channels, device)
+        self.offset_head_norm_1 = get_ttnn_norm(norm, head_channels, device, norm_params=None)
         self.offset_predictor = _create_tt_conv2d(offset_predictor_weight, head_channels, 2, 1, 1, 0, True)
 
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, ttnn.Tensor, Dict, Dict]:
