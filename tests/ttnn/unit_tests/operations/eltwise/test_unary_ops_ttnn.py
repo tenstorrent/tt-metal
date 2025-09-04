@@ -71,8 +71,9 @@ def test_unary_abs_ttnn(input_shapes, device):
     ttnn.abs(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.abs(in_data)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    # comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    # assert comp_pass
+    assert_equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -171,8 +172,9 @@ def test_unary_eqz_ttnn(input_shapes, device):
     ttnn.eqz(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = in_data == 0
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    # comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    # assert comp_pass
+    assert_equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -191,8 +193,9 @@ def test_unary_eqz_ttnn(input_shapes, device):
     ttnn.eqz(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = in_data == 0
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    # comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    # assert comp_pass
+    assert_equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -211,8 +214,9 @@ def test_unary_nez_ttnn(input_shapes, device):
     ttnn.nez(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = in_data != 0
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    # comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    # assert comp_pass
+    assert_equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -231,8 +235,9 @@ def test_unary_gez_ttnn(input_shapes, device):
     ttnn.gez(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = in_data >= 0
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    # comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    # assert comp_pass
+    assert_equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -251,8 +256,9 @@ def test_unary_lez_ttnn(input_shapes, device):
     ttnn.lez(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = in_data <= 0
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    # comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    # assert comp_pass
+    assert_equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -271,8 +277,9 @@ def test_unary_ltz_ttnn(input_shapes, device):
     ttnn.ltz(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = in_data < 0
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    # comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    # assert comp_pass
+    assert_equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -291,8 +298,9 @@ def test_unary_gtz_ttnn(input_shapes, device):
     ttnn.gtz(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = in_data > 0
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    # comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    # assert comp_pass
+    assert_equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(

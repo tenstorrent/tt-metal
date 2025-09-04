@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from math import isnan
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose, assert_equal
 
 
 @pytest.mark.parametrize("h", [64])
@@ -35,7 +35,8 @@ def test_mac_all_tensors(device, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    # assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_allclose(torch_output_tensor, output_tensor, atol=1e-4, rtol=0.01)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -60,10 +61,10 @@ def test_mac_tensor_with_2_scalaras(device, h, w, scalar1, scalar2):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_allclose(torch_output_tensor, output_tensor, atol=1e-4, rtol=0.01)
 
 
-def assert_where_with_pcc(torch_input_tensor, torch_input1, torch_input2, device, pcc=0.9999):
+def assert_where_with_equal(torch_input_tensor, torch_input1, torch_input2, device):
     def from_torch_if_tensor(x):
         if not isinstance(x, torch.Tensor):
             return x
@@ -79,7 +80,7 @@ def assert_where_with_pcc(torch_input_tensor, torch_input1, torch_input2, device
     output_tensor = ttnn.where(input_tensor, input1, input2)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
@@ -107,7 +108,7 @@ def test_where_bcast(device, dtype, hc, ht, hf, wc, wt, wf):
     torch_input_tensor1 = torch.rand((ht, wt), dtype=dtype).uniform_(-100, 100)
     torch_input_tensor2 = torch.rand((hf, wf), dtype=dtype).uniform_(-100, 100)
 
-    assert_where_with_pcc(torch_input_tensor, torch_input_tensor1, torch_input_tensor2, device)
+    assert_where_with_equal(torch_input_tensor, torch_input_tensor1, torch_input_tensor2, device)
 
 
 def run_ternary_test_value(device, h, w, value, ttnn_function, pcc=0.9999):
