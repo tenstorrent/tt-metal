@@ -28,7 +28,6 @@
 #include <cstdint>
 #include <stdexcept>
 
-// NOLINTBEGIN(cppcoreguidelines-no-malloc)
 using namespace ttsl::detail::llvm;
 
 // Check that no bytes are wasted and everything is well-aligned.
@@ -120,6 +119,7 @@ static void* replaceAllocation(void* NewElts, size_t TSize, size_t NewCapacity, 
     if (VSize) {
         memcpy(NewEltsReplace, NewElts, VSize * TSize);
     }
+    // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
     free(NewElts);
     return NewEltsReplace;
 }
@@ -177,4 +177,3 @@ static_assert(
 static_assert(
     sizeof(SmallVectorSizeType<char>) == sizeof(uint32_t), "Expected SmallVectorBase<uint32_t> variant to be in use.");
 #endif
-// NOLINTEND(cppcoreguidelines-no-malloc)

@@ -46,7 +46,6 @@
 #include <type_traits>
 #include <utility>
 
-// NOLINTBEGIN(cppcoreguidelines-no-malloc)
 namespace ttsl::detail::llvm {
 
 template <typename T>
@@ -471,6 +470,7 @@ template <typename T, bool TriviallyCopyable>
 void SmallVectorTemplateBase<T, TriviallyCopyable>::takeAllocationForGrow(T* NewElts, size_t NewCapacity) {
     // If this wasn't grown from the inline copy, deallocate the old space.
     if (!this->isSmall()) {
+        // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
         free(this->begin());
     }
 
@@ -598,6 +598,7 @@ protected:
     void assignRemote(SmallVectorImpl&& RHS) {
         this->destroy_range(this->begin(), this->end());
         if (!this->isSmall()) {
+            // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
             free(this->begin());
         }
         this->BeginX = RHS.BeginX;
@@ -610,6 +611,7 @@ protected:
         // Subclass has already destructed this vector's elements.
         // If this wasn't grown from the inline copy, deallocate the old space.
         if (!this->isSmall()) {
+            // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
             free(this->begin());
         }
     }
@@ -1348,5 +1350,3 @@ inline void swap(ttsl::detail::llvm::SmallVector<T, N>& LHS, ttsl::detail::llvm:
 }
 
 }  // end namespace std
-
-// NOLINTEND(cppcoreguidelines-no-malloc)
