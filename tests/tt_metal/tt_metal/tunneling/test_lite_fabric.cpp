@@ -23,6 +23,7 @@
 #include "core_coord.hpp"
 #include "distributed.hpp"
 #include "fabric_types.hpp"
+#include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "mesh_workload.hpp"
 #include "rtoptions.hpp"
@@ -655,7 +656,7 @@ TEST_P(FabricLite, ReadActiveEth) {
 
 TEST_P(FabricLite, ReadArc) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const uint64_t test_addr = 0x80030400;
+    const uint64_t test_addr = 0x1FE80000;
     CoreCoord target_worker{0, 0};
     CoreCoord virtual_worker =
         cluster.get_virtual_coordinate_from_logical_coordinates(0, target_worker, CoreType::WORKER);
@@ -710,21 +711,26 @@ TEST_P(FabricLite, ReadArc) {
     //     test_addr,
     //     correct_value);
 
-    read_val.clear();
-    read_val.resize(100);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        read_val.data(), 16, {0, virtual_worker.x, virtual_worker.y}, 0x70000);
-    log_info(tt::LogTest, "Read From Local Worker (PCIE) {:#x} {:#x} {:#x}", read_val[0], read_val[1], read_val[2]);
+    if (mesh_device_) {
+        log_info(
+            tt::LogTest,
+            "Allocator Base {:#x}",
+            mesh_device_->get_devices()[0]->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
+    }
 
     read_val.clear();
     read_val.resize(100);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_core(read_val.data(), 16, {0, 8, 0}, test_addr);
+    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        read_val.data(), 4, {0, virtual_worker.x, virtual_worker.y}, 0x19000);
+    log_info(tt::LogTest, "Read From Local Worker (PCIE) {:#x}", read_val[0]);
+
+    read_val.clear();
+    read_val.resize(100);
+    tt::tt_metal::MetalContext::instance().get_cluster().read_core(read_val.data(), 4, {0, 8, 0}, test_addr);
     log_info(
         tt::LogTest,
-        "Read From Local ARC (PCIE) {:#x} {:#x} {:#x} from arc address {:#x}. correct value {:#x}",
+        "Read From Local ARC (PCIE) {:#x} from arc address {:#x}. correct value {:#x}",
         read_val[0],
-        read_val[1],
-        read_val[2],
         test_addr,
         correct_value);
 }

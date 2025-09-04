@@ -355,7 +355,7 @@ int main() {
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     noc_local_state_init(noc_index);
 
-    noc_async_read_one_packet<true>((uint64_t)0x80030400, 0x70000, 16, 0);
+    noc_async_read_one_packet((uint64_t)0x1FE80000, 0x19000, 4, 0);
     noc_async_read_barrier(0);
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
