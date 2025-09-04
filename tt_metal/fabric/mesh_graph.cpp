@@ -208,13 +208,15 @@ void MeshGraph::initialize_from_mgd2(const MeshGraphDescriptor& mgd2) {
     this->intra_mesh_connectivity_.resize(mgd2.all_meshes().size());
 
     for (const auto& id : mgd2.all_meshes()) {
-        auto mesh_data = mgd2.mesh(id);
+        auto & mesh_data = mgd2.get_instance(id);
+
+        const auto& mesh_desc = std::get<const proto::MeshDescriptor*>(mesh_data.desc);
 
         // Retrieve the fabric type from the device topology
-        auto fabric_type = topology_to_fabric_type(mesh_data.desc->device_topology());
+        auto fabric_type = topology_to_fabric_type(mesh_desc->device_topology());
 
         // Only for 2D meshes
-        MeshShape mesh_shape(mesh_data.desc->device_topology().dims().at(0), mesh_data.desc->device_topology().dims().at(1));
+        MeshShape mesh_shape(mesh_desc->device_topology().dims().at(0), mesh_desc->device_topology().dims().at(1));
         std::vector<chip_id_t> chip_ids(mesh_shape[0] * mesh_shape[1]);
         std::iota(chip_ids.begin(), chip_ids.end(), 0);
         this->mesh_to_chip_ids_.emplace(id, MeshContainer<chip_id_t>(mesh_shape, chip_ids));
@@ -233,8 +235,8 @@ void MeshGraph::initialize_from_mgd2(const MeshGraphDescriptor& mgd2) {
     this->inter_mesh_connectivity_.resize(mgd2.all_meshes().size());
 
     // Must use Fabric keyboard for graph descriptors in current version
-    for (const auto& id : mgd2.by_type("FABRIC")) {
-        const auto& graph_data = mgd2.graph(id);
+    for (const auto& id : mgd2.instances_by_type("FABRIC")) {
+        const auto& graph_data = mgd2.get_instance(id);
         // FIXME: Start here
     }
 

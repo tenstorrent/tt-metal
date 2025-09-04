@@ -91,11 +91,12 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::filesystem::path& text_proto
 MeshGraphDescriptor::~MeshGraphDescriptor() = default;
 
 proto::Architecture MeshGraphDescriptor::get_arch() const {
-    return meshes_[0].arch;
+    // All meshes must have the same arch
+    return proto_->mesh_descriptors(0).arch();
 }
 
 uint32_t MeshGraphDescriptor::get_num_eth_ports_per_direction() const {
-    return meshes_[0].desc->channels().count();
+    return proto_->mesh_descriptors(0).channels().count();
 }
 
 void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
