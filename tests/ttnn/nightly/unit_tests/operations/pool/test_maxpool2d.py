@@ -9,7 +9,7 @@ import ttnn
 import pytest
 import math
 
-from models.utility_functions import is_wormhole_b0, is_x2_harvested
+from models.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -72,7 +72,7 @@ def run_max_pool(
     if (out_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat4_b) and output_layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("BFLOAT8_B/BFLOAT4_B output data format is not supported with ROW_MAJOR layout")
 
-    if device.arch() == ttnn.ARCH.BLACKHOLE and output_layout == ttnn.TILE_LAYOUT:
+    if is_blackhole() and output_layout == ttnn.TILE_LAYOUT:
         pytest.skip("Blackhole does not support tiled output for pool operations")
 
     # skips to avoid unimportant combinations
