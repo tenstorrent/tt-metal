@@ -348,3 +348,210 @@ class WanResidualBlock:
         x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         return x_BTHWC
+
+
+class WanMidBlock:
+    def __init__(
+        self,
+        dim,
+        mesh_device,
+        num_layers=1,
+    ):
+        self.dim = dim
+        self.mesh_device = mesh_device
+        resnets = []
+        attentions = []
+
+        resnets.append(
+            WanResidualBlock(
+                in_dim=dim,
+                out_dim=dim,
+                mesh_device=mesh_device,
+            )
+        )
+
+        for _ in range(num_layers):
+            attentions.append(
+                WanAttentionBlock(
+                    dim=dim,
+                    mesh_device=mesh_device,
+                )
+            )
+            resnets.append(
+                WanResidualBlock(
+                    in_dim=dim,
+                    out_dim=dim,
+                    mesh_device=mesh_device,
+                )
+            )
+
+        self.resnets = resnets
+        self.attentions = attentions
+
+    def load_state_dict(self, state_dict):
+        for i in range(len(self.resnets)):
+            self.resnets[i].load_state_dict(substate(state_dict, f"resnets.{i}"))
+        for i in range(len(self.attentions)):
+            self.attentions[i].load_state_dict(substate(state_dict, f"attentions.{i}"))
+
+    def __call__(self, x_BTHWC, feat_cache=None, feat_idx=[0]):
+        x_BTHWC = self.resnets[0](x_BTHWC, feat_cache, feat_idx)
+        for i in range(len(self.attentions)):
+            x_BTHWC = self.attentions[i](x_BTHWC)
+            x_BTHWC = self.resnets[i + 1](x_BTHWC, feat_cache, feat_idx)
+        return x_BTHWC
+
+
+class WanConv2d:
+    """
+    A conv2d implemented with conv3d.
+    """
+
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        mesh_device,
+        stride=1,
+        padding=0,
+    ):
+        self.in_channels = in_channels
+        self.unpadded_out_channels = out_channels
+        self.TILE_WIDTH = 32
+        self.out_channels = self.TILE_WIDTH if out_channels < self.TILE_WIDTH else out_channels
+        if self.out_channels != self.unpadded_out_channels:
+            logger.warning(f"Padding out_channels from {self.unpadded_out_channels} to {self.out_channels}")
+
+        self.kernel_size = _ntuple(kernel_size, 3)
+        self.stride = _ntuple(stride, 3)
+        self.mesh_device = mesh_device
+
+        self.padding = _ntuple(padding, 3)
+
+        self.conv_config = get_conv3d_config(
+            self.in_channels,
+            self.out_channels,
+            self.kernel_size,
+            self.stride,
+            self.padding,
+            padding_mode="zeros",
+            grid_size=self.mesh_device.compute_with_storage_grid_size(),
+        )
+        print(f"Loaded conv_config: {self.conv_config}")
+
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+    def load_state_dict(self, state_dict):
+        def conv2d_to_conv3d_weight(weight):
+            weight = weight.unsqueeze(2)
+            return weight
+
+        reshaped_weight = conv2d_to_conv3d_weight(state_dict["weight"])
+
+        self.conv_weight, self.conv_bias = prepare_conv3d_weights(
+            self.mesh_device,
+            reshaped_weight,
+            state_dict["bias"],
+            self.conv_config,
+        )
+        print(f"Loaded conv_weight: {self.conv_weight.shape}, conv_bias: {self.conv_bias.shape}")
+
+    def __call__(self, x_BTHWC):
+        return ttnn.experimental.conv3d(
+            input_tensor=x_BTHWC,
+            weight_tensor=self.conv_weight,
+            bias_tensor=self.conv_bias,
+            config=self.conv_config,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+
+
+class WanResample:
+    def __init__(
+        self,
+        dim,
+        mode,
+        mesh_device,
+        upsample_out_dim=None,
+    ):
+        self.dim = dim
+        self.mode = mode
+        self.mesh_device = mesh_device
+        upsample_out_dim = upsample_out_dim or dim // 2
+
+        assert mode in ["upsample2d", "upsample3d"]
+
+        self.conv = WanConv2d(
+            in_channels=dim,
+            out_channels=upsample_out_dim,
+            kernel_size=(1, 3, 3),
+            padding=(0, 1, 1),
+            mesh_device=mesh_device,
+        )
+
+        if mode == "upsample3d":
+            self.time_conv = WanCausalConv3d(
+                in_channels=dim,
+                out_channels=dim * 2,
+                kernel_size=(3, 1, 1),
+                padding=(1, 0, 0),
+                mesh_device=mesh_device,
+            )
+
+    def load_state_dict(self, state_dict):
+        self.conv.load_state_dict(substate(state_dict, "resample.1"))
+
+        if self.mode == "upsample3d":
+            self.time_conv.load_state_dict(substate(state_dict, "time_conv"))
+
+    def __call__(self, x_BTHWC, feat_cache=None, feat_idx=[0]):
+        B, T, H, W, C = x_BTHWC.shape
+        if self.mode == "upsample3d":
+            if feat_cache is not None:
+                idx = feat_idx[0]
+                if feat_cache[idx] is None:
+                    feat_cache[idx] = "Rep"
+                    feat_idx[0] += 1
+                else:
+                    t_start = x_BTHWC.shape[1] - CACHE_T
+                    cache_x_BTHWC = x_BTHWC[:, t_start:, :, :, :]
+                    is_rep = isinstance(feat_cache[idx], str) and feat_cache[idx] == "Rep"
+                    assert not (
+                        isinstance(feat_cache[idx], str) and not is_rep
+                    ), "If feat_cache[idx] is a string, it must be 'Rep'"
+                    if cache_x_BTHWC.shape[1] < 2 and feat_cache[idx] is not None and not is_rep:
+                        cache_x_BTHWC = ttnn.concat([feat_cache[idx][:, -1:, :, :, :], cache_x_BTHWC], dim=1)
+
+                    if cache_x_BTHWC.shape[1] < 2 and feat_cache[idx] is not None and is_rep:
+                        # When feat_cache[idx] is "Rep", we need to pad the cache_x_BTHWC with zeros
+                        # Padding only works on the lowest 3 dims
+                        cache_x_B1NC = ttnn.reshape(cache_x_BTHWC, (B, 1, H * W, C))
+                        cache_x_BTNC = ttnn.pad(cache_x_B1NC, [(0, 0), (1, 0), (0, 0), (0, 0)], value=0.0)
+                        cache_x_BTHWC = ttnn.reshape(cache_x_BTNC, (B, 2, H, W, C))
+
+                    if is_rep:
+                        x_BTHWU = self.time_conv(x_BTHWC)
+                    else:
+                        x_BTHWU = self.time_conv(x_BTHWC, feat_cache[idx])
+                    feat_cache[idx] = cache_x_BTHWC
+                    feat_idx[0] += 1
+
+                    T1 = x_BTHWU.shape[1]
+                    x_BTHW2C = ttnn.reshape(x_BTHWU, (B, T1, H, W, 2, C))
+                    x_BT2HWC = ttnn.permute(x_BTHW2C, (0, 1, 4, 2, 3, 5))
+                    x_BTHWC = ttnn.reshape(x_BT2HWC, (B, T1 * 2, H, W, C))
+
+        T2 = x_BTHWC.shape[1]
+        x_NHWC = ttnn.reshape(x_BTHWC, (B * T2, H, W, C))
+        x_NHWC = ttnn.upsample(x_NHWC, scale_factor=2)
+        H2, W2 = x_NHWC.shape[1], x_NHWC.shape[2]
+        x_BTHWC = ttnn.reshape(x_NHWC, (B, T2, H2, W2, C))
+        x_BTHWC = self.conv(x_BTHWC)
+        return x_BTHWC
