@@ -18,12 +18,15 @@ def mesh_shape_iterator(num_devices, limit=None):
 
 
 @contextmanager
-def device_context(mesh_shape, fabric_config):
+def device_context(mesh_shape, fabric_config, device_params=None):
+    device_params = device_params or {}
     mesh_device = None
     try:
         logger.info("Setting up device")
         ttnn.set_fabric_config(fabric_config)
-        mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(mesh_shape), **get_updated_device_params({}))
+        mesh_device = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(mesh_shape), **get_updated_device_params(device_params)
+        )
         yield mesh_device, None
     except AssertionError as e:
         logger.error(f"Device error: {e}")

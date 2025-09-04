@@ -59,6 +59,7 @@ class SweepsConfig:
     elastic_password: Optional[str] = None
     summary: bool = False
     run_contents: str = None
+    debug: bool = False
 
 
 def create_config_from_args(args) -> SweepsConfig:
@@ -78,6 +79,7 @@ def create_config_from_args(args) -> SweepsConfig:
         skip_modules=args.skip_modules,
         skip_on_timeout=args.skip_on_timeout,
         summary=args.summary,
+        debug=args.debug,
     )
 
     if config.vector_source == "elastic" or config.result_destination == "elastic":
@@ -301,7 +303,8 @@ def run(test_module, input_queue, output_queue, config: SweepsConfig):
                     status, message = results
                     e2e_perf = None
             except Exception as e:
-                # logger.exception(e)
+                if config.debug:
+                    logger.exception(e)
                 status, message = False, str(e)
                 e2e_perf = None
             if config.measure_device_perf:
@@ -322,7 +325,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
     arch = ttnn.get_arch_name()
     reset_util = tt_smi_util.ResetUtil(arch)
 
-    if len(test_vectors) > 1 and not config.dry_run:
+    if not config.debug or (len(test_vectors) > 1 and not config.dry_run):
         p = Process(target=run, args=(test_module, input_queue, output_queue, config))
         p.start()
 
@@ -339,7 +342,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
 
         # Capture the original test vector data BEFORE any modifications
         original_vector_data = test_vector.copy()
-        validity =  deserialize(test_vector["validity"]).split(".")[-1]
+        validity = deserialize(test_vector["validity"]).split(".")[-1]
 
         if validity == VectorValidity.INVALID:
             result["status"] = TestStatus.NOT_RUN
@@ -797,6 +800,13 @@ if __name__ == "__main__":
         help="Log a detailed execution or dry-run summary at the end of the run.",
     )
 
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        required=False,
+        help="Run tests on main process and log test exceptions",
+    )
+
     args = parser.parse_args(sys.argv[1:])
 
     # Argument validation
@@ -830,10 +840,6 @@ if __name__ == "__main__":
 
     # Parse modules for running specific tests
     module_names = get_module_names(config)
-
-    from ttnn import *
-    from framework.serialize import *
-    from framework.device_fixtures import default_device
 
     run_sweeps(
         module_names,
