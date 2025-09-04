@@ -13,18 +13,12 @@
 namespace ttnn {
 
 void NeighborPadAsync::validate_with_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    TT_FATAL(this->dim == 0, "Error, neighbor pad currently only supports padding dim 0, provided {}", this->dim);
-    TT_FATAL(
-        this->direction == 0,
-        "Error, neighbor pad currently only supports shifting left, but direction provided was {}",
-        this->direction);
-}
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {}
 
 std::vector<ttnn::TensorSpec> NeighborPadAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
     auto shape = input_tensor.logical_shape();
-    shape[this->dim] += this->padding;
+    shape[this->dim] += (this->padding_left + this->padding_right);
     return {TensorSpec(
         shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config))};
 }
@@ -78,9 +72,9 @@ tt::tt_metal::operation::ProgramWithCallbacks NeighborPadAsync::create_program_a
         backward_device,
         output_tensors[0],
         this->dim,
-        this->padding,
+        this->padding_left,
+        this->padding_right,
         this->padding_mode,
-        this->direction,
         this->final_semaphore,
         this->barrier_semaphore,
         this->num_links,
@@ -98,9 +92,9 @@ tt::tt_metal::operation::Hash NeighborPadAsync::compute_program_hash(const std::
     uint32_t barrier_semaphore_address = this->barrier_semaphore.address();
     return tt::tt_metal::operation::hash_operation<NeighborPadAsync>(
         this->dim,
-        this->padding,
+        this->padding_left,
+        this->padding_right,
         this->padding_mode,
-        this->direction,
         this->num_links,
         this->output_mem_config,
         this->topology,
@@ -120,9 +114,9 @@ namespace {
 Tensor neighbor_pad_async_impl(
     const Tensor& input_tensor,
     const int32_t dim,
-    const uint32_t padding,
+    const uint32_t padding_left,
+    const uint32_t padding_right,
     const std::string& padding_mode,
-    const bool direction,
     const uint32_t cluster_axis,
     const GlobalSemaphore& final_semaphore,
     const GlobalSemaphore& barrier_semaphore,
@@ -150,9 +144,9 @@ Tensor neighbor_pad_async_impl(
                ttnn::NeighborPadAsync(
                    devices,
                    dim,
-                   padding,
+                   padding_left,
+                   padding_right,
                    padding_mode,
-                   direction,
                    cluster_axis,
                    final_semaphore,
                    barrier_semaphore,
@@ -170,9 +164,9 @@ Tensor neighbor_pad_async_impl(
 Tensor neighbor_pad_async(
     const Tensor& input_tensor,
     const int32_t dim,
-    const uint32_t padding,
+    const uint32_t padding_left,
+    const uint32_t padding_right,
     const std::string& padding_mode,
-    const bool direction,
     const uint32_t cluster_axis,
     const GlobalSemaphore& final_semaphore,
     const GlobalSemaphore& barrier_semaphore,
@@ -185,9 +179,9 @@ Tensor neighbor_pad_async(
     return neighbor_pad_async_impl(
         input_tensor,
         dim,
-        padding,
+        padding_left,
+        padding_right,
         padding_mode,
-        direction,
         cluster_axis,
         final_semaphore,
         barrier_semaphore,
