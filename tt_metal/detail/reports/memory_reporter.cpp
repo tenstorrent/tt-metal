@@ -10,7 +10,7 @@
 #include <map>
 #include <memory>
 #include <utility>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include "buffer_types.hpp"
 #include "tt_metal/detail/reports/report_utils.hpp"
@@ -82,7 +82,7 @@ void write_memory_usage(
     memory_usage_summary_report << "," << stats.total_allocatable_size_bytes << "," << stats.total_allocated_bytes
                                 << "," << stats.total_free_bytes << "," << stats.largest_free_block_bytes << "\n";
 
-    detailed_memory_usage_report << "," << magic_enum::enum_name(buffer_type) << "\n"
+    detailed_memory_usage_report << "," << reflect::enum_name(buffer_type) << "\n"
                                  << ",Total allocatable (B):," << (stats.total_allocatable_size_bytes * num_banks)
                                  << "\n"
                                  << ",Total allocated (B):," << (stats.total_allocated_bytes * num_banks) << "\n"
