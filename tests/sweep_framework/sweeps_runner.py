@@ -333,10 +333,7 @@ def device_context(test_module, output_queue):
 
 
 def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
-    logger.info(f"TEST MODULE NAME: {test_module_name}")
     test_module = importlib.import_module("sweeps." + test_module_name)
-    logger.info(f"TEST MODULE: {test_module}")
-
     with device_context(test_module, output_queue) as (device, device_name):
         while True:
             try:
