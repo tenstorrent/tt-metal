@@ -105,7 +105,6 @@ class Yolov11Conv2D:
             return_weights_and_bias=True,
             dtype=self.activation_dtype,
         )
-        print(f"DEBUG Yolov11Conv2D: Output shape = {x.shape}")
         hw = output_height * output_width
         if x.shape[2] != hw:
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
@@ -223,9 +222,7 @@ class TtnnConv:
         )
 
     def __call__(self, device, x):
-        print(f"DEBUG TtnnConv: Input shape = {x.shape}")
         x = self.conv(x)
-        print(f"DEBUG TtnnConv: Output shape = {x.shape}")
         return x
 
 
