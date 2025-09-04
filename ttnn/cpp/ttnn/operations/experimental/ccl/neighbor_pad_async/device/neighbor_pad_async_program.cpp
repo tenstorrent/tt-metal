@@ -265,12 +265,12 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
                 auto& worker_reader_runtime_args = reader_runtime_args[core.x][core.y];
                 worker_reader_runtime_args[0] = input.buffer()->address();
                 worker_reader_runtime_args[1] = output.buffer()->address();
-                worker_reader_runtime_args[8] = out_ready_semaphore.address();
+                worker_reader_runtime_args[9] = out_ready_semaphore.address();
                 // writer
                 auto& worker_writer_runtime_args = writer_runtime_args[core.x][core.y];
                 worker_writer_runtime_args[0] = input.buffer()->address();
                 worker_writer_runtime_args[1] = output.buffer()->address();
-                worker_writer_runtime_args[12] = out_ready_semaphore.address();
+                worker_writer_runtime_args[13] = out_ready_semaphore.address();
 
                 // if (barrier_semaphore.has_value()) {
                 // 	worker_writer_sender_runtime_args[16] = barrier_semaphore.value().address();
