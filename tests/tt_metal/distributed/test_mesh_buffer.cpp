@@ -622,11 +622,13 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
 
     // Prepare destination buffer and pin the entire destination range for the target shard
-    std::vector<uint32_t> dst(bytes_per_device / sizeof(uint32_t), 0);
+    std::vector<uint32_t> dst((bytes_per_device + 32)/ sizeof(uint32_t), 0);
+    uint32_t *dst_ptr_aligned = reinterpret_cast<uint32_t*>((reinterpret_cast<uintptr_t>(dst.data()) + 31) & ~31);
+    fmt::println(stderr, "dst_ptr_aligned: {}", fmt::ptr(dst_ptr_aligned));
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
     auto pinned_unique = mesh_device_->pin_memory(
         coordinate_range_set,
-        static_cast<void*>(dst.data()),
+        static_cast<void*>(dst_ptr_aligned),
         bytes_per_device,
         /*map_to_noc=*/true);
     std::shared_ptr<PinnedMemory> pinned_shared = std::move(pinned_unique);
@@ -634,13 +636,15 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
     // Read back using enqueue_read_shards with pinned_memory populated
     auto read_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
         .shard_coord = coord,
-        .host_data = static_cast<void*>(dst.data()),
+        .host_data = static_cast<void*>(dst_ptr_aligned),
         .pinned_memory = pinned_shared,
         .region = BufferRegion(0, bytes_per_device),
     };
     mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
 
-    EXPECT_EQ(dst, src);
+    std::vector<uint32_t> dst_aligned(dst_ptr_aligned, dst_ptr_aligned + (bytes_per_device / sizeof(uint32_t)));
+
+    EXPECT_EQ(dst_aligned, src);
 }
 
 }  // namespace
