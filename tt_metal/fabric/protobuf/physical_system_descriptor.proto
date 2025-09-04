@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package tt.fabric.proto;
+
+// Ethernet connection between two ASICs
+message EthConnection {
+    uint32 src_chan = 1;
+    uint32 dst_chan = 2;
+    bool is_local = 3;
+}
+
+// Connection edge to another ASIC with multiple ethernet connections
+message AsicConnectionEdge {
+    uint64 dst_asic_id = 1;
+    repeated EthConnection eth_connections = 2;
+}
+
+// ASIC connectivity information
+message AsicConnections {
+    repeated AsicConnectionEdge asic_connections = 1;
+}
+
+// Graph of ASIC connectivity for a specific ASIC
+message AsicGraph {
+    uint64 asic_id = 1;
+    AsicConnections topology = 2;
+}
+
+// Host-specific ASIC connectivity information
+message HostAsicConnectivity {
+    string host_name = 1;
+    repeated AsicGraph asic_topologies = 2;
+}
+
+// Exit node connection between two hosts
+message ExitNodeConnection {
+    uint64 src_exit_node = 1;
+    uint64 dst_exit_node = 2;
+    EthConnection eth_conn = 3;
+}
+
+// Connection edge to another host with exit node connections
+message HostConnectionEdge {
+    string dst_host_name = 1;
+    repeated ExitNodeConnection exit_node_connections = 2;
+}
+
+// Host connectivity information
+message HostConnections {
+    string src_host_name = 1;
+    repeated HostConnectionEdge host_connections = 2;
+}
+
+// Physical connectivity graph containing both ASIC and host connectivity
+message PhysicalConnectivityGraph {
+    repeated HostAsicConnectivity asic_connectivity_graph = 1;
+    repeated HostConnections host_connectivity_graph = 2;
+}
+
+// ASIC descriptor information
+message AsicDescriptor {
+    uint32 tray_id = 1;
+    uint32 asic_location = 2;
+    uint32 board_type = 3;  // Enum value for BoardType
+    uint64 unique_id = 4;
+    string host_name = 5;
+}
+
+// Map entry for ASIC ID to descriptor
+message AsicDescriptorMap {
+    uint64 asic_id = 1;
+    AsicDescriptor asic_descriptor = 2;
+}
+
+// Map entry for host to motherboard name
+message HostToMoboMap {
+    string host_name = 1;
+    string mobo_name = 2;
+}
+
+// Map entry for host to rank
+message HostToRankMap {
+    string host_name = 1;
+    uint32 rank = 2;
+}
+
+// Exit node connection table entry
+message ExitNodeConnectionTable {
+    string host_name = 1;
+    repeated ExitNodeConnection exit_connections = 2;
+}
+
+// Top-level Physical System Descriptor message
+message PhysicalSystemDescriptor {
+    PhysicalConnectivityGraph system_graph = 1;
+    repeated AsicDescriptorMap asic_descriptors = 2;
+    repeated HostToMoboMap host_to_mobo_name = 3;
+    repeated HostToRankMap host_to_rank = 4;
+    repeated ExitNodeConnectionTable exit_node_connection_table = 5;
+}
