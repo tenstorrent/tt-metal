@@ -175,3 +175,17 @@ jobs:
             models/docs/MODEL_UPDATES.md
             tt-metalium.tar.gz
           fail_on_unmatched_files: true
+
+  create-docker-release-image:
+    needs: [
+      regression-testing,
+      create-tag,
+      create-and-upload-draft-release
+    ]
+    uses: ./.github/workflows/publish-release-image.yaml
+    secrets: inherit
+    if: github.ref != 'refs/heads/main'
+    with:
+      version: ${{ needs.create-tag.outputs.version }}
+      tag-latest:  ${{ needs.get-params.outputs.is-release-candidate != 'true' }}
+      wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
