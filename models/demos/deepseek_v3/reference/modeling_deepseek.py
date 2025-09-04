@@ -730,7 +730,9 @@ class DeepseekV3Attention(nn.Module):
         key_states[:, :, :, self.kv_lora_rank :] = k_pe
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-            key_states, _ = past_key_value.update(key_states, key_states, self.layer_idx, cache_kwargs)
+            key_states, _ = past_key_value.update(
+                key_states, torch.empty((*key_states.shape[:-1], 0)), self.layer_idx, cache_kwargs
+            )
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) * self.softmax_scale
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
@@ -1257,7 +1259,7 @@ class DeepseekV3Model(DeepseekV3PreTrainedModel):
 
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
-        # self.post_init()
+        self.post_init()
 
     def get_input_embeddings(self):
         return self.embed_tokens
