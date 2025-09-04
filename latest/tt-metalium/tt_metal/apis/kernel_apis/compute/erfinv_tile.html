@@ -23,7 +23,7 @@
     <script src="../../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../../genindex.html" />
     <link rel="search" title="Search" href="../../../../search.html" />
-    <link rel="next" title="gelu_tile" href="gelu_tile.html" />
+    <link rel="next" title="tanh_tile" href="tanh_tile.html" />
     <link rel="prev" title="erfc_tile" href="erfc_tile.html" /> 
 </head>
 
@@ -63,91 +63,14 @@
 <li class="toctree-l1 current"><a class="reference internal" href="../../index.html">APIs</a><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="../../host_apis.html">Host APIs</a></li>
 <li class="toctree-l2 current"><a class="reference internal" href="../../kernel_apis.html">Kernel APIs</a><ul class="current">
-<li class="toctree-l3"><a class="reference internal" href="../data_movement/data_movement.html">Data Movement APIs</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../circular_buffers/circular_buffers.html">Circular Buffer APIs</a></li>
-<li class="toctree-l3 current"><a class="reference internal" href="compute.html">Compute APIs</a><ul class="current">
-<li class="toctree-l4"><a class="reference internal" href="copy_tile.html">copy_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="move_copy_tile.html">move_copy_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="acquire_dst.html">acquire_dst</a></li>
-<li class="toctree-l4"><a class="reference internal" href="release_dst.html">release_dst</a></li>
-<li class="toctree-l4"><a class="reference internal" href="reg_api.html">reg_api</a></li>
-<li class="toctree-l4"><a class="reference internal" href="init_functions.html">any_init</a></li>
-<li class="toctree-l4"><a class="reference internal" href="abs_tile.html">abs_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="add_tiles.html">add_tiles</a></li>
-<li class="toctree-l4"><a class="reference internal" href="sub_tiles.html">sub_tiles</a></li>
-<li class="toctree-l4"><a class="reference internal" href="mul_tiles.html">mul_tiles</a></li>
-<li class="toctree-l4"><a class="reference internal" href="add_tiles_bcast.html">add_tiles_bcast</a></li>
-<li class="toctree-l4"><a class="reference internal" href="sub_tiles_bcast.html">sub_tiles_bcast</a></li>
-<li class="toctree-l4"><a class="reference internal" href="mul_tiles_bcast.html">mul_tiles_bcast</a></li>
-<li class="toctree-l4"><a class="reference internal" href="matmul_tiles.html">matmul_tiles</a></li>
-<li class="toctree-l4"><a class="reference internal" href="matmul_block.html">matmul_block</a></li>
-<li class="toctree-l4"><a class="reference internal" href="exp_tile.html">exp_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="exp2_tile.html">exp2_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="expm1_tile.html">expm1_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="relu_tile.html">relu_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="relu_tile.html#relu-max-tile">relu_max_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="relu_tile.html#relu-min-tile">relu_min_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="relu_tile.html#leaky-relu-tile">leaky_relu_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="elu_tile.html">elu_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="erf_tile.html">erf_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="erfc_tile.html">erfc_tile</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">erfinv_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="gelu_tile.html">gelu_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="heaviside_tile.html">heaviside_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="compute_kernel_hw_startup.html">compute_kernel_hw_startup</a></li>
-<li class="toctree-l4"><a class="reference internal" href="isinf_tile.html">isinf_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="isinf_tile.html#isposinf-tile">isposinf_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="isinf_tile.html#isneginf-tile">isneginf_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="isinf_tile.html#isfinite-tile">isfinite_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="isnan_tile.html">isnan_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="i0_tile.html">i0_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="logical_not_unary_tile.html">logical_not_unary_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="recip_tile.html">recip_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="sign_tile.html">sign_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="sqrt_tile.html">sqrt_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="rsqrt_tile.html">rsqrt_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="sigmoid_tile.html">sigmoid_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="log_tile.html">log_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="log_with_base_tile.html">log_with_base_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="power_tile.html">power_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="rsub_tile.html">rsub_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="signbit_tile.html">signbit_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="square_tile.html">square_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="reduce_tile.html">reduce_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="transpose_wh_tile.html">transpose_wh_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="tanh_tile.html">tanh_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="tan_tile.html">tan_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="sin_tile.html">sin_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="cos_tile.html">cos_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="asin_tile.html">asin_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="atan_tile.html">atan_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="acos_tile.html">acos_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="quant_tile.html">quant_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="requant_tile.html">requant_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="dequant_tile.html">dequant_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ltz_tile.html">ltz_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="eqz_tile.html">eqz_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="lez_tile.html">lez_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="gtz_tile.html">gtz_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="gez_tile.html">gez_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="nez_tile.html">nez_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="unary_ne_tile.html">unary_ne_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="unary_gt_tile.html">unary_gt_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="unary_lt_tile.html">unary_lt_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="unary_max_tile.html">unary_max_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="unary_min_tile.html">unary_min_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="cb_wait_front.html">cb_wait_front</a></li>
-<li class="toctree-l4"><a class="reference internal" href="cb_pop_front.html">cb_pop_front</a></li>
-<li class="toctree-l4"><a class="reference internal" href="cb_reserve_back.html">cb_reserve_back</a></li>
-<li class="toctree-l4"><a class="reference internal" href="cb_push_back.html">cb_push_back</a></li>
-<li class="toctree-l4"><a class="reference internal" href="binary_op_init_funcs.html">binary_init_funcs</a></li>
-<li class="toctree-l4"><a class="reference internal" href="tilize.html">tilize</a></li>
-<li class="toctree-l4"><a class="reference internal" href="untilize.html">untilize</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../kernel_apis.html#common-apis">Common APIs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../kernel_apis.html#data-movement">Data Movement</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../../kernel_apis.html#compute">Compute</a><ul class="current">
+<li class="toctree-l4 current"><a class="reference internal" href="compute.html">Compute APIs</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../pack_unpack/packing_apis.html">Packing APIs</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../sfpu/llk.html">Low Level Kernels</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="../kernel_args/kernel_args.html">Kernel Argument APIs</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../sfpu/llk.html">Low Level Kernels</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../pack_unpack/packing_apis.html">Packing APIs</a></li>
 </ul>
 </li>
 </ul>
@@ -239,7 +162,7 @@
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="erfc_tile.html" class="btn btn-neutral float-left" title="erfc_tile" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="gelu_tile.html" class="btn btn-neutral float-right" title="gelu_tile" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="tanh_tile.html" class="btn btn-neutral float-right" title="tanh_tile" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
