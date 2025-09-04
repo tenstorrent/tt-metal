@@ -51,7 +51,7 @@ void kernel_main() {
 #else
     constexpr uint32_t ct_arg_idx = 26;
 #endif
-#else 
+#else
     constexpr uint32_t ct_arg_idx = 17;
 #endif
 
