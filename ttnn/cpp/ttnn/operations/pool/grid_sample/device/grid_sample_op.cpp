@@ -4,7 +4,6 @@
 
 #include "grid_sample_op.hpp"
 
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/constants.hpp>
 
@@ -24,7 +23,16 @@ void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
     // Shape validation
     TT_FATAL(input_tensor.logical_shape().rank() == 4, "Input tensor must be 4D (N, C, H, W)");
     TT_FATAL(grid_tensor.logical_shape().rank() == 4, "Grid tensor must be 4D (N, H_out, W_out, 2)");
-    TT_FATAL(grid_tensor.logical_shape()[-1] == 2, "Grid tensor last dimension must be 2 (x, y coordinates)");
+
+    if (use_precomputed_grid_) {
+        TT_FATAL(
+            grid_tensor.logical_shape()[-1] == 6,
+            "Grid tensor last dimension must be 6 (h_nw, w_nw, weight_nw, weight_ne, weight_sw, weight_se)");
+    } else {
+        TT_FATAL(
+            grid_tensor.logical_shape()[-1] == 2, "Grid tensor last dimension must be 2 (x, y relative coordinates)");
+    }
+
     TT_FATAL(
         input_tensor.logical_shape()[0] == grid_tensor.logical_shape()[0],
         "Batch size mismatch between input and grid");
@@ -40,7 +48,6 @@ void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
     // Parameter validation - currently only support fixed configuration
     TT_FATAL(mode_ == "bilinear", "Only bilinear interpolation mode is currently supported");
     TT_FATAL(padding_mode_ == "zeros", "Only zeros padding mode is currently supported");
-    TT_FATAL(!use_precomputed_grid_, "Only use_precomputed_grid=false is currently supported");
 
     // Memory layout validation - for now only support interleaved
     TT_FATAL(

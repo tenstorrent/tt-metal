@@ -174,7 +174,6 @@ bool vecadd_multi_core(
 }
 }  // namespace unit_tests_common::vecadd::test_vecadd_multi_core
 
-
 TEST_F(MeshDispatchFixture, DISABLED_VecaddMultiCore) {
     GTEST_SKIP();
     uint32_t num_tiles = 64;

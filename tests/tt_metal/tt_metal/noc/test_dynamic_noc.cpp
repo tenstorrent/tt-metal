@@ -17,7 +17,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "device_fixture.hpp"
+#include "command_queue_fixture.hpp"
 #include "env_lib.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -25,6 +25,8 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
 
 namespace tt::tt_metal {
 
@@ -34,7 +36,7 @@ using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
 void build_and_run_program(
-    tt::tt_metal::IDevice* device,
+    std::shared_ptr<distributed::MeshDevice> device,
     bool slow_dispatch,
     uint32_t NUM_PROGRAMS,
     uint32_t MAX_LOOP,
@@ -46,7 +48,6 @@ void build_and_run_program(
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 
-    // CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
     CoreCoord worker_grid_size = {1,1};
     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     CoreRangeSet cr_set(cr);
@@ -62,6 +63,7 @@ void build_and_run_program(
     CreateCircularBuffer(program2, cr_set, cb_config);
 
     vector<uint32_t> compile_args = {MAX_LOOP, page_size};
+    tt_metal::TensorAccessorArgs().append_to(compile_args);
 
     auto brisc_kernel1 = CreateKernel(
         program1,
@@ -132,59 +134,49 @@ void build_and_run_program(
             tt::tt_metal::SetRuntimeArgs(program2, ncrisc_kernel2, core, rt_args);
         }
     }
-
-    tt::tt_metal::detail::CompileProgram(device, program1);
-    tt::tt_metal::detail::CompileProgram(device, program2);
+    distributed::MeshWorkload workload1;
+    distributed::MeshWorkload workload2;
+    distributed::AddProgramToMeshWorkload(
+        workload1, std::move(program1), distributed::MeshCoordinateRange(device->shape()));
+    distributed::AddProgramToMeshWorkload(
+        workload2, std::move(program2), distributed::MeshCoordinateRange(device->shape()));
 
     // This loop caches program1 and runs
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         log_info(tt::LogTest, "Running program1 {} of {}", i + 1, NUM_PROGRAMS);
         if (i % 2 == 0) {
-            if (slow_dispatch) {
-                tt::tt_metal::detail::LaunchProgram(device, program1);
-            } else {
-                EnqueueProgram(device->command_queue(), program1, false);
-            }
+            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload1, false);
         } else {
-            if (slow_dispatch) {
-                tt::tt_metal::detail::LaunchProgram(device, program2);
-            } else {
-                EnqueueProgram(device->command_queue(), program2, false);
-            }
+            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload2, false);
         }
     }
-    if (!slow_dispatch) {
-        Finish(device->command_queue());
-        log_info(tt::LogTest, "Finish FD runs");
-    } else {
-        log_info(tt::LogTest, "Finish SD runs");
-    }
+    distributed::Finish(device->mesh_command_queue());
 }
 
-TEST_F(DeviceSingleCardFastSlowDispatchFixture, TestDynamicNoCOneProgram) {
+TEST_F(UnitMeshCQFixture, TestDynamicNoCOneProgram) {
     uint32_t NUM_PROGRAMS = 1;
     uint32_t MAX_LOOP = 65536;
     uint32_t page_size = 1024;
     bool mix_noc_mode = false;
 
-    build_and_run_program(this->device_, this->slow_dispatch_, NUM_PROGRAMS, MAX_LOOP, page_size, mix_noc_mode);
+    build_and_run_program(this->devices_[0], this->slow_dispatch_, NUM_PROGRAMS, MAX_LOOP, page_size, mix_noc_mode);
 }
 
-TEST_F(DeviceSingleCardFastSlowDispatchFixture, TestDynamicNoCMutlipleProgram) {
+TEST_F(UnitMeshCQFixture, TestDynamicNoCMutlipleProgram) {
     uint32_t NUM_PROGRAMS = 3;
     uint32_t MAX_LOOP = 65536;
     uint32_t page_size = 1024;
     bool mix_noc_mode = false;
 
-    build_and_run_program(this->device_, this->slow_dispatch_, NUM_PROGRAMS, MAX_LOOP, page_size, mix_noc_mode);
+    build_and_run_program(this->devices_[0], this->slow_dispatch_, NUM_PROGRAMS, MAX_LOOP, page_size, mix_noc_mode);
 }
 
-TEST_F(DeviceSingleCardFastSlowDispatchFixture, TestDynamicNoCMutlipleProgramMixedMode) {
+TEST_F(UnitMeshCQFixture, TestDynamicNoCMutlipleProgramMixedMode) {
     uint32_t NUM_PROGRAMS = 5;
     uint32_t MAX_LOOP = 65536;
     uint32_t page_size = 1024;
     bool mix_noc_mode = true;
 
-    build_and_run_program(this->device_, this->slow_dispatch_, NUM_PROGRAMS, MAX_LOOP, page_size, mix_noc_mode);
+    build_and_run_program(this->devices_[0], this->slow_dispatch_, NUM_PROGRAMS, MAX_LOOP, page_size, mix_noc_mode);
 }
 }  // namespace tt::tt_metal

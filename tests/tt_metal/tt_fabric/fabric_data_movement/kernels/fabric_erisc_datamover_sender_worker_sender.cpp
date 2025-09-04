@@ -67,8 +67,8 @@ void kernel_main() {
     const uint32_t receiver_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t receiver_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
-    const InterleavedAddrGen<dest_is_dram> dest_addr_gen = {
-        .bank_base_address = dest_addr, .page_size = page_size};
+    constexpr auto dst_args = TensorAccessorArgs<5>();
+    const auto dest_addr_gen = TensorAccessor(dst_args, dest_addr, page_size);
 
     sender.open<true>();
 
