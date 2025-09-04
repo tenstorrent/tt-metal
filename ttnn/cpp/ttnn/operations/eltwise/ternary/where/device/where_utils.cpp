@@ -253,47 +253,40 @@ WhereBroadcastType get_broadcast_type(
 
     // Check for OUTER_BCAST: only for TTT variant since TTS doesn't have OUTER_BCAST kernel support
     if (!false_shape.empty()) {
-        // For TTT variant: shapes can be broadcasted to match predicate
-        bool can_broadcast = true;
+        // For outer broadcast, the last two dimensions (height and width) must match exactly
+        // This allows broadcasting in outer dimensions (dims beyond -2)
+        const bool height_matches = (predicate_shape[-2] == true_shape[-2]) && (predicate_shape[-2] == false_shape[-2]);
+        const bool width_matches = (predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]);
 
-        // Check if true_shape can be broadcasted to predicate_shape
-        if (true_shape.rank() > predicate_shape.rank()) {
-            can_broadcast = false;  // Cannot broadcast to smaller rank
-        } else {
-            // Check from the end: dimensions must either match or be 1 in the smaller tensor
-            for (int i = 0; i < true_shape.rank(); ++i) {
+        if (height_matches && width_matches) {
+            // Check if the shapes are compatible for broadcasting
+            // For outer broadcast, we allow different ranks as long as inner dims match
+            bool can_broadcast = true;
+
+            // Get the minimum rank to check common dimensions
+            int min_rank = std::min({predicate_shape.rank(), true_shape.rank(), false_shape.rank()});
+
+            // Check the common dimensions from the end
+            for (int i = 0; i < min_rank; ++i) {
                 int pred_dim = predicate_shape[predicate_shape.rank() - 1 - i];
                 int true_dim = true_shape[true_shape.rank() - 1 - i];
-                if (true_dim != 1 && true_dim != pred_dim) {
-                    can_broadcast = false;
-                    break;
-                }
-            }
-        }
-
-        // Check if false_shape can be broadcasted
-        if (false_shape.rank() > predicate_shape.rank()) {
-            can_broadcast = false;
-        } else {
-            for (int i = 0; i < false_shape.rank(); ++i) {
-                int pred_dim = predicate_shape[predicate_shape.rank() - 1 - i];
                 int false_dim = false_shape[false_shape.rank() - 1 - i];
-                if (false_dim != 1 && false_dim != pred_dim) {
-                    can_broadcast = false;
-                    break;
+
+                // For outer broadcast, we only need exact match in the last 2 dims (already checked)
+                // For other dims, standard broadcast rules apply (dims must be equal or 1)
+                if (i >= 2) {  // Checking dims beyond height and width
+                    bool dims_compatible = (pred_dim == true_dim || pred_dim == 1 || true_dim == 1) &&
+                                           (pred_dim == false_dim || pred_dim == 1 || false_dim == 1) &&
+                                           (true_dim == false_dim || true_dim == 1 || false_dim == 1);
+
+                    if (!dims_compatible) {
+                        can_broadcast = false;
+                        break;
+                    }
                 }
             }
-        }
 
-        // For OUTER_BCAST, the last two dimensions (height and width) must match exactly
-        // OUTER_BCAST should only be used for broadcasting in outer dimensions (-5, -4, -3)
-        if (can_broadcast) {
-            const bool height_matches =
-                (predicate_shape[-2] == true_shape[-2]) && (predicate_shape[-2] == false_shape[-2]);
-            const bool width_matches =
-                (predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]);
-
-            if (height_matches && width_matches) {
+            if (can_broadcast) {
                 return WhereBroadcastType::OUTER_BCAST;
             }
         }
@@ -359,18 +352,6 @@ WhereBroadcastType get_broadcast_type(
             (pred_h == true_h && pred_h == false_h)) {
             return WhereBroadcastType::COL_BCAST;
         }
-    }
-
-    return WhereBroadcastType::INVALID_BCAST;
-}
-
-WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& b_shape) {
-    if ((predicate_shape == b_shape)) {
-        return WhereBroadcastType::NONE;
-    }
-
-    if ((predicate_shape[-1] == b_shape[-1]) && (predicate_shape[-2] == b_shape[-2])) {
-        return WhereBroadcastType::OUTER_BCAST;
     }
 
     return WhereBroadcastType::INVALID_BCAST;
