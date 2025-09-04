@@ -443,10 +443,8 @@ class RotarySetup(LightweightModule):
         else:
             rot_idxs = position_idxs
             assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
-        breakpoint()
         # Send the idxs to device
         if rot_idxs.device != device:
-            breakpoint()
             rot_idxs = ttnn.to_device(rot_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         embedding_layout = ttnn.TILE_LAYOUT

@@ -366,7 +366,6 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
-        breakpoint()
         rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs_global)
         rot_mats_local = (
             self.rope_local_setup.get_rot_mats(rot_mat_idxs_local) if rot_mat_idxs_local is not None else None
