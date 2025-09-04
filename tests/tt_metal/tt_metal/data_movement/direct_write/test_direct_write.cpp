@@ -25,7 +25,6 @@ struct DirectWriteConfig {
     bool same_destination = true;            // All writes to same address vs different addresses
     bool use_stateful_approach = true;       // Stateful vs non-stateful approach
     bool same_value = false;                 // Write same value each time vs different values (stateful only)
-    uint32_t dest_l1_addr_offset = 0x20000;  // L1 address offset on receiver
     uint32_t addr_stride = 4;                // Address increment for different destinations
     NOC noc_id = NOC::NOC_0;
 };
@@ -238,8 +237,6 @@ void address_pattern_test(
 }
 
 }  // namespace unit_tests::dm::direct_write
-
-/* ========== TEST CASES ========== */
 
 TEST_F(DeviceFixture, TensixDirectWritePerformanceComparison) {
     // GTEST_SKIP() << "Skipping test";
