@@ -32,7 +32,7 @@ namespace sfpu {
 
 inline sfpi::vFloat calculate_gelu_chebychev(sfpi::vFloat val) {
     sfpi::vFloat result = 0.0f;
-    v_if(val >= -5.5f) {
+    v_if(val >= -3.0f) {
         result = POLYVAL15(
             -1.81205228163e-09,
             -4.59055119276e-08,
@@ -79,13 +79,13 @@ if (APPROXIMATION_MODE) {
         sfpi::vFloat result = in;
         v_if(in == 0.0f) { result = 0.0f; }
         v_elseif(in < 3.0f) { result = calculate_gelu_chebychev(in); }
-        v_endif sfpi::dst_reg[0] = result;
+        v_endif;
+        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
     // _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
 }
 }
-
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_gelu_derivative() {
     _calculate_gelu_derivative_<APPROXIMATION_MODE, ITERATIONS>();
