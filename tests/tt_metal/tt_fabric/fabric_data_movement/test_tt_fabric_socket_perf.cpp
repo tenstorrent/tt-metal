@@ -17,6 +17,9 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <fstream>
+#include <filesystem>
+#include <iomanip>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -58,7 +61,7 @@ struct PerfPoint {
     uint64_t bytes;  // p.tensor_bytes
     double sec;
     double ms;
-    double gbps;  // based on useful_bytes
+    double gbps;
 };
 
 struct PerfParams {
@@ -285,7 +288,6 @@ TEST_F(Fabric2DFixture, UnicastConn_SweepTensorSize) {
     base.sender_core = {0, 0};
     base.receiver_core = {0, 0};
 
-    // Choose sizes (multiples of page_size so useful==wire). Adjust as needed.
     std::vector<uint32_t> sizes_bytes = {
         1 * base.page_size,
         2 * base.page_size,
@@ -297,16 +299,35 @@ TEST_F(Fabric2DFixture, UnicastConn_SweepTensorSize) {
         128 * base.page_size,
         256 * base.page_size};
 
-    // CSV header: bytes,ms,GBps
-    std::cout << "bytes,ms,gbps\n";
+    std::vector<PerfPoint> results;
+    results.reserve(sizes_bytes.size());
 
     for (auto sz : sizes_bytes) {
         PerfParams p = base;
         p.tensor_bytes = sz;
 
         auto r = RunUnicastConnWithParams(this, p);
-        std::cout << r.bytes << "," << r.ms << "," << r.gbps << "\n";
+        results.push_back(r);
     }
+
+    std::filesystem::create_directories("artifacts");
+    const auto now = std::chrono::system_clock::now();
+    const auto ts = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+    const std::string csv_name = fmt::format(
+        "artifacts/unicast_sweep_m{}_s{}_d{}_p{}_t{}.csv",
+        base.mesh_id,
+        base.src_chip,
+        base.dst_chip,
+        base.page_size,
+        ts);
+    std::ofstream ofs(csv_name);
+    ofs << std::fixed << std::setprecision(6);
+    ofs << "bytes,ms,gbps\n";
+    for (const auto& r : results) {
+        ofs << r.bytes << "," << r.ms << "," << r.gbps << "\n";
+    }
+    ofs.close();
+    std::cout << "[perf] wrote " << results.size() << " points -> " << csv_name << "\n";
 }
 
 }  // namespace fabric_router_tests
