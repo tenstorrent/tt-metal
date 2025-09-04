@@ -11,16 +11,16 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_blackhole
 
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor
+from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 
 
 def run_neighbor_pad_impl(
     t3k_mesh_device,
-    num_devices,
     input_shape,
     dim,
     padding_left,
     padding_right,
+    cluster_axis,
     num_links,
     input_dtype,
     layout,
@@ -67,7 +67,8 @@ def run_neighbor_pad_impl(
 
     for i in range(num_iters):
         input_tensor = torch.rand(input_shape).bfloat16()
-        chunks = torch.chunk(input_tensor, num_devices, dim)
+        num_chunks = t3k_mesh_device.shape[cluster_axis]
+        chunks = torch.chunk(input_tensor, num_chunks, dim)
         np_output_tensor = []
         # pad left
         first_slice_front = torch.narrow(chunks[0], dim, 0, 1)
@@ -75,27 +76,29 @@ def run_neighbor_pad_impl(
         np_output_tensor.append(first_slice)
         for p in range(padding_left - 1):
             np_output_tensor[0] = torch.cat((first_slice_front, np_output_tensor[0]), dim=dim)
-        for k in range(1, num_devices):
+        for k in range(1, num_chunks):
             prev_halo = torch.narrow(chunks[k - 1], dim, chunks[k - 1].shape[dim] - padding_left, padding_left)
             np_output_tensor.append(torch.cat((prev_halo, chunks[k]), dim=dim))
 
         # pad right
-        last_slice_size = np_output_tensor[num_devices - 1].shape[dim]
-        last_slice_back = torch.narrow(np_output_tensor[num_devices - 1], dim, last_slice_size - 1, 1)
+        last_slice_size = np_output_tensor[num_chunks - 1].shape[dim]
+        last_slice_back = torch.narrow(np_output_tensor[num_chunks - 1], dim, last_slice_size - 1, 1)
         for p in range(padding_right):
-            np_output_tensor[num_devices - 1] = torch.cat((np_output_tensor[num_devices - 1], last_slice_back), dim=dim)
-        for k in range(0, num_devices - 1):
+            np_output_tensor[num_chunks - 1] = torch.cat((np_output_tensor[num_chunks - 1], last_slice_back), dim=dim)
+        for k in range(0, num_chunks - 1):
             next_halo = torch.narrow(chunks[k + 1], dim, 0, padding_right)
             np_output_tensor[k] = torch.cat((np_output_tensor[k], next_halo), dim=dim)
         np_output_tensor_goldens_list.append(torch.cat(np_output_tensor, dim=dim))
 
+        dims = [None, None]
+        dims[cluster_axis] = dim
         input_tensor_mesh = ttnn.from_torch(
             input_tensor,
             device=t3k_mesh_device,
             layout=layout,
             dtype=input_dtype,
             memory_config=mem_config_input,
-            mesh_mapper=ttnn.ShardTensorToMesh(t3k_mesh_device, dim=dim),
+            mesh_mapper=ttnn.ShardTensor2dMesh(t3k_mesh_device, mesh_shape=tuple(t3k_mesh_device.shape), dims=dims),
         )
 
         input_tensor_mesh_list.append(input_tensor_mesh)
@@ -110,7 +113,7 @@ def run_neighbor_pad_impl(
             padding_left=padding_left,
             padding_right=padding_right,
             padding_mode="replicate",
-            cluster_axis=1,
+            cluster_axis=cluster_axis,
             final_semaphore=ccl_semaphore_handles[i],
             barrier_semaphore=barrier_semaphore_handles[i],
             mesh_device=t3k_mesh_device,
@@ -154,9 +157,14 @@ def run_neighbor_pad_impl(
     for i in range(num_iters):
         tt_np_out_tensor = tt_neighbor_pad_out_tensor_list[i]
         torch_np_out_tensor = np_output_tensor_goldens_list[i if not enable_trace else 0]
-
         tt_np_out = ttnn.from_device(tt_np_out_tensor)
-        tt_np_out = ttnn.to_torch(tt_np_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=dim))
+        dims[cluster_axis] = dim
+        dims[1 - cluster_axis] = 1 - dim
+        tt_np_out = ttnn.to_torch(
+            tt_np_out,
+            mesh_composer=ConcatMesh2dToTensor(t3k_mesh_device, mesh_shape=tuple(t3k_mesh_device.shape), dims=dims),
+        )
+        tt_np_out = torch.narrow(tt_np_out, 1 - dim, 0, torch_np_out_tensor.shape[1 - dim])
         eq, output = comp_pcc(tt_np_out, torch_np_out_tensor, 1)
         logger.info(f"{output}, iteration {i}")
         assert eq, f"{i} FAILED np: {output}"
@@ -169,7 +177,7 @@ def run_neighbor_pad_impl(
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
             os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -177,18 +185,20 @@ def run_neighbor_pad_impl(
 )
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "num_devices, input_shape, dim, layout, input_dtype, padding_left, padding_right",
+    "input_shape, dim, layout, input_dtype, padding_left, padding_right, cluster_axis",
     [
-        (8, [32, 60, 106, 768], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0),
-        (8, [88, 120, 212, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0),
-        (8, [168, 240, 424, 256], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0),
-        (8, [168, 480, 848, 128], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0),
+        ([32, 60, 106, 768], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, 0),
+        ([88, 120, 212, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, 1),
+        ([168, 240, 424, 256], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, 1),
+        ([168, 480, 848, 128], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, 1),
+        ([32, 60, 106, 768], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, 1),
     ],
     ids=[
         "mochi_vae_1",
         "mochi_vae_2",
         "mochi_vae_3",
         "mochi_vae_4",
+        "left_and_right",
     ],
 )
 @pytest.mark.parametrize(
@@ -218,11 +228,11 @@ def run_neighbor_pad_impl(
 )
 def test_neighbor_pad_async(
     mesh_device,
-    num_devices,
     input_shape,
     dim,
     padding_left,
     padding_right,
+    cluster_axis,
     num_links,
     input_dtype,
     layout,
@@ -234,11 +244,11 @@ def test_neighbor_pad_async(
 ):
     run_neighbor_pad_impl(
         mesh_device,
-        num_devices=num_devices,
         input_shape=input_shape,
         dim=dim,
         padding_left=padding_left,
         padding_right=padding_right,
+        cluster_axis=cluster_axis,
         num_links=num_links,
         input_dtype=input_dtype,
         layout=layout,
