@@ -225,6 +225,8 @@ class TtASPP(nn.Module):
         W = x.shape[2]  # Width
         C = x.shape[3]  # Channels
 
+        print("Input shape:", input_shape)
+
         if H % self.pool_kernel_size[0] or W % self.pool_kernel_size[1]:
             raise ValueError(
                 "`pool_kernel_size` must be divisible by the shape of inputs. "
@@ -251,8 +253,15 @@ class TtASPP(nn.Module):
             ceil_mode=False,
         )
 
+        print("Shape after pooling, shape and padded shape:")
+        print(pooled.shape)
+        print(pooled.padded_shape)
+
         output_h = floor(H + 0 - self.pool_kernel_size[0]) + 1
         output_w = floor(W + 0 - self.pool_kernel_size[1]) + 1
+
+        print("Output H and W after pooling:")
+        print(output_h, output_w)
 
         pooled = ttnn.reshape(pooled, (N, output_h, output_w, C))
 
@@ -263,11 +272,22 @@ class TtASPP(nn.Module):
         pooled = self.pool_conv(pooled)
         pooled = self.activation(pooled)
 
+        print("Pooled after conv, shape and padded shape:")
+        print(pooled.shape)
+        print(pooled.padded_shape)
+
         current_h, current_w = pooled.shape[1], pooled.shape[2]
         scale_factor = [H // current_h, W // current_w]
 
         pooled = ttnn.to_layout(pooled, ttnn.ROW_MAJOR_LAYOUT)
+        print("Scale factor:", scale_factor)
+        print("Pooled before upsample, shape and padded shape:")
+        print(pooled.shape)
+        print(pooled.padded_shape)
         pooled = ttnn.upsample(pooled, scale_factor=scale_factor, mode="bilinear")
+        print("Pooled after upsample, shape and padded shape:")
+        print(pooled.shape)
+        print(pooled.padded_shape)
         pooled = ttnn.to_memory_config(pooled, ttnn.DRAM_MEMORY_CONFIG)
 
         res.append(pooled)
