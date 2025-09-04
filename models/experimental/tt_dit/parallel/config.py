@@ -26,6 +26,11 @@ class VAEParallelConfig(NamedTuple):
     tensor_parallel: ParallelFactor
 
 
+class MochiVAEParallelConfig(NamedTuple):
+    time_parallel: ParallelFactor
+    hw_parallel: ParallelFactor
+
+
 class OldParallelConfig(NamedTuple):
     mesh_shape: tuple[int, int]
     factor: int
@@ -70,7 +75,7 @@ def vae_all_gather(ccl_manager, x: ttnn.Tensor, cluster_axis: int = 1, dim: int 
 
 
 def vae_neighbor_pad(
-    ccl_manager, x: ttnn.Tensor, cluster_axis: int = 1, dim: int = 0, context_size: int = 2, direction: int = 0
+    ccl_manager, x: ttnn.Tensor, cluster_axis: int = 1, dim: int = 0, padding_left: int = 0, padding_right: int = 0
 ) -> ttnn.Tensor:
     global_semaphore = ccl_manager.get_np_ping_pong_semaphore(cluster_axis)
     barrier_semaphore = ccl_manager.get_barrier_semaphore(cluster_axis)
@@ -79,9 +84,9 @@ def vae_neighbor_pad(
     x_pad = ttnn.experimental.neighbor_pad_async(
         x,
         dim=dim,
-        padding=context_size,
+        padding_left=padding_left,
+        padding_right=padding_right,
         padding_mode="replicate",
-        direction=direction,
         cluster_axis=cluster_axis,
         final_semaphore=global_semaphore,
         barrier_semaphore=barrier_semaphore,
