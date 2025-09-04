@@ -25,8 +25,45 @@ std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile) {
-    return pack_fp32_vec_as_bfp_tiles<tt::DataFormat::Bfp8_b>(fp32_vec, row_major_input, is_exp_a, tile);
+    return pack_as_bfp_tiles<tt::DataFormat::Bfp8_b>(fp32_vec, row_major_input, is_exp_a, tile);
 }
+
+template <typename T>
+std::vector<uint32_t> pack_as_bfp8_tiles(
+    tt::stl::Span<const T> data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile) {
+    return pack_as_bfp_tiles<tt::DataFormat::Bfp8_b>(data, row_major_input, is_exp_a, tile);
+}
+
+template std::vector<uint32_t> pack_as_bfp8_tiles<bfloat16>(
+    tt::stl::Span<const bfloat16> data,
+    bool row_major_input,
+    bool is_exp_a,
+    const std::optional<tt::tt_metal::Tile>& tile);
+template std::vector<uint32_t> pack_as_bfp8_tiles<float>(
+    tt::stl::Span<const float> data,
+    bool row_major_input,
+    bool is_exp_a,
+    const std::optional<tt::tt_metal::Tile>& tile);
+template std::vector<uint32_t> pack_as_bfp8_tiles<int32_t>(
+    tt::stl::Span<const int32_t> data,
+    bool row_major_input,
+    bool is_exp_a,
+    const std::optional<tt::tt_metal::Tile>& tile);
+template std::vector<uint32_t> pack_as_bfp8_tiles<uint32_t>(
+    tt::stl::Span<const uint32_t> data,
+    bool row_major_input,
+    bool is_exp_a,
+    const std::optional<tt::tt_metal::Tile>& tile);
+template std::vector<uint32_t> pack_as_bfp8_tiles<uint8_t>(
+    tt::stl::Span<const uint8_t> data,
+    bool row_major_input,
+    bool is_exp_a,
+    const std::optional<tt::tt_metal::Tile>& tile);
+template std::vector<uint32_t> pack_as_bfp8_tiles<uint16_t>(
+    tt::stl::Span<const uint16_t> data,
+    bool row_major_input,
+    bool is_exp_a,
+    const std::optional<tt::tt_metal::Tile>& tile);
 
 std::vector<float> unpack_bfp8_tiles_into_float_vec(
     tt::stl::Span<const uint32_t> bfp8_tiles,
@@ -180,49 +217,4 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
         }
     }
     return float_vec;
-}
-
-std::vector<uint32_t> create_random_vector_of_bfp8(
-    uint32_t num_bytes, bool is_exp_a, int rand_max_float, int seed, float offset) {
-    uint32_t single_bfp8_tile_size = tile_size(tt::DataFormat::Bfp8_b);
-    TT_ASSERT(num_bytes % single_bfp8_tile_size == 0);
-    uint32_t num_tiles = num_bytes / single_bfp8_tile_size;
-
-    auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
-
-    int packed_data_size = num_bytes / sizeof(float);
-    int num_float_in_tile = 1024;
-    int float_data_size = num_tiles * num_float_in_tile;
-
-    std::vector<float> fp32_vec(float_data_size, 0);
-    for (int i = 0; i < fp32_vec.size(); i++) {
-        fp32_vec.at(i) = rand_float() + offset;
-    }
-
-    std::vector<uint32_t> packed_result = pack_fp32_vec_as_bfp8_tiles(fp32_vec, /*row_major_input=*/true, is_exp_a);
-
-    TT_ASSERT(packed_result.size() == packed_data_size);
-
-    return packed_result;
-}
-
-std::vector<uint32_t> create_constant_vector_of_bfp8(uint32_t num_bytes, float value, bool is_exp_a) {
-    uint32_t single_bfp8_tile_size = tile_size(tt::DataFormat::Bfp8_b);
-    TT_ASSERT(num_bytes % single_bfp8_tile_size == 0);
-    uint32_t num_tiles = num_bytes / single_bfp8_tile_size;
-
-    int packed_data_size = num_bytes / sizeof(float);
-    int num_float_in_tile = 1024;
-    int float_data_size = num_tiles * num_float_in_tile;
-
-    std::vector<float> fp32_vec(float_data_size, 0);
-    for (int i = 0; i < fp32_vec.size(); i++) {
-        fp32_vec.at(i) = value;
-    }
-
-    std::vector<uint32_t> packed_result = pack_fp32_vec_as_bfp8_tiles(fp32_vec, /*row_major_input=*/true, is_exp_a);
-
-    TT_ASSERT(packed_result.size() == packed_data_size);
-
-    return packed_result;
 }
