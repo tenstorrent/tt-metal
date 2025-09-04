@@ -61,7 +61,7 @@ def get_DRAM_conv_config(module_path, idx):
                     num_slices = 4
             else:
                 num_slices = 16
-        if block_id == 2 and "upsamplers" not in module_path:
+        if block_id == 3 and "upsamplers" not in module_path:
             if "resnets.0" in module_path and idx == 1:
                 num_slices = 16
             else:
