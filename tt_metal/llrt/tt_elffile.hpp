@@ -65,10 +65,10 @@ public:
 
     // Read an elf file, populate segments vector.
     // Path must remain live throughout processing.
-    void ReadImage(std::string_view path);
+    void ReadImage(const std::string& path);
 
     // Write the (now-processed) elf file.
-    void WriteImage(std::string const& path);
+    void WriteImage(const std::string& path);
 
     // Weaken data symbols, remove all others. Keep STRONG_NAMES
     // strong (can be non-data symbols).  Names can be exact or simple
