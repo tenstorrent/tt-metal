@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <stdexcept>
 
+// NOLINTBEGIN(cppcoreguidelines-no-malloc)
 using namespace ttsl::detail::llvm;
 
 // Check that no bytes are wasted and everything is well-aligned.
@@ -176,3 +177,4 @@ static_assert(
 static_assert(
     sizeof(SmallVectorSizeType<char>) == sizeof(uint32_t), "Expected SmallVectorBase<uint32_t> variant to be in use.");
 #endif
+// NOLINTEND(cppcoreguidelines-no-malloc)

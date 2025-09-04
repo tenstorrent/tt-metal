@@ -33,6 +33,7 @@
 #include <cstdlib>
 #include <stdexcept>
 
+// NOLINTBEGIN(cppcoreguidelines-no-malloc)
 namespace ttsl::detail::llvm {
 
 [[nodiscard]] inline void* safe_malloc(size_t Sz) {
@@ -78,3 +79,4 @@ namespace ttsl::detail::llvm {
 }
 
 }  // namespace ttsl::detail::llvm
+// NOLINTEND(cppcoreguidelines-no-malloc)

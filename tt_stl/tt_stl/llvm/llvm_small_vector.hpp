@@ -46,6 +46,7 @@
 #include <type_traits>
 #include <utility>
 
+// NOLINTBEGIN(cppcoreguidelines-no-malloc)
 namespace ttsl::detail::llvm {
 
 template <typename T>
@@ -1347,3 +1348,5 @@ inline void swap(ttsl::detail::llvm::SmallVector<T, N>& LHS, ttsl::detail::llvm:
 }
 
 }  // end namespace std
+
+// NOLINTEND(cppcoreguidelines-no-malloc)
