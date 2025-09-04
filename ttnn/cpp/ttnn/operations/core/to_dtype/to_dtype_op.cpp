@@ -146,11 +146,7 @@ Tensor ToDtype::invoke(const ttnn::Tensor& input_tensor, const ttnn::DataType& d
             input_tensor.logical_shape(),
             input_tensor.padded_shape()));
 
-    return Tensor(
-        tt::tt_metal::HostStorage(std::move(output_storage)),
-        output_spec,
-        input_tensor.distributed_tensor_config(),
-        input_tensor.tensor_topology());
+    return Tensor(tt::tt_metal::HostStorage(std::move(output_storage)), output_spec, input_tensor.tensor_topology());
 };
 
 }  // namespace ttnn::operations::core
