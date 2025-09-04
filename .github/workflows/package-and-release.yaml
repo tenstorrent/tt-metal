@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "If true, do not upload tag or draft release."
+        description: "Dry-run: If true, do not upload tag or draft release."
         required: false
         default: false
         type: boolean
