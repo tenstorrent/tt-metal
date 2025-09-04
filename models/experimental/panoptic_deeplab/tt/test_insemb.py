@@ -17,6 +17,12 @@ import ttnn
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
 def test_ttnn_wholeInsEmbed(device):
+    compute_grid = device.compute_with_storage_grid_size()
+
+    print(f"compute_grid: {compute_grid.x}x{compute_grid.y}")
+    if compute_grid.x != 5 or compute_grid.y != 4:
+        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+
     torch.manual_seed(0)
 
     # 1. Definicija Konfiguracije Modela (uglavnom ista kao SemSeg)
