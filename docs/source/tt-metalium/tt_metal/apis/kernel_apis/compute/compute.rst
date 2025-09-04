@@ -1,13 +1,13 @@
 Compute APIs
 ============
 
-This page contains a list of APIs avaliable in the compute kernels. These API govern differnt aspects of the compute kernel. Including
+This page lists the APIs available in the compute kernels. These APIs cover:
 
-* Synchronization between the 3 cores runing the compute kernel cooperatively
-* Copying data between SRAM and registers that the compute engines use
-* Perform the computation
+* Synchronization between the three cores running the compute kernel cooperatively
+* Copying data between SRAM and the registers used by the compute engines
+* Performing computations
 
-To undeerstand what parameters to pass to these functions and what they mean, please refer to the :ref:`Compute Engines and Data Flow within Tensix<compute_engines_and_dataflow_within_tensix>` documentation for more details.
+For details on function parameters and their meanings, see the :ref:`Compute Engines and Data Flow within Tensix<compute_engines_and_dataflow_within_tensix>` documentation.
 
 Synchronization
 ---------------
