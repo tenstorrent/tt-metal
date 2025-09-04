@@ -414,12 +414,22 @@ class AddTensorGroupUnittest(UnitTestOperation):
 
     def generate_code(self) -> str:
         """Generate the code for this add tensor unit test operation."""
+        # Fix the broken set() pattern with proper parameter generation
+        param_tuples = []
+        for shape in self.input_shape_list:
+            if 0 in shape and 1 in shape:
+                param_tuples.append(f"        ({shape[0]}, {shape[1]})")
+
+        # Remove duplicates while preserving order
+        unique_params = list(dict.fromkeys(param_tuples))
+        params_str = ",\n".join(unique_params) if unique_params else "        ([1, 1, 32, 32], [1, 1, 32, 32])"
+
         return f"""
 
 @pytest.mark.parametrize(
     "input_shape_a, input_shape_b",
     (
-{''.join(set(f'        ({shape[0]}, {shape[1]}),' for shape in self.input_shape_list if 0 in shape and 1 in shape))}
+{params_str},
     )
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
@@ -428,6 +438,10 @@ def test_add_tensor(device, input_shape_a, input_shape_b, dtype, layout):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip("Issue #6984: Compute Grid size too small")
+
+    # Skip incompatible combinations: bfloat8_b/bfloat4_b requires TILE_LAYOUT
+    if (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b) and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("bfloat8_b/bfloat4_b requires TILE_LAYOUT, skipping ROW_MAJOR_LAYOUT combination")
 
     torch_input_tensor_a = torch.randn(input_shape_a, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn(input_shape_b, dtype=torch.bfloat16)
