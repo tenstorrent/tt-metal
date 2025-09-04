@@ -1726,7 +1726,13 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
         this->write_fabric_connections_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
         this->write_routing_tables_to_eth_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
     }
-    // this->write_all_to_all_routing_fields_1D<true>(16);
+    MeshShape mesh_shape = this->get_physical_mesh_shape(MeshId{0});
+    uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
+    uint16_t ew_dim = mesh_shape[1];  // east-west dimension
+    this->write_all_to_all_routing_fields_1D<true>(num_chips);
+    TT_ASSERT(num_chips <= 1024, "Number of chips exceeds 1024");
+    TT_ASSERT(mesh_shape[0] <= 32 && mesh_shape[1] <= 32, "One or both of mesh axis exceed 32");
+    this->write_all_to_all_routing_fields_2D<true>(num_chips, ew_dim);
 }
 
 // TODO: remove this after TG is deprecated
