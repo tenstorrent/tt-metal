@@ -22,7 +22,7 @@ class Yolov11Conv2D:
         is_detect=False,
         is_dfl=False,
         config_override=None,
-        deallocate_activation=True,  # Enable aggressive memory deallocation
+        deallocate_activation=False,  # Enable aggressive memory deallocation
     ):
         self.is_detect = is_detect
         self.activation = activation
