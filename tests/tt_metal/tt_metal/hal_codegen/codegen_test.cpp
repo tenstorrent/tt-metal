@@ -66,4 +66,10 @@ TEST(CodegenTest, CodegenTest) {
     }
     // Verify that after modification, the view reflects the changes
     verify_equal(*raw_ptr, const_view);
+    for (auto hop : mutable_view.trace_route()) {
+        auto ts = hop.timestamp();
+        EXPECT_EQ(ts.year(), 2024);
+        EXPECT_EQ(ts.month(), 6);
+        EXPECT_EQ(ts.day(), 24);
+    }
 }
