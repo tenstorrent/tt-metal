@@ -396,42 +396,68 @@ TEST_F(DeviceFixture, VerifyLogicalToVirtualMap) {
             }
         }
 
-        CoreCoord logical_core(0, 0);
+        CoreRange logical_core_range(CoreCoord(0, 0), CoreCoord(logical_grid_size.x - 1, logical_grid_size.y - 1));
         tt_metal::Program program = tt_metal::CreateProgram();
         uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-        std::vector<uint32_t> host_buffer;
-        uint32_t read_size = sizeof(uint32_t) * logical_grid_size.x * logical_grid_size.y;
-        std::vector<uint32_t> logical_col_to_virtual_col(logical_grid_size.x);
-        std::vector<uint32_t> logical_row_to_virtual_row(logical_grid_size.y);
+        std::array<std::vector<uint32_t>, 2> host_buffers;
+        uint32_t read_size = sizeof(uint32_t) * (logical_grid_size.x + logical_grid_size.y);
 
-        auto pcie_reader = tt_metal::CreateKernel(
+        auto kernel0_l1_address = l1_unreserved_base;
+        auto kernel0 = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/read_logical_to_virtual_table.cpp",
-            logical_core,
+            logical_core_range,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::NOC_0,
+                .compile_args = {kernel0_l1_address, logical_grid_size.x, logical_grid_size.y}});
+
+        auto kernel1_l1_address = l1_unreserved_base + (((logical_grid_size.x + 3) / 4) * 4) * sizeof(uint32_t) +
+                                  (((logical_grid_size.y + 3) / 4) * 4) * sizeof(uint32_t);
+        auto kernel1 = tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/read_logical_to_virtual_table.cpp",
+            logical_core_range,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = tt_metal::NOC::NOC_0,
-                .compile_args = {l1_unreserved_base, logical_grid_size.x, logical_grid_size.y}});
+                .noc = tt_metal::NOC::NOC_1,
+                .compile_args = {kernel1_l1_address, logical_grid_size.x, logical_grid_size.y}});
 
         tt_metal::detail::LaunchProgram(device, program);
 
-        tt_metal::detail::ReadFromDeviceL1(device, logical_core, l1_unreserved_base, read_size, host_buffer);
+        for (size_t x = 0; x < logical_grid_size.x; x++) {
+            for (size_t y = 0; y < logical_grid_size.y; y++) {
+                CoreCoord logical_core(x, y);
+                tt_metal::detail::ReadFromDeviceL1(
+                    device, logical_core, kernel0_l1_address, read_size, host_buffers[0]);
+                tt_metal::detail::ReadFromDeviceL1(
+                    device, logical_core, kernel1_l1_address, read_size, host_buffers[1]);
 
-        size_t host_buffer_offset = 0;
-        bool first_half = true;
-        for (size_t i = 0; i < logical_grid_size.x; i++) {
-            logical_col_to_virtual_col[i] = host_buffer[host_buffer_offset++];
-        }
-        for (size_t i = 0; i < logical_grid_size.y; i++) {
-            logical_row_to_virtual_row[i] = host_buffer[host_buffer_offset++];
-        }
+                for (size_t index = 0; index < host_buffers.size(); index++) {
+                    std::vector<uint32_t> logical_col_to_virtual_col(logical_grid_size.x);
+                    std::vector<uint32_t> logical_row_to_virtual_row(logical_grid_size.y);
+                    size_t host_buffer_offset = 0;
+                    bool first_half = true;
 
-        for (auto test_coords : logical_to_virtual_map) {
-            auto virtual_coord = tt_xy_pair{
-                logical_col_to_virtual_col[test_coords.first.x], logical_row_to_virtual_row[test_coords.first.y]};
-            EXPECT_EQ(test_coords.second, virtual_coord) << "Logical coord: " << test_coords.first.str()
-                                                         << " does not match virtual coord: " << virtual_coord.str()
-                                                         << " expected: " << test_coords.second.str();
+                    for (size_t i = 0; i < logical_grid_size.x; i++) {
+                        logical_col_to_virtual_col[i] = host_buffers[index][host_buffer_offset++];
+                    }
+                    for (size_t i = 0; i < logical_grid_size.y; i++) {
+                        logical_row_to_virtual_row[i] = host_buffers[index][host_buffer_offset++];
+                    }
+
+                    for (auto test_coords : logical_to_virtual_map) {
+                        auto virtual_coord = tt_xy_pair{
+                            logical_col_to_virtual_col[test_coords.first.x],
+                            logical_row_to_virtual_row[test_coords.first.y]};
+                        EXPECT_EQ(test_coords.second, virtual_coord)
+                            << "At logical core X,Y " << x << "," << y << " on RISCV_" << index
+                            << " logical coord: " << test_coords.first.str()
+                            << " does not match expected virtual coord: " << test_coords.second.str()
+                            << " instead found virtual coord: " << virtual_coord.str();
+                    }
+                }
+            }
         }
     }
 }
