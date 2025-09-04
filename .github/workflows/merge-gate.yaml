@@ -162,7 +162,7 @@ jobs:
       matrix:
         platform: [
           "N300-viommu",
-          "N300-llmbox",
+          "N300-llmbox-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -185,7 +185,7 @@ jobs:
       matrix:
         platform: [
           "N300-viommu",
-          "N300-llmbox",
+          "N300-llmbox-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
