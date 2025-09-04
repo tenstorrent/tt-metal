@@ -815,11 +815,6 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     runs-on: tt-ubuntu-2204-large-stable
     steps:
-      - name: Checkout repository for actions
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            .github/actions
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
@@ -841,12 +836,29 @@ jobs:
           name: sweeps-run-result
           path: /work/tests/sweep_framework/results_export/oprun_*.json
           retention-days: 7
-      - name: Upload sweep results to SFTP server
-        if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs.upload_results }}
+
+  ttnn-upload-results:
+    name: Upload sweep results (host)
+    needs:
+      - ttnn-homogenize-and-publish-run-result
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs.upload_results }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository (actions only)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/actions
+      - name: Download homogenized results
+        uses: actions/download-artifact@v4
+        with:
+          name: sweeps-run-result
+          path: .
+      - name: Upload via SFTP
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/optest_batchfile.txt
           username: ml-kernel-op-test-writer
           hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
-          path: /work
+          path: ${{ github.workspace }}
