@@ -91,6 +91,8 @@ protected:
     std::unordered_set<uint32_t> asic_locations_;
 };
 
-Board create_board(const std::string& board_name);
+Board create_board(tt::umd::BoardType board_type);
+
+tt::umd::BoardType get_board_type_from_string(const std::string& board_name);
 
 }  // namespace tt::scaleout_tools
