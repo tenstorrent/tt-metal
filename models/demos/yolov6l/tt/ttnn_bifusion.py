@@ -15,7 +15,7 @@ except ModuleNotFoundError:
 
 
 class TtBiFusion:
-    def __init__(self, device, parameters, model_params):
+    def __init__(self, device, parameters, model_params, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED):
         self.parameters = parameters
         self.model_params = model_params
         self.cv1 = Yolov6l_Conv2D(
@@ -41,7 +41,7 @@ class TtBiFusion:
         self.upsample = Yolov6x_Conv_T_2D(
             model_params.upsample.upsample_transpose,
             parameters.upsample.upsample_transpose,
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            shard_layout=shard_layout,
             device=device,
         )
         self.downsample = Yolov6l_Conv2D(
