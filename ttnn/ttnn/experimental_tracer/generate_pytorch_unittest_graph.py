@@ -1107,21 +1107,36 @@ def test_silu(device, input_shape, dtype, layout):
 
 class DivTensorGroupUnittest(UnitTestOperation):
     def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
-        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
-        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 2]
-        self.input_shape_list = [
-            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
-        ]
+        self.input_shape_list = self._process_div_operations(input_shapes_list)
         HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def _process_div_operations(self, input_shapes_list: List[Optional[Dict[int, Any]]]) -> List[Dict[str, Any]]:
+        """Process div operations to extract input shapes properly."""
+        processed_ops = []
+        for shapes in input_shapes_list:
+            if shapes and len(shapes) >= 2 and 0 in shapes and 1 in shapes:
+                shape_a = list(shapes[0]) if isinstance(shapes[0], torch.Size) else list(shapes[0])
+                shape_b = list(shapes[1]) if isinstance(shapes[1], torch.Size) else list(shapes[1])
+                processed_ops.append({"shape_a": shape_a, "shape_b": shape_b})
+        return processed_ops
 
     def generate_code(self) -> str:
         """Generate the code for this div tensor unit test operation."""
+        # Generate parameter tuples properly
+        param_tuples = []
+        for op in self.input_shape_list:
+            param_tuples.append(f"        ({op['shape_a']}, {op['shape_b']})")
+
+        # Remove duplicates while preserving order
+        unique_params = list(dict.fromkeys(param_tuples))
+        params_str = ",\n".join(unique_params) if unique_params else "        ([1, 1, 32, 32], [1, 1, 32, 32])"
+
         return f"""
 
 @pytest.mark.parametrize(
     "input_shape_a, input_shape_b",
     (
-{''.join(set(f'        ({shape[0]}, {shape[1]}),' for shape in self.input_shape_list if 0 in shape and 1 in shape))}
+{params_str},
     )
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
