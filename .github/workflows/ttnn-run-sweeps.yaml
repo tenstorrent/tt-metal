@@ -838,7 +838,7 @@ jobs:
           retention-days: 7
 
   ttnn-upload-results:
-    name: Upload sweep results (host)
+    name: Upload sweep results to SFTP server
     needs:
       - ttnn-homogenize-and-publish-run-result
     if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs.upload_results }}
@@ -853,7 +853,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: sweeps-run-result
-          path: .
+          path: tests/sweep_framework/results_export
       - name: Upload via SFTP
         uses: ./.github/actions/upload-data-via-sftp
         with:
