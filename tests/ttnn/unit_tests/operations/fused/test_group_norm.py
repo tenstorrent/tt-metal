@@ -40,7 +40,8 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
 @pytest.mark.parametrize("H", [32])
 @pytest.mark.parametrize("W", [32])
 @pytest.mark.parametrize("num_groups", [32])
-def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups):
+@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
+def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welford):
     torch.manual_seed(0)
 
     grid_size = ttnn.CoreGrid(y=1, x=8)
@@ -108,6 +109,7 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups):
         bias=beta_t,
         memory_config=sharded_mem_config,
         core_grid=grid_size,
+        use_welford=use_welford,
     )
 
     output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
@@ -128,7 +130,8 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups):
         # (1, 960, 1, 4096, 32),
     ],
 )
-def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_groups):
+@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
+def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_groups, use_welford):
     torch.manual_seed(0)
 
     grid_size = ttnn.CoreGrid(y=4, x=8)
@@ -200,6 +203,7 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
         bias=beta_t,
         memory_config=sharded_mem_config,
         core_grid=grid_size,
+        use_welford=use_welford,
     )
 
     # output tensor
@@ -229,7 +233,8 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
         # (1, 640, 1, 8192, 32),
     ],
 )
-def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_groups):
+@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
+def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_groups, use_welford):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
@@ -303,6 +308,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
         bias=beta_t,
         memory_config=sharded_mem_config,
         core_grid=grid_size,
+        use_welford=use_welford,
     )
 
     # output tensor
@@ -322,7 +328,8 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
         (1, 2560, 1, 512, 32),
     ],
 )
-def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, W, num_groups):
+@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
+def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, W, num_groups, use_welford):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
@@ -397,6 +404,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, 
         memory_config=sharded_mem_config,
         core_grid=grid_size,
         inplace=False,
+        use_welford=use_welford,
     )
 
     # output tensor
@@ -446,7 +454,8 @@ def generate_sdxl_test_inputs():
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
-def test_sdxl_base_group_norm(device, input_shape):
+@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
+def test_sdxl_base_group_norm(device, input_shape, use_welford):
     num_groups = 32  #  always 32 for SDXL Base 1024x1024
     N, C, H, W = input_shape
     torch.manual_seed(0)
@@ -500,6 +509,7 @@ def test_sdxl_base_group_norm(device, input_shape):
         memory_config=sharded_mem_config,
         core_grid=grid_size,
         inplace=tt_input_tensor.layout != ttnn.TILE_LAYOUT,
+        use_welford=use_welford,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
@@ -518,7 +528,8 @@ def generate_sdxl_test_inputs_neg_mask():
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 47000}], indirect=True)
 @pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs_neg_mask())
-def test_sdxl_base_group_norm_negative_mask(device, input_shape):
+@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
+def test_sdxl_base_group_norm_negative_mask(device, input_shape, use_welford):
     num_groups = 32  #  always 32 for SDXL Base 1024x1024
     N, C, H, W = input_shape
     torch.manual_seed(0)
@@ -607,6 +618,7 @@ def test_sdxl_base_group_norm_negative_mask(device, input_shape):
         core_grid=grid_size,
         weight=gamma_t,
         bias=beta_t,
+        use_welford=use_welford,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
@@ -621,7 +633,8 @@ def test_sdxl_base_group_norm_negative_mask(device, input_shape):
 @pytest.mark.parametrize("H", [64])
 @pytest.mark.parametrize("W", [64])
 @pytest.mark.parametrize("num_groups", [32])
-def test_group_norm_compute_config(device, N, C, H, W, num_groups):
+@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
+def test_group_norm_compute_config(device, N, C, H, W, num_groups, use_welford):
     """
     Test that a high-accuracy compute kernel config produces a higher PCC with torch
     than a lower-accuracy compute kernel config.
@@ -676,6 +689,7 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
             memory_config=sharded_mem_config,
             core_grid=grid_size,
             compute_kernel_config=compute_config,
+            use_welford=use_welford,
         )
         tt_output_tensor_host = ttnn.from_device(tt_output_tensor)
         tt_output_tensor_host = ttnn.to_torch(tt_output_tensor_host)

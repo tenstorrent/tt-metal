@@ -18,6 +18,8 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/welford.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -92,6 +94,7 @@ void MAIN {
     uint32_t index_h_offset = 0;
     uint32_t index_b_offset = 0;
     uint32_t index_g_offset = 0;
+    uint32_t tile_offset = 0;
     // inplace out cbs
     bool copy_or_add = true;
     uint32_t group_reset_index = 0;
@@ -169,29 +172,47 @@ void MAIN {
     index_b_offset = 0;
     for (uint32_t b = 0; b < batch; ++b) {
         index_g_offset = 0;
+        tile_offset = 0;
         for (uint32_t g = 0; g < group; ++g) {
+            uint32_t curr_xy_coord = 0;
+            uint32_t curr_xy_limit = 0;
+
             // Compute Welford values and write to cb_ex_partial
             index_h_offset = index_b_offset + index_g_offset;
             cb_reserve_back(cb_ex_partial, 1);
+            welford_init();
             tile_regs_acquire();
             for (uint32_t i = 0; i < block_h; ++i) {
+                curr_xy_limit += num_cols_per_group;
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; ++j) {
                     for (uint32_t w = 0; w < subblock_w; ++w) {
                         uint32_t index = w + index_subblock_w_offset + index_h_offset;
+
+                        // Check if this is the first tile in the row and set tile_offset accordingly
+                        auto this_tile_offset = (j + w) ? 0 : tile_offset;
 #ifdef TILIZE_IN
-                        // mul_tiles(cb_in, cb_input_mask, index, index_mask, w);
+                        transpose_wh_init_short(cb_in);
+                        transpose_wh_tile(cb_in, index, 0);
 #else
-                        // mul_tiles(cb_in0, cb_input_mask, index, index_mask, w);
+                        transpose_wh_init_short(cb_in0);
+                        transpose_wh_tile(cb_in0, index, 0);
 #endif
+                        welford_tile<0, 1, 2, false>(curr_xy_coord, curr_xy_limit, this_tile_offset);
+                        curr_xy_coord += std::min(32 - this_tile_offset, curr_xy_limit - curr_xy_coord);
                     }
                     index_subblock_w_offset += subblock_w;
                 }
                 index_h_offset += per_core_N;
             }
+            welford_final(curr_xy_limit);  // Convert M2 to variance
+
+            // Update for next group
+            tile_offset = (tile_offset + num_cols_per_group) % TILE_WIDTH;
+
             tile_regs_commit();
             tile_regs_wait();
-            // TODO: Pack here
+            pack_tile_block(1, cb_ex_partial, 2);
             tile_regs_release();
             cb_push_back(cb_ex_partial, 1);
 
