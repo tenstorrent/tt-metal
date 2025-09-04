@@ -46,30 +46,30 @@ permissions:
   packages: write
   checks: write
 
-# run-name: All post-commit tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
-# jobs:
-#   build-artifact:
-#     uses: ./.github/workflows/build-artifact.yaml
-#     permissions:
-#       packages: write
-#     secrets: inherit
-#     with:
-#       build-type: ${{ inputs.build-type || 'Release' }}
-#       build-wheel: true
-#       version: ${{ inputs.version || '22.04' }}
-#       skip-tt-train: false
-#   build-artifact-profiler:
-#     uses: ./.github/workflows/build-artifact.yaml
-#     permissions:
-#       packages: write
-#     secrets: inherit
-#     with:
-#       build-type: ${{ inputs.build-type || 'Release' }}
-#       build-wheel: true
-#       tracy: true
-#       version: ${{ inputs.version || '22.04' }}
+run-name: All post-commit tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      version: ${{ inputs.version || '22.04' }}
+      skip-tt-train: false
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      tracy: true
+      version: ${{ inputs.version || '22.04' }}
 
-  # Slow Dispatch Unit Tests
+  # # Slow Dispatch Unit Tests
   # sd-unit-tests:
   #   needs: build-artifact
   #   secrets: inherit
@@ -87,7 +87,7 @@ permissions:
   #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
   #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  # Fast Dispatch Unit Tests
+  # # Fast Dispatch Unit Tests
   # fast-dispatch-unit-tests:
   #   needs: build-artifact
   #   secrets: inherit
@@ -104,7 +104,7 @@ permissions:
   #     runner-label: ${{ matrix.test-group.runner-label }}
   #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
   #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  # Fabric Unit Tests
+  # # Fabric Unit Tests
   # fabric-unit-tests:
   #   needs: build-artifact
   #   secrets: inherit
@@ -121,7 +121,7 @@ permissions:
   #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
   #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  # TTNN FD Unit tests
+  # # TTNN FD Unit tests
   # ttnn-unit-tests:
   #   needs: build-artifact
   #   secrets: inherit
@@ -140,7 +140,7 @@ permissions:
   #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
-  # FD Model Tests
+  # # FD Model Tests
   # models-unit-tests:
   #   needs: build-artifact
   #   secrets: inherit
@@ -157,7 +157,7 @@ permissions:
   #     runner-label: ${{ matrix.test-group.runner-label }}
   #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
   #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  # FD C++ Unit Tests
+  # # FD C++ Unit Tests
   # cpp-unit-tests:
   #   needs: build-artifact
   #   secrets: inherit
@@ -191,7 +191,7 @@ permissions:
   #     runner-label: ${{ matrix.test-group.runner-label }}
   #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
   #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  # TT-CNN Unit tests
+  # # TT-CNN Unit tests
   # tt-cnn-unit-tests:
   #   needs: build-artifact
   #   secrets: inherit
@@ -227,6 +227,7 @@ permissions:
   #     docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
   #     build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
   #     wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+
   t3000-apc-fast-tests:
     if: ${{ github.event.pull_request.head.repo.fork == false }}
     needs: build-artifact
@@ -261,19 +262,19 @@ permissions:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  # test-ttnn-tutorials:
-  #   needs: build-artifact
-  #   secrets: inherit
-  #   uses: ./.github/workflows/ttnn-tutorials-post-commit.yaml
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       test-group: [
-  #         { arch: wormhole_b0, runner-label: N150 },
-  #       ]
-  #   with:
-  #     arch: ${{ matrix.test-group.arch }}
-  #     runner-label: ${{ matrix.test-group.runner-label }}
-  #     docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
-  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  test-ttnn-tutorials:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/ttnn-tutorials-post-commit.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N150 },
+        ]
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
