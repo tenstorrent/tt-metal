@@ -164,7 +164,7 @@ void MAIN {
                     PACK((pack_untilize_uninit(tmp_cb_id)));
 
                     // Workaround until #27504 is not closed
-                    if constexpr (is_output_block_format) {
+                    if constexpr (is_output_block_format || window_size_hw > FACE_HEIGHT) {
                         tensix_sync();
                         unary_op_init_common(tmp_cb_id, out_cb_id);
                         tensix_sync();
@@ -176,7 +176,7 @@ void MAIN {
                     cb_push_back(out_cb_id, in_ntiles_c);
                     tilize_uninit(tmp_cb_id, out_cb_id);
 
-                    if constexpr (is_output_block_format) {
+                    if constexpr (is_output_block_format || window_size_hw > FACE_HEIGHT) {
                         tensix_sync();
                         unary_op_init_common(in_cb_id_0, tmp_cb_id);
                         tensix_sync();
