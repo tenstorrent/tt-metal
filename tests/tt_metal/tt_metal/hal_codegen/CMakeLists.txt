@@ -12,8 +12,8 @@ add_custom_command(
         ${INTF_FILE}
         ${IMPL_FILE}
     COMMAND
-        ${Python3_EXECUTABLE} ${GENERATOR} --driver_ns tt::tt_metal::hal_structs --driver_include_path
-        "llrt/struct_view_driver.hpp" ${SCHEMA} ${INTF_FILE} ${IMPL_FILE}
+        ${GENERATOR} --driver_ns tt::tt_metal::hal_structs --driver_include_path "llrt/struct_view_driver.hpp" ${SCHEMA}
+        ${INTF_FILE} ${IMPL_FILE}
     DEPENDS
         ${GENERATOR}
         ${SCHEMA}
@@ -27,6 +27,9 @@ add_custom_target(
 )
 
 add_dependencies(hal_codegen_test generate_test_msgs_header)
+if(TARGET all_generated_files)
+    add_dependencies(all_generated_files generate_test_msgs_header)
+endif()
 
 target_include_directories(
     hal_codegen_test
