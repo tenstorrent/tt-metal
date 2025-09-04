@@ -1,4 +1,4 @@
-name: "[internal] TG demo all post commit"
+name: "[internal] Galaxy APC fast tests"
 
 on:
   workflow_call:
@@ -19,7 +19,7 @@ on:
       topology:
         required: false
         type: string
-        default: "config-tg"
+        default: "topology-6u"
 
 jobs:
   tg-demo-all-post-commit-tests:
