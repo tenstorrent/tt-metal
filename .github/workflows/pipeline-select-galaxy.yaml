@@ -24,11 +24,10 @@ on:
           - ASan
           - TSan
         default: "Release"
-      extra-tag: # set in-service and topology-6u by default
-        description: "You can specify only one topology, 'topology-6u' or 'config-tg'. Default is config-tg."
+      extra-tag:
         required: true
         type: string
-        default: "in-service,config-tg"
+        default: "in-service"
       galaxy-quick:
         required: false
         type: boolean
