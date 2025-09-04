@@ -132,6 +132,8 @@ def _create_ds1_model_parameters(conv_args, resolution):
     conv_args.c3["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     conv_args.c3["dtype"] = ttnn.bfloat8_b
     conv_args.c3["num_cores_nhw"] = None
+    if resolution == (640, 640):
+        conv_args.c3["act_block_h"] = 1024
 
     conv_args.c4["act_block_h"] = None
     conv_args.c4["deallocate_activation"] = True
@@ -139,6 +141,8 @@ def _create_ds1_model_parameters(conv_args, resolution):
     conv_args.c4["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     conv_args.c4["dtype"] = ttnn.bfloat8_b
     conv_args.c4["num_cores_nhw"] = None
+    if resolution == (640, 640):
+        conv_args.c4["act_block_h"] = 1024
 
     conv_args.c5["act_block_h"] = None
     conv_args.c5["deallocate_activation"] = False
@@ -146,6 +150,8 @@ def _create_ds1_model_parameters(conv_args, resolution):
     conv_args.c5["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     conv_args.c5["dtype"] = ttnn.bfloat8_b
     conv_args.c5["num_cores_nhw"] = None
+    if resolution == (640, 640):
+        conv_args.c5["act_block_h"] = 1024
 
     if resolution == (320, 320):
         conv_args.c6["act_block_h"] = None
@@ -165,6 +171,8 @@ def _create_ds1_model_parameters(conv_args, resolution):
     conv_args.c7["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     conv_args.c7["dtype"] = ttnn.bfloat8_b
     conv_args.c7["num_cores_nhw"] = None
+    if resolution == (640, 640):
+        conv_args.c7["act_block_h"] = 1024
 
     conv_args.c8["act_block_h"] = None
     conv_args.c8["deallocate_activation"] = True
@@ -172,6 +180,8 @@ def _create_ds1_model_parameters(conv_args, resolution):
     conv_args.c8["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     conv_args.c8["dtype"] = ttnn.bfloat8_b
     conv_args.c8["num_cores_nhw"] = None
+    if resolution == (640, 640):
+        conv_args.c8["act_block_h"] = 1024
 
 
 def create_ds1_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, resolution, device):
@@ -739,12 +749,7 @@ def _create_head_model_parameters(conv_args, resolution):
     conv_args.c11["reshard_if_not_optimal"] = True
     conv_args.c11["dtype"] = ttnn.bfloat8_b
     conv_args.c11["num_cores_nhw"] = None
-    if resolution == (320, 320):
-        conv_args.c11["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    elif resolution == (640, 640):
-        conv_args.c11["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    else:
-        raise ValueError(f"Unsupported resolution: {resolution}")
+    conv_args.c11["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
 
     conv_args.c12["act_block_h"] = None
     conv_args.c12["deallocate_activation"] = True
