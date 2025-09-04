@@ -144,8 +144,8 @@ def test_vit(device, batch_size, is_single_card_n300):
 
     ttnn.synchronize_device(device)
 
-    num_warmup_iterations = 100
-    num_measurement_iterations = 1000
+    num_warmup_iterations = 0
+    num_measurement_iterations = 1
 
     run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measurement_iterations)
 

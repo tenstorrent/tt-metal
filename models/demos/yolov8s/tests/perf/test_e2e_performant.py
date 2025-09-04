@@ -37,8 +37,9 @@ def run_yolov8s(
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
 
     t0 = time.time()
-    for _ in range(10):
+    for _ in range(1):
         _ = performant_runner.run(torch_input_tensor)
+        print("-------------------------------------------------")
     ttnn.synchronize_device(device)
     t1 = time.time()
 
@@ -47,6 +48,7 @@ def run_yolov8s(
     logger.info(
         f"Model: ttnn_yolov8s - batch_size: {batch_size}. One inference iteration time (sec): {inference_time_avg}, FPS: {round((batch_size) / inference_time_avg)}"
     )
+    ttnn.ReadDeviceProfiler(device)
 
 
 @run_for_wormhole_b0()

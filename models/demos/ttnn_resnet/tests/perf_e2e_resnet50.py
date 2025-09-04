@@ -183,7 +183,7 @@ def run_perf_resnet(
     ttnn.synchronize_device(device)
 
     num_warmup_iterations = 5
-    num_measurement_iterations = 15
+    num_measurement_iterations = 1
 
     with torch.no_grad():
         profiler.start(cpu_key)

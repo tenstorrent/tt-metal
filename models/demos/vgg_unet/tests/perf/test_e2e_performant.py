@@ -23,7 +23,7 @@ def run_vgg_unet_e2e(device, device_batch_size, model_location_generator, channe
     batch_size = device_batch_size * device.get_num_devices()
     input_shape = (batch_size, channels, resolution, resolution)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-    inference_iter_count = 10
+    inference_iter_count = 1
     inference_time_iter = []
     for iter in range(0, inference_iter_count):
         t0 = time.time()

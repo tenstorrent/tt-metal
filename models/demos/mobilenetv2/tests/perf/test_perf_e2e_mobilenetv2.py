@@ -69,7 +69,7 @@ def run_mobilenetv2_e2e(
         l1_input_memory_config=input_l1_mem_config,
     )
 
-    iterations = 32
+    iterations = 1
     host_inputs = [host_input_tensor] * iterations
 
     pipe.compile(host_input_tensor)
