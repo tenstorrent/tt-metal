@@ -88,7 +88,7 @@ std::string get_kernel_file_path(KernelName kernel_name) {
                    "ternary_reader_colbcast_ttt.cpp";
         case KernelName::ReaderColBcastTTS:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
-                   "ternary_reader_colbcast_tts.cpp";
+                   "tts_tst_reader_col_bcast.cpp";
         case KernelName::ReaderRowBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
                    "ternary_reader_rowbcast_ttt.cpp";
