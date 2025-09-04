@@ -316,10 +316,12 @@ def generate_build_header(
 
     num_rows = 32
     num_cols = 32
-    validate_tile_dimensions(input_A_dimensions[0], num_cols)
-    validate_tile_dimensions(input_B_dimensions[1], num_rows)
-    block_rt_dim = input_A_dimensions[0] // num_cols
-    block_ct_dim = input_B_dimensions[1] // num_rows
+    validate_tile_dimensions(input_A_dimensions[0], num_rows)
+    validate_tile_dimensions(input_A_dimensions[1], num_cols)
+    validate_tile_dimensions(input_B_dimensions[0], num_rows)
+    validate_tile_dimensions(input_B_dimensions[1], num_cols)
+    block_rt_dim = input_A_dimensions[0] // num_rows
+    block_ct_dim = input_B_dimensions[1] // num_cols
 
     header_content.extend(
         [
