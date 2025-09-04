@@ -4494,3 +4494,472 @@ def test_conv2d_ch_split_dram_panoptic(
     else:
         pytest.skip("Not a split conv test, skipping.")
     signpost(header=f"ch_slice_conv_{split_input_channels_factor}_{split_output_channels_factor}_end.")
+
+
+## Conv+BN_Relu - Vonvet
+def run_conv_bn(
+    device,
+    torch_tensor_map,
+    math_fidelity,
+    output_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    padding,
+    config_override,
+    math_approx_mode=True,
+    dilation_h=1,
+    dilation_w=1,
+    transpose_shards=False,
+    fp32_accum=False,
+    packer_l1_acc=False,
+    input_layout=ttnn.ROW_MAJOR_LAYOUT,
+    input_dtype=None,
+    output_layout=ttnn.TILE_LAYOUT,
+    deallocate_activation=False,
+    groups=1,
+    has_bias=True,
+    shard_layout=None,
+    auto_shard=False,
+    memory_config=None,
+    input_mesh_mapper=None,
+    weight_mesh_mapper=None,
+    output_mesh_composer=None,
+    enable_split_reader=False,
+    activation="",
+    in_place=False,
+    run_twice=False,
+    fast_compare=False,
+    slice_config=None,
+    enable_kernel_stride_folding=False,
+    enable_act_double_buffer=False,
+    enable_weights_double_buffer=False,
+    bs_full_inner_dim=False,
+    sharded_cfg=None,
+):
+    if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
+        assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
+        assert (
+            weight_mesh_mapper is not None
+        ), "Expected mesh mapper for weight tensors when running on multiple devices"
+        assert (
+            output_mesh_composer is not None
+        ), "Expected mesh composer for output tensor when running on multiple devices"
+        num_devices = len(device.get_device_ids())
+        total_batch_size = num_devices * batch_size  # Batch size across all devices
+        logger.info(f"Using {num_devices} devices for this test")
+    else:
+        total_batch_size = batch_size
+
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
+        pytest.skip("Row major layout not compatible with bfloat8_b")
+
+    if hasattr(padding, "__len__"):
+        if len(padding) == 2:
+            pad_top = padding[0]
+            pad_bottom = padding[0]
+            pad_left = padding[1]
+            pad_right = padding[1]
+        elif len(padding) == 4:
+            pad_top = padding[0]
+            pad_bottom = padding[1]
+            pad_left = padding[2]
+            pad_right = padding[3]
+        else:
+            raise ValueError("Padding should be a scalar or a list of 2 or 4 elements")
+    else:
+        pad_top = padding
+        pad_bottom = padding
+        pad_left = padding
+        pad_right = padding
+
+    if input_dtype is None:
+        input_dtype = output_dtype
+
+    from models.experimental.vovnet.common import load_torch_model
+    from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
+
+    torch.manual_seed(0)
+
+    # vovnet model init
+    model = load_torch_model()
+
+    # Fused Conv+BN weights
+    torch_weight_tensor_fused, torch_bias_tensor_fused = fold_batch_norm2d_into_conv2d(model.stem[0].conv, model.stem[0].bn)
+
+    tt_weight_tensor_fused = ttnn.from_torch(
+        torch_weight_tensor_fused,
+        ttnn.bfloat16 if weights_dtype == ttnn.bfloat16 else ttnn.float32,
+        mesh_mapper=weight_mesh_mapper,
+    )
+    tt_bias_tensor_fused = ttnn.from_torch(
+        torch_bias_tensor_fused.reshape(1, 1, 1, -1),
+        ttnn.bfloat16 if weights_dtype == ttnn.bfloat16 else ttnn.float32,
+        mesh_mapper=weight_mesh_mapper,
+    )
+
+    # Input tensor init
+    conv_input_shape = (total_batch_size, input_channels, input_height, input_width)
+    sqrt_act_function = activation == "sqrt"
+    torch_input_tensor_nchw = randomize_torch_tensor(
+        torch_tensor_map, conv_input_shape, generate_positive_numbers=sqrt_act_function
+    )
+    torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
+
+    torch_padded_input = torch.nn.functional.pad(
+        torch_input_tensor_nchw,
+        (pad_left, pad_right, pad_top, pad_bottom),
+        mode="constant",
+        value=0,
+    )
+
+    # Unfused Conv+BN+Relu params
+    torch_weight_tensor = model.stem[0].conv.weight
+    torch_bias_tensor = model.stem[0].conv.bias
+    torch_bn_weight_tensor = model.stem[0].bn.weight
+    torch_bn_bias_tensor = model.stem[0].bn.bias
+    running_mean = model.stem[0].bn.running_mean
+    running_var = model.stem[0].bn.running_var
+
+    ttnn_running_mean = ttnn.from_torch(
+        running_mean.reshape(1, -1, 1, 1),
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    ttnn_running_var = ttnn.from_torch(
+        running_var.reshape(1, -1, 1, 1),
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    eps = model.stem[0].bn.eps
+    scale = model.stem[0].bn.weight
+    shift = model.stem[0].bn.bias
+
+    # Torch Conv2d, BN, Relu
+    ref = torch.nn.functional.conv2d(
+        torch_padded_input,
+        torch_weight_tensor,
+        bias=torch_bias_tensor.reshape(-1) if has_bias else None,
+        stride=(stride_h, stride_w),
+        padding=(0, 0),
+        dilation=(dilation_h, dilation_w),
+        groups=groups,
+    )
+    ref = torch.nn.functional.batch_norm(
+        ref,
+        running_mean=running_mean,
+        running_var=running_var,
+        weight=torch_bn_weight_tensor,
+        bias=torch_bn_bias_tensor,
+        training=False,
+        eps=eps,
+    )
+    act_func = get_torch_act_func_from_string(activation)
+    if act_func:
+        ref = act_func(ref)
+
+    # ttnn conversion of conv, bn params
+    tt_weight_tensor = ttnn.from_torch(
+        torch_weight_tensor,
+        ttnn.bfloat16 if weights_dtype == ttnn.bfloat16 else ttnn.float32,
+        mesh_mapper=weight_mesh_mapper,
+    )
+    tt_bias_tensor = None
+
+    tt_bn_weight_tensor = ttnn.from_torch(
+        torch_bn_weight_tensor.reshape(1, -1, 1, 1),
+        ttnn.bfloat16 if weights_dtype == ttnn.bfloat16 else ttnn.float32,
+        mesh_mapper=weight_mesh_mapper,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    tt_bn_bias_tensor = ttnn.from_torch(
+        torch_bn_bias_tensor.reshape(1, -1, 1, 1),
+        ttnn.bfloat16 if weights_dtype == ttnn.bfloat16 else ttnn.float32,
+        mesh_mapper=weight_mesh_mapper,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    requires_device_placement = input_dtype == ttnn.bfloat8_b or sharded_cfg is not None
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        input_dtype,
+        mesh_mapper=input_mesh_mapper,
+        layout=input_layout,
+        device=device if requires_device_placement else None,
+    )
+
+    if sharded_cfg:
+        tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_cfg)
+
+    conv_config = ttnn.Conv2dConfig(
+        weights_dtype=weights_dtype,
+        shard_layout=shard_layout if not auto_shard else None,
+        deallocate_activation=deallocate_activation,
+        enable_act_double_buffer=enable_act_double_buffer,
+        enable_weights_double_buffer=enable_weights_double_buffer,
+        enable_split_reader=enable_split_reader,
+        output_layout=output_layout,
+        activation=activation,
+        transpose_shards=transpose_shards,
+        in_place=in_place,
+        enable_kernel_stride_folding=enable_kernel_stride_folding,
+        # full_inner_dim=bs_full_inner_dim,
+    )
+    conv_config1 = ttnn.Conv2dConfig(
+        weights_dtype=weights_dtype,
+        shard_layout=shard_layout if not auto_shard else None,
+        deallocate_activation=deallocate_activation,
+        enable_act_double_buffer=enable_act_double_buffer,
+        enable_weights_double_buffer=enable_weights_double_buffer,
+        enable_split_reader=enable_split_reader,
+        output_layout=output_layout,
+        activation="",
+        transpose_shards=transpose_shards,
+        in_place=in_place,
+        enable_kernel_stride_folding=enable_kernel_stride_folding,
+        # full_inner_dim=bs_full_inner_dim,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_approx_mode=math_approx_mode,
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
+    )
+    if config_override and "act_block_h" in config_override:
+        conv_config.act_block_h_override = config_override["act_block_h"]
+
+    if config_override and "act_block_w_div" in config_override and not auto_shard:
+        conv_config.act_block_w_div = config_override["act_block_w_div"]
+
+    # Fused Conv+BN+Relu
+    [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
+        input_tensor=tt_input_tensor,
+        weight_tensor=tt_weight_tensor_fused,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        bias_tensor=tt_bias_tensor_fused,
+        kernel_size=(filter_height, filter_width),
+        stride=(stride_h, stride_w),
+        padding=(pad_top, pad_bottom, pad_left, pad_right),
+        dilation=(dilation_h, dilation_w),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        groups=groups,
+        memory_config=memory_config,
+        slice_config=slice_config,
+        return_output_dim=True,
+        return_weights_and_bias=True,
+        dtype=output_dtype,
+    )
+
+    # UnFused Conv+BN+Relu
+    [tt_output_tensor_on_device1, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
+        input_tensor=tt_input_tensor,
+        weight_tensor=tt_weight_tensor,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        bias_tensor=None,
+        kernel_size=(filter_height, filter_width),
+        stride=(stride_h, stride_w),
+        padding=(pad_top, pad_bottom, pad_left, pad_right),
+        dilation=(dilation_h, dilation_w),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        conv_config=conv_config1,
+        compute_config=compute_config,
+        groups=groups,
+        memory_config=memory_config,
+        slice_config=slice_config,
+        return_output_dim=True,
+        return_weights_and_bias=True,
+        dtype=output_dtype,
+    )
+    tt_output_tensor_on_device1 = ttnn.sharded_to_interleaved(tt_output_tensor_on_device1, ttnn.L1_MEMORY_CONFIG)
+    tt_output_tensor_on_device1 = ttnn.reshape(
+        tt_output_tensor_on_device1, (batch_size, out_height, out_width, tt_output_tensor_on_device1.shape[-1])
+    )
+    tt_output_tensor_on_device1 = ttnn.permute(tt_output_tensor_on_device1, (0, 3, 1, 2))
+
+    bn_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    tt_output_tensor_on_device1 = ttnn.batch_norm(
+            tt_output_tensor_on_device1,
+            running_mean=ttnn_running_mean,
+            running_var=ttnn_running_var,
+            weight=tt_bn_weight_tensor,
+            bias=tt_bn_bias_tensor,
+            training=False,
+            compute_kernel_config=bn_config,
+            eps=eps,
+        )
+    tt_output_tensor_on_device1 = ttnn.relu(tt_output_tensor_on_device1, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+
+    out = ttnn.to_torch(tt_output_tensor_on_device, mesh_composer=output_mesh_composer)
+    out1 = ttnn.to_torch(tt_output_tensor_on_device1, mesh_composer=output_mesh_composer)
+
+    out = out.reshape(total_batch_size, out_height, out_width, out.shape[-1])
+    out = out[:, :, :, :output_channels]
+
+    out1 = out1.reshape(total_batch_size, out_height, out_width, out.shape[-1])
+    out1 = out1[:, :, :, :output_channels]
+
+    ref = torch.permute(ref, (0, 2, 3, 1))
+
+    if not fp32_accum:
+        pcc = 0.985
+        if input_channels * filter_height * filter_width > 10000:
+            pcc = 0.97
+    elif math_fidelity == ttnn.MathFidelity.LoFi and output_dtype == ttnn.bfloat8_b:
+        pcc = 0.996
+    else:
+        pcc = 0.997
+
+    if activation == "tanh":
+        # Scale down PCC for tanh.
+        # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
+        pcc = pcc * 0.99
+
+    torch.set_printoptions(precision=3, sci_mode=False)
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
+    logger.info(f"Torch vs ttnn PCC = {pcc_msg}. Threshold = {pcc}")
+    assert passing, pcc_msg
+    assert pcc_msg != 1, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(out, out1, pcc=pcc) # pcc: -0.0006553094286573255
+    logger.info(f"ttnn vs ttnn1 PCC = {pcc_msg}. Threshold = {pcc}")
+    assert passing, pcc_msg
+    assert pcc_msg != 1, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(ref, out1, pcc=pcc) # pcc: -0.0006577345993574618
+    logger.info(f"torch vs ttnn1 PCC = {pcc_msg}. Threshold = {pcc}")
+    assert passing, pcc_msg
+    assert pcc_msg != 1, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"
+
+    if memory_config:
+        output_memory_config = ttnn.get_memory_config(tt_output_tensor_on_device)
+        logger.info(f"Output Memory Config : {output_memory_config}")
+        assert output_memory_config == memory_config
+
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("stride", [2])
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width, shard_layout, config",
+    (
+        (64, 3, 224, 224, HS, None), # stem[0]
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "output_dtype, output_layout",
+    [
+        (ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "fp32_accum",
+    [False],
+)
+@pytest.mark.parametrize(
+    "has_bias",
+    [False],
+)
+@pytest.mark.parametrize(
+    "filter, pad",
+    [
+        [3, 1],
+    ],
+)
+@pytest.mark.parametrize("enable_act_double_buffer", [True])
+@pytest.mark.parametrize("enable_weights_double_buffer", [True])
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("activation", ["relu"])
+def test_conv_vovnet(
+    device,
+    torch_tensor_map,
+    math_fidelity,
+    output_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    shard_layout,
+    config,
+    filter,
+    stride,
+    pad,
+    output_layout,
+    fp32_accum,
+    has_bias,
+    activation,
+    enable_act_double_buffer,
+    enable_weights_double_buffer,
+):
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
+        pytest.skip("Row major layout not compatible with bfloat8_b")
+
+    if output_dtype == ttnn.bfloat8_b and shard_layout == HS and activation == "sqrt":
+        pytest.skip(
+            "Skipping sqrt activation for bfloat8_b and height sharded due to PCC error that occurs due to how sqrt over negative numbers is handled in bfloat8_b vs bfloat16"
+        )
+
+    run_conv_bn(
+        device,
+        torch_tensor_map,
+        math_fidelity,
+        output_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter,
+        filter,
+        stride,
+        stride,
+        pad,
+        config,
+        shard_layout=shard_layout,
+        output_layout=output_layout,
+        has_bias=has_bias,
+        fp32_accum=fp32_accum,
+        packer_l1_acc=False,
+        activation=activation,
+        input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else None,
+        enable_act_double_buffer=enable_act_double_buffer,
+        enable_weights_double_buffer=enable_weights_double_buffer,
+        bs_full_inner_dim=True,
+    )
