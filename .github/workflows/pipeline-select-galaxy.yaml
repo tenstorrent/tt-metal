@@ -171,7 +171,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
+      topology: 'topology-6u'
   tg-frequent-tests:
     if: ${{ needs.determine-tests.outputs.run-frequent == 'true' }}
     needs: [build-artifact, determine-tests]
@@ -182,7 +182,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
+      topology: 'topology-6u'
   tg-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
     needs: [build-artifact, determine-tests]
@@ -193,7 +193,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
+      topology: 'topology-6u'
   tg-model-perf-tests:
     if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
     needs: [build-artifact, determine-tests]
@@ -204,7 +204,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
+      topology: 'topology-6u'
   tg-stress-test:
     if: ${{ needs.determine-tests.outputs.run-stress == 'true' }}
     needs: [build-artifact, determine-tests]
@@ -215,5 +215,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology-4u: ${{ needs.determine-tests.outputs.is-config-tg == 'true'}}
-      topology-6u: ${{ needs.determine-tests.outputs.is-config-tg == 'false'}}
+      topology-6u: true
