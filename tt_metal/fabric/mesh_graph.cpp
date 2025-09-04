@@ -19,8 +19,6 @@
 #include <tt_stl/indestructible.hpp>
 #include <tt_stl/caseless_comparison.hpp>
 
-#include <tt-metalium/mesh_graph_descriptor.hpp>
-
 namespace tt {
 enum class ARCH;
 }  // namespace tt
@@ -163,21 +161,6 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
     }
 
     return valid_connections;
-}
-
-void MeshGraph::initialize_from_mgd2(const MeshGraphDescriptor& mgd2) {
-
-    //static const unordered_map<tt::ARCH, proto::Architecture> arch_to_proto_arch = {
-    //    {tt::ARCH::WORMHOLE_B0, proto::Architecture::WORMHOLE_B0},
-    //    {tt::ARCH::BLACKHOLE, proto::Architecture::BLACKHOLE},
-    //};
-
-    //// TODO: need to fix
-    //this->chip_spec_ = ChipSpec{
-    //    .arch = mgd2.get_chip_spec().arch(),
-    //    .num_eth_ports_per_direction = mgd2.get_chip_spec().num_eth_ports_per_direction(),
-    //    .num_z_ports = mgd2.get_chip_spec().num_z_ports()
-    //};
 }
 
 void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_path) {
