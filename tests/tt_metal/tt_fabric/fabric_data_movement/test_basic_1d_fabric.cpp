@@ -311,6 +311,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
     }
 
     // Launch sender and receiver programs and wait for them to finish
+    // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, recv_program] : recv_programs) {
         log_info(tt::LogTest, "Run receiver on: {}", dev->id());
         fixture->RunProgramNonblocking(dev, *recv_program);
@@ -318,6 +319,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
     log_info(tt::LogTest, "Run Sender on: {}", sender_device->id());
     fixture->RunProgramNonblocking(sender_device, sender_program);
 
+    // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, recv_program] : recv_programs) {
         fixture->WaitForSingleProgramDone(dev, *recv_program);
     }
@@ -336,6 +338,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
     uint64_t sender_bytes =
         ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
 
+    // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, _] : recv_programs) {
         std::vector<uint32_t> receiver_status;
         tt_metal::detail::ReadFromDeviceL1(

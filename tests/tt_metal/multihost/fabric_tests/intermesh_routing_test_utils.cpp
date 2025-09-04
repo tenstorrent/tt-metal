@@ -463,11 +463,13 @@ void run_mcast_recv_step(
         recv_programs[dev] = create_receiver_program(compile_time_args, receiver_runtime_args, receiver_logical_core);
     }
     // Run the mcast receiver programs
+    // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, recv_program] : recv_programs) {
         log_debug(tt::LogTest, "Run receiver on: {}", dev->id());
         fixture->RunProgramNonblocking(dev, *recv_program);
     }
 
+    // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, recv_program] : recv_programs) {
         fixture->WaitForSingleProgramDone(dev, *recv_program);
     }
@@ -480,6 +482,7 @@ void run_mcast_recv_step(
         tt::tt_metal::distributed::multihost::Tag{0}              // exchange tests results over tag 0
     );
 
+    // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, _] : recv_programs) {
         std::vector<uint32_t> receiver_status;
         tt_metal::detail::ReadFromDeviceL1(
