@@ -68,6 +68,8 @@ constexpr uint32_t cb_output = tt::CBIndex::c_15;
 
 constexpr uint32_t cb_mm_result_holder = tt::CBIndex::c_16;  // used for holding current matmul output
 
+constexpr uint32_t cb_test_temp_res = tt::CBIndex::c_17;  // used for debugging only
+
 const uint32_t onetile = 1U;
 const uint32_t tiles_per_head = q_tiles_per_head;  // assuming q_tiles_per_head == k_tiles_per_head
 
@@ -122,9 +124,18 @@ void MAIN {
                 cb_reserve_back(cb_qk_result, onetile);
                 pack_reconfig_data_format(cb_qk_result);
                 pack_tile(matmul_accum_reg, cb_qk_result);
+
+                // [Debug]: pack mask to debug cb
+                cb_reserve_back(cb_test_temp_res, onetile);
+                pack_reconfig_data_format(cb_test_temp_res);
+                pack_tile(matmul_accum_reg, cb_test_temp_res);  // for debugging only
+
                 tile_regs_release();
                 cb_push_back(cb_qk_result, onetile);
                 cb_pop_front(cb_attn_mask, onetile);
+
+                // [Debug] push mask to debug cb
+                cb_push_back(cb_test_temp_res, onetile);  // for debugging only
 
                 // pop key data to make space for next key chunk
                 cb_pop_front(cb_key, tiles_per_head);
@@ -174,6 +185,9 @@ void MAIN {
                 std::swap(alias_cb_prev_max, alias_cb_cur_max);
                 std::swap(alias_cb_prev_sum_exp, alias_cb_cur_sum_exp);
                 std::swap(alias_cb_prev_mm_out, alias_cb_cur_mm_out);
+
+                // [Debug] pop mask from debug cb
+                cb_pop_front(cb_test_temp_res, onetile);  // for debugging only
             }
 
             // update final output

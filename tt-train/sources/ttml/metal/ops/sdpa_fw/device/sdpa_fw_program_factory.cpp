@@ -56,6 +56,7 @@ constexpr uint32_t kMaxValueHolderTiles = 1U;
 constexpr uint32_t kExpMaxDiffTiles = 1U;
 constexpr uint32_t kExpSumTiles = 1U;
 constexpr uint32_t kIntermediateTiles = 1U;  // [Debug] should be 2U
+constexpr uint32_t kOnetile = 1U;
 
 const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
 
@@ -184,8 +185,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     auto [kBt, kHt, kSt, kDt] = key.padded_shape().to_array_4D();
     auto [vBt, vHt, vSt, vDt] = value.padded_shape().to_array_4D();
     // we assume that V has the same shape as K
-    uint32_t q_heads = 2U;   // will be passed by user into args
-    uint32_t kv_heads = 2U;  // will be passed by user into args
+    uint32_t q_heads = args.q_heads;    // will be passed by user into args
+    uint32_t kv_heads = args.kv_heads;  // will be passed by user into args
     TT_FATAL(
         q_heads % kv_heads == 0,
         "Number of heads must be divisible by number of groups, got heads={}, groups={}",
@@ -231,7 +232,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     //[DEBUG]:
     fmt::print(
-        "SDPA FW: NC={}, Ht_={}, Wt={}, scaler = {}, block_size={}, total_rows_to_process = {}, num_cores={} ({}x{}), "
+        "SDPA FW: NC={}, Ht_={}, Wt={}, scaler = {}, block_size={}, q_heads = {}, kv_heads = {}, total_rows_to_process "
+        "= {}, num_cores={} ({}x{}), "
         "group1 cores={} rows/core={}, group2 "
         "cores={} "
         "rows/core={}\n",
@@ -240,6 +242,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         Wt,
         1.0F / std::sqrt(static_cast<float>(Et)),
         block_size,
+        q_heads,
+        kv_heads,
         total_rows_to_process,
         num_cores,
         num_cores_x,
@@ -307,6 +311,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     auto cb_mm_result_holder =
         create_circular_buffer(program, all_cores, tt::CBIndex::c_16, data_format, bfloat16_single_tile_size_bytes, Wt);
+
+    auto cb_test_temp_result = create_circular_buffer(
+        program, all_cores, tt::CBIndex::c_17, data_format, bfloat16_single_tile_size_bytes, kOnetile);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels

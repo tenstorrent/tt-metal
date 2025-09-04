@@ -110,12 +110,17 @@ SDPAForwardDeviceOperation::invoke(
     const ttnn::Tensor& key_tensor,
     const ttnn::Tensor& value_tensor,
     const std::optional<ttnn::Tensor>& mask,  // attention mask
-    float dropout_probability,                // default value
-    bool return_intermediates,
+    const uint32_t q_heads,                   // num of query heads
+    const uint32_t kv_heads,                  // num of key/value heads
+    const float dropout_probability,          // default value
+    const bool return_intermediates,
     const std::optional<ttnn::Tensor>& preallocated_intermediate,
     const std::optional<ttnn::Tensor>& preallocated_output) {
     operation_attributes_t operation_attributes{
-        .return_intermediates = return_intermediates, .dropout_probability = dropout_probability};
+        .q_heads = q_heads,
+        .kv_heads = kv_heads,
+        .return_intermediates = return_intermediates,
+        .dropout_probability = dropout_probability};
     tensor_args_t tensor_args{
         .query = query_tensor,
         .key = key_tensor,

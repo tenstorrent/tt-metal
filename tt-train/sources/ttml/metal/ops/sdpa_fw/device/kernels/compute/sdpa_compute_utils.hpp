@@ -72,7 +72,7 @@ void update_cur_row_max_value(uint32_t cb_cur_max, uint32_t cb_prev_max, bool do
     reduce_uninit();
 
     if (do_eltwise_max) {
-        DPRINT << "do eltwise max" << ENDL();
+        // DPRINT << "do eltwise max" << ENDL();
         cb_wait_front(cb_prev_max, onetile);
         copy_tile_init(cb_prev_max);
         copy_tile(cb_prev_max, /* tile_idx */ 0, /* register idx */ prev_max_dst_idx);

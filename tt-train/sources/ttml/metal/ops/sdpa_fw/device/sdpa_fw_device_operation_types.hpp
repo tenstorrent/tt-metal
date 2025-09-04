@@ -9,6 +9,8 @@
 namespace ttml::metal::ops::sdpa_fw::device {
 
 struct operation_attributes_t {
+    uint32_t q_heads{1U};
+    uint32_t kv_heads{1U};
     bool return_intermediates{false};
     float dropout_probability{0.8F};  // default value
 };

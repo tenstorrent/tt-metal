@@ -59,6 +59,8 @@ void kernel_main() {
     constexpr uint32_t cb_prev_max = tt::CBIndex::c_8;  // used to store previous max value
     constexpr uint32_t cb_cur_max = tt::CBIndex::c_9;   // used to store current max value
 
+    constexpr uint32_t cb_test_temp_res = tt::CBIndex::c_17;  // used for debugging only
+
     constexpr uint32_t qWt = get_compile_time_arg_val(0);  // (vDt / TILE_W)
     constexpr uint32_t kWt = get_compile_time_arg_val(1);  // (kDt / TILE_W)
     constexpr uint32_t Ht = get_compile_time_arg_val(2);   // (S / TILE_H)
@@ -120,22 +122,37 @@ void kernel_main() {
         for (uint32_t q_tile_idx = 0; q_tile_idx < qWt; q_tile_idx += tiles_per_head) {
             read_head(q_row_idx + q_tile_idx, tiles_per_head, cb_query, query_address_generator, tile_bytes);
 
+            DPRINT << "[noc] Q head idx: " << q_tile_idx / tiles_per_head << ENDL();
+
             uint32_t kv_group_idx = get_group_idx(q_tile_idx, tiles_per_head, heads_per_group);
-            DPRINT << "KV group index: " << kv_group_idx << ENDL();
+            DPRINT << "[noc] heads per group: " << heads_per_group << ENDL();
+            DPRINT << "[noc]KV group index: " << kv_group_idx << ENDL();
             // jump to start of relevant head of K and V
-            uint32_t kv_offset = key_batch_offset + kv_group_idx;
+            uint32_t kv_offset = key_batch_offset + kv_group_idx * tiles_per_head;
+            DPRINT << "[noc]KV base offset: " << kv_offset << ENDL();
             uint32_t attn_mask_idx = (start_row + i) * Ht;
+            // DPRINT << "[noc] attn_mask_idx: " << attn_mask_idx << ENDL();
             for (uint32_t h = 0; h < Ht; ++h) {
                 uint32_t kv_start_idx = kv_offset + h * kWt;  // jump to the next row
+                DPRINT << "[noc] K/V row start idx: " << kv_start_idx << ENDL();
                 read_head(kv_start_idx, tiles_per_head, cb_key, key_address_generator, tile_bytes);
 
                 // read one tile of attn_mask for current row of K and V
                 // row of K define the column in (QK^T) matrix, so it define the column of attn_mask
                 cb_reserve_back(cb_attn_mask, onetile);
                 uint32_t attn_mask_l1_writer_addr = get_write_ptr(cb_attn_mask);
+                DPRINT << "[noc] attn_mask_idx: " << attn_mask_idx + h << ENDL();
                 noc_async_read_tile(attn_mask_idx + h, mask_address_generator, attn_mask_l1_writer_addr);
                 noc_async_read_barrier();
                 cb_push_back(cb_attn_mask, onetile);
+
+                // if (q_tile_idx == 0) {
+                // print_tile(cb_attn_mask, 0);  // print attn_mask only once
+                // }
+
+                cb_wait_front(cb_test_temp_res, onetile);
+                DPRINT << "[noc] Mask after processing: " << ENDL();
+                // print_tile(cb_test_temp_res, 0);
 
                 read_head(kv_start_idx, tiles_per_head, cb_value, value_address_generator, tile_bytes);
             }
