@@ -29,11 +29,11 @@ auto loop_and_wait_with_timeout(
     OnTimeout&& on_timeout,
     std::chrono::duration<float> timeout_duration,
     Args&&... args) {
-    auto start_time = std::chrono::high_resolution_clock::now();
+    if (timeout_duration.count() > 0.0f) {
+        auto start_time = std::chrono::high_resolution_clock::now();
 
-    do {
-        func_body(args...);
-        if (timeout_duration.count() > 0.0f) {
+        do {
+            func_body(args...);
             std::this_thread::yield();
             auto current_time = std::chrono::high_resolution_clock::now();
             auto elapsed = std::chrono::duration<float>(current_time - start_time).count();
@@ -42,8 +42,12 @@ auto loop_and_wait_with_timeout(
                 on_timeout();
                 break;
             }
-        }
-    } while (wait_condition(args...));
+        } while (wait_condition(args...));
+    } else {
+        do {
+            func_body(args...);
+        } while (wait_condition(args...));
+    }
 }
 
 // Ripped out of boost for std::size_t so as to not pull in bulky boost dependencies

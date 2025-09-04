@@ -492,13 +492,16 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
         sub_device_cq_owner[*sub_device_id].finished(this->id_);
     }
 
-    if (thread_exception_ptr_) {
-        num_outstanding_reads_.store(0);
-        reads_processed_cv_.notify_all();
-        lock.unlock();
-        auto exception_ptr = thread_exception_ptr_;
-        thread_exception_ptr_ = nullptr;
-        std::rethrow_exception(exception_ptr);
+    if (should_handle_exception_.load()) {
+        std::lock_guard<std::mutex> exception_lock(exception_mutex_);
+        if (auto exception_ptr = thread_exception_ptr_) {
+            thread_exception_ptr_ = nullptr;
+            should_handle_exception_.store(false);
+            num_outstanding_reads_.store(0);
+            reads_processed_cv_.notify_all();
+            lock.unlock();
+            std::rethrow_exception(exception_ptr);
+        }
     }
 }
 
@@ -751,7 +754,12 @@ void FDMeshCommandQueue::read_completion_queue() {
             // If we are here, its likely the device is hung, meaning that the whole program is stuck.
             // We don't have a recovery mechanism for this, so we just need to clean up the state and let the main
             // thread handle it.
-            thread_exception_ptr_ = std::current_exception();
+            {
+                std::lock_guard<std::mutex> exception_lock(exception_mutex_);
+                thread_exception_ptr_ = std::current_exception();
+                should_handle_exception_.store(true);
+            }
+
             thread_exception_state_.store(true);
             exit_condition_.store(true);
             num_outstanding_reads_.store(0);

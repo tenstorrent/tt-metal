@@ -167,7 +167,9 @@ private:
     std::unique_ptr<RingbufferCacheManager> prefetcher_cache_manager_;
     // The backup prefetcher cache manager is used to stash away the prefetcher cache state during trace recording.
     std::unique_ptr<RingbufferCacheManager> dummy_prefetcher_cache_manager_;
+    std::atomic<bool> should_handle_exception_{false};
     std::exception_ptr thread_exception_ptr_;
+    std::mutex exception_mutex_;
     std::atomic<bool> thread_exception_state_ = false;
 
 protected:

@@ -421,8 +421,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     // Handler for the timeout
     auto on_timeout = [&exit_condition]() {
         exit_condition.store(true);
-        throw std::runtime_error(
-            "TIMEOUT: device timeout, potential hang detected, please check out the documentation");
+        throw std::runtime_error("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
 
     tt::utils::loop_and_wait_with_timeout(

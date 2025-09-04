@@ -133,6 +133,21 @@ private:
         ZoneScopedN("Run primitive ttnn operation");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data), cpp_fully_qualified_name.size());
         auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
+        if (tt::utils::get_timeout_duration_for_operations().count() > 0.0f) {
+            // Extract device from any of the arguments
+            const MeshDevice* device = extract_device_from_args(args...);
+            auto result =
+                ttnn::device_operation::detail::invoke<operation_t>(queue_id, operation_attributes, tensors_args);
+            if (device) {
+                // Synchronize all individual devices in the mesh
+                for (auto* individual_device : device->get_devices()) {
+                    tt::tt_metal::Synchronize(individual_device);
+                }
+            }
+
+            return result;
+        }
+
         return ttnn::device_operation::detail::invoke<operation_t>(queue_id, operation_attributes, tensors_args);
     }
 
@@ -149,9 +164,77 @@ private:
     }
 
     template <typename... args_t>
+    static const MeshDevice* extract_device_from_args(args_t&&... args) {
+        const MeshDevice* device = nullptr;
+        auto extract_device = [&device](auto&& arg) {
+            using T = std::decay_t<decltype(arg)>;
+
+            // Case 1: Direct MeshDevice reference
+            if constexpr (std::is_same_v<T, MeshDevice>) {
+                device = &arg;
+            }
+            // Case 2: MeshDevice pointer
+            else if constexpr (std::is_same_v<T, MeshDevice*> || std::is_same_v<T, const MeshDevice*>) {
+                device = arg;
+            }
+            // Case 3: Optional MeshDevice reference wrapper
+            else if constexpr (std::is_same_v<T, std::optional<std::reference_wrapper<MeshDevice>>>) {
+                if (arg.has_value()) {
+                    device = &arg.value().get();
+                }
+            }
+            // Case 4: Optional MeshDevice pointer
+            else if constexpr (
+                std::is_same_v<T, std::optional<MeshDevice*>> || std::is_same_v<T, std::optional<const MeshDevice*>>) {
+                if (arg.has_value()) {
+                    device = arg.value();
+                }
+            }
+            // Case 5: Reference wrapper to MeshDevice
+            else if constexpr (std::is_same_v<T, std::reference_wrapper<MeshDevice>>) {
+                device = &arg.get();
+            }
+            // Case 6: Direct Tensor
+            else if constexpr (requires { arg.device(); }) {
+                device = static_cast<const MeshDevice*>(arg.device());
+            }
+            // Case 7: Optional Tensor
+            else if constexpr (requires { arg.value().device(); }) {
+                if (arg.has_value()) {
+                    device = static_cast<const MeshDevice*>(arg.value().device());
+                }
+            }
+            // Case 8: Reference wrapper to Tensor
+            else if constexpr (requires { arg.get().device(); }) {
+                device = static_cast<const MeshDevice*>(arg.get().device());
+            }
+        };
+
+        // Try to extract device from any argument
+        (extract_device(args), ...);
+
+        return device;
+    }
+
+    template <typename... args_t>
     auto invoke_composite(args_t&&... args) const {
         ZoneScopedN("Run composite ttnn operation ");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data), cpp_fully_qualified_name.size());
+
+        if (tt::utils::get_timeout_duration_for_operations().count() > 0.0f) {
+            // Extract device from any of the arguments
+            const MeshDevice* device = extract_device_from_args(args...);
+            auto result = operation_t::invoke(std::forward<decltype(args)>(args)...);
+            if (device) {
+                // Synchronize all individual devices in the mesh
+                for (auto* individual_device : device->get_devices()) {
+                    tt::tt_metal::Synchronize(individual_device);
+                }
+            }
+
+            return result;
+        }
+
         return operation_t::invoke(std::forward<decltype(args)>(args)...);
     }
 };
