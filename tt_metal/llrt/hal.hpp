@@ -24,7 +24,7 @@
 #include <vector>
 
 #include "tt_memory.h"
-#include "llrt/hal/generated_headers/dev_msgs.hpp"
+#include "hal/generated/dev_msgs.hpp"
 
 #include <tt_stl/overloaded.hpp>
 

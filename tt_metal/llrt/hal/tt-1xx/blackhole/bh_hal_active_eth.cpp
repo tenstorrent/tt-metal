@@ -28,7 +28,7 @@ namespace tt::tt_metal::blackhole {
 
 // This file is intended to be wrapped inside arch/core-specific namespace.
 namespace active_eth_dev_msgs {
-#include "llrt/hal/generated_headers/dev_msgs_impl.hpp"
+#include "hal/generated/dev_msgs_impl.hpp"
 }
 
 HalCoreInfoType create_active_eth_mem_map() {

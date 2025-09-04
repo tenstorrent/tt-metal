@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <enchantum/iostream.hpp>
 
-#include "llrt/hal/generated_headers/dev_msgs.hpp"
+#include "hal/generated/dev_msgs.hpp"
 #include "hal_types.hpp"
 #include <umd/device/types/arch.h>
 

@@ -41,6 +41,7 @@ cat > ${OUT_IMPL_FILE} << EOF
 // It should not be used anywhere else.
 EOF
 
+mkdir -p "${OUT_DIR}"
 if ! $PYTHON "${SCRIPT_PY}" \
              --append_mode \
              --driver_ns="::tt::tt_metal::hal_structs" \
@@ -52,6 +53,6 @@ if ! $PYTHON "${SCRIPT_PY}" \
     exit 1
 fi
 
-if which clang-format; then
+if which clang-format > /dev/null; then
     clang-format -i "${OUT_INTF_FILE}" "${OUT_IMPL_FILE}"
 fi

@@ -25,7 +25,7 @@ namespace tt::tt_metal::blackhole {
 
 // This file is intended to be wrapped inside arch/core-specific namespace.
 namespace tensix_dev_msgs {
-#include "llrt/hal/generated_headers/dev_msgs_impl.hpp"
+#include "hal/generated/dev_msgs_impl.hpp"
 }
 
 HalCoreInfoType create_tensix_mem_map() {
