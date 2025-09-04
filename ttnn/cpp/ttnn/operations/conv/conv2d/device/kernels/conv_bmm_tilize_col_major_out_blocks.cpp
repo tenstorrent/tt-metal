@@ -52,9 +52,9 @@ inline void tilize_single_block() {
 }
 
 template <uint32_t in_cb_id, uint32_t window_reuse_offset>
-inline void update_in_cb(uint32_t& in_cb_addr) {
+inline uint32_t update_in_cb(uint32_t in_cb_addr) {
     UNPACK((get_local_cb_interface(in_cb_id).fifo_rd_ptr = in_cb_addr));
-    in_cb_addr += window_reuse_offset;
+    return in_cb_addr + window_reuse_offset;
 }
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, uint32_t tilized_cb_row_offset>
@@ -80,7 +80,7 @@ inline void tilize_in_reuse(uint32_t in_cb_start_addr) {
 
     // full image rows
     for (uint32_t image_row = 0; image_row < num_image_rows; ++image_row) {
-        update_in_cb<in_cb_id, window_reuse_offset>(in_cb_addr);
+        in_cb_addr = update_in_cb<in_cb_id, window_reuse_offset>(in_cb_addr);
         for (uint32_t image_col = 0; image_col < image_width_in_tiles; ++image_col) {
             cb_reserve_back(out_cb_id, in_block_w);
             tilize_single_block<in_cb_id, in_block_w, out_cb_id>();
@@ -89,7 +89,7 @@ inline void tilize_in_reuse(uint32_t in_cb_start_addr) {
     }
 
     // partial last image row
-    update_in_cb<in_cb_id, window_reuse_offset>(in_cb_addr);
+    in_cb_addr = update_in_cb<in_cb_id, window_reuse_offset>(in_cb_addr);
     for (uint32_t image_col = 0; image_col < last_row_columns; ++image_col) {
         cb_reserve_back(out_cb_id, in_block_w);
         tilize_single_block<in_cb_id, in_block_w, out_cb_id>();
@@ -131,8 +131,8 @@ inline void tilize_in_reuse_split_reader(uint32_t act_cb_start_address, uint32_t
 
     // full image rows
     for (uint32_t image_row = 0; image_row < min_num_image_rows; ++image_row) {
-        update_in_cb<in1_cb_id, window_reuse_offset>(in1_cb_addr);
-        update_in_cb<in2_cb_id, window_reuse_offset>(in2_cb_addr);
+        in1_cb_addr = update_in_cb<in1_cb_id, window_reuse_offset>(in1_cb_addr);
+        in2_cb_addr = update_in_cb<in2_cb_id, window_reuse_offset>(in2_cb_addr);
         for (uint32_t image_col = 0; image_col < image_width_in_tiles; ++image_col) {
             tilize_single_block_with_out_cb_update<in1_cb_id, in_block_w, out_cb_id, tilized_cb_row_offset>(
                 out_cb_addr);
@@ -142,15 +142,15 @@ inline void tilize_in_reuse_split_reader(uint32_t act_cb_start_address, uint32_t
     }
 
     // partial last image row
-    update_in_cb<in1_cb_id, window_reuse_offset>(in1_cb_addr);
-    update_in_cb<in2_cb_id, window_reuse_offset>(in2_cb_addr);
+    in1_cb_addr = update_in_cb<in1_cb_id, window_reuse_offset>(in1_cb_addr);
+    in2_cb_addr = update_in_cb<in2_cb_id, window_reuse_offset>(in2_cb_addr);
     for (uint32_t image_col = 0; image_col < max_leftover; ++image_col) {
         if (image_col < leftover_in1) {
             tilize_single_block_with_out_cb_update<in1_cb_id, in_block_w, out_cb_id, tilized_cb_row_offset>(
                 out_cb_addr);
 
             if (image_col == image_width_in_tiles - 1) {
-                update_in_cb<in1_cb_id, window_reuse_offset>(in1_cb_addr);
+                in1_cb_addr = update_in_cb<in1_cb_id, window_reuse_offset>(in1_cb_addr);
             }
         }
 
@@ -159,7 +159,7 @@ inline void tilize_in_reuse_split_reader(uint32_t act_cb_start_address, uint32_t
                 out_cb_addr_second_reader);
 
             if (image_col == image_width_in_tiles - 1) {
-                update_in_cb<in2_cb_id, window_reuse_offset>(in2_cb_addr);
+                in2_cb_addr = update_in_cb<in2_cb_id, window_reuse_offset>(in2_cb_addr);
             }
         }
     }

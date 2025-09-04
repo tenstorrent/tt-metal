@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <tt-metalium/constants.hpp>
 #include "dataflow_api.h"
 
 // Zero out all tiles for a given circular buffer.
@@ -23,6 +24,13 @@ FORCE_INLINE void zero_out_tiles() {
         write_addr += MEM_ZEROS_SIZE;
     }
     noc_async_read_barrier();
+}
+
+template <uint32_t coalesced_read_bytes, uint32_t stride_h_bytes>
+FORCE_INLINE void read_kernel_w(uint32_t& l1_write_addr_act, uint32_t& act_l1_offset) {
+    noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
+    l1_write_addr_act += coalesced_read_bytes;
+    act_l1_offset += stride_h_bytes;
 }
 
 template <
@@ -77,13 +85,6 @@ FORCE_INLINE void pass_to_the_next_image_width(
     get_local_cb_interface(cb_id_act).fifo_wr_ptr = l1_write_addr_act;
 }
 
-template <uint32_t coalesced_read_bytes, uint32_t stride_h_bytes>
-FORCE_INLINE void read_kernel_w(uint32_t& l1_write_addr_act, uint32_t& act_l1_offset) {
-    noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-    l1_write_addr_act += coalesced_read_bytes;
-    act_l1_offset += stride_h_bytes;
-}
-
 template <uint32_t cb_id_act, uint32_t act_cb_w_tiles>
 FORCE_INLINE void push_full_tile_height() {
     noc_async_read_barrier();
@@ -103,7 +104,6 @@ FORCE_INLINE void read_first_image_row_window(
     uint32_t& l1_write_addr_act, uint32_t reader_offset, uint16_t ind, uint32_t& pixel_column) {
     uint32_t act_l1_offset = reader_offset + (ind * conv_act_c_read_bytes);
     for (uint32_t outer = 0; outer < window_outer; outer++) {
-        // read full inner dim at once
         read_kernel_w<coalesced_read_bytes, stride_h_bytes>(l1_write_addr_act, act_l1_offset);
     }
     l1_write_addr_act += act_block_w_extra_align_bytes;
@@ -149,8 +149,8 @@ FORCE_INLINE void read_sticks_activation_reuse(
     uint32_t& reader_idx,
     uint32_t cb_start_addr,
     uint32_t remaining_tiles_to_push) {
-    constexpr uint32_t image_width_padded_to_tile = image_width_tiles * 32;
-    constexpr uint32_t output_image_width_full_tile = output_image_width == image_width_padded_to_tile;
+    constexpr uint32_t image_width_padded_to_tile = image_width_tiles * tt::constants::TILE_HEIGHT;
+    constexpr bool output_image_width_full_tile = output_image_width == image_width_padded_to_tile;
     constexpr uint32_t reuse_outer = window_outer - 1;
     constexpr uint32_t outer_coalesced_read_bytes = reuse_outer * coalesced_read_bytes;
     constexpr uint32_t outer_stride_h_bytes = reuse_outer * stride_h_bytes;
