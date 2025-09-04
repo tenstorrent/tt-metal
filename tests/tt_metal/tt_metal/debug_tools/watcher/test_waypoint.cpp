@@ -183,9 +183,9 @@ void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevic
                     // Active eth core only has one available erisc to test on.
                     (device->arch() == ARCH::BLACKHOLE and not is_active) ? waypoint : "   X");
                 if (device->arch() == ARCH::BLACKHOLE) {
-                    expected += fmt::format("rmsg:???|?? h_id:  0 smsg:? k_id:{}", k_id_s);
+                    expected += fmt::format("rmsg:???|?? h_id:  0 smsg:? k_ids:{}", k_id_s);
                 } else {
-                    expected += fmt::format("rmsg:???|? h_id:  0 k_id:{}", k_id_s);
+                    expected += fmt::format("rmsg:???|? h_id:  0 k_ids:{}", k_id_s);
                 }
             } else {
                 // Each different config has a different calculation for k_id, let's just do one. Fast Dispatch, one device.
