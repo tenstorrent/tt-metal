@@ -130,6 +130,9 @@ private:
     void validate_bank_id(uint32_t bank_id) const;
     void init_allocators_across_states(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset);
 
+    // Assert on non-const methods that have not been tested with overlapping allocators
+    void assert_single_state_allocator() const;
+
     // State-dependent methods
     allocator::Algorithm* get_allocator_for_state(StateDependencies::StateId state);
     const allocator::Algorithm* get_allocator_for_state(StateDependencies::StateId state) const;

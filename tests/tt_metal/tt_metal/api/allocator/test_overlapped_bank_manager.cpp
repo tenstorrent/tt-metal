@@ -158,6 +158,75 @@ TEST(OverlappedAllocator, InvalidState) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Invalid allocator state 2 (num_states=2)")));
 }
 
+TEST(OverlappedAllocator, InvalidAPIsForOverlappedAllocators) {
+    // Create bank manager with 2 states (0 and 1)
+    BankManager::StateDependencies deps{{{StateId{0}, {}}, {StateId{1}, {}}}};
+    BankManager bank_manager = get_bank_manager_with_state_dependencies(deps);
+
+    // Test accessing an API that only works for single state
+    EXPECT_THAT(
+        [&]() { bank_manager.reset_size(StateId{0}); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Expected single state allocator!")));
+    EXPECT_THAT(
+        [&]() { bank_manager.reset_size(StateId{1}); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Expected single state allocator!")));
+    EXPECT_THAT(
+        [&]() { bank_manager.shrink_size(1024, true, StateId{0}); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Expected single state allocator!")));
+    EXPECT_THAT(
+        [&]() { bank_manager.shrink_size(1024, true, StateId{1}); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Expected single state allocator!")));
+}
+
+TEST(OverlappedAllocator, DeallocateAllAndClear) {
+    // Two independent allocators (0 and 1); allocator 2 overlaps both 0 and 1
+    BankManager::StateDependencies deps{{{StateId{0}, {StateId{2}}}, {StateId{1}, {StateId{2}}}}};
+    BankManager bank_manager = get_bank_manager_with_state_dependencies(deps);
+    const uint32_t bank_id = 0;
+
+    uint32_t alloc_size_1K = 1024;
+    uint32_t alloc_size_2K = 2048;
+
+    // Verify no allocations exist initially
+    EXPECT_EQ(bank_manager.lowest_occupied_address(bank_id, StateId{0}), std::nullopt);
+    EXPECT_EQ(bank_manager.lowest_occupied_address(bank_id, StateId{1}), std::nullopt);
+    EXPECT_EQ(bank_manager.lowest_occupied_address(bank_id, StateId{2}), std::nullopt);
+
+    // Allocate in each state
+    auto addr0 = bank_manager.allocate_buffer(
+        alloc_size_1K, alloc_size_1K, true, CoreRangeSet(std::vector<CoreRange>{}), std::nullopt, StateId{0});
+    auto addr1 = bank_manager.allocate_buffer(
+        alloc_size_2K, alloc_size_2K, true, CoreRangeSet(std::vector<CoreRange>{}), std::nullopt, StateId{1});
+    auto addr2 = bank_manager.allocate_buffer(
+        alloc_size_1K, alloc_size_1K, true, CoreRangeSet(std::vector<CoreRange>{}), std::nullopt, StateId{2});
+
+    // Verify allocations exist in all states
+    EXPECT_EQ(bank_manager.lowest_occupied_address(bank_id, StateId{0}), 0);
+    EXPECT_EQ(bank_manager.lowest_occupied_address(bank_id, StateId{1}), 0);
+    EXPECT_EQ(bank_manager.lowest_occupied_address(bank_id, StateId{2}), addr1 + alloc_size_2K);
+
+    // Clear all allocations
+    bank_manager.deallocate_all();
+    bank_manager.clear();
+
+    // Verify all allocations are cleared in all states
+    EXPECT_EQ(bank_manager.lowest_occupied_address(bank_id, StateId{0}), std::nullopt);
+    EXPECT_EQ(bank_manager.lowest_occupied_address(bank_id, StateId{1}), std::nullopt);
+    EXPECT_EQ(bank_manager.lowest_occupied_address(bank_id, StateId{2}), std::nullopt);
+
+    // Verify we can allocate from the beginning again in all states
+    auto new_addr0 = bank_manager.allocate_buffer(
+        alloc_size_1K, alloc_size_1K, true, CoreRangeSet(std::vector<CoreRange>{}), std::nullopt, StateId{0});
+    auto new_addr1 = bank_manager.allocate_buffer(
+        alloc_size_2K, alloc_size_2K, true, CoreRangeSet(std::vector<CoreRange>{}), std::nullopt, StateId{1});
+    auto new_addr2 = bank_manager.allocate_buffer(
+        alloc_size_1K, alloc_size_1K, true, CoreRangeSet(std::vector<CoreRange>{}), std::nullopt, StateId{2});
+
+    EXPECT_EQ(new_addr0, 0);
+    EXPECT_EQ(new_addr1, 0);
+    EXPECT_EQ(new_addr2, new_addr1 + alloc_size_2K);
+}
+
 TEST(OverlappedAllocator, IndependentStates) {
     // 2 independent allocators, no overlaps
     BankManager::StateDependencies deps{{{StateId{0}, {}}, {StateId{1}, {}}}};

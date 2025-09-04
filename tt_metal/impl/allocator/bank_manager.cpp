@@ -212,6 +212,10 @@ void BankManager::validate_bank_id(uint32_t bank_id) const {
         bank_id_to_bank_offset_.size());
 }
 
+void BankManager::assert_single_state_allocator() const {
+    TT_FATAL(state_dependencies_.num_states() == 1, "Expected single state allocator!");
+}
+
 allocator::Algorithm* BankManager::get_allocator_for_state(BankManager::StateDependencies::StateId state) {
     TT_FATAL(
         state.value < state_dependencies_.num_states(),
@@ -413,13 +417,13 @@ BankManager::~BankManager() {
 }
 
 BankManager&& BankManager::operator=(BankManager&& that) noexcept {
-    state_dependencies_ = std::move(that.state_dependencies_);
     buffer_type_ = that.buffer_type_;
     allocated_buffers_ = std::move(that.allocated_buffers_);
     bank_id_to_bank_offset_ = std::move(that.bank_id_to_bank_offset_);
     allocators_ = std::move(that.allocators_);
     interleaved_address_limit_ = that.interleaved_address_limit_;
     alignment_bytes_ = that.alignment_bytes_;
+    state_dependencies_ = std::move(that.state_dependencies_);
     return std::move(*this);
 }
 
@@ -460,6 +464,7 @@ MemoryBlockTable BankManager::get_memory_block_table(BankManager::StateDependenc
 }
 
 void BankManager::shrink_size(DeviceAddr shrink_size, bool bottom_up, BankManager::StateDependencies::StateId state) {
+    this->assert_single_state_allocator();
     auto* alloc = this->get_allocator_for_state(state);
     if (alloc) {
         alloc->shrink_size(shrink_size, bottom_up);
@@ -467,6 +472,7 @@ void BankManager::shrink_size(DeviceAddr shrink_size, bool bottom_up, BankManage
 }
 
 void BankManager::reset_size(BankManager::StateDependencies::StateId state) {
+    this->assert_single_state_allocator();
     auto* alloc = this->get_allocator_for_state(state);
     if (alloc) {
         alloc->reset_size();
