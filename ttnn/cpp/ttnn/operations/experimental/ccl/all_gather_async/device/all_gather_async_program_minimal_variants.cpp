@@ -20,6 +20,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
@@ -35,6 +36,58 @@
 using namespace tt::constants;
 
 namespace ttnn {
+
+namespace detail {
+
+uint32_t all_gather_async_core_count(
+    uint32_t num_workers_per_direction,
+    uint32_t num_directions_per_link,
+    uint32_t num_mux_cores_per_direction_per_link) {
+    return (num_workers_per_direction + num_mux_cores_per_direction_per_link) * num_directions_per_link;
+}
+
+uint32_t default_workers(
+    const MeshDevice& mesh_device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    ccl::Topology topology,
+    uint32_t output_data_size_bytes,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t num_directions_per_link,
+    uint32_t num_mux_cores_per_direction_per_link) {
+    auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    uint32_t num_cores = subdevice_core_range_set.num_cores();
+    // Above 4 workers we start getting performance drops, so we limit to 4 workers or less, depending on the number of
+    // available cores This was determined by the sweep
+    // tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py
+    ttnn::SmallVector<uint32_t> candidate_worker_counts;
+    // if per link data moved is greater than 0.25 MB, we search greedily for 4 workers, otherwise we search greedily
+    // for 2 workers. for ring, half the data is moved per link, so we divide by 2
+    double data_moved_per_link_bytes = double(output_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
+                                       (topology == ccl::Topology::Ring ? 2 : 1);
+    if (data_moved_per_link_bytes > double(0.25 * 1024 * 1024)) {
+        candidate_worker_counts = {4, 2, 1};
+    } else {
+        candidate_worker_counts = {2, 1};
+    }
+    for (auto worker_count : candidate_worker_counts) {
+        uint32_t core_count =
+            all_gather_async_core_count(worker_count, num_directions_per_link, num_mux_cores_per_direction_per_link);
+        if (num_cores >= core_count) {
+            log_trace(
+                tt::LogOp,
+                "data_moved_per_link_bytes: {} and worker_count: {}",
+                data_moved_per_link_bytes,
+                worker_count);
+            return worker_count;
+        }
+    }
+    TT_THROW(
+        "Not enough cores available on the subdevice or device for the requested match the number of links {}",
+        num_links);
+}
+}  // namespace detail
 
 using namespace ccl;
 
@@ -90,8 +143,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     const uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
+    const GlobalSemaphore& barrier_semaphore,
+    bool do_sync,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
@@ -112,7 +165,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
         topology,
         semaphore,
         barrier_semaphore,
-        using_persistent_buffers,
+        do_sync,
         sub_device_id,
         empty_fused_op_signaler,
         chunks_per_sync,
@@ -133,8 +186,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     const uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
+    const GlobalSemaphore& barrier_semaphore,
+    bool do_sync,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,
@@ -142,17 +195,33 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset) {
     // Tensor Info
-    const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
+    auto mesh_device = input_tensor.device();
+    TT_FATAL(mesh_device != nullptr, "Mesh device not found");
 
     // op hyperparams
-    uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(1);
+    uint32_t num_directions_per_link = 2;
+    uint32_t num_mux_cores_per_direction_per_link = 1;
+    // Get worker cores
+    // 2 senders (reader + writer) per direction (forward, backward) per link
+    uint32_t output_data_size_bytes = output_tensor.buffer()->size();
+    uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(detail::default_workers(
+        *mesh_device,
+        sub_device_id,
+        topology,
+        output_data_size_bytes,
+        num_links,
+        ring_size,
+        num_directions_per_link,
+        num_mux_cores_per_direction_per_link));
+    uint32_t num_cores_per_link = detail::all_gather_async_core_count(
+        num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
+
+    log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 
-    auto mesh_device = input_tensor.device();
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
@@ -194,14 +263,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             topology, sender_device, forward_device, backward_device, ring_size - 1, ring_size - 1);
     TT_FATAL(
         !((topology == ccl::Topology::Linear) && fuse_op), "linear is not support when using fused for all-gather");
-
-    // Get worker cores
-    // 2 senders (reader + writer) per direction (forward, backward) per link
-    uint32_t num_directions_per_link = 2;
-    uint32_t num_mux_cores_per_direction_per_link = 1;
-
-    uint32_t num_cores_per_link =
-        num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
 
     const auto [all_core_range, all_cores] =
         choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
@@ -373,8 +434,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     global_worker_id * base_pages_per_worker + std::min(global_worker_id, remainder);
                 uint32_t input_tile_id_end =
                     (global_worker_id + 1) * base_pages_per_worker + std::min(global_worker_id + 1, remainder);
-                uint32_t chunks_per_sync_val = chunks_per_sync.value_or(
-                    std::max((input_tile_id_end - input_tile_id_start) / num_tiles_to_write_per_packet, (uint32_t)1));
+
+                // Heuristic is based on a sweep of large shapes. This will be used when total chunks per worker is
+                // larger than 160. Doing it less frequently adds performance cost to many shapes. Sweep test:
+                // tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py
+                constexpr uint32_t HEURISTIC_MAX_CHUNKS_PER_SYNC = 160;
+                uint32_t chunks_per_sync_val = chunks_per_sync.value_or(std::min(
+                    std::max((input_tile_id_end - input_tile_id_start) / num_tiles_to_write_per_packet, (uint32_t)1),
+                    HEURISTIC_MAX_CHUNKS_PER_SYNC));
+                log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 uint32_t self_write_done_semaphore;
                 if (fuse_op) {
@@ -383,24 +451,26 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
 
                 // Reader
                 std::vector<uint32_t> sender_reader_compile_args = {
-                    ring_index,                                        // my_chip_id
-                    static_cast<uint32_t>(input_tensor_buffer_type),   // input_buffer_type
-                    static_cast<uint32_t>(output_tensor_buffer_type),  // output_buffer_type
-                    sender_cb_index,                                   // cb_forward_id
-                    num_tiles_to_write_per_packet,                     // num_tiles_to_write_per_packet
-                    page_size,                                         // tensor0_page_size
-                    num_targets_forward,                               // num_slices_forward_direction
-                    num_targets_backward,                              // num_slices_backward_direction
-                    static_cast<uint32_t>(topology),                   // topology
-                    dir,                                               // direction
-                    fuse_op,                                           // fused op
+                    ring_index,                       // my_chip_id
+                    sender_cb_index,                  // cb_forward_id
+                    num_tiles_to_write_per_packet,    // num_tiles_to_write_per_packet
+                    page_size,                        // tensor0_page_size
+                    num_targets_forward,              // num_slices_forward_direction
+                    num_targets_backward,             // num_slices_backward_direction
+                    static_cast<uint32_t>(topology),  // topology
+                    dir,                              // direction
+                    fuse_op,                          // fused op
                     chunks_per_sync_val,
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
+                } else {
+                    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
                 }
                 if (output_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(output_tensor, sender_reader_compile_args);
+                } else {
+                    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_reader_compile_args);
                 }
                 auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
                     program,
@@ -458,19 +528,20 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
 
                 // Writer
                 std::vector<uint32_t> sender_writer_compile_args = {
-                    ring_index,                                        // my_chip_id
-                    reserved_packet_header_CB_index,                   // reserved_packet_header_cb_id
-                    num_packet_headers_storable,                       // num_packet_headers_storable
-                    static_cast<uint32_t>(output_tensor_buffer_type),  // output_buffer_type
-                    sender_cb_index,                                   // cb_forward_id
-                    num_tiles_to_write_per_packet,                     // num_tiles_to_write_per_packet
-                    page_size,                                         // tensor0_page_size
-                    num_targets_forward,                               // num_targets_forward_direction
-                    num_targets_backward,                              // num_targets_backward_direction
-                    fuse_op,                                           // fused op
-                    static_cast<uint32_t>(topology),                   // topology
-                    dir,                                               // direction
+                    ring_index,                       // my_chip_id
+                    reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
+                    num_packet_headers_storable,      // num_packet_headers_storable
+                    sender_cb_index,                  // cb_forward_id
+                    num_tiles_to_write_per_packet,    // num_tiles_to_write_per_packet
+                    page_size,                        // tensor0_page_size
+                    num_targets_forward,              // num_targets_forward_direction
+                    num_targets_backward,             // num_targets_backward_direction
+                    fuse_op,                          // fused op
+                    static_cast<uint32_t>(topology),  // topology
+                    dir,                              // direction
                     chunks_per_sync_val,
+                    do_sync,                      // use synchronize barrier semaphore
+                    barrier_semaphore.address(),  // synchronize barrier semaphore
                 };
                 fabric_mux_connection_ct_args(
                     worker == 0,
@@ -496,6 +567,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 }
                 if (output_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
+                } else {
+                    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_writer_compile_args);
                 }
                 auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
                     program,
@@ -506,25 +579,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
 
                 std::vector<uint32_t> writer_rt_args = {
-                    output_tensor.buffer()->address(),                           // output_tensor_address
-                    input_tensor_Wt,                                             // width in tiles of the output shard
-                    input_tensor_Ht,                                             // height in tiles of the output shard
-                    output_tensor_Wt,                                            // width in tiles of entire output
-                    output_tensor_Ht,                                            // height in tiles of entire output
-                    dim,                                                         // dim to gather on
-                    batch_head_size,                                             // product of the first two dims
-                    input_tile_id_start,                                         //
-                    input_tile_id_end,                                           //
-                    virtual_core.x,                                              // out_ready_sem_noc0_x
-                    virtual_core.y,                                              // out_ready_sem_noc0_y
-                    ring_size,                                                   // ring_size
-                    semaphore.at(dir).address(),                                 // out_ready_semaphore_forward
-                    input_tile_id_start % input_tensor_Wt,                       // start_pages_read_in_row
-                    input_tile_id_start / input_tensor_Wt * output_tensor_Wt,    // start_row_offset
-                    barrier_semaphore.has_value() && !using_persistent_buffers,  // use synchronize barrier semaphore
-                    barrier_semaphore.has_value()                                // synchronize barrier semaphore
-                        ? barrier_semaphore.value().address()
-                        : 0,
+                    output_tensor.buffer()->address(),                         // output_tensor_address
+                    input_tensor_Wt,                                           // width in tiles of the output shard
+                    input_tensor_Ht,                                           // height in tiles of the output shard
+                    output_tensor_Wt,                                          // width in tiles of entire output
+                    output_tensor_Ht,                                          // height in tiles of entire output
+                    dim,                                                       // dim to gather on
+                    batch_head_size,                                           // product of the first two dims
+                    input_tile_id_start,                                       //
+                    input_tile_id_end,                                         //
+                    virtual_core.x,                                            // out_ready_sem_noc0_x
+                    virtual_core.y,                                            // out_ready_sem_noc0_y
+                    ring_size,                                                 // ring_size
+                    semaphore.at(dir).address(),                               // out_ready_semaphore_forward
+                    input_tile_id_start % input_tensor_Wt,                     // start_pages_read_in_row
+                    input_tile_id_start / input_tensor_Wt * output_tensor_Wt,  // start_row_offset
                     opposite_core_coord.x,
                     opposite_core_coord.y};
                 fabric_mux_connection_rt_args(
@@ -550,24 +619,29 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         }
     }
 
-    auto override_runtime_arguments_callback =
-        [reader_kernel_ids,
-         writer_kernel_ids,
-         all_cores,
-         num_links,
-         num_directions_per_link,
-         num_workers_per_direction,
-         num_mux_cores_per_direction_per_link,
-         num_cores_per_link](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
+    // Barrier semaphores are always created internally (within the op) and are persistent so we never have to update
+    // their address. op semaphores are conditionally created internally. If created internally we don't have to update
+    // their addresses, but if they are passed in as args at the model level we have to update their address.
+    auto override_runtime_arguments_callback_body =
+        [](const void* operation,
+           Program& program,
+           const std::vector<Tensor>& input_tensors,
+           const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+           const std::vector<Tensor>& output_tensors,
+           const std::vector<tt::tt_metal::KernelHandle>& reader_kernel_ids,
+           const std::vector<tt::tt_metal::KernelHandle>& writer_kernel_ids,
+           const std::vector<CoreCoord>& all_cores,
+           uint32_t num_links,
+           uint32_t num_directions_per_link,
+           uint32_t num_workers_per_direction,
+           uint32_t num_mux_cores_per_direction_per_link,
+           uint32_t num_cores_per_link) {
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[0];
 
-            auto barrier_semaphore = static_cast<const ttnn::AllGatherAsync*>(operation)->barrier_semaphore;
+            bool do_sync = static_cast<const ttnn::AllGatherAsync*>(operation)->do_sync;
+            auto op_semaphores = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore;
+
             // update senders
             uint32_t core_idx = 0;
             for (uint32_t link = 0; link < num_links; link++) {
@@ -580,20 +654,19 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                         auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_idx]);
                         auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_idx]);
 
-                        auto out_ready_semaphore =
-                            static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore.at(dir);
                         // sender reader
                         auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
                         worker_reader_sender_runtime_args[0] = input.buffer()->address();
                         worker_reader_sender_runtime_args[1] = output.buffer()->address();
-                        worker_reader_sender_runtime_args[11] = out_ready_semaphore.address();
+                        if (!do_sync) {
+                            worker_reader_sender_runtime_args[11] = op_semaphores.value().at(dir).address();
+                        }
+
                         // sender writer
                         auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
                         worker_writer_sender_runtime_args[0] = output.buffer()->address();
-                        worker_writer_sender_runtime_args[12] = out_ready_semaphore.address();
-
-                        if (barrier_semaphore.has_value()) {
-                            worker_writer_sender_runtime_args[16] = barrier_semaphore.value().address();
+                        if (!do_sync) {
+                            worker_writer_sender_runtime_args[12] = op_semaphores.value().at(dir).address();
                         }
 
                         core_idx++;
@@ -601,6 +674,84 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 }
             }
         };
+
+    // Always need to capture the barrier semaphore, as it is created internally within the op.
+    // Need to conditionally capture the op semaphores.
+    // If the op internally creates it's op semaphores they need to be captured,
+    // otherwise (model is managing the op semaphores) we should not capture those semaphores
+    std::function<void(
+        const void*,
+        Program&,
+        const std::vector<Tensor>&,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>&)>
+        override_runtime_arguments_callback;
+    if (do_sync) {
+        override_runtime_arguments_callback =
+            [override_runtime_arguments_callback_body,
+             reader_kernel_ids,
+             writer_kernel_ids,
+             all_cores,
+             num_links,
+             num_directions_per_link,
+             num_workers_per_direction,
+             num_mux_cores_per_direction_per_link,
+             num_cores_per_link,
+             barrier_semaphore,
+             semaphore](
+                const void* operation,
+                Program& program,
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                const std::vector<Tensor>& output_tensors) {
+                override_runtime_arguments_callback_body(
+                    operation,
+                    program,
+                    input_tensors,
+                    optional_input_tensors,
+                    output_tensors,
+                    reader_kernel_ids,
+                    writer_kernel_ids,
+                    all_cores,
+                    num_links,
+                    num_directions_per_link,
+                    num_workers_per_direction,
+                    num_mux_cores_per_direction_per_link,
+                    num_cores_per_link);
+            };
+    } else {
+        override_runtime_arguments_callback =
+            [override_runtime_arguments_callback_body,
+             reader_kernel_ids,
+             writer_kernel_ids,
+             all_cores,
+             num_links,
+             num_directions_per_link,
+             num_workers_per_direction,
+             num_mux_cores_per_direction_per_link,
+             num_cores_per_link,
+             barrier_semaphore](
+                const void* operation,
+                Program& program,
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                const std::vector<Tensor>& output_tensors) {
+                override_runtime_arguments_callback_body(
+                    operation,
+                    program,
+                    input_tensors,
+                    optional_input_tensors,
+                    output_tensors,
+                    reader_kernel_ids,
+                    writer_kernel_ids,
+                    all_cores,
+                    num_links,
+                    num_directions_per_link,
+                    num_workers_per_direction,
+                    num_mux_cores_per_direction_per_link,
+                    num_cores_per_link);
+            };
+    }
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
@@ -617,8 +768,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
+    const GlobalSemaphore& barrier_semaphore,
+    bool do_sync,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool use_optimal_ccl_for_llama = false) {
     tt::tt_metal::Program program{};
@@ -726,8 +877,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         num_targets_forward,              // num_targets_forward_direction
         num_targets_backward,             // num_targets_backward_direction
         ring_size,                        // ring_size
-        barrier_semaphore.has_value() &&  // use_barrier_sem
-            !using_persistent_buffers,
+        do_sync,                          // use_barrier_sem
+        barrier_semaphore.address(),      // barrier_sem
     };
     writer_kernel_config.compile_args.insert(
         writer_kernel_config.compile_args.end(), forward_args.begin(), forward_args.end());
@@ -841,11 +992,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
             drain_sync_core.x,                    // out_ready_sem_noc0_x
             drain_sync_core.y,                    // out_ready_sem_noc0_y
             out_ready_sem_wait_value,             // out_ready_sem_wait_value
-            barrier_semaphore.has_value()         // barrier_sem
-                ? barrier_semaphore.value().address()
-                : 0,
-            barrier_core.x,  // barrier_sem_noc0_x
-            barrier_core.y   // barrier_sem_noc0_y
+            barrier_core.x,                       // barrier_sem_noc0_x
+            barrier_core.y                        // barrier_sem_noc0_y
         };
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
@@ -876,20 +1024,23 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
 
-    auto override_runtime_arguments_callback =
-        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, semaphore, sender_worker_cores, ring_index](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
+    // Barrier semaphores are always created internally (within the op) and are persistent so we never have to update
+    // their address. op semaphores are conditionally created internally. If created internally we don't have to update
+    // their addresses, but if they are passed in as args at the model level we have to update their address.
+    auto override_runtime_arguments_callback_body =
+        [](const void* operation,
+           Program& program,
+           const std::vector<Tensor>& input_tensors,
+           const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+           const std::vector<Tensor>& output_tensors,
+           const tt::tt_metal::KernelHandle& worker_sender_reader_kernel_id,
+           const tt::tt_metal::KernelHandle& worker_sender_writer_kernel_id,
+           const std::vector<CoreCoord>& sender_worker_cores) {
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[0];
 
-            auto semaphore = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore.at(0);
-            auto barrier_semaphore = static_cast<const ttnn::AllGatherAsync*>(operation)->barrier_semaphore;
-
-            log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
+            bool do_sync = static_cast<const ttnn::AllGatherAsync*>(operation)->do_sync;
+            auto op_semaphores = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore;
 
             // update senders
             auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
@@ -901,12 +1052,69 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
                 // writer
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = output.buffer()->address();
-                worker_writer_sender_runtime_args[1] = semaphore.address();
-                if (barrier_semaphore.has_value()) {
-                    worker_writer_sender_runtime_args[11] = barrier_semaphore.value().address();
+                if (!do_sync) {
+                    worker_writer_sender_runtime_args[1] = op_semaphores.value().at(0).address();
                 }
             }
         };
+
+    // Always need to capture the barrier semaphore, as it is created internally within the op.
+    // Need to conditionally capture the op semaphores.
+    // If the op internally creates it's op semaphores they need to be captured,
+    // otherwise (model is managing the op semaphores) we should not capture those semaphores
+    std::function<void(
+        const void*,
+        Program&,
+        const std::vector<Tensor>&,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>&)>
+        override_runtime_arguments_callback;
+    if (do_sync) {
+        override_runtime_arguments_callback =
+            [override_runtime_arguments_callback_body,
+             worker_sender_reader_kernel_id,
+             worker_sender_writer_kernel_id,
+             sender_worker_cores,
+             barrier_semaphore,
+             semaphore](
+                const void* operation,
+                Program& program,
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                const std::vector<Tensor>& output_tensors) {
+                override_runtime_arguments_callback_body(
+                    operation,
+                    program,
+                    input_tensors,
+                    optional_input_tensors,
+                    output_tensors,
+                    worker_sender_reader_kernel_id,
+                    worker_sender_writer_kernel_id,
+                    sender_worker_cores);
+            };
+    } else {
+        override_runtime_arguments_callback =
+            [override_runtime_arguments_callback_body,
+             worker_sender_reader_kernel_id,
+             worker_sender_writer_kernel_id,
+             sender_worker_cores,
+             barrier_semaphore](
+                const void* operation,
+                Program& program,
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                const std::vector<Tensor>& output_tensors) {
+                override_runtime_arguments_callback_body(
+                    operation,
+                    program,
+                    input_tensors,
+                    optional_input_tensors,
+                    output_tensors,
+                    worker_sender_reader_kernel_id,
+                    worker_sender_writer_kernel_id,
+                    sender_worker_cores);
+            };
+    }
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }

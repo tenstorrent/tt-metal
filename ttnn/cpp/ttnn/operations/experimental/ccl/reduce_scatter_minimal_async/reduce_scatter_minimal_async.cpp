@@ -70,13 +70,25 @@ ttnn::Tensor composite_reduce_scatter(
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
+    uint32_t num_devices;
+    if (cluster_axis.has_value()) {
+        auto mesh_device = input_tensor.device();
+        const auto& mesh_view = mesh_device->get_view();
+        num_devices = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    } else {
+        num_devices = ttnn::ccl::get_active_physical_devices(input_tensor).size();
+    }
+
     auto input_shape = input_tensor.logical_shape();
 
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
+    auto output_shape = input_shape;
+    output_shape[scatter_dim] /= num_devices;
+
     bool is_tiled_and_not_tile_aligned = input_tensor.layout() == Layout::TILE &&
-                                         (input_shape[2] % tile_height != 0 || input_shape[3] % tile_width != 0);
+                                         (output_shape[2] % tile_height != 0 || output_shape[3] % tile_width != 0);
 
     // If we need to convert to row-major, then if the input dtype is bfloat8_b we need to typecast before untilizing
     // and after re-tilizing
@@ -143,7 +155,7 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
             persistent_output_buffers,
             dim,
             multi_device_global_semaphore,
-            barrier_semaphore,
+            barrier_semaphore.has_value(),
             num_links,
             memory_config,
             intermediate_memory_config,

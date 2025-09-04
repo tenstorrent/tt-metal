@@ -12,6 +12,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
+@pytest.mark.parametrize("use_precomputed_grid", [False, True])
 @pytest.mark.parametrize(
     "input_shape, grid_shape",
     [
@@ -30,10 +31,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ((8, 32, 50, 50), (8, 3604, 1, 2)),
     ],
 )
-def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape):
+def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape, use_precomputed_grid):
     torch.manual_seed(0)
 
     batch_size, grid_h, grid_w, _ = grid_shape
+
+    batch_size, channels, height, width = input_shape
+
+    input_shape_nhwc = [batch_size, height, width, channels]
 
     # PyTorch CPU grid_sample has bad behaviour for bfloat16 inputs
     torch_input_nchw = torch.randn(input_shape, dtype=torch.float32)
@@ -57,9 +62,19 @@ def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape):
     torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_grid = ttnn.from_torch(torch_grid_bf16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid)
+    if use_precomputed_grid:
+        ttnn_grid = ttnn.from_torch(torch_grid_bf16, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32)
+        prepared_grid = ttnn.prepare_grid_sample_grid(
+            ttnn_grid, input_shape_nhwc, padding_mode="zeros", output_dtype=ttnn.bfloat16
+        )
+        prepared_grid = ttnn.to_device(prepared_grid, device)
+        ttnn_output = ttnn.grid_sample(ttnn_input, prepared_grid, use_precomputed_grid=True)
+    else:
+        # Use regular grid
+        ttnn_grid = ttnn.from_torch(torch_grid_bf16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16)
+        ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid)
+
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
