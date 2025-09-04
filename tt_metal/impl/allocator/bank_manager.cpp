@@ -215,7 +215,7 @@ void BankManager::validate_bank_id(uint32_t bank_id) const {
 allocator::Algorithm* BankManager::get_allocator_for_state(BankManager::StateDependencies::StateId state) {
     TT_FATAL(
         state.value < state_dependencies_.num_states(),
-        "Invalid state {} (num_states={})",
+        "Invalid allocator state {} (num_states={})",
         state.value,
         state_dependencies_.num_states());
     return allocators_[state.value] ? allocators_[state.value].get() : nullptr;

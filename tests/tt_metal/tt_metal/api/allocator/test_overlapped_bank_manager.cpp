@@ -135,6 +135,29 @@ INSTANTIATE_TEST_SUITE_P(
             /*expected_dependencies=*/{{StateId{1}, StateId{2}}, {StateId{0}, StateId{2}}, {StateId{0}, StateId{1}}}}));
 
 // --- BankManager tests ---
+
+TEST(OverlappedAllocator, InvalidState) {
+    // Create bank manager with 2 states (0 and 1)
+    BankManager::StateDependencies deps{{{StateId{0}, {}}, {StateId{1}, {}}}};
+    BankManager bank_manager = get_bank_manager_with_state_dependencies(deps);
+
+    // Test accessing invalid state that's greater than num_states
+    StateId invalid_state{2};  // Should fail since we only have states 0 and 1
+
+    // Test non-const overload of get_allocator_for_state
+    EXPECT_THAT(
+        [&]() {
+            bank_manager.allocate_buffer(
+                1024, 1024, true, CoreRangeSet(std::vector<CoreRange>{}), std::nullopt, invalid_state);
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Invalid allocator state 2 (num_states=2)")));
+
+    // Test const overload of get_allocator_for_state
+    EXPECT_THAT(
+        [&]() { bank_manager.lowest_occupied_address(0, invalid_state); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Invalid allocator state 2 (num_states=2)")));
+}
+
 TEST(OverlappedAllocator, IndependentStates) {
     // 2 independent allocators, no overlaps
     BankManager::StateDependencies deps{{{StateId{0}, {}}, {StateId{1}, {}}}};
