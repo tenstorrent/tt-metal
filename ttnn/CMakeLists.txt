@@ -117,12 +117,13 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_core
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
     FILE_SET
     jit_api
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn
         COMPONENT ttnn-runtime
 )
-install(TARGETS ttnn_core LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 ##################################################
 # Collect all the files and folders that TTNN will use
@@ -436,6 +437,10 @@ target_sources(
             cpp/ttnn/operations/creation.hpp
             cpp/ttnn/operations/functions.hpp
             cpp/ttnn/operations/compute_throttle_utils.hpp
+            cpp/ttnn/operations/cb_utils.hpp
+            cpp/ttnn/operations/math.hpp
+            cpp/ttnn/operations/sharding_utilities.hpp
+            cpp/ttnn/operations/trace.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
