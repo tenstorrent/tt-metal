@@ -176,12 +176,12 @@ def run_conv(
     sqrt_act_function = activation == "sqrt"
     torch_input_tensor_nchw = randomize_torch_tensor(
         torch_tensor_map, conv_input_shape, generate_positive_numbers=sqrt_act_function
-    ) / math.sqrt(input_channels * filter_height * filter_width)
+    )
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
     torch_weight_tensor = randomize_torch_tensor(
         torch_tensor_map, conv_weight_shape, generate_positive_numbers=sqrt_act_function
-    ) / math.sqrt(input_channels * filter_height * filter_width)
+    )
     torch_bias_tensor = (
         randomize_torch_tensor(torch_tensor_map, conv_bias_shape, generate_positive_numbers=sqrt_act_function) * 10
         if has_bias
@@ -246,6 +246,7 @@ def run_conv(
         enable_kernel_stride_folding=enable_kernel_stride_folding,
         full_inner_dim=bs_full_inner_dim,
     )
+
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_approx_mode=math_approx_mode,
@@ -740,7 +741,7 @@ SliceWidth = ttnn.Conv2dSliceWidth
 )
 @pytest.mark.parametrize(
     "fp32_accum, packer_l1_acc",
-    [[False, False]],
+    [[True, True]],
 )
 def test_conv_dram(
     device,
