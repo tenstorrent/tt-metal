@@ -9,6 +9,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "assert.hpp"
@@ -38,9 +39,17 @@ std::vector<std::string> expected = {
 
 namespace {
 
-void RunTest(WatcherFixture* fixture, IDevice* device, HalProcessorIdentifier processor) {
+void RunTest(
+    MeshWatcherFixture* fixture,
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    HalProcessorIdentifier processor) {
     // Set up program
-    Program program;
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::AddProgramToMeshWorkload(workload, {}, device_range);
+    auto& program = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     // Depending on riscv type, choose one core to run the test on
     // and set up the kernel on the correct risc
@@ -107,9 +116,10 @@ void RunTest(WatcherFixture* fixture, IDevice* device, HalProcessorIdentifier pr
             break;
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported core type");
     }
+    log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
 
     // Run the program
-    fixture->RunProgram(device, program, true);
+    fixture->RunProgram(mesh_device, workload, true);
 
     log_info(tt::LogTest, "Checking file: {}", fixture->log_file_name);
 
@@ -125,56 +135,77 @@ void RunTest(WatcherFixture* fixture, IDevice* device, HalProcessorIdentifier pr
 using enum HalProgrammableCoreType;
 using enum HalProcessorClassType;
 
-TEST_F(WatcherFixture, TestWatcherRingBufferBrisc) {
-    for (IDevice* device : this->devices_) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferBrisc) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture* fixture, IDevice* device) { RunTest(fixture, device, {TENSIX, DM, 0}); }, device);
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, {TENSIX, DM, 0});
+            },
+            mesh_device);
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferNCrisc) {
-    for (IDevice* device : this->devices_) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferNCrisc) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture* fixture, IDevice* device) { RunTest(fixture, device, {TENSIX, DM, 1}); }, device);
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, {TENSIX, DM, 1});
+            },
+            mesh_device);
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferTrisc0) {
-    for (IDevice* device : this->devices_) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc0) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture* fixture, IDevice* device) { RunTest(fixture, device, {TENSIX, COMPUTE, 0}); }, device);
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, {TENSIX, COMPUTE, 0});
+            },
+            mesh_device);
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferTrisc1) {
-    for (IDevice* device : this->devices_) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc1) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture* fixture, IDevice* device) { RunTest(fixture, device, {TENSIX, COMPUTE, 1}); }, device);
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, {TENSIX, COMPUTE, 1});
+            },
+            mesh_device);
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferTrisc2) {
-    for (IDevice* device : this->devices_) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc2) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture* fixture, IDevice* device) { RunTest(fixture, device, {TENSIX, COMPUTE, 2}); }, device);
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, {TENSIX, COMPUTE, 2});
+            },
+            mesh_device);
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferErisc) {
-    for (IDevice* device : this->devices_) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferErisc) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture* fixture, IDevice* device) { RunTest(fixture, device, {ACTIVE_ETH, DM, 0}); }, device);
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, {ACTIVE_ETH, DM, 0});
+            },
+            mesh_device);
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferIErisc) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferIErisc) {
     if (!this->IsSlowDispatch()) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
-    for (IDevice* device : this->devices_) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture* fixture, IDevice* device) { RunTest(fixture, device, {IDLE_ETH, DM, 0}); }, device);
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, {IDLE_ETH, DM, 0});
+            },
+            mesh_device);
     }
 }
 
