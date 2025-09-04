@@ -84,7 +84,7 @@ static FabricType topology_to_fabric_type(const proto::TorusTopology& topology) 
 MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path, const bool version_2) {
     if (version_2) {
         auto filepath = std::filesystem::path(mesh_graph_desc_file_path);
-        MeshGraphDescriptor mgd2(filepath);
+        MeshGraphDescriptor mgd2(filepath, true);
         this->initialize_from_mgd2(mgd2);
     } else {
         this->initialize_from_yaml(mesh_graph_desc_file_path);
@@ -190,6 +190,20 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
     return valid_connections;
 }
 
+namespace {
+RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirection& routing_direction) {
+    switch (routing_direction) {
+        case proto::RoutingDirection::N: return RoutingDirection::N;
+        case proto::RoutingDirection::E: return RoutingDirection::E;
+        case proto::RoutingDirection::S: return RoutingDirection::S;
+        case proto::RoutingDirection::W: return RoutingDirection::W;
+        case proto::RoutingDirection::C: return RoutingDirection::C;
+        case proto::RoutingDirection::NONE: return RoutingDirection::NONE;
+        default: TT_FATAL(false, "Invalid routing direction: {}", routing_direction);
+    }
+}
+}  // namespace
+
 void MeshGraph::initialize_from_mgd2(const MeshGraphDescriptor& mgd2) {
 
     static const std::unordered_map<const proto::Architecture, tt::ARCH> proto_arch_to_arch = {
@@ -208,19 +222,40 @@ void MeshGraph::initialize_from_mgd2(const MeshGraphDescriptor& mgd2) {
     // NOTE: Not using MGD 2.0 Mesh graph because it currently does not support port direction
     this->intra_mesh_connectivity_.resize(mgd2.all_meshes().size());
 
+    // This is to make sure emtpy elements are filled
+    for (const auto& mesh : mgd2.all_meshes()) {
+        const auto& mesh_instance = mgd2.get_instance(mesh);
+        this->intra_mesh_connectivity_[mesh_instance.local_id].resize(mesh_instance.sub_instances.size());
+    }
+
     for (const auto & connection : mgd2.connections_by_type("MESH")) {
         const auto& connection_data = mgd2.get_connection(connection);
+        const auto& src_instance = mgd2.get_instance(connection_data.nodes[0]);
 
+        const auto& mesh_instance = mgd2.get_instance(connection_data.parent_instance_id);
+
+        const MeshId src_mesh_id = MeshId(mesh_instance.local_id);
+
+        const chip_id_t src_chip_id = mgd2.get_instance(connection_data.nodes[0]).local_id;
+        const chip_id_t dst_chip_id =
+            mgd2.get_instance(connection_data.nodes[1]).local_id;  // ONly expect one single dest chip
+
+        RouterEdge router_edge{
+            .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
+            .connected_chip_ids = std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, dst_chip_id),
+            .weight = 0,
+        };
+
+        if (this->intra_mesh_connectivity_[*src_mesh_id].size() <= mesh_instance.sub_instances.size()) {
+            this->intra_mesh_connectivity_[*src_mesh_id].resize(mesh_instance.sub_instances.size());
+        }
+
+        this->intra_mesh_connectivity_[*src_mesh_id][src_chip_id].insert({dst_chip_id, router_edge});
     }
 
     this->inter_mesh_connectivity_.resize(mgd2.all_meshes().size());
 
     // Must use Fabric keyboard for graph descriptors in current version
-    for (const auto& id : mgd2.instances_by_type("FABRIC")) {
-        const auto& graph_data = mgd2.get_instance(id);
-        // FIXME: Start here
-    }
-
 }
 
 void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_path) {

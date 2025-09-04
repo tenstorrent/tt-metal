@@ -30,6 +30,7 @@ class NodeRef;
 class MeshRef;
 class GraphRef;
 enum Policy : int;
+enum RoutingDirection : int;
 }
 
 // TODO: Try make efficient by storing stringviews?
@@ -40,7 +41,6 @@ public:
     using ConnectionId = uint32_t;
 
     enum class NodeKind : uint8_t { Mesh = 0, Graph = 1, Device = 2 };
-    enum class RoutingDirection : uint8_t { N = 0, E = 1, S = 2, W = 3, C = 4, NONE = 5 };
 
     // NOTE: Instance Data and ConnectionData are subject to change as Physical discovery is implemented
     // These will be moved to Mesh Graph object once MGD 1.0 is deprecated
@@ -74,13 +74,13 @@ public:
         const ConnectionId connection_id = generate_next_global_id();
 
         // TODO: Remove after MGD 1.0 is deprecated
-        const RoutingDirection routing_direction;
+        const proto::RoutingDirection routing_direction;
 
-        private:
-            inline static ConnectionId generate_next_global_id() {
-                static std::atomic_uint32_t next_global_id_ = 0;
-                return next_global_id_++;
-            }
+    private:
+        inline static ConnectionId generate_next_global_id() {
+            static std::atomic_uint32_t next_global_id_ = 0;
+            return next_global_id_++;
+        }
     };
 
     // backwards_compatible will enable all checks related to MGD 1.0. This will limit the functionality of MGD 2.0
