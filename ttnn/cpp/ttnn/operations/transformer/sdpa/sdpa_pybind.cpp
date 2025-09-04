@@ -489,5 +489,80 @@ void py_bind_sdpa(py::module& module) {
             py::arg("compute_kernel_config").noconvert() = std::nullopt,
             py::arg("queue_id") = DefaultQueueId,
         });
+
+    auto ring_distributed_doc =
+        R"doc(
+        Ring-distributed causal scaled dot product attention for multi-device execution.
+        This optimization distributes query computation across multiple devices in a ring topology,
+        with each device computing only a subset of queries to reduce redundant computation
+        caused by causal masking. Each device gets two query chunks (one early, one late)
+        to balance computational load.
+
+        This operation is CAUSAL-ONLY and generates causal masks internally for each device's
+        non-contiguous query assignments. Custom attention masks are not supported.
+
+        Note: This operation outputs results contiguously for the device's assigned queries.
+        Model-level code must perform all-gather and reshuffling to restore sequence order.
+
+        Args:
+            input_tensor_q (ttnn.Tensor): the input tensor.          [b x nqh x s x dh]
+            input_tensor_k (ttnn.Tensor): the input tensor.          [b x nkv x s x dh]
+            input_tensor_v (ttnn.Tensor): the input tensor.          [b x nkv x s x dh]
+            ring_size (uint32_t): Number of devices in the ring topology.
+            ring_id (uint32_t): This device's position in the ring (0 to ring_size-1).
+
+        Keyword args:
+            scale (float, optional): Attention scaling factor. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            program_config (SDPAProgramConfig, optional): Program configuration. Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+
+        Returns:
+            ttnn.Tensor: the output tensor with results for this device's assigned queries [b x nqh x local_s x dh].
+
+        )doc";
+
+    using RingDistributedOperationType = decltype(ttnn::transformer::ring_distributed_scaled_dot_product_attention);
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::transformer::ring_distributed_scaled_dot_product_attention,
+        ring_distributed_doc,
+        ttnn::pybind_overload_t{
+            [](const RingDistributedOperationType& self,
+               const ttnn::Tensor& input_tensor_q,
+               const ttnn::Tensor& input_tensor_k,
+               const ttnn::Tensor& input_tensor_v,
+               uint32_t ring_size,
+               uint32_t ring_id,
+               std::optional<float> scale,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<SDPAProgramConfig> program_config,
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+               QueueId queue_id) {
+                return self(
+                    queue_id,
+                    input_tensor_q,
+                    input_tensor_k,
+                    input_tensor_v,
+                    ring_size,
+                    ring_id,
+                    scale,
+                    memory_config,
+                    program_config,
+                    compute_kernel_config);
+            },
+            py::arg("input_tensor_q").noconvert(),
+            py::arg("input_tensor_k").noconvert(),
+            py::arg("input_tensor_v").noconvert(),
+            py::arg("ring_size").noconvert(),
+            py::arg("ring_id").noconvert(),
+            py::kw_only(),
+            py::arg("scale").noconvert() = std::nullopt,
+            py::arg("memory_config").noconvert() = std::nullopt,
+            py::arg("program_config").noconvert() = std::nullopt,
+            py::arg("compute_kernel_config").noconvert() = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId,
+        });
 }
 }  // namespace ttnn::operations::transformer
