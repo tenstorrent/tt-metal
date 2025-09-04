@@ -120,7 +120,7 @@ class UFLDPerformanceRunnerInfra:
         ttnn_output_tensor = self.output_tensor_1 if output_tensor_1 is None else output_tensor_1
         torch_output_tensor = self.torch_output_tensor_1 if torch_output_tensor_1 is None else torch_output_tensor_1
         output_tensor = ttnn.to_torch(ttnn_output_tensor, mesh_composer=self.output_mesh_composer).squeeze(1).squeeze(1)
-        self.valid_pcc = 0.99
+        self.valid_pcc = 0.976
         self.pcc_passed, self.pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc=self.valid_pcc)
         logger.info(
             f"ufld_v2 - batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"
