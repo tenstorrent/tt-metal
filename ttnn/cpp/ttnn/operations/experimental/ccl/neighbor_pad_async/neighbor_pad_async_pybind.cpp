@@ -29,9 +29,9 @@ void bind_neighbor_pad_async(pybind11::module& module, const ccl_operation_t& op
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const int32_t dim,
-               const uint32_t padding,
+               const uint32_t padding_left,   // top
+               const uint32_t padding_right,  // bottom
                const std::string& padding_mode,
-               const bool direction,
                const uint32_t cluster_axis,
                const GlobalSemaphore& final_semaphore,
                const GlobalSemaphore& barrier_semaphore,
@@ -42,9 +42,9 @@ void bind_neighbor_pad_async(pybind11::module& module, const ccl_operation_t& op
                 return self(
                     input_tensor,
                     dim,
-                    padding,
+                    padding_left,
+                    padding_right,
                     padding_mode,
-                    direction,
                     cluster_axis,
                     final_semaphore,
                     barrier_semaphore,
@@ -55,9 +55,9 @@ void bind_neighbor_pad_async(pybind11::module& module, const ccl_operation_t& op
             },
             py::arg("input_tensor"),
             py::arg("dim"),
-            py::arg("padding"),
+            py::arg("padding_left"),
+            py::arg("padding_right"),
             py::arg("padding_mode"),
-            py::arg("direction"),
             py::arg("cluster_axis"),
             py::arg("final_semaphore"),
             py::arg("barrier_semaphore"),
@@ -81,9 +81,9 @@ void py_bind_neighbor_pad_async(pybind11::module& module) {
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor.
             dim (int): Dimension to pad on.
-            padding (uint): How much to pad.
+            padding (uint): How much to pad to the left (top).
+            padding (uint): How much to pad to the right (bottom).
             padding_mode (string): replicate, constant, reflect.
-            direction (bool): Direction to get the padding values from. 0 = left, 1 = right
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the neighbor_pad operation on.
 
         Keyword Args:

@@ -16,9 +16,9 @@ namespace ttnn::operations::experimental::ccl {
 ttnn::Tensor ExecuteNeighborPadAsync::invoke(
     const ttnn::Tensor& input_tensors,
     int32_t dim,
-    uint32_t padding,
+    uint32_t padding_left,
+    uint32_t padding_right,
     const std::string& padding_mode,
-    bool direction,
     uint32_t cluster_axis,
     const GlobalSemaphore& final_semaphore,
     const GlobalSemaphore& barrier_semaphore,
@@ -29,9 +29,9 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
     return ttnn::operations::experimental::ccl::neighbor_pad_async(
         input_tensors,
         dim,
-        padding,
+        padding_left,
+        padding_right,
         padding_mode,
-        direction,
         cluster_axis,
         final_semaphore,
         barrier_semaphore,
