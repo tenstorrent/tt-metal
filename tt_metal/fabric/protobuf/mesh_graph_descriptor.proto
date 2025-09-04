@@ -64,7 +64,7 @@ message MeshGraphDescriptor {
 // Pitfalls:
 // - Use `name` as the descriptor identifier. References use mesh_descriptor + mesh_id.
 // - Ensure all dims > 0 and channels.count > 0.
-// - If device_topology.types is shorter than dims, unspecified entries default to LINE.
+// - device_topology.dim_types must be the same size as device_topology.dims
 // - Device indices for express links are linearized (row-major convention).
 message MeshDescriptor {
     // Logical identifier used in MeshRef.mesh_descriptor (e.g., "M0").
@@ -73,8 +73,8 @@ message MeshDescriptor {
     // Target device architecture for this mesh. Valid values: WORMHOLE_B0, BLACKHOLE.
     Architecture arch = 2;
 
-    // Device grid shape. `dims` required; `types` optional per dimension (LINE/RING).
-    // When `types` is omitted or shorter than `dims`, treat missing entries as LINE.
+    // Device grid shape. `dims` required; `dim_types` optional per dimension (LINE/RING).
+    // When `dim_types` is omitted or shorter than `dims`, treat missing entries as LINE.
     TorusTopology device_topology = 3;
 
     // Required per-neighbor link count; optional Policy controls enforcement.
@@ -145,14 +145,11 @@ message GraphDescriptor {
     // Members of this graph. All entries must be the same NodeRef kind (mesh OR graph).
     repeated NodeRef instances = 3;
 
-    // Default per-edge channels when using graph_topology; optional otherwise.
-    optional Channels channels = 4;
-
     // Shorthand connectivity pattern (e.g., ALL_TO_ALL, RING). Use with `channels`.
-    optional GraphTopology graph_topology = 5;
+    optional GraphTopology graph_topology = 4;
 
     // Explicit connections as an alternative to `graph_topology`.
-    repeated Connection connections = 6;
+    repeated Connection connections = 5;
 }
 
 // -----------------------------------------------------------------------------
@@ -300,6 +297,9 @@ message GraphTopology {
 
     // Required graph topology type.
     Type layout_type = 1;
+
+    // Channels for the graph topoogy
+    Channels channels = 2;
 }
 
 // Architecture selects the target device family for a mesh.
