@@ -430,6 +430,8 @@ void MetalContext::teardown_fabric_config() {
     this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     this->cluster_->configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
     this->num_fabric_active_routing_planes_ = 0;
+    this->fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+    this->set_fabric_tensix_config(tt_fabric::FabricTensixConfig::DISABLED);
     // if (!rtoptions_.get_erisc_iram_env_var_enabled()) {
     //     rtoptions_.set_erisc_iram_enabled(false);
     // }
@@ -448,15 +450,16 @@ void MetalContext::set_fabric_config(
             TT_THROW("2D fabric with torus topology is only supported on GALAXY clusters.");
         }
     }
-
+    // If we are staying in a disabled state, no need to change anything
+    if (fabric_config == this->fabric_config_ && fabric_config == tt_fabric::FabricConfig::DISABLED) {
+        return;
+    }
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
     // config, not through this function exposed in the detail API.
-    force_reinit_ = true;
-
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED ||
         fabric_config == tt_fabric::FabricConfig::DISABLED) {
+        force_reinit_ = true;
         this->fabric_config_ = fabric_config;
-        this->fabric_reliability_mode_ = reliability_mode;
     } else {
         TT_FATAL(
             this->fabric_config_ == fabric_config,
@@ -466,12 +469,7 @@ void MetalContext::set_fabric_config(
     }
 
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {
-        if (num_routing_planes.has_value()) {
-            log_warning(
-                tt::LogMetal,
-                "Got num_routing_planes while disabling fabric, ignoring it and disabling all active routing planes");
-        }
-
+        log_info(tt::LogMetal, "Disabling fabric and ignoring all other config parameters");
         this->teardown_fabric_config();
         return;
     }
@@ -479,6 +477,17 @@ void MetalContext::set_fabric_config(
     bool enable_erisc_iram =
         !rtoptions_.get_erisc_iram_env_var_enabled() || !rtoptions_.get_erisc_iram_env_var_disabled();
     rtoptions_.set_erisc_iram_enabled(enable_erisc_iram);
+
+    if (this->fabric_reliability_mode_ != reliability_mode) {
+        force_reinit_ = true;
+        this->fabric_reliability_mode_ = reliability_mode;
+    }
+
+    // Set the fabric tensix config
+    if (this->fabric_tensix_config_ != fabric_tensix_config) {
+        force_reinit_ = true;
+        this->set_fabric_tensix_config(fabric_tensix_config);
+    }
 
     if (num_routing_planes.has_value() && num_routing_planes.value() < this->num_fabric_active_routing_planes_) {
         log_warning(
@@ -493,17 +502,17 @@ void MetalContext::set_fabric_config(
     // ideally the highest value should be the maximum number of eth cores in a direction across all chips
     const auto new_val = std::max(
         this->num_fabric_active_routing_planes_, num_routing_planes.value_or(std::numeric_limits<uint8_t>::max()));
-    if (new_val != this->num_fabric_active_routing_planes_ && this->num_fabric_active_routing_planes_ > 0) {
-        log_info(
-            tt::LogMetal,
-            "Overriding the number of routing planes to activate from {} to {}",
-            this->num_fabric_active_routing_planes_,
-            new_val);
+    if (new_val != this->num_fabric_active_routing_planes_) {
+        force_reinit_ = true;
+        this->num_fabric_active_routing_planes_ = new_val;
+        if (this->num_fabric_active_routing_planes_ > 0) {
+            log_info(
+                tt::LogMetal,
+                "Overriding the number of routing planes to activate from {} to {}",
+                this->num_fabric_active_routing_planes_,
+                new_val);
+        }
     }
-    this->num_fabric_active_routing_planes_ = new_val;
-
-    // Set the fabric tensix config
-    this->set_fabric_tensix_config(fabric_tensix_config);
 }
 
 void MetalContext::initialize_fabric_config() {
