@@ -31,6 +31,8 @@ def generate_anchors(device, feats, fpn_strides, grid_cell_offset=0.5, weights_m
         stride_tensor.append(torch.full((h * w, 1), stride, dtype=torch.float))
     anchor_points = torch.cat(anchor_points)
     stride_tensor = torch.cat(stride_tensor)
+    anchor_points = anchor_points.permute(1, 0)
+    stride_tensor = stride_tensor.permute(1, 0)
     return (
         ttnn.from_torch(
             anchor_points,
@@ -89,7 +91,7 @@ def create_yolov6l_model_parameters(model: Model, torch_input: torch.Tensor, dev
     strides = torch.tensor([8.0, 16.0, 32.0])
     anchor_points, stride_tensor = generate_anchors(device, feats, strides, weights_mesh_mapper=weights_mesh_mapper)
 
-    ones_tensor = torch.ones((1, 8400, 1), dtype=torch.float32)
+    ones_tensor = torch.ones((1, 1, 8400), dtype=torch.float32)
     ones_tensor = ttnn.from_torch(
         ones_tensor,
         dtype=ttnn.bfloat16,
@@ -125,7 +127,7 @@ def create_yolov6l_model_parameters_detect(model: Model, torch_input: torch.Tens
     parameters["anchors"] = anchor_points
     parameters["strides"] = stride_tensor
 
-    ones_tensor = torch.ones((1, 8400, 1), dtype=torch.float32)
+    ones_tensor = torch.ones((1, 1, 8400), dtype=torch.float32)
     ones_tensor = ttnn.from_torch(ones_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     parameters["ones_tensor"] = ones_tensor
     return parameters
