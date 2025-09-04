@@ -20,6 +20,8 @@ const std::string& get_reports_dir();
 
 std::chrono::duration<float> get_timeout_duration_for_operations();
 
+bool synchronize_after_operation();
+
 // Cancellable timeout wrapper: invokes on_timeout() before throwing and waits for task to exit
 // Please note that the FuncBody is going to loop until the FuncWait returns false.
 template <typename FuncBody, typename FuncWait, typename OnTimeout, typename... Args>
