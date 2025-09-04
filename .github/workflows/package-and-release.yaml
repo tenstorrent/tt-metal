@@ -53,6 +53,7 @@ jobs:
             exit 1
           fi
           echo "should-create-release is true, proceeding with release workflow."
+
   create-tag:
     needs: release-precheck
     uses: ./.github/workflows/release-verify-or-create-tag.yaml
@@ -89,6 +90,7 @@ jobs:
         with:
           name: changelog
           path: CHANGELOG.txt
+
   create-release-notes:
     needs: create-changelog
     permissions: read-all
@@ -118,6 +120,7 @@ jobs:
         with:
           name: release-notes
           path: RELEASE_NOTES.txt
+
   # Candidate for breaking up
   create-and-upload-draft-release:
     needs: [create-tag, create-release-notes, regression-testing]
