@@ -27,7 +27,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "Galaxy Fabric 2D Torus Nightly Tests", arch: wormhole_b0, cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_2d_torus_nightly.yaml, timeout: 60, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
+          { name: "Galaxy Fabric 2D Torus Nightly Tests", arch: wormhole_b0, cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config /tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_2d_torus_nightly.yaml, timeout: 60, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
