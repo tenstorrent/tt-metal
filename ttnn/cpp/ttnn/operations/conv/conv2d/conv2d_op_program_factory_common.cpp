@@ -482,11 +482,14 @@ bool is_split_reader_viable(
     // Split reader is viable when activation cost significantly exceeds weight cost
     const bool is_viable = activation_cost > 2.0f * weight_cost;
 
-    log_debug(
+    log_info(
         tt::LogOp,
-        "Split reader viability: activation_cost={:.3f}, weight_cost={:.3f}, threshold_factor=2.0, viable={}",
+        "Split reader viability: activation_cost={:.3f}, weight_cost={:.3f}, threshold_factor=2.0, "
+        "weight_tile_size={}, weight_block_ntiles={}, viable={}",
         activation_cost,
         weight_cost,
+        weights_tile_size,
+        weights_block_ntiles,
         is_viable);
 
     return is_viable;
