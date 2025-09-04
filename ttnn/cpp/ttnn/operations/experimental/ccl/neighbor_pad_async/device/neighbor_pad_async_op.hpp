@@ -28,9 +28,9 @@ using ccl::EriscDatamoverBuilder;
 struct NeighborPadAsync {
     std::vector<IDevice*> devices;
     const uint32_t dim;
-    const uint32_t padding;
+    const uint32_t padding_left;
+    const uint32_t padding_right;
     const std::string& padding_mode;
-    const bool direction;
     const uint32_t cluster_axis;
     const GlobalSemaphore& final_semaphore;
     const GlobalSemaphore& barrier_semaphore;
@@ -42,9 +42,9 @@ struct NeighborPadAsync {
     NeighborPadAsync(
         std::vector<IDevice*> devices,
         uint32_t dim,
-        uint32_t padding,
+        uint32_t padding_left,
+        uint32_t padding_right,
         const std::string& padding_mode,
-        bool direction,
         uint32_t cluster_axis,
         const GlobalSemaphore& final_semaphore,
         const GlobalSemaphore& barrier_semaphore,
@@ -54,9 +54,9 @@ struct NeighborPadAsync {
         uint32_t ring_size) :
         devices(std::move(devices)),
         dim(dim),
-        padding(padding),
+        padding_left(padding_left),
+        padding_right(padding_right),
         padding_mode(padding_mode),
-        direction(direction),
         cluster_axis(cluster_axis),
         final_semaphore(final_semaphore),
         barrier_semaphore(barrier_semaphore),
@@ -71,9 +71,9 @@ struct NeighborPadAsync {
         std::vector<std::tuple<std::string, Attribute>> attrs;
 
         attrs.emplace_back("dim", dim);
-        attrs.emplace_back("padding", padding);
+        attrs.emplace_back("padding_left", padding_left);
+        attrs.emplace_back("padding_right", padding_right);
         attrs.emplace_back("padding_mode", padding_mode);
-        attrs.emplace_back("direction", direction);
         attrs.emplace_back("cluster_axis", cluster_axis);
         attrs.emplace_back("final_semaphore", final_semaphore);
         attrs.emplace_back("barrier_semaphore", barrier_semaphore);
@@ -111,9 +111,9 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
     const uint32_t dim,
-    const uint32_t padding,
+    const uint32_t padding_left,
+    const uint32_t padding_right,
     const std::string padding_mode,
-    const bool direction,
     const GlobalSemaphore& final_semaphore,
     const GlobalSemaphore& barrier_semaphore,
     const uint32_t num_links,
@@ -128,9 +128,9 @@ namespace ccl {
 Tensor neighbor_pad_async(
     const Tensor& input_tensor,
     const int32_t dim,
-    const uint32_t padding,
+    const uint32_t padding_left,
+    const uint32_t padding_right,
     const std::string& padding_mode,
-    const bool direction,
     const uint32_t cluster_axis,
     const GlobalSemaphore& final_semaphore,
     const GlobalSemaphore& barrier_semaphore,

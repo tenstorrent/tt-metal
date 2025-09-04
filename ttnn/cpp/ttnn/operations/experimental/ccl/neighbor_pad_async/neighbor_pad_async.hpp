@@ -15,9 +15,9 @@ struct ExecuteNeighborPadAsync {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensors,
         int32_t dim,
-        uint32_t padding,
+        uint32_t padding_left,
+        uint32_t padding_right,
         const std::string& padding_mode,
-        bool direction,
         uint32_t cluster_axis,
         const GlobalSemaphore& final_semaphore,
         const GlobalSemaphore& barrier_semaphore,
