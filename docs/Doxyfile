@@ -961,6 +961,9 @@ INPUT                  = tt_metal/hw/inc/compile_time_args.h \
                          tt_metal/include/compute_kernel_api/transpose_wh.h \
                          tt_metal/include/compute_kernel_api/untilize.h \
                          tt_metal/include/compute_kernel_api/cumsum.h \
+                         tt_metal/include/compute_kernel_api/add_int_sfpu.h \
+                         tt_metal/include/compute_kernel_api/binop_with_scalar.h \
+                         tt_metal/include/compute_kernel_api/gcd.h \
                          tt_metal/include/compute_kernel_api.h \
                          tt_metal/impl/kernels/kernel_args.hpp \
                          tt_metal/include/tt_metal/metal.hpp \

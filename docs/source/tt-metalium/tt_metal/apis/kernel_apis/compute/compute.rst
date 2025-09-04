@@ -20,9 +20,6 @@ Register IO
 
 .. toctree::
 
-  copy_tile
-  move_copy_tile
-
   cb_wait_front
   cb_pop_front
   cb_reserve_back
@@ -56,15 +53,6 @@ Compute (FPU/matrix engine)
   reduce_tile
   transpose_wh_tile
 
-  tanh_tile
-  tan_tile
-  sin_tile
-  cos_tile
-  asin_tile
-  atan_tile
-  acos_tile
-  acosh_tile
-
   tilize
   untilize
 
@@ -73,29 +61,19 @@ Compute (FPU/matrix engine)
 Compute (SFPU/vector engine)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+Element wise operations
+^^^^^^^^^^^^^^^^^^^^^^^
+
 .. toctree::
 
   abs_tile
   exp_tile
   exp2_tile
   expm1_tile
-  relu_tile
-  elu_tile
-  erf_tile
-  erfc_tile
-  erfinv_tile
-  gelu_tile
-  heaviside_tile
-  compute_kernel_hw_startup
-  isinf_tile
-  isnan_tile
-  i0_tile
-  logical_not_unary_tile
   recip_tile
   sign_tile
   sqrt_tile
   rsqrt_tile
-  sigmoid_tile
   log_tile
   log_with_base_tile
   power_tile
@@ -106,12 +84,13 @@ Compute (SFPU/vector engine)
   clamp_tile
   cumsum_tile
   div_binary_tile
-  celu_tile
-
-  quant_tile
-  requant_tile
-  dequant_tile
-
+  add_binary_tile
+  compute_kernel_hw_startup
+  isinf_tile
+  isnan_tile
+  i0_tile
+  logical_not_unary_tile
+  heaviside_tile
   ltz_tile
   eqz_tile
   lez_tile
@@ -123,3 +102,42 @@ Compute (SFPU/vector engine)
   unary_lt_tile
   unary_max_tile
   unary_min_tile
+  gcd_tile
+
+Trigonometric functions
+^^^^^^^^^^^^^^^^^^^^^^^
+
+.. toctree::
+
+  erf_tile
+  erfc_tile
+  erfinv_tile
+
+  tanh_tile
+  tan_tile
+  sin_tile
+  cos_tile
+  asin_tile
+  atan_tile
+  acos_tile
+  acosh_tile
+
+Activation functions
+^^^^^^^^^^^^^^^^^^^^
+
+.. toctree::
+
+  relu_tile
+  elu_tile
+  gelu_tile
+  sigmoid_tile
+  celu_tile
+
+Misc
+^^^^
+
+.. toctree::
+
+  quant_tile
+  requant_tile
+  dequant_tile
