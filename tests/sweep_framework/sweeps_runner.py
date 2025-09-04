@@ -10,9 +10,8 @@ import os
 import pathlib
 import importlib
 import datetime as dt
-
-# from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
-# from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
+from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
+from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
 
 # import ttnn
 from multiprocessing import Process
@@ -164,7 +163,7 @@ def get_timeout():
     # try:
     #     timeout = test_module.TIMEOUT
     # except:
-    timeout = 30
+    timeout = 45
     return timeout
 
 
@@ -390,12 +389,6 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                 if config.measure_perf:
                     # Run one time before capturing result to deal with compile-time slowdown of perf measurement
                     # Ensure a worker process is running if we're in child mode
-                    child_mode = (len(test_vectors) > 1) and (not config.dry_run)
-                    if child_mode and (p is None or not p.is_alive()):
-                        p = Process(target=run, args=(module_name, input_queue, output_queue, config))
-                        p.start()
-                    # Ensure a worker process is running if we're in child mode
-                    child_mode = (len(test_vectors) > 1) and (not config.dry_run)
                     if child_mode and (p is None or not p.is_alive()):
                         p = Process(target=run, args=(module_name, input_queue, output_queue, config))
                         p.start()
@@ -460,7 +453,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
             except Empty as e:
                 if p:
                     logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
-                    p.kill()
+                    p.terminate()
                     p.join(timeout_before_rejoin)  # Wait for graceful process termination
                     if p.is_alive():
                         logger.error(f"Child process {p.pid} did not terminate, killing it.")
@@ -468,7 +461,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                         p.join()
                     p = None
                     reset_util.reset()
-                    sleep(15)
+                    sleep(5)
 
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
@@ -597,7 +590,6 @@ def run_sweeps(
     module_pbar = pbar_manager.counter(total=len(module_names), desc="Modules", leave=False)
     try:
         for module_name in module_names:
-            # test_module = importlib.import_module("sweeps." + module_name)
             if config.suite_name:
                 # Filter to only the specified suite
                 all_suites = vector_source.get_available_suites(module_name)
