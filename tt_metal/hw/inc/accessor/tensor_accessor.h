@@ -75,7 +75,7 @@ public:
         const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
         const size_t bank_base_address_in,
         const uint32_t page_size_in = 0) :
-        TensorAccessor(tensor_accessor::make_dspec_from_args(args), bank_base_address_in, page_size_in) {}
+        dspec_instance(args), bank_base_address(bank_base_address_in), page_size(page_size_in) {}
 
     constexpr const auto& dspec() const {
         if constexpr (DSpec::is_static) {
@@ -292,11 +292,25 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     BankCoordsWrapper,
     /* IsInterleaved */ true,
     IsDram>> : public InterleavedAddrGen<IsDram> {
+    using DSpec = tensor_accessor::DistributionSpec<
+        RankCT,
+        NumBanksCT,
+        TensorShapeWrapper,
+        ShardShapeWrapper,
+        BankCoordsWrapper,
+        /* IsInterleaved */ true,
+        IsDram>;
+
     template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
     TensorAccessor(
         const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
         const size_t bank_base_address_in,
         const uint32_t page_size_in = 0) :
+        InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {}
+
+    template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
+    constexpr explicit TensorAccessor(
+        DSpec_&& dspec, const size_t bank_base_address_in, const uint32_t page_size_in = 0) :
         InterleavedAddrGen<IsDram>({.bank_base_address = bank_base_address_in, .page_size = page_size_in}) {}
 
     // Locality APIs
@@ -353,7 +367,54 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
 
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
-    -> TensorAccessor<decltype(tensor_accessor::make_dspec_from_args(args))>;
+    -> TensorAccessor<tensor_accessor::DistributionSpec<
+        /* RankCT */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::RankCT,
+        /* NumBanksCT */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::NumBanksCT,
+        /* TensorShapeWrapper */
+        typename tensor_accessor::ArrayWrapperTypeSelectorU32<
+            !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::tensor_shape_is_crta,
+            TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::TensorShapeCTAOffset,
+            TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::RankCT>::type,
+        /* ShardShapeWrapper */
+        typename tensor_accessor::ArrayWrapperTypeSelectorU32<
+            !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::shard_shape_is_crta,
+            TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::ShardShapeCTAOffset,
+            TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::RankCT>::type,
+        /* BankCoordsWrapper */
+        typename tensor_accessor::ArrayWrapperTypeSelectorPackedU16<
+            !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::bank_coords_is_crta,
+            TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::BankCoordsCTAOffset,
+            TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::NumBanksCT>::type,
+        /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_sharded,
+        /* IsDram */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_dram>>;
+
+template <
+    uint32_t RankCT,
+    uint32_t NumBanksCT,
+    typename TensorShapeWrapper,
+    typename ShardShapeWrapper,
+    typename BankCoordsWrapper,
+    bool IsInterleaved,
+    bool IsDram>
+TensorAccessor(
+    tensor_accessor::DistributionSpec<
+        RankCT,
+        NumBanksCT,
+        TensorShapeWrapper,
+        ShardShapeWrapper,
+        BankCoordsWrapper,
+        IsInterleaved,
+        IsDram>,
+    size_t,
+    uint32_t)
+    -> TensorAccessor<tensor_accessor::DistributionSpec<
+        RankCT,
+        NumBanksCT,
+        TensorShapeWrapper,
+        ShardShapeWrapper,
+        BankCoordsWrapper,
+        IsInterleaved,
+        IsDram>>;
 
 namespace tensor_accessor::detail {
 template <typename... Args, uint32_t... Indexes>

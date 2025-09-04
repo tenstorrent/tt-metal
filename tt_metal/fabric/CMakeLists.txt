@@ -37,6 +37,7 @@ target_sources(
         mesh_graph.cpp
         erisc_datamover_builder.cpp
         fabric.cpp
+        fabric_init.cpp
         fabric_host_utils.cpp
         fabric_context.cpp
         fabric_mux_config.cpp
@@ -48,6 +49,9 @@ target_sources(
         ccl/ccl_common.cpp
         physical_system_descriptor.cpp
 )
+
+# Make .clang-tidy available in the fabric binary directory for generated files
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/.clang-tidy ${CMAKE_CURRENT_BINARY_DIR}/.clang-tidy COPYONLY)
 
 # Include helper functions and generate headers from flatbuffer schemas
 include(flatbuffers)

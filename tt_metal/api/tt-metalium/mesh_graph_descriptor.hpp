@@ -160,22 +160,20 @@ private:
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
 
-    // Static methods for setting defaults and validation
     static void set_defaults(proto::MeshGraphDescriptor& proto);
-
-    // Static validation methods
     static std::vector<std::string> static_validate(const proto::MeshGraphDescriptor& proto);
-    // Helper methods for validation that return their own error lists
-    static std::vector<std::string> validate_basic_structure(const proto::MeshGraphDescriptor& proto);
-    static std::vector<std::string> validate_names(const proto::MeshGraphDescriptor& proto);
-    static std::vector<std::string> validate_mesh_topology(const proto::MeshGraphDescriptor& proto);
-    static std::vector<std::string> validate_architecture_consistency(const proto::MeshGraphDescriptor& proto);
-    static std::vector<std::string> validate_channels(const proto::MeshGraphDescriptor& proto);
-    static std::vector<std::string> validate_express_connections(const proto::MeshGraphDescriptor& proto);
-    static std::vector<std::string> validate_graph_descriptors(const proto::MeshGraphDescriptor& proto);
-    static std::vector<std::string> validate_graph_topology_and_connections(const proto::MeshGraphDescriptor& proto);
 
-    static std::vector<std::string> validate_legacy_requirements(const proto::MeshGraphDescriptor& proto);
+    // Helper methods for validation that return their own error lists
+    static void validate_basic_structure(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+    static void validate_names(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+    static void validate_mesh_topology(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+    static void validate_architecture_consistency(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+    static void validate_channels(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+    static void validate_express_connections(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+    static void validate_graph_descriptors(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+    static void validate_graph_topology_and_connections(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+
+    static void validate_legacy_requirements(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
 
     void populate();
 
