@@ -60,7 +60,6 @@ void set_or_update_runtime_arguments(
     constexpr size_t num_writer_args = 3;
     constexpr size_t num_kernel_args = 3;
 
-
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
 
@@ -383,8 +382,26 @@ void set_or_update_runtime_arguments(
 
                 uint32_t start_t = start_tile_id % (output_Ht * output_Wt);
                 uint32_t start_tw = start_t % output_Wt;
-                uint32_t freq = output_Wt;    // Column broadcast frequency
-                uint32_t counter = start_tw;  // Column broadcast counter
+                uint32_t start_th = start_t / output_Wt;
+
+                // Determine broadcast direction locally based on tensor shapes
+                auto pred_shape_local = predicate_tensor.logical_shape();
+                auto true_shape_local = value_true_tensor.value().logical_shape();
+                auto pred_h_local = pred_shape_local[pred_shape_local.rank() - 2];
+                auto true_h_local = true_shape_local[true_shape_local.rank() - 2];
+
+                bool is_height_broadcast = (true_h_local == 1 && pred_h_local > 1);
+
+                uint32_t freq, counter;
+                if (is_height_broadcast) {
+                    // Height broadcast: broadcast every row
+                    freq = output_Ht;
+                    counter = start_th;
+                } else {
+                    // Width broadcast: broadcast every column
+                    freq = output_Wt;
+                    counter = start_tw;
+                }
 
                 std::array compute_runtime_args = {num_tiles_per_core, freq, counter, bit_cast_scalar};
                 handle_args(program, compute_kernel_id, core, compute_runtime_args);
@@ -419,8 +436,12 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
 
     const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
 
+    // Declare broadcast detection variable at function level
+    bool is_height_bcast = false;  // Track if this is height broadcasting for TTS
+
     WhereVariant variant = operation_attributes.where_variant;
     WhereBroadcastType broadcast_type = operation_attributes.broadcast_type;
+    bool pred_is_bcast = false, true_is_bcast = false, false_is_bcast = false;
 
     // Use WhereKernelConfig to get the appropriate kernel names
     WhereKernelConfig kernel_config(variant, broadcast_type);
@@ -575,7 +596,11 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     auto output_is_dram = static_cast<uint32_t>(output.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
 
     // BROADCAST DETECTION - Common for both reader and compute kernels
-    bool pred_is_bcast = false, true_is_bcast = false, false_is_bcast = false;
+    // Variables are declared at function level, just initialize them here
+    pred_is_bcast = false;
+    true_is_bcast = false;
+    false_is_bcast = false;
+    is_height_bcast = false;  // Initialize to false for broadcast detection
     if (broadcast_type == WhereBroadcastType::COL_BCAST) {
         // Determine which tensor is actually broadcast based on logical shapes (not padded)
         auto pred_shape = predicate_tensor.logical_shape();
@@ -585,9 +610,29 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             // For TTS: only predicate and true tensor, false is scalar
             auto pred_w = pred_shape[pred_shape.rank() - 1];
             auto true_w = true_shape[true_shape.rank() - 1];
+            auto pred_h = pred_shape[pred_shape.rank() - 2];
+            auto true_h = true_shape[true_shape.rank() - 2];
 
-            pred_is_bcast = (pred_w == 1 && true_w > 1);
-            true_is_bcast = (true_w == 1 && pred_w > 1);
+            // Check for width or height broadcasting
+            pred_is_bcast = (pred_w == 1 && true_w > 1) || (pred_h == 1 && true_h > 1);
+            true_is_bcast = (true_w == 1 && pred_w > 1) || (true_h == 1 && pred_h > 1);
+
+            // Determine if this is height broadcasting
+            is_height_bcast = true_is_bcast && (true_h == 1 && pred_h > 1);
+
+            log_info(
+                tt::LogOp,
+                "[COL_BCAST] pred_shape: h={}, w={}, true_shape: h={}, w={}",
+                pred_h,
+                pred_w,
+                true_h,
+                true_w);
+            log_info(
+                tt::LogOp,
+                "[COL_BCAST] pred_is_bcast={}, true_is_bcast={}, is_height_bcast={}",
+                pred_is_bcast,
+                true_is_bcast,
+                is_height_bcast);
 
             // Check for multi-dimensional broadcasting: if ranks differ, true tensor needs broadcasting
             if (pred_shape.rank() != true_shape.rank()) {
@@ -650,6 +695,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         // Set broadcast defines based on actual detection
         reader_defines["SRC_BCAST_PREDICATE"] = pred_is_bcast ? "1" : "0";
         reader_defines["SRC_BCAST_TRUE"] = true_is_bcast ? "1" : "0";
+        reader_defines["SRC_HEIGHT_BCAST_TRUE"] = (true_is_bcast && is_height_bcast) ? "1" : "0";
         reader_defines["SRC_BCAST_FALSE"] = false_is_bcast ? "1" : "0";
 
         // Add BCAST_LLK define (set to 0 for now, can be optimized later)
@@ -692,7 +738,22 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         // Set broadcast defines for TTS column broadcast
         reader_defines["SRC_BCAST_PREDICATE"] = pred_is_bcast ? "1" : "0";
         reader_defines["SRC_BCAST_TRUE"] = true_is_bcast ? "1" : "0";  // CB1 uses true tensor broadcast pattern
+        reader_defines["SRC_HEIGHT_BCAST_TRUE"] = (true_is_bcast && is_height_bcast) ? "1" : "0";
         reader_defines["SRC_BCAST_FALSE"] = "0";                       // False is scalar
+
+        // Add height broadcast flag for TTS
+        bool true_height_bcast = false;
+        bool pred_height_bcast = false;
+        if (true_is_bcast) {
+            auto true_shape = value_true_tensor.value().logical_shape();
+            true_height_bcast = (true_shape[true_shape.rank() - 2] == 1);
+        }
+        if (pred_is_bcast) {
+            auto pred_shape = predicate_tensor.logical_shape();
+            pred_height_bcast = (pred_shape[pred_shape.rank() - 2] == 1);
+        }
+        reader_defines["TRUE_HEIGHT_BCAST"] = true_height_bcast ? "1" : "0";
+        reader_defines["PRED_HEIGHT_BCAST"] = pred_height_bcast ? "1" : "0";
 
         // Add BCAST_LLK define
         reader_defines["BCAST_LLK"] = "0";

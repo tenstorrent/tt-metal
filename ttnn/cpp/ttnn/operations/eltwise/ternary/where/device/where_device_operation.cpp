@@ -98,12 +98,14 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
             // For outer broadcast, shapes should be compatible
             // The broadcast detection should have already validated this
         } else if (broadcast_type == WhereBroadcastType::COL_BCAST) {
-            // For column broadcast, validate height compatibility
-            const bool same_height =
-                (predicate_tensor.logical_shape()[-2] == value_true_tensor.value().logical_shape()[-2]);
+            // For column broadcast, validate that dimensions are broadcastable
+            // Either heights are same, or one is 1 (broadcastable)
+            const auto pred_h = predicate_tensor.logical_shape()[-2];
+            const auto true_h = value_true_tensor.value().logical_shape()[-2];
+            const bool height_broadcastable = (pred_h == true_h) || (pred_h == 1) || (true_h == 1);
             TT_FATAL(
-                same_height,
-                "Where TTS column broadcast requires predicate and value_true to have same height. "
+                height_broadcastable,
+                "Where TTS column broadcast requires predicate and value_true heights to be broadcastable. "
                 "Predicate: {}, Value true: {}",
                 predicate_tensor.logical_shape(),
                 value_true_tensor.value().logical_shape());

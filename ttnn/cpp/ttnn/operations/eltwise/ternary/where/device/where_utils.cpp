@@ -203,17 +203,47 @@ WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const 
         return WhereBroadcastType::NONE;
     }
 
-    // Check for outer broadcast (all dimensions match) - TTS only supports this when ranks are equal
-    if ((predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-2] == true_shape[-2])) {
-        if (predicate_shape.rank() == true_shape.rank()) {
-            return WhereBroadcastType::OUTER_BCAST;
-        } else {
-            return WhereBroadcastType::INVALID_BCAST;
-        }
-    }
+    // Removed incorrect early check for outer broadcast - outer broadcast supports different ranks
 
     bool same_width = (predicate_shape[-1] == true_shape[-1]);
     bool same_height = (predicate_shape[-2] == true_shape[-2]);
+
+    log_debug(tt::LogOp, "TTS broadcast detection - predicate shape: {}, true shape: {}", predicate_shape, true_shape);
+    log_debug(tt::LogOp, "same_width: {}, same_height: {}", same_width, same_height);
+
+    // Check for outer broadcast first: if last two dimensions match exactly,
+    // it's outer broadcast (broadcasting in dimensions beyond -2)
+    if (same_height && same_width) {
+        // For outer broadcast, we need to check if the shapes are compatible
+        int pred_rank = predicate_shape.rank();
+        int true_rank = true_shape.rank();
+        int min_rank = std::min(pred_rank, true_rank);
+        bool can_broadcast = true;
+
+        // Check dimensions from the end
+        for (int i = 0; i < min_rank; ++i) {
+            int pred_dim = predicate_shape[pred_rank - 1 - i];
+            int true_dim = true_shape[true_rank - 1 - i];
+
+            // For outer broadcast, we only need exact match in the last 2 dims (already checked)
+            // For other dims, standard broadcast rules apply (dims must be equal or 1)
+            if (i >= 2) {  // Checking dims beyond height and width
+                if (pred_dim != true_dim && pred_dim != 1 && true_dim != 1) {
+                    can_broadcast = false;
+                    break;
+                }
+            }
+        }
+
+        // If one tensor has more dimensions, those dimensions can be any value (implicit broadcast)
+        // This is the standard broadcasting rule where missing dimensions are treated as 1
+        if (can_broadcast) {
+            log_debug(tt::LogOp, "Detected OUTER_BCAST for TTS");
+            return WhereBroadcastType::OUTER_BCAST;
+        } else {
+            log_debug(tt::LogOp, "OUTER_BCAST compatibility check failed");
+        }
+    }
 
     // Multi-dimensional broadcast is not supported for now
     if (!same_height && !same_width) {
@@ -238,6 +268,31 @@ WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const 
         }
     }
 
+    // Check for row broadcast patterns (height dimension differs)
+    if (!same_height) {
+        // Check for row broadcast patterns: at least one tensor is broadcasting in height and widths are same
+        auto max_h = std::max(pred_h, true_h);
+        bool pred_row_broadcasted = (pred_h == 1 && max_h > 1);
+        bool true_row_broadcasted = (true_h == 1 && max_h > 1);
+
+        log_debug(
+            tt::LogOp,
+            "TTS row broadcast check: pred_h={}, true_h={}, same_width={}, pred_row_broadcasted={}, "
+            "true_row_broadcasted={}",
+            pred_h,
+            true_h,
+            same_width,
+            pred_row_broadcasted,
+            true_row_broadcasted);
+
+        // For TTS, treat row broadcast as column broadcast (2D case)
+        // Row broadcast case: at least one tensor is broadcasting in height and widths are same
+        if ((pred_row_broadcasted || true_row_broadcasted) && same_width) {
+            log_debug(tt::LogOp, "TTS detected row broadcast, treating as COL_BCAST");
+            return WhereBroadcastType::COL_BCAST;
+        }
+    }
+
     // Row broadcast not supported for TTS (simplified approach)
     return WhereBroadcastType::INVALID_BCAST;
 }
@@ -251,7 +306,7 @@ WhereBroadcastType get_broadcast_type(
         return WhereBroadcastType::NONE;
     }
 
-    // Check for OUTER_BCAST: only for TTT variant since TTS doesn't have OUTER_BCAST kernel support
+    // Check for OUTER_BCAST: supported for TTT, TST, and TTS variants
     if (!false_shape.empty()) {
         // For outer broadcast, the last two dimensions (height and width) must match exactly
         // This allows broadcasting in outer dimensions (dims beyond -2)
