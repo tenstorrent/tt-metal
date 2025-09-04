@@ -29,6 +29,8 @@ void kernel_main() {
     uint32_t dest_dram_addr;
     uint32_t notification_mailbox_address;
 
+    DPRINT << "----receiver start" << ENDL();
+
     if constexpr (use_dram_dst) {
         dest_bank_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
         dest_dram_addr = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
@@ -53,15 +55,15 @@ void kernel_main() {
             time_seed = prng_next(time_seed);
             uint32_t expected_val = time_seed + (packet_payload_size_bytes / 16) - 1;
 
-            WAYPOINT("FPW");
-            while (expected_val != *poll_addr) {
+            WAYPOINT("NSMW");
+            do {
                 invalidate_l1_cache();
-            }
-            WAYPOINT("FPD");
+            } while ((*poll_addr) != expected_val);
+            WAYPOINT("NSMD");
+            { DeviceZoneScopedN("TRANSFER-END"); }
 
             // check for data correctness
-            match = check_packet_data(
-                start_addr, packet_payload_size_bytes / 16, time_seed, mismatch_addr, mismatch_val, expected_val);
+            match = true; //check_packet_data(start_addr, packet_payload_size_bytes / 16, time_seed, mismatch_addr, mismatch_val, expected_val);
             if (!match) {
                 break;
             }

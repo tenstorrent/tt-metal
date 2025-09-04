@@ -148,10 +148,12 @@ inline void send_packet(
         reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address + packet_payload_size_bytes - 4);
 #endif
     connection.wait_for_empty_write_slot();
-    RECORD_FABRIC_HEADER(packet_header);
+    { DeviceZoneScopedN("TRANSFER-START"); }
+    
     connection.send_payload_without_header_non_blocking_from_address(
         source_l1_buffer_address, packet_payload_size_bytes);
     connection.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+    { DeviceZoneScopedN("TRANSFER-SENT-TO-ROUTER"); }
 }
 
 // connect to edm
@@ -292,6 +294,11 @@ void kernel_main() {
         // fwd packet
         send_packet(
             fwd_packet_header, source_l1_buffer_address, packet_payload_size_bytes, time_seed, fwd_fabric_connection);
+        
+        //DPRINT << "---" << (int)fwd_packet_header->route_buffer[0] << ENDL();
+        //DPRINT << "---" << (int)fwd_packet_header->route_buffer[1] << ENDL();
+        //DPRINT << "---" << (int)fwd_packet_header->routing_fields.branch_west_offset << ENDL();
+        //DPRINT << "---" << ENDL();
 
         if constexpr (additional_dir) {
             // bwd packet

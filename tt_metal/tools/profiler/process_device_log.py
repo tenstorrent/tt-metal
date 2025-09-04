@@ -649,6 +649,7 @@ def timeseries_analysis(riscData, name, analysis):
             },
             "series": tmpList,
         }
+        print("--------------------------------", list(tmpDF.loc[:, "duration_cycles"]))
     if tmpDict:
         if "analysis" not in riscData:
             riscData["analysis"] = {name: tmpDict}
@@ -743,6 +744,7 @@ def generate_device_level_summary(devicesData):
                                         )
 
         for name, analysisList in analysisLists.items():
+            print("length of stat list is: ", len(analysisList["statList"]))
             tmpDF = pd.DataFrame(analysisList["statList"])
             tmpDict = {}
             if not tmpDF.empty:
