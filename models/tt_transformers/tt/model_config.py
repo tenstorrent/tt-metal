@@ -1781,11 +1781,23 @@ class ModelArgs:
     def get_model_config(self):
         return self.model_config
 
+    def get_hf_model_cls(self):
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
+
+        if not self.is_multimodal:
+            return AutoModelForCausalLM
+
+        for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
+            if type(self.hf_config) in model_cls._model_mapping:
+                return model_cls
+
+        raise ValueError(f"Unknown model for config {type(self.hf_config)}")
+
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         if self.dummy_weights:
             if self.checkpoint_type == CheckpointType.HuggingFace:
-                from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForVision2Seq
+                from transformers import AutoConfig
 
                 config = AutoConfig.from_pretrained(
                     self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
@@ -1797,7 +1809,7 @@ class ModelArgs:
                     config.num_layers = self.n_layers
                     config.num_hidden_layers = self.n_layers
 
-                model_cls = AutoModelForVision2Seq if self.is_multimodal else AutoModelForCausalLM
+                model_cls = self.get_hf_model_cls()
                 model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
                 state_dict = model.state_dict()
             else:
@@ -1810,9 +1822,7 @@ class ModelArgs:
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
-                from transformers import AutoModelForCausalLM, AutoModelForVision2Seq
-
-                model_cls = AutoModelForVision2Seq if self.is_multimodal else AutoModelForCausalLM
+                model_cls = self.get_hf_model_cls()
                 model = model_cls.from_pretrained(
                     self.CKPT_DIR,
                     torch_dtype="auto",
@@ -2320,9 +2330,9 @@ class ModelArgs:
                 model.load_state_dict(self.load_state_dict())
             return model
         else:
-            from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForVision2Seq
+            from transformers import AutoConfig
 
-            model_cls = AutoModelForVision2Seq if self.is_multimodal else AutoModelForCausalLM
+            model_cls = self.get_hf_model_cls()
 
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
@@ -2396,9 +2406,9 @@ class ModelArgs:
 
     def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
         if self.checkpoint_type == CheckpointType.HuggingFace:
-            from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForVision2Seq
+            from transformers import AutoConfig
 
-            model_cls = AutoModelForVision2Seq if self.is_multimodal else AutoModelForCausalLM
+            model_cls = self.get_hf_model_cls()
 
             if self.dummy_weights and not load_checkpoint:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
