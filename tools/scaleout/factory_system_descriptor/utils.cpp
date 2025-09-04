@@ -16,8 +16,8 @@
 
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <tt_stl/reflection.hpp>
-#include <scaleout_tools/board/board.hpp>
-#include <scaleout_tools/cabling_generator/cabling_generator.hpp>
+#include <board/board.hpp>
+#include <cabling_generator/cabling_generator.hpp>
 
 // Add protobuf includes
 #include "protobuf/factory_system_descriptor.pb.h"

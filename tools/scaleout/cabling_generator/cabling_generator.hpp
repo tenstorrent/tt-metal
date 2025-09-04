@@ -9,7 +9,7 @@
 #include <utility>
 
 #include <tt_stl/strong_type.hpp>
-#include <scaleout_tools/board/board.hpp>
+#include <board/board.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt::scaleout_tools {

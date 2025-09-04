@@ -9,7 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <google/protobuf/text_format.h>
-#include <scaleout_tools/connector/connector.hpp>
+#include <connector/connector.hpp>
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
@@ -53,7 +53,7 @@ tt::scaleout_tools::cabling_generator::proto::NodeDescriptor find_node_descripto
     // Fallback: load from file
     // TODO: This should be converted to factory functions
     return load_descriptor_from_textproto<tt::scaleout_tools::cabling_generator::proto::NodeDescriptor>(
-        "scaleout_tools/scaleout_tools/cabling_descriptor/instances/" + node_descriptor_name + ".textproto");
+        "tools/scaleout/cabling_descriptor/instances/" + node_descriptor_name + ".textproto");
 }
 
 // Build node from descriptor with port connections and validation
