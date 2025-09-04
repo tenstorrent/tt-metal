@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+
+#include <algorithm>  // comment this if you want to check if my claim is true.
+// #include "llk_sfpu_types.h" // uncomment this to check if my claim is true.
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
@@ -15,6 +18,10 @@ namespace NAMESPACE {
 void MAIN {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+
+    // This will print 1.
+    // DPRINT << static_cast<uint32_t>((::abs == SfpuType::abs)) << ENDL(); // uncomment this to check if my claim is
+    // true.
 
     init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
