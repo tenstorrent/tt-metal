@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   workflow_call:
   schedule:
-    - cron: "0 */2 * * *"
+    - cron: "0 5,14,23 * * *"
 
 jobs:
   build-artifact:
