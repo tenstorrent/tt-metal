@@ -19,5 +19,8 @@ add_custom_command(
 )
 
 add_custom_target(hal_generate_dev_msgs_header DEPENDS ${DEV_MSGS_GENERATED_FILES})
+if(TARGET all_generated_files)
+    add_dependencies(all_generated_files hal_generate_dev_msgs_header)
+endif()
 
 add_subdirectory(tt-1xx)

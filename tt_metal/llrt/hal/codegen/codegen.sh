@@ -16,6 +16,7 @@ OUT_INTF_FILE="${OUT_DIR}/dev_msgs.hpp"
 OUT_IMPL_FILE="${OUT_DIR}/dev_msgs_impl.hpp"
 YEAR=$(date +%Y)
 
+mkdir -p "${OUT_DIR}"
 cat > ${OUT_INTF_FILE} <<EOF
 // SPDX-FileCopyrightText: © ${YEAR} Tenstorrent AI ULC.
 //
@@ -41,7 +42,6 @@ cat > ${OUT_IMPL_FILE} << EOF
 // It should not be used anywhere else.
 EOF
 
-mkdir -p "${OUT_DIR}"
 if ! $PYTHON "${SCRIPT_PY}" \
              --append_mode \
              --driver_ns="::tt::tt_metal::hal_structs" \
