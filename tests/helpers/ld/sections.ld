@@ -128,6 +128,16 @@ SECTIONS
   {
     *(local_data_noinit)
   } > REGION_DATA
+  .gcov_info :
+  {
+    __gcov_info_start = .;
+    /* The KEEP directives tell the linker to not garbage-collect the segments. */
+    KEEP(*(.gcov_info))
+    KEEP(*(.gcov_info.*))
+    __gcov_info_end = .;
+  } > REGION_DATA
+  __coverage_start = ORIGIN(REGION_GCOV);
+  __coverage_end = ORIGIN(REGION_GCOV) + LENGTH(REGION_GCOV);
   . = ALIGN(16);
   _edata = .; PROVIDE (edata = .);
   _end = .; PROVIDE (end = .);
