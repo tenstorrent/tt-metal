@@ -58,7 +58,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     tt::tt_metal::DataType im_data_format,
     CoreCoord grid_size,
     bool inplace,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool use_welford);
 
 struct GroupNorm {
     float eps;

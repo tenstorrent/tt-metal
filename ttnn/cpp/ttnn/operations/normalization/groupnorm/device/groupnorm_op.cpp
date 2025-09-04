@@ -235,7 +235,8 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
                     program_config.im_data_format,
                     program_config.compute_with_storage_grid_size,
                     inplace,
-                    this->compute_kernel_config);
+                    this->compute_kernel_config,
+                    this->use_welford);
             } else {
                 uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;
                 uint32_t num_cores_y = program_config.compute_with_storage_grid_size.y;

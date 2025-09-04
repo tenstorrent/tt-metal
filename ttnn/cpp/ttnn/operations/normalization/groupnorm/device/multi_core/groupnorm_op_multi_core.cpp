@@ -130,7 +130,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     DataType im_data_format,
     CoreCoord grid_size,
     bool inplace,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool use_welford) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (gamma.has_value()) {
         TT_FATAL(
@@ -425,7 +426,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     uint32_t interm_block_tiles = block_ht * block_wt;
     uint32_t x_CB_size = interm_block_tiles * single_tile_size;
     uint32_t xmm_CB_size = interm_block_tiles * single_tile_size;
-    uint32_t ex_partial_CB_size = single_tile_size;   // partial Ex
+    uint32_t ex_partial_CB_size = single_tile_size * (use_welford ? 2 : 1);  // partial Ex
     uint32_t ex_global_CB_size = ex_partial_CB_size;  // the final result Ex
     uint32_t xmm2_CB_size = interm_block_tiles * single_tile_size;
     uint32_t ex2pe_CB_size = ex_partial_CB_size;
@@ -592,8 +593,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     // reader kernel
     auto reader_mcast_sender_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
-        "reader_mcast_sender_unary_sharded_gn_v2.cpp",
+        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                       "welford_reader_mcast_sender_unary_sharded_gn_v2.cpp"
+                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                       "reader_mcast_sender_unary_sharded_gn_v2.cpp"),
         mcast_sender_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -604,8 +607,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     if (use_mcast) {
         reader_mcast_receiver_kernels_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
-            "reader_mcast_receiver_unary_sharded_gn_v2.cpp",
+            (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                           "welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp"
+                         : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                           "reader_mcast_receiver_unary_sharded_gn_v2.cpp"),
             mcast_receiver_cores,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -752,7 +757,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     auto mcast_sender_compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp",
+        (use_welford
+             ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/"
+               "welford_groupnorm_sharded_v2.cpp"
+             : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp"),
         mcast_sender_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -762,7 +770,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
             .defines = eltwise_binary_defines});
     auto mcast_receiver_compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp",
+        (use_welford
+             ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/"
+               "welford_groupnorm_sharded_v2.cpp"
+             : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp"),
         mcast_receiver_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
