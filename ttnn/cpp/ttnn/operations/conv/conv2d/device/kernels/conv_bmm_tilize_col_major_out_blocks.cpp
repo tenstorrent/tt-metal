@@ -80,6 +80,8 @@ inline void tilize_in_reuse(uint32_t in_cb_start_addr) {
 
     // full image rows
     for (uint32_t image_row = 0; image_row < num_image_rows; ++image_row) {
+        // each time we start processing a new image row, we need to update the read pointer to the appropriate offset
+        // from the start of the CB to match the reader behavior
         in_cb_addr = update_in_cb<in_cb_id, window_reuse_offset>(in_cb_addr);
         for (uint32_t image_col = 0; image_col < image_width_in_tiles; ++image_col) {
             cb_reserve_back(out_cb_id, in_block_w);
@@ -112,6 +114,10 @@ template <
     uint32_t tilized_cb_second_reader_offset,
     uint32_t image_width_in_tiles>
 inline void tilize_in_reuse_split_reader(uint32_t act_cb_start_address, uint32_t act_cb_second_reader_start_address) {
+    // with activation reuse, the activation buffers are sized to fit one output image width only,
+    // so we need to interleave waits and pops on the two buffers to allow parallelization;
+    // we reserve back tilized CB to store whole act block h - and then we update write pointers so that
+    // we fill in first row of the first hald (NCRISC), first row of the second half (BRISC) and so on
     cb_reserve_back(out_cb_id, out_cb_tiles);
     fast_tilize_init_with_dt(in1_cb_id, in_block_w, out_cb_id);
 
@@ -129,8 +135,10 @@ inline void tilize_in_reuse_split_reader(uint32_t act_cb_start_address, uint32_t
     constexpr uint32_t leftover_in2 = in2_num_subblocks - min_num_image_rows * image_width_in_tiles;
     constexpr uint32_t max_leftover = leftover_in1 > leftover_in2 ? leftover_in1 : leftover_in2;
 
-    // full image rows
+    // process minimum number of image rows for both readers in the same loop
     for (uint32_t image_row = 0; image_row < min_num_image_rows; ++image_row) {
+        // each time we start processing a new image row, we need to update the read pointer to the appropriate offset
+        // from the start of the CB to match the reader behavior
         in1_cb_addr = update_in_cb<in1_cb_id, window_reuse_offset>(in1_cb_addr);
         in2_cb_addr = update_in_cb<in2_cb_id, window_reuse_offset>(in2_cb_addr);
         for (uint32_t image_col = 0; image_col < image_width_in_tiles; ++image_col) {
@@ -141,7 +149,7 @@ inline void tilize_in_reuse_split_reader(uint32_t act_cb_start_address, uint32_t
         }
     }
 
-    // partial last image row
+    // leftover image rows if one reader had more rows than the other
     in1_cb_addr = update_in_cb<in1_cb_id, window_reuse_offset>(in1_cb_addr);
     in2_cb_addr = update_in_cb<in2_cb_id, window_reuse_offset>(in2_cb_addr);
     for (uint32_t image_col = 0; image_col < max_leftover; ++image_col) {
@@ -277,6 +285,8 @@ void MAIN {
         skip_compute = (bool)get_arg_val<uint32_t>(0);
     }
 #ifdef ACTIVATION_REUSE
+    // if activation reuse is enabled, we need to update read pointers of the act buffers
+    // each time we pass on to the new output image row to match the reader behavior
     uint32_t act_cb_start_address = get_local_cb_interface(in0_cb_id).fifo_rd_ptr;
 #ifdef SPLIT_READER
     const uint32_t out_cb_tiles = in0_block_w * (in0_num_subblocks_read + in0_num_subblocks_read_last);

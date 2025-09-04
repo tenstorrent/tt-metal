@@ -31,6 +31,90 @@ namespace conv2d {
 // Compute kernel addressing mode divides addresses with 16
 constexpr uint32_t COMPUTE_KERNEL_ADDRESS_DIVISOR = 16;
 
+struct ActivationReuseConfig {
+    uint32_t image_width_tiles = 0;
+    uint32_t image_width_mod_tile = 0;
+    uint32_t act_cb_num_tiles_split = 0;
+    uint32_t act_cb_num_tiles_split_last = 0;
+    uint32_t reuse_window_offset = 0;
+    bool readers_process_full_image_widths = false;
+    uint32_t tilized_cb_row_offset = 0;
+    uint32_t tilized_cb_second_reader_offset = 0;
+    uint32_t total_remaining_tiles_to_push = 0;
+    uint32_t cores_pushing_remaining_tiles = 0;
+    uint32_t partial_core_remaining_tiles = 0;
+};
+
+ActivationReuseConfig calculate_activation_reuse_params(
+    uint32_t output_image_width,
+    uint32_t filter_w,
+    uint32_t filter_h,
+    uint32_t conv_act_c_read_bytes,
+    uint32_t act_block_w_extra_align_bytes,
+    uint32_t act_block_h_nsubblocks_split,
+    uint32_t act_block_h_nsubblocks_split_last,
+    uint32_t tilized_act_tile_size,
+    uint32_t act_block_w_ntiles,
+    uint32_t act_block_h_ntiles,
+    uint32_t total_active_num_cores,
+    uint32_t output_matrix_height_tiles,
+    const std::vector<CBInfo>& cb_info,
+    bool enable_split_reader) {
+    ActivationReuseConfig config;
+
+    // Calculate compile time args needed for activation reuse feature
+    config.image_width_tiles = tt::div_up(output_image_width, tt::constants::TILE_HEIGHT);
+    config.image_width_mod_tile = output_image_width % tt::constants::TILE_HEIGHT;
+    const uint32_t image_width_tile_leftover =
+        config.image_width_mod_tile == 0 ? 0 : tt::constants::TILE_HEIGHT - config.image_width_mod_tile;
+
+    // We rely that double buffering is turned off here
+    // TODO(sjovic): avoid this assumption
+    config.act_cb_num_tiles_split = get_cb_info_by_name(cb_info, Conv2dCb::ACT).num_pages;
+    if (enable_split_reader) {
+        config.act_cb_num_tiles_split_last = get_cb_info_by_name(cb_info, Conv2dCb::ACT_SECOND_READER).num_pages;
+    }
+
+    // Number of bytes to move the CB read pointer when passing on to the new output image row;
+    // We need to skip the first kernel_w*in_channels_padded elements
+    config.reuse_window_offset = filter_w * conv_act_c_read_bytes;
+    // In case the output image width is not a multiple of the tile height, we need to skip the additional elements
+    // we read to fill in the tile height
+    if (image_width_tile_leftover) {
+        config.reuse_window_offset +=
+            (filter_w * filter_h * conv_act_c_read_bytes + act_block_w_extra_align_bytes) * image_width_tile_leftover;
+    }
+
+    // Precompute happy path for the feature - if each reader processes full image rows only, we can skip many if
+    // conditions in the kernel. There are two cases which can affect this:
+    // - shards are split in such way that one shard ends in the middle of the image width
+    // - shards contain full image widths only, but split reader splits shard in the middle of the image width
+    // - output image width is not a multiple of the tile height, so we need to process more than one image width at
+    // once
+    config.readers_process_full_image_widths = act_block_h_nsubblocks_split % config.image_width_tiles == 0 &&
+                                               act_block_h_nsubblocks_split_last % config.image_width_tiles == 0 &&
+                                               image_width_tile_leftover == 0;
+
+    // Compute kernel interleaves tilizing data coming from two readers so it needs to calculate the address in the
+    // tilized CB
+    config.tilized_cb_row_offset = tilized_act_tile_size * act_block_w_ntiles;
+    config.tilized_cb_second_reader_offset = tilized_act_tile_size * act_block_h_nsubblocks_split * act_block_w_ntiles;
+
+    // Last cores sometime have less work to do, but we still need to push the same number of tiles
+    // to avoid blocking compute kernels; Here we compute how many cores will be pushing the remaining tiles
+    config.total_remaining_tiles_to_push = act_block_h_ntiles * total_active_num_cores - output_matrix_height_tiles;
+    if (config.total_remaining_tiles_to_push > 0) {
+        config.cores_pushing_remaining_tiles = tt::div_up(config.total_remaining_tiles_to_push, act_block_h_ntiles);
+
+        config.partial_core_remaining_tiles = config.total_remaining_tiles_to_push % act_block_h_ntiles;
+        if (config.partial_core_remaining_tiles == 0) {
+            config.partial_core_remaining_tiles = act_block_h_ntiles;
+        }
+    }
+
+    return config;
+}
+
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     tt::tt_metal::Program& program,
     const Tensor& a,
@@ -554,74 +638,25 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t reader_arg_act_block_h_datums = (enable_split_reader ? act_block_h_datums_split : act_block_h_datums);
     TT_FATAL(reader_arg_act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
 
-    // reader kernel args
-    uint32_t image_width_tiles = 0;
-    uint32_t image_width_mod_tile = 0;
-    uint32_t act_cb_num_tiles_split = 0;
-    uint32_t act_cb_num_tiles_split_last = 0;
-    uint32_t reuse_window_offset = 0;
-    bool readers_process_full_image_widths = false;
-
-    // compute kernel args
-    uint32_t tilized_cb_row_offset = 0;
-    uint32_t tilized_cb_second_reader_offset = 0;
-
-    uint32_t total_remaining_tiles_to_push = 0;
-    uint32_t cores_pushing_remaining_tiles = 0;
-    uint32_t partial_core_remaining_tiles = 0;
     uint32_t last_core_with_work = 0;
 
+    ActivationReuseConfig activation_reuse_config;
     if (enable_activation_reuse) {
-        // Calculate compile time args needed for activation reuse feature
-        image_width_tiles = (output_image_width + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
-        image_width_mod_tile = output_image_width % tt::constants::TILE_HEIGHT;
-        const uint32_t image_width_tile_leftover =
-            image_width_mod_tile == 0 ? 0 : tt::constants::TILE_HEIGHT - image_width_mod_tile;
-
-        // We rely that double buffering is turned off here
-        // TODO(sjovic): avoid this assumption
-        act_cb_num_tiles_split = get_cb_info_by_name(cb_info, Conv2dCb::ACT).num_pages;
-        if (enable_split_reader) {
-            act_cb_num_tiles_split_last = get_cb_info_by_name(cb_info, Conv2dCb::ACT_SECOND_READER).num_pages;
-        }
-
-        // Number of bytes to move the CB read pointer when passing on to the new output image row;
-        // We need to skip the first kernel_w*in_channels_padded elements
-        reuse_window_offset = filter_w * conv_act_c_read_bytes;
-        // In case the output image width is not a multiple of the tile height, we need to skip the additional elements
-        // we read to fill in the tile height
-        if (image_width_tile_leftover) {
-            reuse_window_offset += (filter_w * filter_h * conv_act_c_read_bytes + act_block_w_extra_align_bytes) *
-                                   image_width_tile_leftover;
-        }
-
-        // Precompute happy path for the feature - if each reader processes full image rows only, we can skip many if
-        // conditions in the kernel. There are two cases which can affect this:
-        // - shards are split in such way that one shard ends in the middle of the image width
-        // - shards contain full image widths only, but split reader splits shard in the middle of the image width
-        // - output image width is not a multiple of the tile height, so we need to process more than one image width at
-        // once
-        readers_process_full_image_widths = act_block_h_nsubblocks_split % image_width_tiles == 0 &&
-                                            act_block_h_nsubblocks_split_last % image_width_tiles == 0 &&
-                                            image_width_tile_leftover == 0;
-
-        // Compute kernel interleaves tilizing data coming from two readers so it needs to calculate the address in the
-        // tilized CB
-        tilized_cb_row_offset = tilized_act_tile_size * act_block_w_ntiles;
-        tilized_cb_second_reader_offset = tilized_act_tile_size * act_block_h_nsubblocks_split * act_block_w_ntiles;
-
-        // Last cores sometime have less work to do, but we still need to push the same number of tiles
-        // to avoid blocking compute kernels; Here we compute how many cores will be pushing the remaining tiles
-        total_remaining_tiles_to_push = act_block_h_ntiles * total_active_num_cores - output_matrix_height_tiles;
-        if (total_remaining_tiles_to_push > 0) {
-            cores_pushing_remaining_tiles =
-                (total_remaining_tiles_to_push + act_block_h_ntiles - 1) / act_block_h_ntiles;  // Ceiling division
-
-            partial_core_remaining_tiles = total_remaining_tiles_to_push % act_block_h_ntiles;
-            if (partial_core_remaining_tiles == 0) {
-                partial_core_remaining_tiles = act_block_h_ntiles;
-            }
-        }
+        activation_reuse_config = calculate_activation_reuse_params(
+            output_image_width,
+            filter_w,
+            filter_h,
+            conv_act_c_read_bytes,
+            act_block_w_extra_align_bytes,
+            act_block_h_nsubblocks_split,
+            act_block_h_nsubblocks_split_last,
+            tilized_act_tile_size,
+            act_block_w_ntiles,
+            act_block_h_ntiles,
+            total_active_num_cores,
+            output_matrix_height_tiles,
+            cb_info,
+            enable_split_reader);
     }
 
 
@@ -657,13 +692,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     if (enable_activation_reuse) {
         std::vector<uint32_t> activation_reuse_args = {
-            act_cb_num_tiles_split,
+            activation_reuse_config.act_cb_num_tiles_split,
             act_block_w_ntiles,
-            static_cast<uint32_t>(readers_process_full_image_widths),
-            image_width_tiles,
+            static_cast<uint32_t>(activation_reuse_config.readers_process_full_image_widths),
+            activation_reuse_config.image_width_tiles,
             output_image_width,
-            reuse_window_offset,
-            static_cast<uint32_t>(total_remaining_tiles_to_push != 0)};
+            activation_reuse_config.reuse_window_offset,
+            static_cast<uint32_t>(activation_reuse_config.total_remaining_tiles_to_push != 0)};
 
         reader_compile_time_args.insert(
             reader_compile_time_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
@@ -760,13 +795,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             if (enable_activation_reuse) {
                 std::vector<uint32_t> activation_reuse_args = {
                     filter_h,
-                    act_cb_num_tiles_split_last,
+                    activation_reuse_config.act_cb_num_tiles_split_last,
                     act_block_w_ntiles,
-                    static_cast<uint32_t>(readers_process_full_image_widths),
-                    image_width_tiles,
+                    static_cast<uint32_t>(activation_reuse_config.readers_process_full_image_widths),
+                    activation_reuse_config.image_width_tiles,
                     output_image_width,
-                    reuse_window_offset,
-                    static_cast<uint32_t>(total_remaining_tiles_to_push != 0)};
+                    activation_reuse_config.reuse_window_offset,
+                    static_cast<uint32_t>(activation_reuse_config.total_remaining_tiles_to_push != 0)};
                 split_reader_args.insert(
                     split_reader_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
             }
@@ -816,11 +851,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         check_skip_compute};
 
     if (enable_activation_reuse) {
-        compute_kernel_args.push_back(image_width_tiles);
-        compute_kernel_args.push_back(reuse_window_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
+        compute_kernel_args.push_back(activation_reuse_config.image_width_tiles);
+        compute_kernel_args.push_back(activation_reuse_config.reuse_window_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
         if (enable_split_reader) {
-            compute_kernel_args.push_back(tilized_cb_row_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
-            compute_kernel_args.push_back(tilized_cb_second_reader_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
+            compute_kernel_args.push_back(
+                activation_reuse_config.tilized_cb_row_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
+            compute_kernel_args.push_back(
+                activation_reuse_config.tilized_cb_second_reader_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
         }
     }
 
@@ -886,20 +923,20 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         int writer_remaining_tiles_to_push = 0;
         for (uint32_t core_i = 0; core_i < total_active_num_cores; core_i++) {
             // Core pushing at least 1 tile in height of real data
-            if (core_i == total_active_num_cores - cores_pushing_remaining_tiles) {
-                reader_remaining_tiles_to_push = partial_core_remaining_tiles;
+            if (core_i == total_active_num_cores - activation_reuse_config.cores_pushing_remaining_tiles) {
+                reader_remaining_tiles_to_push = activation_reuse_config.partial_core_remaining_tiles;
                 if (enable_split_reader) {
-                    if (partial_core_remaining_tiles > act_block_h_nsubblocks_split_last) {
+                    if (activation_reuse_config.partial_core_remaining_tiles > act_block_h_nsubblocks_split_last) {
                         writer_remaining_tiles_to_push = act_block_h_nsubblocks_split_last;
                         reader_remaining_tiles_to_push =
-                            partial_core_remaining_tiles - act_block_h_nsubblocks_split_last;
+                            activation_reuse_config.partial_core_remaining_tiles - act_block_h_nsubblocks_split_last;
                     } else {
-                        writer_remaining_tiles_to_push = partial_core_remaining_tiles;
+                        writer_remaining_tiles_to_push = activation_reuse_config.partial_core_remaining_tiles;
                         reader_remaining_tiles_to_push = 0;
                     }
                 }
                 // Cores with no meaningful work
-            } else if (core_i > total_active_num_cores - cores_pushing_remaining_tiles) {
+            } else if (core_i > total_active_num_cores - activation_reuse_config.cores_pushing_remaining_tiles) {
                 reader_remaining_tiles_to_push = act_block_h_ntiles;
                 if (enable_split_reader) {
                     reader_remaining_tiles_to_push = act_block_h_nsubblocks_split;

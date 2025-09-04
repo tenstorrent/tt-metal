@@ -26,13 +26,6 @@ FORCE_INLINE void zero_out_tiles() {
     noc_async_read_barrier();
 }
 
-template <uint32_t coalesced_read_bytes, uint32_t stride_h_bytes>
-FORCE_INLINE void read_kernel_w(uint32_t& l1_write_addr_act, uint32_t& act_l1_offset) {
-    noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-    l1_write_addr_act += coalesced_read_bytes;
-    act_l1_offset += stride_h_bytes;
-}
-
 template <
     uint32_t dilation_w,
     uint32_t coalesced_read_bytes,
@@ -72,6 +65,13 @@ FORCE_INLINE void read_sticks(
         }
     }
     reader_idx++;
+}
+
+template <uint32_t coalesced_read_bytes, uint32_t stride_h_bytes>
+FORCE_INLINE void read_kernel_w(uint32_t& l1_write_addr_act, uint32_t& act_l1_offset) {
+    noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
+    l1_write_addr_act += coalesced_read_bytes;
+    act_l1_offset += stride_h_bytes;
 }
 
 #ifdef ACTIVATION_REUSE
