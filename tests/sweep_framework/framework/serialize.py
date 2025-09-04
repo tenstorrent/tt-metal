@@ -7,7 +7,7 @@ import json
 from framework.statuses import VectorValidity
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 
-TTNN_NAME =ttnn.__name__
+TTNN_NAME = ttnn.__name__
 
 
 def convert_enum_values_to_strings(data):
