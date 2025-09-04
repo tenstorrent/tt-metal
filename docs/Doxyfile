@@ -944,6 +944,8 @@ INPUT                  = tt_metal/hw/inc/compile_time_args.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/rounding.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/activations.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/clamp.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/trigonometric.h \
+                         tt_metal/include/compute_kernel_api/eltwise_unary/binop_with_scalar.h \
                          tt_metal/include/compute_kernel_api/bcast.h \
                          tt_metal/include/compute_kernel_api/cb_api.h \
                          tt_metal/include/compute_kernel_api/compute_kernel_hw_startup.h \

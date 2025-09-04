@@ -103,6 +103,10 @@ Element wise operations
   unary_max_tile
   unary_min_tile
   gcd_tile
+  add_int_tile
+  asinh_tile
+  atanh_tile
+  binop_with_scalar_tile
 
 Trigonometric functions
 ^^^^^^^^^^^^^^^^^^^^^^^
