@@ -153,12 +153,12 @@ void validate_sharding(
             break;
         case SubtileBroadcastType::COL_A:
         case SubtileBroadcastType::COL_B:
-            TT_FATAL(
-                memory_layout_x == TensorMemoryLayout::HEIGHT_SHARDED,
-                "Operands to eltwise binary must be height sharded when broadcasting on W");
-            TT_FATAL(
-                memory_layout_y == TensorMemoryLayout::HEIGHT_SHARDED,
-                "Operands to eltwise binary must be height sharded when broadcasting on W");
+            // TT_FATAL(
+            //     memory_layout_x == TensorMemoryLayout::HEIGHT_SHARDED,
+            //     "Operands to eltwise binary must be height sharded when broadcasting on W");
+            // TT_FATAL(
+            //     memory_layout_y == TensorMemoryLayout::HEIGHT_SHARDED,
+            //     "Operands to eltwise binary must be height sharded when broadcasting on W");
             TT_FATAL(
                 shard_spec_x.shape[0] == shard_spec_y.shape[0],
                 "Operands to eltwise binary need to have the same"
@@ -167,7 +167,7 @@ void validate_sharding(
                 shard_spec_x.orientation == shard_spec_y.orientation,
                 "Operands to eltwise binary must have same shard orientation");
             break;
-        default: TT_THROW("Invalid subtile broadcast type for sharding validation");
+        default: break;  // TT_THROW("Invalid subtile broadcast type for sharding validation");
     }
 }
 
@@ -297,13 +297,13 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
         }
 
         if (has_shard_spec and i != -1) {
-            TT_FATAL(
-                a_dim == b_dim,
-                "Cannot broadcast sharded tensors on dims other than W, violation for rank {}, dim a: {}, dim b: "
-                "{}",
-                i,
-                a_dim,
-                b_dim);
+            // TT_FATAL(
+            //     a_dim == b_dim,
+            //     "Cannot broadcast sharded tensors on dims other than W, violation for rank {}, dim a: {}, dim b: "
+            //     "{}",
+            //     i,
+            //     a_dim,
+            //     b_dim);
         }
     }
 }

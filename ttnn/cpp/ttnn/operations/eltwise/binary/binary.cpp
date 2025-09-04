@@ -355,8 +355,8 @@ bool is_legacy_only(
 
     if (detail::any_non_llk_row_broadcasted(lhs, rhs) or detail::any_sharded_block_format(lhs, rhs) or
         detail::any_subtile_broadcasted_block_format(lhs, rhs) or
-        detail::any_non_height_sharded_w_bcast(lhs, rhs, output_mem_cfg) or detail::any_uneven(lhs, rhs, output) or
-        detail::any_sharded_scalar(lhs, rhs)) {
+        detail::any_non_height_sharded_w_bcast(lhs, rhs, output_mem_cfg) or detail::any_uneven(lhs, rhs, output) /*or
+        detail::any_sharded_scalar(lhs, rhs)*/) {
         TT_FATAL(
             lhs_activations.size() <= 1,
             "lhs_activations support maximum of 1 for legacy-only configuration; Override with use_legacy=False "

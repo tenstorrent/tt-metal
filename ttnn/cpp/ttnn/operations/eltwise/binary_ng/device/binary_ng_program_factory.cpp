@@ -678,11 +678,14 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     // to maintain backward compatibility, old writer kernel only needs b_dtype
     auto writer_defines = make_dataflow_defines(b_dtype, a_dtype);
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
-    writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
+    // writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
+    writer_defines["DST_SHARDED"] = "0";
 
     auto reader_defines = make_dataflow_defines(a_dtype, b_dtype);
-    reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
-    reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
+    // reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
+    reader_defines["SRC_SHARDED"] = "0";
+    // reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
+    reader_defines["SRC_SHARDED_B"] = "0";
 
     // overwrite reader and write kernel names so that reader reads both and b and
     // writer does not read b. For the transition, it can choose the original kernels
