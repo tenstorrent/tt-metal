@@ -246,7 +246,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: in-service, topology: topology-6u },
         ]
-    uses: ./.github/workflows/galaxy-apc-fast-tests.yaml
+    uses: ./.github/workflows/galaxy-apc-fast-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
