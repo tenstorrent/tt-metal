@@ -7,12 +7,11 @@ from contextlib import contextmanager
 import enlighten
 import sys
 import os
-import pathlib
+from pathlib import Path
 import importlib
 import datetime as dt
 from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
-import ttnn
 from multiprocessing import Process
 from faster_fifo import Queue
 from queue import Empty
@@ -21,7 +20,6 @@ import framework.tt_smi_util as tt_smi_util
 from elasticsearch import Elasticsearch, NotFoundError
 from framework.device_fixtures import default_device
 from framework.elastic_config import *
-from framework.serialize import *
 from framework.statuses import VectorValidity, TestStatus
 from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
@@ -111,6 +109,18 @@ def create_config_from_args(args) -> SweepsConfig:
         exit(1)
     config.arch_name = arch_env
 
+    # Validate and set ARCH_NAME
+    allowed_arch = {"blackhole", "wormhole_b0"}
+    arch_env = os.getenv("ARCH_NAME")
+    if not arch_env:
+        logger.error("ARCH_NAME must be set in environment and be one of ['blackhole', 'wormhole_b0']")
+        exit(1)
+    arch_env = arch_env.strip()
+    if arch_env not in allowed_arch:
+        logger.error(f"Invalid ARCH_NAME '{arch_env}'. Must be one of ['blackhole', 'wormhole_b0']")
+        exit(1)
+    config.arch_name = arch_env
+
     return config
 
 
@@ -156,14 +166,42 @@ def validate_arguments(args, parser):
 
 
 def get_all_modules():
-    sweeps_path = pathlib.Path(__file__).parent / "sweeps"
+    sweeps_path = Path(__file__).parent / "sweeps"
     for file in sorted(sweeps_path.glob("**/*.py")):
-        sweep_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3].replace("/", ".")
+        sweep_name = str(Path(file).relative_to(sweeps_path))[:-3].replace("/", ".")
         yield sweep_name
 
 
+<<<<<<< HEAD
 def get_timeout():
     timeout = 30
+=======
+DEFAULT_TIMEOUT = 30
+TIMEOUT_KEY = "TIMEOUT"
+SWEEPS_SUBDIR_NAME = "sweeps"
+PY_SUFFIX = ".py"
+
+
+def get_timeout(test_module_name):
+    """We need to grab the test's timeout without loading the test module"""
+
+    sweep_root_path = Path(__file__).resolve().parent
+    test_source_name = test_module_name.replace(".", "/") + PY_SUFFIX
+    test_path = sweep_root_path / SWEEPS_SUBDIR_NAME / test_source_name
+
+    if not (test_path.exists() and test_path.is_file()):
+        return DEFAULT_TIMEOUT
+
+    timeout = DEFAULT_TIMEOUT
+    with test_path.open("rt") as fh:
+        for line in fh:
+            if TIMEOUT_KEY in line:
+                try:
+                    timeout = int(line.split("=")[-1].strip())
+                except:
+                    break
+
+>>>>>>> 5f25a58329 (Apply Steven's fix for device reset hangs)
     return timeout
 
 
@@ -195,7 +233,11 @@ def gather_single_test_perf(device, test_passed):
         logger.error("Multi-device perf is not supported. Failing.")
         return None
     # Read profiler data from device
+<<<<<<< HEAD
     # ttnn.ReadDeviceProfiler(device)
+=======
+
+>>>>>>> 5f25a58329 (Apply Steven's fix for device reset hangs)
     opPerfData = get_device_data_generate_report(
         PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True
     )
@@ -300,7 +342,11 @@ def device_context(test_module, output_queue):
         return
 
 
-def run(test_module, input_queue, output_queue, config: SweepsConfig):
+def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
+    logger.info(f"TEST MODULE NAME: {test_module_name}")
+    test_module = importlib.import_module("sweeps." + test_module_name)
+    logger.info(f"TEST MODULE: {test_module}")
+
     with device_context(test_module, output_queue) as (device, device_name):
         while True:
             try:
@@ -336,7 +382,8 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     input_queue = Queue()
     output_queue = Queue()
     p = None
-    timeout = get_timeout()
+
+    timeout = get_timeout(module_name)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
     child_mode = not config.dry_run or config.debug
@@ -392,6 +439,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                         "Executing test on parent process for debug purposes because there is only one test vector. Hang detection and handling is disabled."
                     )
                     run(module_name, input_queue, output_queue, config)
+
                 response = output_queue.get(block=True, timeout=timeout)
                 status, message, e2e_perf, device_perf = (
                     response[0],
@@ -480,7 +528,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                     break
                 else:
                     logger.info("Continuing with remaining tests in suite despite timeout.")
-                    p = Process(target=run, args=(test_module, input_queue, output_queue, config))
+                    p = Process(target=run, args=(test_module_name, input_queue, output_queue, config))
                     p.start()
                     # Continue to the next test vector without breaking
 
@@ -607,6 +655,7 @@ def run_sweeps(
                     continue
                 header_info, test_vectors = sanitize_inputs(vectors)
                 results = execute_suite(test_vectors, pbar_manager, suite, module_name, header_info, config)
+
 
                 suite_end_time = dt.datetime.now()
                 logger.info(f"Completed tests for module {module_name}, suite {suite}.")
