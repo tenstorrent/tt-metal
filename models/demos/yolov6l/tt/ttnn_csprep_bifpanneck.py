@@ -52,6 +52,7 @@ class TtCSPRepBiFPANNeck:
             conv=model_params.downsample1.block.conv,
             conv_pth=parameters.downsample1.block.conv,
             activation="relu",
+            shard_layout=ttnn.ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.Rep_n4 = TtBepC3(
             device,
@@ -92,13 +93,14 @@ class TtCSPRepBiFPANNeck:
 
         output_sharded_memory_config = ttnn.create_sharded_memory_config(
             [
-                down_feat0.memory_config().shard_spec.shape[0],
-                2 * down_feat0.memory_config().shard_spec.shape[1],
+                fpn_out0.memory_config().shard_spec.shape[0],
+                2 * fpn_out0.memory_config().shard_spec.shape[1],
             ],
-            core_grid=down_feat0.memory_config().shard_spec.grid,
+            core_grid=fpn_out0.memory_config().shard_spec.grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             use_height_and_width_as_shard_shape=True,
         )
+        down_feat0 = ttnn.to_memory_config(down_feat0, memory_config=fpn_out0.memory_config())
         p_concat_layer2 = ttnn.concat([down_feat0, fpn_out0], dim=-1, memory_config=output_sharded_memory_config)
         pan_out0 = self.Rep_n4(p_concat_layer2)
 
