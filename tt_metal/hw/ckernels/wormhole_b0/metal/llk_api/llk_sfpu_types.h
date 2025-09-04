@@ -4,8 +4,7 @@
 
 #pragma once
 
-namespace ckernel {
-enum SfpuType {
+enum class SfpuType {
     tanh,
     hardtanh,
     gelu,
@@ -122,4 +121,3 @@ enum SfpuType {
     softsign,
     celu,
 };
-}
