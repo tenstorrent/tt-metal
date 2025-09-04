@@ -22,7 +22,7 @@ on:
         default: "topology-6u"
 
 jobs:
-  tg-nightly-tests:
+  galaxy-nightly-tests:
     strategy:
       fail-fast: false
       matrix:
