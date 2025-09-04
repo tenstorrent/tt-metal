@@ -60,11 +60,11 @@ jobs:
           - name: tools
             cmd: |
               ./tests/scripts/run_tools_tests.sh
-              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="*-*NIGHTLY_*"
+              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*-*NIGHTLY_*
           - name: ttnn tensor accessor
             cmd: "./build/test/ttnn/unit_tests_ttnn_accessor"
           - name: data movement
-            cmd: ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*-*NIGHTLY_*"
+            cmd: ./build/test/tt_metal/unit_tests_data_movement --gtest_filter=*-*NIGHTLY_*
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image }}

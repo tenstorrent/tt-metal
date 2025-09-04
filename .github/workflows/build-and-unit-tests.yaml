@@ -43,12 +43,12 @@ jobs:
               mkdir -p /tmp/kernels
               TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*
           - name: data_movement
-            cmd: ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*-*NIGHTLY_*"
+            cmd: ./build/test/tt_metal/unit_tests_data_movement --gtest_filter=*-*NIGHTLY_*
           - name: debug_tools and device and dispatch
             cmd: |
-              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="*-*NIGHTLY_*"
-              ./build/test/tt_metal/unit_tests_device --gtest_filter="*-*NIGHTLY_*"
-              ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="*-*NIGHTLY_*"
+              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*-*NIGHTLY_*
+              ./build/test/tt_metal/unit_tests_device --gtest_filter=*-*NIGHTLY_*
+              ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=*-*NIGHTLY_*
           - name: llk
             cmd: ./build/test/tt_metal/unit_tests_llk
           - name: FD2
