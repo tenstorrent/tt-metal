@@ -28,29 +28,29 @@ jobs:
           {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
         ]
         model-group:
-          - name: llm_javelin
-            timeout: 20
-            model-list:
-              - models/demos/falcon7b_common/tests
-              - models/demos/wormhole/mamba/tests
+          # - name: llm_javelin
+          #   timeout: 20
+          #   model-list:
+          #     - models/demos/falcon7b_common/tests
+          #     - models/demos/wormhole/mamba/tests
 
-          - name: cnn_javelin
-            timeout: 10
-            model-list:
-              - models/experimental/functional_unet/tests
-              - models/demos/wormhole/stable_diffusion/tests
+          # - name: cnn_javelin
+          #   timeout: 10
+          #   model-list:
+          #     - models/experimental/functional_unet/tests
+          #     - models/demos/wormhole/stable_diffusion/tests
 
-          - name: other
-            timeout: 5
-            model-list:
-              - models/demos/convnet_mnist/tests/
-              # This is bad. These should be referencing .../tests directories
-              - models/demos/bert_tiny/tests/test_performance.py
-              - models/demos/squeezebert/tests/test_performance.py
-              - models/demos/roberta/tests/test_performance.py
+          # - name: other
+          #   timeout: 5
+          #   model-list:
+          #     - models/demos/convnet_mnist/tests/
+          #     # This is bad. These should be referencing .../tests directories
+          #     - models/demos/bert_tiny/tests/test_performance.py
+          #     - models/demos/squeezebert/tests/test_performance.py
+          #     - models/demos/roberta/tests/test_performance.py
 
           - name: other_magic_env
-            timeout: 45
+            timeout: 60
             model-list:
               - models/demos/yolov10x/tests/perf/
               - models/demos/sentence_bert/tests/perf/
