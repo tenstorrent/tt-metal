@@ -11,8 +11,8 @@ from typing import Optional, Tuple
 import ttnn
 
 from tt_lib.fallback_ops import fallback_ops
-from models.helper_funcs import Linear as TTLinear
-from models.utility_functions import (
+from models.common.helper_funcs import Linear as TTLinear
+from models.common.utility_functions import (
     tt2torch_tensor,
     pad_by_zero,
 )
