@@ -8,7 +8,6 @@
 #include <cstdio>
 #include <ctype.h>
 #include <iostream>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -17,7 +16,6 @@
 #include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
 #include <core_coord.hpp>
 #include <fmt/base.h>
-#include <fmt/ranges.h>
 #include <metal_soc_descriptor.h>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/tt_core_coordinates.h>
@@ -567,8 +565,10 @@ void WatcherDeviceReader::Core::Dump() const {
     // Eth core only reports erisc kernel id, uses the brisc field
     fprintf(reader_.f, "k_ids:");
     auto num_processors = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type_);
-    std::span watcher_kernel_ids(launch_msg_->kernel_config.watcher_kernel_ids, num_processors);
-    fmt::print(reader_.f, "{:3d}", fmt::join(watcher_kernel_ids, "|"));
+    for (size_t i = 0; i < num_processors; i++) {
+        const char* separator = (i > 0) ? "|" : "";
+        fprintf(reader_.f, "%s%3d", separator, launch_msg_->kernel_config.watcher_kernel_ids[i]);
+    }
     if (!is_eth_core && rtoptions.get_watcher_text_start()) {
         uint32_t kernel_config_base = launch_msg_->kernel_config.kernel_config_base[0];
         fprintf(reader_.f, " text_start:");
