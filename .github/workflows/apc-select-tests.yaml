@@ -242,7 +242,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: in-service },
+          { arch: wormhole_b0, runner-label: in-service, topology: topology-6u },
         ]
     uses: ./.github/workflows/galaxy-apc-fast-tests-impl.yaml
     with:
