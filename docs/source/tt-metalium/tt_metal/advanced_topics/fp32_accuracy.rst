@@ -40,6 +40,10 @@ On the host, you must configure the compute kernel to enable high-precision comp
 
 Additionally, ensure that the circular buffers that will handle the FP32 data are created with the ``DataFormat::Float32`` type.
 
+.. note::
+
+    Some functions, most notably ``exp_tile`` and the various trigonometric functions, have inherent limitations due to their polynomial approximations. These limitations can lead to reduced accuracy for certain input ranges, even when using the vector engine with FP32 settings. Always validate the accuracy of results for your specific use case. The operator implementations are built to balance performance and accuracy for the intended (machine learning) workloads. If your application requires higher precision across all input ranges, consider implementing custom functions.
+
 Kernel-Side Implementation
 --------------------------
 
