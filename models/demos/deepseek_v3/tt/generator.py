@@ -216,11 +216,19 @@ class DeepseekGenerator:
         positions: [B] int tensor
         returns: (rope_tensors, tt_positions)
         """
-        # Rope mats and indices
-        rope_mats, rot_idxs = self.rope.get_rot_mats(positions.to(torch.int32), return_rot_idxs=True)
+        # Build RoPE tensors for current positions
+        rope_mats = self.rope.get_rot_mats(positions.to(torch.int32))
         rope_tensors = {"cos_matrix": rope_mats[0], "sin_matrix": rope_mats[1], "trans_matrix": rope_mats[2]}
-        # tt positions is returned as TTNN tensor (rot_idxs)
-        return rope_tensors, rot_idxs
+
+        # Create TTNN position tensor as INT32 with the same sharding pattern used in tests
+        mesh_shape = list(self.mesh_device.shape)
+        tt_positions = ttnn.from_torch(
+            positions.to(torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, 0), mesh_shape=mesh_shape),
+            dtype=ttnn.int32,
+        )
+        return rope_tensors, tt_positions
 
     def _decode_step(self, tokens_step: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
         """Run a single decode step and return logits on host as torch tensor [1, 1, B, V]."""
@@ -232,6 +240,22 @@ class DeepseekGenerator:
         hidden = Model1D.forward_decode(
             tt_tokens, tt_positions, rope_tensors, self.page_table_tt, self.model1d_run_config
         )
+        # Gather width-sharded hidden across mesh columns so each device has full K=hidden_size,
+        # mirroring the CCL conventions used elsewhere (cluster_axis=1, dim=-1, Linear topology).
+        hidden_gathered = ttnn.experimental.all_gather_async(
+            hidden,
+            dim=-1,
+            cluster_axis=1,
+            mesh_device=self.mesh_device,
+            topology=ttnn.Topology.Linear,
+            multi_device_global_semaphore=self.ccl.get_gather_sem(1),
+            num_links=self.ccl.get_max_links(1),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(hidden)
+        # Reshard gathered activations to LMHead's expected input memory config
+        hidden = ttnn.to_memory_config(hidden_gathered, self.lm_head_run_config["input_memory_config"])
+        ttnn.deallocate(hidden_gathered)
         logits_tt = LMHead.forward_decode(hidden, self.lm_head_run_config)
 
         # Gather to host
