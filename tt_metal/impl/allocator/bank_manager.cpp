@@ -262,14 +262,14 @@ uint64_t BankManager::allocate_buffer(
     const auto& neighbors = state_dependencies_.dependencies[state.value];
     if (neighbors.empty()) {
         auto address = alloc->allocate(size_per_bank, bottom_up, address_limit);
-        if (not address.has_value()) {
-            TT_THROW(
-                "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
-                "store {} B",
-                size,
-                enchantum::to_string(buffer_type_),
-                num_banks,
-                size_per_bank);
+        TT_FATAL(
+            address.has_value(),
+            "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
+            "store {} B",
+            size,
+            enchantum::to_string(buffer_type_),
+            num_banks,
+            size_per_bank);
         }
         allocated_buffers_[state.value].insert(address.value());
         return address.value();
@@ -363,22 +363,22 @@ uint64_t BankManager::allocate_buffer(
         }
     }
 
-    if (!chosen.has_value()) {
-        TT_THROW(
-            "Out of Memory: Not enough space after considering dependencies to allocate {} B {} across {} banks ({} B "
-            "per bank)",
-            size,
-            enchantum::to_string(buffer_type_),
-            num_banks,
-            size_per_bank);
-    } else if (chosen.value() % alignment_bytes_ != 0) {
-        TT_THROW("Chosen address {} is not aligned to {} B", chosen.value(), alignment_bytes_);
-    }
+    TT_FATAL(
+        chosen.has_value(),
+        "Out of Memory: Not enough space after considering dependencies to allocate {} B {} across {} banks ({} B "
+        "per bank)",
+        size,
+        enchantum::to_string(buffer_type_),
+        num_banks,
+        size_per_bank);
+    TT_FATAL(
+        chosen.value() % alignment_bytes_ == 0,
+        "Chosen address {} is not aligned to {} B",
+        chosen.value(),
+        alignment_bytes_);
 
     auto address = alloc->allocate_at_address(chosen.value(), size_per_bank);
-    if (!address.has_value()) {
-        TT_THROW("Allocator failed to place at chosen address {}", chosen.value());
-    }
+    TT_FATAL(address.has_value(), "Allocator failed to place at chosen address {}", chosen.value());
     allocated_buffers_[state.value].insert(address.value());
     return address.value();
 }
