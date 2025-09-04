@@ -45,42 +45,13 @@ Mesh: [
   board: 1x8,
   device_topology: [1, 8],
   host_topology: [1, 1],
-},
-{
-  id: 5,
-  board: 1x8,
-  device_topology: [1, 8],
-  host_topology: [1, 1],
-
-},
-{
-  id: 6,
-  board: 1x8,
-  device_topology: [1, 8],
-  host_topology: [1, 1],
-},
-{
-  id: 7,
-  board: 1x8,
-  device_topology: [1, 8],
-  host_topology: [1, 1],
 }
 ]
 
 Graph: [
-  [M0, M1, 1],
   [M0, M2, 1],
-  [M0, M3, 1],
   [M1, M2, 1],
-  [M1, M3, 1],
   [M2, M3, 1],
 
-  [M4, M5, 1],
-  [M4, M6, 1],
-  [M4, M7, 1],
-  [M5, M6, 1],
-  [M5, M7, 1],
-  [M6, M7, 1],
-
-  [M2, M5, 1]
+  [M2, M4, 1]
 ]
