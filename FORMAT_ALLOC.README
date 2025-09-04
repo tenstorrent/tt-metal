@@ -29,9 +29,25 @@ Core rules
 - Minimum segment width:
   - If a segment's computed width is too small to fit its label with side padding, increase that segment's width to label_len + 2 and shrink the rightmost segment accordingly.
 - Free segments:
-  - Label as "free". For explicit de-allocations, include the freed size (e.g., "1K free"). Center using the same rules.
+  - Label as "free". For explicit de-allocations, include the freed size (e.g., "1K free"). Center using the same rules. If a "1K free" and another "1K" are the same segment across different rows, set all "1K" to same size as "1K free"
+  - For free segments, keep it as small as possible
+  - For the final segment, make sure the size is large enough so that the last '|' matches with the longest row.
 - Consistency across steps:
   - Keep W and scale consistent across all lines in a sequence so readers can visually compare changes over time.
+
+- Cross-row alignment:
+  - The last pipe '|' must be vertically aligned across all lines in the same diagram. If there are different number of segments, extend the last one to match the last '|'.
+  - Equivalent cumulative sizes align vertically across rows (e.g., "1K" + "1K" aligns with "2K").
+  - If rows have a different number of '|' characters, align using the rightmost '|' on each row.
+  - Equal-size segments align between rows even if one is free and the other allocated (e.g., "1K" aligns with "1K free"). This is important. Please treat 1K and 1K free as the same segment size if they are on top of each other.
+  - Within a single row, equal-size labels (e.g., "1K" vs "1K free") may have different visual widths; cross-row alignment and label centering take precedence.
+
+Priorities when generating descriptions
+- Make sure segments are aligned accordingly with their sizes
+  - 1K + 1K free should align with another row's 2K or 2K free (ie. the bounding '|' on either side should align)
+  - 1K and 1K free should have same sizes between rows (ie. the bounding '|' on either side should align)
+- Insert free segment at the end of the longest row
+- Insert free segments at the end of the other rows, ensuring that the final '|' aligns with the longest row
 
 Style details
 - Sizes: use short labels like "1K", "2K", "4K" (or bytes/MB as appropriate).
@@ -71,3 +87,8 @@ Quick checklist
 - Segment widths roughly proportional to sizes; enforce a readable minimum.
 - Center labels; if centering is not exact, extra space goes on the right.
 - Any rounding remainder for the line goes to the rightmost segment.
+ - Last '|' aligned across rows.
+ - Equivalent cumulative widths align across rows (e.g., 1K+1K aligns with 2K).
+  - If rows have different counts of '|' characters, align by the rightmost one.
+  - Align equal-size segments across rows even if labels differ (e.g., "1K" and "1K free").
+  - Within a row, equal-size labels may render at different widths.

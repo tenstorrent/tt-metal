@@ -136,7 +136,8 @@ INSTANTIATE_TEST_SUITE_P(
 
 // --- BankManager tests ---
 TEST(OverlappedAllocator, IndependentStates) {
-    BankManager::StateDependencies deps{{{StateId{0}, {}}, {StateId{1}, {}}}};  // 2 states, no overlaps
+    // 2 independent allocators, no overlaps
+    BankManager::StateDependencies deps{{{StateId{0}, {}}, {StateId{1}, {}}}};
     BankManager bank_manager = get_bank_manager_with_state_dependencies(deps);
     const uint32_t bank_id = 0;
 
@@ -209,15 +210,16 @@ TEST(OverlappedAllocator, IndependentStates) {
 }
 
 TEST(OverlappedAllocator, OverlappedStates) {
-    // Two independent states (0 and 1); state 2 overlaps both 0 and 1
+    // Two independent allocators (0 and 1); allocator 2 overlaps both 0 and 1
     BankManager::StateDependencies deps{{{StateId{0}, {StateId{2}}}, {StateId{1}, {StateId{2}}}}};
     BankManager bank_manager = get_bank_manager_with_state_dependencies(deps);
+    const uint32_t bank_id = 0;
 
     // Hard-coded allocation sizes
     uint32_t alloc_size_1K = 1024;
     uint32_t alloc_size_2K = 2048;
 
-    // Allocate 1K in state 0
+    // Allocate 1K in allocator 0
     auto alloc0_addr0 = bank_manager.allocate_buffer(
         alloc_size_1K,
         alloc_size_1K,
@@ -227,7 +229,7 @@ TEST(OverlappedAllocator, OverlappedStates) {
         StateId{0});
     EXPECT_EQ(alloc0_addr0, 0);
 
-    // Allocate 2K in state 1
+    // Allocate 2K in allocator 1
     auto alloc1_addr0 = bank_manager.allocate_buffer(
         alloc_size_2K,
         alloc_size_2K,
@@ -237,7 +239,17 @@ TEST(OverlappedAllocator, OverlappedStates) {
         StateId{1});
     EXPECT_EQ(alloc1_addr0, 0);
 
-    // Allocate 1K in overlapped state 2: should be placed after state 1's 2K
+    // Allocate 1K in allocator 1
+    auto alloc1_addr1 = bank_manager.allocate_buffer(
+        alloc_size_1K,
+        alloc_size_1K,
+        /*bottom_up=*/true,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        StateId{1});
+    EXPECT_EQ(alloc1_addr1, alloc1_addr0 + alloc_size_2K);
+
+    // Allocate 1K in overlapped allocator 2 (should be placed after allocator 1's 2K):
     auto alloc2_addr0 = bank_manager.allocate_buffer(
         alloc_size_1K,
         alloc_size_1K,
@@ -245,5 +257,56 @@ TEST(OverlappedAllocator, OverlappedStates) {
         CoreRangeSet(std::vector<CoreRange>{}),
         std::nullopt,
         StateId{2});
-    EXPECT_EQ(alloc2_addr0, alloc1_addr0 + alloc_size_2K);
+    EXPECT_EQ(alloc2_addr0, alloc1_addr1 + alloc_size_1K);
+
+    // Allocate 1K in allocator 0 (should be placed after allocator 1's 1K and before allocator 2's 1K):
+    auto alloc0_addr1 = bank_manager.allocate_buffer(
+        alloc_size_1K,
+        alloc_size_1K,
+        /*bottom_up=*/true,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        StateId{0});
+    EXPECT_EQ(alloc0_addr1, alloc0_addr0 + alloc_size_1K);
+
+    // Allocate 1K in allocator 1 (should be placed after allocator 2's 1K):
+    auto alloc1_addr2 = bank_manager.allocate_buffer(
+        alloc_size_1K,
+        alloc_size_1K,
+        /*bottom_up=*/true,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        StateId{1});
+    EXPECT_EQ(alloc1_addr2, alloc2_addr0 + alloc_size_1K);
+
+    bank_manager.deallocate_buffer(alloc2_addr0, StateId{2});
+    // Lowest occupied address does not account for allocations in other allocators
+    EXPECT_EQ(bank_manager.lowest_occupied_address(bank_id, StateId{2}), std::nullopt);
+    auto alloc0_addr2 = bank_manager.allocate_buffer(
+        alloc_size_2K,
+        alloc_size_2K,
+        /*bottom_up=*/true,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        StateId{0});
+    EXPECT_EQ(alloc0_addr2, alloc0_addr1 + alloc_size_1K);
+    auto alloc1_addr3 = bank_manager.allocate_buffer(
+        alloc_size_1K,
+        alloc_size_1K,
+        /*bottom_up=*/true,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        StateId{1});
+    EXPECT_EQ(alloc1_addr3, alloc2_addr0);
+
+    bank_manager.deallocate_buffer(alloc0_addr1, StateId{0});
+    bank_manager.deallocate_buffer(alloc1_addr0, StateId{1});
+    auto alloc2_addr1 = bank_manager.allocate_buffer(
+        alloc_size_1K,
+        alloc_size_1K,
+        /*bottom_up=*/true,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        StateId{2});
+    EXPECT_EQ(alloc2_addr1, alloc0_addr1);
 }
