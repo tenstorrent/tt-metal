@@ -250,6 +250,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       runner-label: ${{ matrix.test-group.runner-label }}
+      topology: ${{ matrix.test-group.topology }}
 
   test-ttnn-tutorials:
     needs: [parse-tests-json, build-artifact]
