@@ -117,7 +117,7 @@ HostTopology proto_to_host_topology(const tt::fabric::proto::PhysicalConnectivit
     HostTopology topology;
 
     for (const auto& host_conn : graph.host_connectivity_graph()) {
-        std::string src_host = host_conn.src_host_name();
+        const std::string& src_host = host_conn.src_host_name();
         std::vector<HostConnectionEdge>& connections = topology[src_host];
 
         for (const auto& edge : host_conn.host_connections()) {
@@ -199,7 +199,7 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
 
     // Convert ASIC connectivity graph
     for (const auto& host_asic_conn : proto_desc.system_graph().asic_connectivity_graph()) {
-        std::string host_name = host_asic_conn.host_name();
+        const std::string& host_name = host_asic_conn.host_name();
         system_graph.asic_connectivity_graph[host_name] = proto_to_asic_topology(host_asic_conn);
     }
 
