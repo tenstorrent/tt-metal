@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from ttnn import *
+import ttnn
 import json
 from framework.statuses import VectorValidity
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger

@@ -7,12 +7,11 @@ from contextlib import contextmanager
 import enlighten
 import sys
 import os
-import pathlib
+from pathlib import Path
 import importlib
 import datetime as dt
 from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
-import ttnn
 from multiprocessing import Process
 from faster_fifo import Queue
 from queue import Empty
@@ -21,11 +20,10 @@ import framework.tt_smi_util as tt_smi_util
 from elasticsearch import Elasticsearch, NotFoundError
 from framework.device_fixtures import default_device
 from framework.elastic_config import *
-from framework.serialize import *
 from framework.statuses import VectorValidity, TestStatus
 from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
-from framework.serialize import deserialize
+from framework.serialize import deserialize, deserialize_vector_structured
 import subprocess
 from dataclasses import dataclass
 from typing import Optional
@@ -59,6 +57,7 @@ class SweepsConfig:
     elastic_password: Optional[str] = None
     summary: bool = False
     run_contents: str = None
+    arch_name: Optional[str] = None
     debug: bool = False
 
 
@@ -92,6 +91,18 @@ def create_config_from_args(args) -> SweepsConfig:
         config.elastic_password = os.getenv("ELASTIC_PASSWORD")
         if not config.elastic_username or not config.elastic_password:
             raise ValueError("ELASTIC_USERNAME and ELASTIC_PASSWORD must be set in environment variables")
+
+    # Validate and set ARCH_NAME
+    allowed_arch = {"blackhole", "wormhole_b0"}
+    arch_env = os.getenv("ARCH_NAME")
+    if not arch_env:
+        logger.error("ARCH_NAME must be set in environment and be one of ['blackhole', 'wormhole_b0']")
+        exit(1)
+    arch_env = arch_env.strip()
+    if arch_env not in allowed_arch:
+        logger.error(f"Invalid ARCH_NAME '{arch_env}'. Must be one of ['blackhole', 'wormhole_b0']")
+        exit(1)
+    config.arch_name = arch_env
 
     return config
 
@@ -138,17 +149,37 @@ def validate_arguments(args, parser):
 
 
 def get_all_modules():
-    sweeps_path = pathlib.Path(__file__).parent / "sweeps"
+    sweeps_path = Path(__file__).parent / "sweeps"
     for file in sorted(sweeps_path.glob("**/*.py")):
-        sweep_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3].replace("/", ".")
+        sweep_name = str(Path(file).relative_to(sweeps_path))[:-3].replace("/", ".")
         yield sweep_name
 
 
-def get_timeout(test_module):
-    try:
-        timeout = test_module.TIMEOUT
-    except:
-        timeout = 30
+DEFAULT_TIMEOUT = 30
+TIMEOUT_KEY = "TIMEOUT"
+SWEEPS_SUBDIR_NAME = "sweeps"
+PY_SUFFIX = ".py"
+
+
+def get_timeout(test_module_name):
+    """We need to grab the test's timeout without loading the test module"""
+
+    sweep_root_path = Path(__file__).resolve().parent
+    test_source_name = test_module_name.replace(".", "/") + PY_SUFFIX
+    test_path = sweep_root_path / SWEEPS_SUBDIR_NAME / test_source_name
+
+    if not (test_path.exists() and test_path.is_file()):
+        return DEFAULT_TIMEOUT
+
+    timeout = DEFAULT_TIMEOUT
+    with test_path.open("rt") as fh:
+        for line in fh:
+            if TIMEOUT_KEY in line:
+                try:
+                    timeout = int(line.split("=")[-1].strip())
+                except:
+                    break
+
     return timeout
 
 
@@ -180,7 +211,7 @@ def gather_single_test_perf(device, test_passed):
         logger.error("Multi-device perf is not supported. Failing.")
         return None
     # Read profiler data from device
-    ttnn.ReadDeviceProfiler(device)
+
     opPerfData = get_device_data_generate_report(
         PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True
     )
@@ -285,7 +316,11 @@ def device_context(test_module, output_queue):
         return
 
 
-def run(test_module, input_queue, output_queue, config: SweepsConfig):
+def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
+    logger.info(f"TEST MODULE NAME: {test_module_name}")
+    test_module = importlib.import_module("sweeps." + test_module_name)
+    logger.info(f"TEST MODULE: {test_module}")
+
     with device_context(test_module, output_queue) as (device, device_name):
         while True:
             try:
@@ -315,18 +350,19 @@ def run(test_module, input_queue, output_queue, config: SweepsConfig):
                 output_queue.put([status, message, e2e_perf, None])
 
 
-def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig):
+def execute_suite(
+    test_module_name, test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig
+):
     results = []
     input_queue = Queue()
     output_queue = Queue()
     p = None
-    timeout = get_timeout(test_module)
+    timeout = get_timeout(test_module_name)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
-    arch = ttnn.get_arch_name()
-    reset_util = tt_smi_util.ResetUtil(arch)
+    reset_util = tt_smi_util.ResetUtil(config.arch_name)
 
     if not config.debug or (len(test_vectors) > 1 and not config.dry_run):
-        p = Process(target=run, args=(test_module, input_queue, output_queue, config))
+        p = Process(target=run, args=(test_module_name, input_queue, output_queue, config))
         p.start()
 
     for i, test_vector in enumerate(test_vectors):
@@ -361,14 +397,14 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                         logger.info(
                             "Executing test (first run, e2e perf is enabled) on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
                         )
-                        run(test_module, input_queue, output_queue, config)
+                        run(test_module_name, input_queue, output_queue, config)
                     output_queue.get(block=True, timeout=timeout)
                 input_queue.put(test_vector)
                 if p is None:
                     logger.info(
                         "Executing test on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
                     )
-                    run(test_module, input_queue, output_queue, config)
+                    run(test_module_name, input_queue, output_queue, config)
                 response = output_queue.get(block=True, timeout=timeout)
                 status, message, e2e_perf, device_perf = (
                     response[0],
@@ -449,7 +485,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                     break
                 else:
                     logger.info("Continuing with remaining tests in suite despite timeout.")
-                    p = Process(target=run, args=(test_module, input_queue, output_queue, config))
+                    p = Process(target=run, args=(test_module_name, input_queue, output_queue, config))
                     p.start()
                     # Continue to the next test vector without breaking
 
@@ -523,7 +559,7 @@ def run_sweeps(
         run_metadata = {
             "initiated_by": get_initiated_by(),
             "host": get_hostname(),
-            "card_type": ttnn.get_arch_name(),
+            "card_type": config.arch_name,
             "run_type": "sweeps",
             "run_contents": config.run_contents,
             "git_author": get_git_author(),
@@ -548,7 +584,6 @@ def run_sweeps(
     module_pbar = pbar_manager.counter(total=len(module_names), desc="Modules", leave=False)
     try:
         for module_name in module_names:
-            test_module = importlib.import_module("sweeps." + module_name)
             if config.suite_name:
                 # Filter to only the specified suite
                 all_suites = vector_source.get_available_suites(module_name)
@@ -579,7 +614,7 @@ def run_sweeps(
                     max_test_cases_module = module_name
                 header_info, test_vectors = sanitize_inputs(vectors)
                 results = execute_suite(
-                    test_module, test_vectors, pbar_manager, suite, module_name, header_info, config
+                    module_name, test_vectors, pbar_manager, suite, module_name, header_info, config
                 )
 
                 suite_end_time = dt.datetime.now()
