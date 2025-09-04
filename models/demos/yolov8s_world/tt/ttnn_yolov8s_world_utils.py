@@ -603,57 +603,6 @@ def create_custom_preprocessor(device):
     return custom_preprocessor
 
 
-def tt_adaptive_to_max_pool2d(input_shape, output_size):
-    if isinstance(output_size, int):
-        output_size = (output_size, output_size)
-
-    input_height, input_width = input_shape[1], input_shape[2]
-    output_height, output_width = output_size
-
-    # Check if dimensions are valid
-    if input_height < output_height or input_width < output_width:
-        raise ValueError("Output size cannot be larger than input size for max pooling")
-
-    # Calculate stride (might be floating point)
-    stride_h_float = input_height / output_height
-    stride_w_float = input_width / output_width
-
-    # Round down stride to integer
-    stride_h = math.floor(stride_h_float)
-    stride_w = math.floor(stride_w_float)
-
-    # Ensure stride is at least 1
-    stride_h = max(1, stride_h)
-    stride_w = max(1, stride_w)
-
-    # Calculate kernel size
-    kernel_h = input_height - (output_height - 1) * stride_h
-    kernel_w = input_width - (output_width - 1) * stride_w
-
-    # Handle case where kernel size might be too large
-    if kernel_h > input_height:
-        kernel_h = input_height
-    if kernel_w > input_width:
-        kernel_w = input_width
-
-    # Calculate if this is an exact conversion
-    is_exact = (
-        stride_h_float == stride_h
-        and stride_w_float == stride_w
-        and input_height == (output_height - 1) * stride_h + kernel_h
-        and input_width == (output_width - 1) * stride_w + kernel_w
-    )
-
-    message = ""
-    if not is_exact:
-        message = (
-            "Note: This is an approximation. For non-integer stride ratios, "
-            "AdaptiveMaxPool2d uses a more complex logic with varying kernel sizes."
-        )
-
-    return kernel_w, stride_h, 0, message
-
-
 def ttnn_custom_normalize(x, dim, device):
     # Convert input to tiled layout
     if x.layout != ttnn.TILE_LAYOUT:
