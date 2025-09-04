@@ -64,7 +64,7 @@ def run_device_profiler(command, output_logs_subdir, check_test_return_code=True
         device_analysis_opt = "".join(device_analysis_opt_list)
     # Quote the embedded command so that arguments like `-k "expr with spaces"` survive through the outer shell
     quoted_command = shlex.quote(command)
-    profiler_cmd = f"python3 -m tracy -p -r -o {output_profiler_dir} {check_return_code} {device_analysis_opt} -t 5000 -m {quoted_command}"
+    profiler_cmd = f"python3 -m tracy -p -r -o {output_profiler_dir} {check_return_code} {device_analysis_opt} -t 10000 -m {quoted_command}"
     logger.info(profiler_cmd)
     subprocess.run([profiler_cmd], shell=True, check=True)
 

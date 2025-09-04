@@ -40,7 +40,7 @@ def test_reduce_scatter_chunk_perf():
 
     chunks_per_sync_list = CHUNKS_PER_SYNC
     num_workers_per_link_list = WORKERS_PER_LINK
-    topology_list = ["ring"]
+    topology_list = ["linear"]
     start_time = time.time()
     results_subdir = f"ReduceScatter_{start_time}"
     os.makedirs(results_subdir, exist_ok=True)
@@ -51,8 +51,9 @@ def test_reduce_scatter_chunk_perf():
             elements = total_elems(rs_input_shape)
             total_bytes = elements * 2
 
-            # For reduce-scatter, each device sends (N-1)/N of the tensor; bandwidth calculation mirrors AG for comparability.
-            total_bytes_moved = total_bytes / num_devices / num_links / (2 if topology == "ring" else 1)
+            total_bytes_moved = (
+                total_bytes * ((num_devices - 1) / num_devices) / num_links / (2 if topology == "ring" else 1)
+            )
 
             data_size_bytes_gb = total_bytes / (10**9)
             data_size_bytes_mb = total_bytes / (10**6)
@@ -66,11 +67,6 @@ def test_reduce_scatter_chunk_perf():
 
             for j, chunks_per_sync in enumerate(chunks_per_sync_list):
                 for k, num_workers_per_link in enumerate(num_workers_per_link_list):
-                    if chunks_per_sync != None and num_workers_per_link == None:
-                        continue
-                    elif chunks_per_sync == None and num_workers_per_link != None:
-                        continue
-
                     cols = ["DEVICE KERNEL"]
                     op_name = "ReduceScatterMinimalAsync"
                     step_name = f"reduce_scatter_chunk_perf_{num_devices}_{chunks_per_sync}_{num_workers_per_link}_{topology}_perf"

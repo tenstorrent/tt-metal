@@ -10,10 +10,47 @@ from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce
 
 # (num_devices, num_links, rs_input_shape, dim)
 CONFIGS = [
-    (4, 1, [1, 1, 22528, 3072], 3),
-    (2, 1, [1, 1, 11264, 3072], 3),
+    # (4, 1, [1, 1, 22528, 3072], 3),
+    # (2, 1, [1, 1, 11264, 3072], 3),
     # (2,4,[1, 1, 5632, 3072],3),
     # (8,4,[1, 1, 11264, 3072],3),
+    # (8,4,[1, 1, 10752, 3072],3),
+    # (8,4,[1, 1, 10240, 3072],3),
+    # (8,4,[1, 1, 9728, 3072],3),
+    # (8,4,[1, 1, 8278, 3072],3),
+    # (8,4,[1, 1, 9216, 3072],3),
+    # (8,4,[1, 1, 8192, 3072],3),
+    # (8,4,[1, 1, 7168, 3072],3),
+    # (8,4,[1, 1, 7040, 3072],3),
+    # (8,4,[1, 1, 6912, 3072],3),
+    # (8,4,[1, 1, 6784, 3072],3),
+    # (8,4,[1, 1, 6656, 3072],3),
+    # (8,4,[1, 1, 6528, 3072],3),
+    # (8,4,[1, 1, 6400, 3072],3),
+    # (8,4,[1, 1, 6272, 3072],3),
+    # (8,4,[1, 1, 6144, 3072],3),
+    # (8,4,[1, 1, 6016, 3072],3),
+    # (8,4,[1, 1, 5888, 3072],3),
+    # (8,4,[1, 1, 5760, 3072],3),
+    # (8,4,[1, 1, 5632, 3072],3),
+    # (8,4,[1, 1, 5504, 3072],3),
+    # (8,4,[1, 1, 5376, 3072],3),
+    # (8,4,[1, 1, 5248, 3072],3),
+    # (8,4,[1, 1, 5120, 3072],3),
+    # (8,4,[1, 1, 4992, 3072],3),
+    # (8,4,[1, 1, 4864, 3072],3),
+    # (8,4,[1, 1, 4736, 3072],3),
+    # (8,4,[1, 1, 4608, 3072],3),
+    # (8,4,[1, 1, 4480, 3072],3),
+    # (8,4,[1, 1, 4352, 3072],3),
+    # (8,4,[1, 1, 4224, 3072],3),
+    # (8,4,[1, 1, 4096, 3072],3),
+    # (8,4,[1, 1, 3968, 3072],3),
+    # (8,4,[1, 1, 3840, 3072],3),
+    # (8,4,[1, 1, 3712, 3072],3),
+    (8, 4, [1, 1, 3072, 3072], 3),
+    (8, 4, [1, 1, 2048, 3072], 3),
+    (8, 4, [1, 1, 1024, 3072], 3),
     # (4,4,[1, 1, 5632, 3072],3),
     # (2,1,[1, 1, 128, 1536],3),
     # (4,1,[1, 1, 128, 1536],3),
@@ -24,7 +61,7 @@ CONFIGS = [
 
 CONFIGS_IDS = [f"rs_input_shape{i}_" for i in range(len(CONFIGS))]
 
-WORKERS_PER_LINK = [None]
+WORKERS_PER_LINK = [4, 8]
 WORKERS_PER_LINK_IDS = [f"{worker}-workers" for worker in WORKERS_PER_LINK]
 
 CHUNKS_PER_SYNC = [None]
@@ -57,8 +94,8 @@ TOPOLOGY = ["ring", "linear"]
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 700000}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 700000}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
     ids=TOPOLOGY,
