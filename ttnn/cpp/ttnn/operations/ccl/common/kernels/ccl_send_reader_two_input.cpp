@@ -13,13 +13,11 @@
 
 #include "ttnn/operations/ccl/common/kernels/command_processor.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/io_descriptors.hpp"
-#include "api/ttnn/tensor/enum_types.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -576,7 +574,7 @@ void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_ctx) {
     cb_push_back(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages);
 }
 #endif
-
+namespace command_processor {
 void write_and_advance_local_read_address_for_fabric_write(
     uint64_t noc0_dest_noc_addr,
     size_t packet_header_buffer_addr,
@@ -636,6 +634,7 @@ void write_and_advance_local_read_address_for_fabric_write(
 
     l1_read_addr += payload_size_bytes;
 }
+}
 
 FORCE_INLINE void write_payload_then_advance_read_address(
     uint64_t noc0_dest_noc_addr,
@@ -651,7 +650,7 @@ FORCE_INLINE void write_payload_then_advance_read_address(
     switch (current_cmd_header.dest_type) {
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: [[fallthrough]];
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST:
-            write_and_advance_local_read_address_for_fabric_write(
+            command_processor::write_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr,
                 packet_header_buffer_addr,
                 current_cmd_header,

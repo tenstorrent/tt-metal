@@ -39,6 +39,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "umd/device/types/arch.h"
 #include <tt-metalium/utils.hpp>
+#include "tt_metal/test_utils/bfloat_utils.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -53,7 +54,7 @@ using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
-namespace unit_tests::compute::broadcast {
+namespace unit_tests::compute::unary_broadcast {
 
 enum BroadcastDim : uint8_t { ROW, COL, SCALAR, NONE, NUM_DIMS };
 
@@ -140,7 +141,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
             for (int i = 0; i < vBroadcast.size(); i++) {
                 tempfp32v[i] = vBroadcast[i].to_float();
             }
-            tilized_packed_res = pack_fp32_vec_as_bfp8_tiles(tempfp32v, true, false);
+            tilized_packed_res = pack_as_bfp8_tiles(tt::stl::make_const_span(tempfp32v), true, false);
         } else {
             TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
         }
@@ -154,7 +155,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
             auto packed_vec = pack_vector<uint32_t, bfloat16>(tempfp16bv);
             tilized_packed_res = ::unit_tests::compute::gold_standard_tilize(packed_vec, config);
         } else if (T_out == tt::DataFormat::Bfp8_b) {
-            tilized_packed_res = pack_fp32_vec_as_bfp8_tiles(vBroadcast, true, false);
+            tilized_packed_res = pack_as_bfp8_tiles(tt::stl::make_const_span(vBroadcast), true, false);
         } else {
             TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
         }
@@ -340,9 +341,9 @@ void run_single_core_unary_broadcast(
 
     ASSERT_TRUE(result);
 }
-}  // namespace unit_tests::compute::broadcast
+}  // namespace unit_tests::compute::unary_broadcast
 
-using namespace unit_tests::compute::broadcast;
+using namespace unit_tests::compute::unary_broadcast;
 
 TEST_F(MeshDeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
     if (this->arch_ == tt::ARCH::GRAYSKULL) {
@@ -369,7 +370,7 @@ TEST_F(MeshDeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
                     broadcast_dim_to_type.at(test_config.broadcast_dim_1),
                     test_config.in1_t,
                     test_config.out1_t);
-                unit_tests::compute::broadcast::run_single_core_unary_broadcast(this->devices_.at(0), test_config);
+                run_single_core_unary_broadcast(this->devices_.at(0), test_config);
             }
         }
     }

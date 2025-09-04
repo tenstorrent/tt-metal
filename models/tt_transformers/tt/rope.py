@@ -58,7 +58,7 @@ class RotaryEmbedding(nn.Module):
         emb = torch.cat((freqs, freqs), dim=-1)
         cos = emb.cos()
         sin = emb.sin()
-        self.register_buffer("freqs_cis", torch.complex(cos.to(dtype), sin.to(dtype)), persistent=False)
+        self.register_buffer("freqs_cis", torch.complex(cos.float(), sin.float()), persistent=False)
 
         cos, sin = self.permute_to_meta_format(cos, sin)
         self.register_buffer("cos_cached", cos.to(dtype), persistent=False)
@@ -101,7 +101,7 @@ class ScaledRotaryEmbedding(RotaryEmbedding, ABC):
         freqs = torch.outer(t, freqs).float()
         cos = torch.cos(freqs)
         sin = torch.sin(freqs)
-        self.register_buffer("freqs_cis", torch.complex(cos.to(dtype), sin.to(dtype)), persistent=False)
+        self.register_buffer("freqs_cis", torch.complex(cos.float(), sin.float()), persistent=False)
 
         cos, sin = gather_cos_sin(torch.arange(seq_len), cos, sin)
         self.register_buffer("cos_cached", cos.to(dtype), persistent=False)
@@ -248,13 +248,59 @@ class LlamaRotaryEmbedding(ScaledRotaryEmbedding):
         return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
 
+class Phi3RotaryEmbedding(ScaledRotaryEmbedding):
+    def __init__(
+        self,
+        dim: int,
+        max_position_embeddings: int,
+        base: float,
+        original_max_position_embeddings: int,
+        long_factor: List[int],
+        short_factor: List[int],
+        device: Optional[Any] = None,
+    ) -> None:
+        self.orig_context_len = original_max_position_embeddings
+        self.long_factor = long_factor
+        self.short_factor = short_factor
+        scale = 1024 * 128 / self.orig_context_len  # Specific for Phi-3-mini-128k
+        if scale <= 1.0:
+            scaling_factor = 1.0
+        else:
+            scaling_factor = math.sqrt(1 + math.log(scale) / math.log(self.orig_context_len))
+        super().__init__(dim, max_position_embeddings, base, scaling_factor, device)
+
+    def apply_scaling(self, freqs: torch.Tensor) -> torch.Tensor:
+        if self.max_seq_len_cached > self.orig_context_len:
+            ext_factors = torch.tensor(self.long_factor, dtype=torch.float32)
+        else:
+            ext_factors = torch.tensor(self.short_factor, dtype=torch.float32)
+        assert freqs.shape[-1] == ext_factors.shape[-1]
+        return freqs / ext_factors
+
+    def _set_cos_sin_cache(self, seq_len: int, device: Any, dtype: torch.dtype) -> None:
+        self.max_seq_len_cached = seq_len
+        t = torch.arange(self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype)
+
+        inv_freq_shape = torch.arange(0, self.dim, 2).float().to(device) / self.dim
+        self.inv_freq = 1.0 / (self.base**inv_freq_shape)
+        self.inv_freq = self.apply_scaling(self.inv_freq)
+        freqs = torch.outer(t, self.inv_freq.to(t.device))
+
+        emb = torch.cat((freqs, freqs), dim=-1)
+        cos = emb.cos() * self.scaling_factor
+        sin = emb.sin() * self.scaling_factor
+        cos, sin = self.permute_to_meta_format(cos, sin)
+        self.register_buffer("cos_cached", cos.to(dtype), persistent=False)
+        self.register_buffer("sin_cached", sin.to(dtype), persistent=False)
+
+
 def rotary_embedding_factory(
     dim: int,
     max_position_embeddings: int,
     base: float,
     rope_scaling: Optional[RopeScaling] = None,
     device: Optional[Any] = None,
-) -> Union[RotaryEmbedding, YarnRotaryEmbedding, LlamaRotaryEmbedding, LinearScaledRotaryEmbedding]:
+) -> Union[RotaryEmbedding, ScaledRotaryEmbedding]:
     if rope_scaling is None:
         return RotaryEmbedding(dim, max_position_embeddings, base, device)
     else:
@@ -264,6 +310,8 @@ def rotary_embedding_factory(
             rotary_embedding = LlamaRotaryEmbedding
         elif rope_scaling.rope_type.value == "yarn":
             rotary_embedding = YarnRotaryEmbedding
+        elif rope_scaling.rope_type.value == "longrope":
+            rotary_embedding = Phi3RotaryEmbedding
         else:
             raise ValueError(f"Invalid rope_scaling: {rope_scaling}")
         return rotary_embedding(

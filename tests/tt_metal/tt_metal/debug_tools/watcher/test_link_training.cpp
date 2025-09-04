@@ -11,6 +11,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
@@ -30,10 +31,55 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
-static void RunTest(WatcherFixture* fixture, IDevice* device) {
+static void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    Program program = Program();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
+
+    CoreCoord logical_core, virtual_core;
+    if (device->get_active_ethernet_cores(true).empty()) {
+        log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
+        GTEST_SKIP();
+    }
+
+    for (auto core : device->get_active_ethernet_cores(true)) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device->id(), core)) {
+            logical_core = core;
+            break;
+        }
+    }
+
+    virtual_core = device->ethernet_core_from_logical_core(logical_core);
+    log_info(LogTest, "Running test on device {} core {}...", device->id(), virtual_core.str());
+
+    auto eth_link_kernel = CreateKernel(
+        program_,
+        "tests/tt_metal/tt_metal/test_kernels/misc/watcher_eth_link_check.cpp",
+        logical_core,
+        EthernetConfig{.noc = tt_metal::NOC::NOC_0});
+
+    fixture->RunProgram(mesh_device, workload);
+
+    auto x = MetalContext::instance().watcher_server()->exception_message();
+    // read out link status from L1
+    auto link_up_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::LINK_UP);
+    uint32_t link_status_rd;
+    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        &link_status_rd, sizeof(uint32_t), tt_cxy_pair(device->id(), virtual_core.x, virtual_core.y), link_up_addr);
+
+    if (x.empty()) {
+        EXPECT_NE(link_status_rd, 0);
+    } else {
+        EXPECT_EQ(link_status_rd, 0);
+    }
 }
 
-TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
+TEST_F(MeshWatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     // Eth link retraining only supported on WH for now, this test is also dispatch-agnostic so just pick one.
     if (this->slow_dispatch_ || this->arch_ != tt::ARCH::WORMHOLE_B0 || this->devices_.size() == 1) {
         log_info(LogTest, "Test only runs on fast dispatch + multi-chip WH, skipping...");
@@ -41,7 +87,8 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     }
 
     // Just try forcing an eth retrain on Device 0
-    IDevice* device = this->devices_[0];
+    auto mesh_device = this->devices_[0];
+    auto device = mesh_device->get_devices()[0];
     vector<uint32_t> reset_val = {0x1};
     uint32_t retrain_force_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_FORCE);
@@ -73,7 +120,20 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     }
 
     // Close devices/context to trigger watcher check on teardown.
-    DebugToolsFixture::TearDown();  // Call parent teardown so we don't disable watcher
+    DebugToolsMeshFixture::TearDown();  // NOLINT(bugprone-parent-virtual-call) Call parent teardown so we don't disable
+                                    // watcher
     MetalContext::instance().teardown();
     EXPECT_TRUE(FileContainsAllStrings(this->log_file_name, expected_strings));
+}
+
+TEST_F(MeshWatcherFixture, ActiveEthTestWatcherDetectLinkUp) {
+    if (this->arch_ != tt::ARCH::WORMHOLE_B0) {
+        GTEST_SKIP()
+            << "Enable this test on BH when base FW updated to flush data cache and invalidate instruction cache";
+    }
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            RunTest(fixture, mesh_device);
+        },
+        this->devices_[0]);
 }

@@ -13,19 +13,20 @@ namespace ckernel {
 namespace sfpu {
 
 template <InstrModLoadStore INSTRUCTION_MODE, bool IS_MAX_OP = true, int ITERATIONS = 8>
-inline void calculate_binary_max_min(const uint dst_offset) {
+inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr auto INSTR_MOD_CAST = InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP;
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
+        // size of each tile in Dest is 64 rows
         constexpr uint dst_tile_size = 64;
 
-        TTI_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, 0);  // a
+        TT_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, dst_index_in0 * dst_tile_size);  // a
         if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP) {
             TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG2, INSTR_MOD_CAST);
             TTI_SFPSETSGN(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
         }
 
-        TT_SFPLOAD(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, dst_offset * dst_tile_size);  // b
+        TT_SFPLOAD(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, dst_index_in1 * dst_tile_size);  // b
         if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP) {
             TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG2, INSTR_MOD_CAST);
             TTI_SFPSETSGN(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
@@ -39,13 +40,13 @@ inline void calculate_binary_max_min(const uint dst_offset) {
                 TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG2, INSTR_MOD_CAST);
                 TTI_SFPSETSGN(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
             }
-            TTI_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, 0);
+            TT_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, dst_index_out * dst_tile_size);
         } else {
             if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP) {
                 TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG2, INSTR_MOD_CAST);
                 TTI_SFPSETSGN(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
             }
-            TTI_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, 0);
+            TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, dst_index_out * dst_tile_size);
         }
         dst_reg++;
     }

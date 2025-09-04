@@ -20,11 +20,11 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const PointToPointOp::operation_attributes_t& operation_attributes,
     const MeshCoordinate& send_coord,
     const MeshCoordinate& receive_coord,
-    PointToPointOp::tensor_return_value_t& output_tensors) {
+    PointToPointOp::tensor_return_value_t& output_tensors,
+    const tt::tt_metal::GlobalSemaphore& semaphore) {
     auto mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor.device());
     const auto& topology = operation_attributes.topology;
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto& semaphore = operation_attributes.semaphore;
 
     // basic accounting
     const uint32_t input_num_pages = data_movement::get_num_pages(input_tensor);
@@ -59,7 +59,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     constexpr auto packet_header_cb_id = tt::CBIndex::c_1;
     constexpr auto buffering_factor = 2;  // this is in other fabric kernels
     constexpr auto num_packet_headers_storable = 2;
-    constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_header_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
@@ -155,6 +155,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         PointToPointOp::SendReceive::shared_variables_t{
             .send_unary_reader_kernel_id = send_unary_reader_kernel_id,
             .send_unary_writer_kernel_id = send_unary_writer_kernel_id,
-            .sender_cores = sender_cores}};
+            .sender_cores = sender_cores,
+            .semaphore = semaphore}};
 }
 }  // namespace ttnn::operations::point_to_point

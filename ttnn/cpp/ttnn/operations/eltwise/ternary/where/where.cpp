@@ -13,6 +13,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "device/where_device_operation.hpp"
 #include "device/where_utils.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -61,6 +62,21 @@ Tensor where_impl(
 
 inline bool have_same_shape(const Tensor& a, const Tensor& b) { return (a.logical_shape() == b.logical_shape()); }
 
+inline bool typecast_predicate(const Tensor& predicate, const Tensor& t_true, const Tensor& t_false) {
+    if (!is_floating_point(predicate.dtype()) && is_floating_point(t_true.dtype()) &&
+        is_floating_point(t_false.dtype())) {
+        return true;
+    }
+    return false;
+}
+
+inline bool typecast_predicate(const Tensor& predicate, const Tensor& b) {
+    if (!is_floating_point(predicate.dtype()) && is_floating_point(b.dtype())) {
+        return true;
+    }
+    return false;
+}
+
 }  // namespace ternary_utils
 
 Tensor WhereOperation::invoke(
@@ -72,7 +88,7 @@ Tensor WhereOperation::invoke(
     std::optional<Tensor> output) {
     bool is_value_true_Tensor = std::holds_alternative<Tensor>(value_true);
     bool is_value_false_Tensor = std::holds_alternative<Tensor>(value_false);
-
+    auto condition = predicate;
     bool has_shard_spec =
         predicate.memory_config().is_sharded() ||
         (is_value_true_Tensor ? std::get<Tensor>(value_true).memory_config().is_sharded() : false) ||
@@ -86,58 +102,75 @@ Tensor WhereOperation::invoke(
             // TTT case: tensor-tensor-tensor
             const auto& t_true = std::get<Tensor>(value_true);
             const auto& t_false = std::get<Tensor>(value_false);
+            bool typecast_predicate = ternary_utils::typecast_predicate(predicate, t_true, t_false);
+            if (typecast_predicate) {
+                condition = ttnn::typecast(queue_id, predicate, t_true.dtype());
+            }
 
             // Check if shapes are broadcast-compatible for TTT using broadcast detection
             // This needs to be done in the device operation but we need this check here to decide fallback to legacy
-
             auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
                 predicate.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
 
             if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
                 log_debug(tt::LogOp, "Where LLK - TTT");
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
-                                                                          : std::optional<DataType>(predicate.dtype());
+                                                                          : std::optional<DataType>(t_true.dtype());
                 return ttnn::prim::where(
                     queue_id,
-                    predicate,
+                    condition,
                     t_true,
                     t_false,
                     output_dtype,
-                    memory_config.value_or(predicate.memory_config()),
+                    memory_config.value_or(t_true.memory_config()),
                     output);
             }
         } else if (is_value_true_Tensor && !is_value_false_Tensor) {
             // TTS case: tensor-tensor-scalar
             const auto& t_true = std::get<Tensor>(value_true);
-            if (ternary_utils::have_same_shape(t_true, predicate)) {
+            bool typecast_predicate = ternary_utils::typecast_predicate(predicate, t_true);
+            if (typecast_predicate) {
+                condition = ttnn::typecast(queue_id, predicate, t_true.dtype());
+            }
+            auto broadcast_type =
+                ttnn::operations::ternary::get_broadcast_type(predicate.logical_shape(), t_true.logical_shape());
+
+            if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
                 log_debug(tt::LogOp, "Where LLK - TTS");
                 float scalar_false = std::get<float>(value_false);
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
-                                                                          : std::optional<DataType>(predicate.dtype());
+                                                                          : std::optional<DataType>(t_true.dtype());
                 return ttnn::prim::where(
                     queue_id,
-                    predicate,
+                    condition,
                     t_true,
                     scalar_false,
                     output_dtype,
-                    memory_config.value_or(predicate.memory_config()),
+                    memory_config.value_or(t_true.memory_config()),
                     output);
             }
         } else if (!is_value_true_Tensor && is_value_false_Tensor) {
             // TST case: tensor-scalar-tensor
             const auto& t_false = std::get<Tensor>(value_false);
-            if (ternary_utils::have_same_shape(predicate, t_false)) {
+            bool typecast_predicate = ternary_utils::typecast_predicate(predicate, t_false);
+            if (typecast_predicate) {
+                condition = ttnn::typecast(queue_id, predicate, t_false.dtype());
+            }
+            auto broadcast_type =
+                ttnn::operations::ternary::get_broadcast_type(predicate.logical_shape(), t_false.logical_shape());
+
+            if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
                 log_debug(tt::LogOp, "Where LLK - TST");
                 float scalar_true = std::get<float>(value_true);
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
-                                                                          : std::optional<DataType>(predicate.dtype());
+                                                                          : std::optional<DataType>(t_false.dtype());
                 return ttnn::prim::where(
                     queue_id,
-                    predicate,
+                    condition,
                     scalar_true,
                     t_false,
                     output_dtype,
-                    memory_config.value_or(predicate.memory_config()),
+                    memory_config.value_or(t_false.memory_config()),
                     output);
             }
         } else if (!is_value_true_Tensor && !is_value_false_Tensor && !has_shard_spec) {
@@ -160,7 +193,7 @@ Tensor WhereOperation::invoke(
     return std::visit(
         [&](const auto&... values) {
             return ternary_utils::where_impl(
-                queue_id, predicate, values..., memory_config.value_or(predicate.memory_config()), std::move(output));
+                queue_id, condition, values..., memory_config.value_or(predicate.memory_config()), std::move(output));
         },
         value_true,
         value_false);

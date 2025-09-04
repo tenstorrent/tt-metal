@@ -7,7 +7,6 @@
 #include <tt-metalium/assert.hpp>
 
 #include "tt-metalium/constants.hpp"
-#include "tt-metalium/hal.hpp"
 
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 namespace ttnn::operations::pool {
@@ -29,7 +28,8 @@ uint32_t get_bf16_pool_scalar(
             break;
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
-    return bfloat16(value).to_packed() << 16;
+    // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
+    return bfloat16::truncate(value).to_packed() << 16;
 }
 
 // Return a single bf16 init value for the pool type in u32 (packed in the least 16 bits)
@@ -40,7 +40,8 @@ uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
         case Pool2DType::AVG_POOL2D: value = 0.; break;
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
-    return bfloat16(value).to_packed();
+    // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
+    return bfloat16::truncate(value).to_packed();
 }
 
 bool is_pool_op_one_scalar_per_core(
@@ -225,14 +226,8 @@ uint32_t calculate_L1_usage(
     uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] * params.out_ntiles_c;
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
-    uint32_t alignment_bytes = tt::tt_metal::hal::get_dram_alignment();
-    auto align = [alignment_bytes](uint32_t size) {
-        uint32_t factor = (size + alignment_bytes - 1) / alignment_bytes;
-        return factor * alignment_bytes;
-    };
-
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
-           align(out_cb_config_size) /* global, involved */;
+           sliding_window::align_buffer(out_cb_config_size) /* global, involved */;
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(

@@ -19,6 +19,7 @@
 
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
+#include "tt_target_device.hpp"
 #include <umd/device/types/xy_pair.h>
 
 enum class CoreType;
@@ -127,7 +128,7 @@ class RunTimeOptions {
     bool profiler_enabled = false;
     bool profile_dispatch_cores = false;
     bool profiler_sync_enabled = false;
-    bool profiler_mid_run_tracy_push = false;
+    bool profiler_mid_run_dump = false;
     bool profiler_trace_profiler = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
@@ -163,7 +164,6 @@ class RunTimeOptions {
 
     bool skip_deleting_built_cache = false;
 
-    bool simulator_enabled = false;
     std::filesystem::path simulator_path = "";
 
     bool erisc_iram_enabled = false;
@@ -202,6 +202,12 @@ class RunTimeOptions {
 
     // Enable fabric performance telemetry
     bool enable_fabric_telemetry = false;
+
+    // Mock cluster initialization using a provided cluster descriptor
+    std::string mock_cluster_desc_path = "";
+
+    // Consolidated target device selection
+    TargetDevice runtime_target_device_ = TargetDevice::Silicon;
 
 public:
     RunTimeOptions();
@@ -258,6 +264,7 @@ public:
     bool watcher_ring_buffer_disabled() const { return watcher_feature_disabled(watcher_ring_buffer_str); }
     bool watcher_stack_usage_disabled() const { return watcher_feature_disabled(watcher_stack_usage_str); }
     bool watcher_dispatch_disabled() const { return watcher_feature_disabled(watcher_dispatch_str); }
+    bool watcher_eth_link_status_disabled() const { return watcher_feature_disabled(watcher_eth_link_status_str); }
 
     // Info from inspector environment variables, setters included so that user
     // can override with a SW call.
@@ -382,7 +389,7 @@ public:
     bool get_profiler_do_dispatch_cores() const { return profile_dispatch_cores; }
     bool get_profiler_sync_enabled() const { return profiler_sync_enabled; }
     bool get_profiler_trace_only() const { return profiler_trace_profiler; }
-    bool get_profiler_tracy_mid_run_push() const { return profiler_mid_run_tracy_push; }
+    bool get_profiler_mid_run_dump() const { return profiler_mid_run_dump; }
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
@@ -424,7 +431,7 @@ public:
 
     bool get_skip_deleting_built_cache() const { return skip_deleting_built_cache; }
 
-    bool get_simulator_enabled() const { return simulator_enabled; }
+    bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
     const std::filesystem::path& get_simulator_path() const { return simulator_path; }
 
     bool get_erisc_iram_enabled() const {
@@ -472,6 +479,13 @@ public:
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
 
+    // Mock cluster accessors
+    bool get_mock_enabled() const { return runtime_target_device_ == TargetDevice::Mock; }
+    const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
+
+    // Target device accessor
+    inline TargetDevice get_target_device() const { return runtime_target_device_; }
+
 private:
     // Helper functions to parse feature-specific environment vaiables.
     void ParseFeatureEnv(RunTimeDebugFeatures feature);
@@ -494,6 +508,7 @@ private:
     const std::string watcher_ring_buffer_str = "RING_BUFFER";
     const std::string watcher_stack_usage_str = "STACK_USAGE";
     const std::string watcher_dispatch_str = "DISPATCH";
+    const std::string watcher_eth_link_status_str = "ETH_LINK_STATUS";
     std::set<std::string> watcher_disabled_features;
     bool watcher_feature_disabled(const std::string& name) const {
         return watcher_disabled_features.find(name) != watcher_disabled_features.end();

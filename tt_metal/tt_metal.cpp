@@ -311,25 +311,50 @@ inline void SetRuntimeArgsImpl(
 
 namespace detail {
 
-bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer) {
-    bool pass = true;
+bool WriteToDeviceDRAMChannel(
+    IDevice* device, int dram_channel, uint32_t address, std::span<const std::uint8_t> host_buffer) {
     TT_FATAL(
         address >= device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
         device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
     tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
-        host_buffer.data(), host_buffer.size() * sizeof(uint32_t), device->id(), dram_channel, address);
+        host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address);
+    return true;
+}
+
+bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer) {
+    return WriteToDeviceDRAMChannel(
+        device,
+        dram_channel,
+        address,
+        std::span(reinterpret_cast<const std::uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(uint32_t)));
+}
+
+bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer) {
+    bool pass = true;
+    tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
+    tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
+        host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address);
     return pass;
 }
 
 bool ReadFromDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer) {
-    bool pass = true;
-    tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
     host_buffer.resize((size + sizeof(uint32_t) - 1) / sizeof(uint32_t));
-    tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
-        host_buffer.data(), size, device->id(), dram_channel, address);
-    return pass;
+    return ReadFromDeviceDRAMChannel(
+        device, dram_channel, address, std::span(reinterpret_cast<std::uint8_t*>(host_buffer.data()), size));
+}
+
+bool WriteToDeviceL1(
+    IDevice* device,
+    const CoreCoord& logical_core,
+    uint32_t address,
+    std::span<const std::uint8_t> host_buffer,
+    CoreType core_type) {
+    ZoneScoped;
+    auto worker_core = device->virtual_core_from_logical_core(logical_core, core_type);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(device->id(), worker_core, host_buffer, address);
+    return true;
 }
 
 bool WriteToDeviceL1(
@@ -338,16 +363,31 @@ bool WriteToDeviceL1(
     uint32_t address,
     std::vector<uint32_t>& host_buffer,
     CoreType core_type) {
-    ZoneScoped;
-    auto worker_core = device->virtual_core_from_logical_core(logical_core, core_type);
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(device->id(), worker_core, host_buffer, address);
-    return true;
+    return WriteToDeviceL1(
+        device,
+        logical_core,
+        address,
+        std::span(reinterpret_cast<const std::uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(uint32_t)),
+        core_type);
 }
 
 bool WriteRegToDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, const uint32_t& regval) {
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
         &regval, tt_cxy_pair(device->id(), worker_core), address);
+    return true;
+}
+
+bool ReadFromDeviceL1(
+    IDevice* device,
+    const CoreCoord& logical_core,
+    uint32_t address,
+    std::span<uint8_t> host_buffer,
+    CoreType core_type) {
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+    auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
+    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        host_buffer.data(), host_buffer.size(), tt_cxy_pair(device->id(), virtual_core), address);
     return true;
 }
 
@@ -459,16 +499,13 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
     auto device = buffer.device();
     const auto& allocator = device->allocator();
 
-    std::vector<uint32_t> page;
-    page.resize(page_size / sizeof(uint32_t));
-
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     for (auto mapped_page : buffer_page_mapping) {
         auto core = buffer_page_mapping.all_cores[mapped_page.core_id];
         auto bank_id = allocator->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
         auto bank_offset = allocator->get_bank_offset(buffer.buffer_type(), bank_id);
         auto data_index = mapped_page.host_page * page_size;
-        std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
+        std::span<const std::uint8_t> page(host_buffer.data() + data_index, page_size);
         if (buffer.is_l1()) {
             auto absolute_address =
                 buffer.address() + bank_offset + mapped_page.device_page * buffer.aligned_page_size();
@@ -516,11 +553,9 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
     size_t bank_index = 0;
     size_t data_index = 0;
-    std::vector<uint32_t> page;
-    page.resize(page_size / sizeof(uint32_t));
     for (size_t page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
-        std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
+        std::span<const uint8_t> page(host_buffer.data() + data_index, page_size);
         switch (buffer.buffer_type()) {
             case BufferType::DRAM: WriteToDeviceDRAMChannel(device, bank_index, address, page); break;
             case BufferType::L1:
@@ -604,7 +639,7 @@ void read_pages_to_host_helper(
     const uint32_t& host_page_id,
     const uint32_t& core_page_id,
     const uint32_t& bank_id) {
-    uint32_t host_buffer_start = host_page_id * page_size;
+    uint64_t host_buffer_start = uint64_t(host_page_id) * page_size;
     if (dev_buffer.is_l1()) {
         auto core_coordinates =
             device->worker_core_from_logical_core(dev_buffer.allocator()->get_logical_core_from_bank_id(bank_id));
@@ -1270,7 +1305,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
 void DeallocateBuffer(Buffer& buffer) { buffer.deallocate(); }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
-    detail::DispatchStateCheck(not buffer->device()->using_slow_dispatch());
+    detail::DispatchStateCheck(tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
     program.add_buffer(buffer);
 }
 
@@ -1321,7 +1356,7 @@ void SetRuntimeArgs(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::shared_ptr<RuntimeArgs>& runtime_args) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    detail::DispatchStateCheck(not device->using_slow_dispatch());
+    detail::DispatchStateCheck(tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgs, device, kernel, core_spec, runtime_args);
     SetRuntimeArgsImpl(kernel, core_spec, std::move(runtime_args), false);
 }
@@ -1336,7 +1371,7 @@ void SetRuntimeArgs(
         "Mismatch between number of cores {} and number of runtime args {} getting updated",
         core_spec.size(),
         runtime_args.size());
-    detail::DispatchStateCheck(not device->using_slow_dispatch());
+    detail::DispatchStateCheck(tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
     SetRuntimeArgsImpl(kernel, core_spec, runtime_args, false);
 }
 

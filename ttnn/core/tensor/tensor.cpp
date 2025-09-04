@@ -206,8 +206,10 @@ Tensor Tensor::from_span<float>(
             auto physical_data = tensor_impl::encode_tensor_data(buffer, spec, pad_value);
             std::vector<uint32_t> packed_block_floats =
                 spec.data_type() == DataType::BFLOAT8_B
-                    ? pack_fp32_vec_as_bfp8_tiles(physical_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile)
-                    : pack_fp32_vec_as_bfp4_tiles(physical_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
+                    ? pack_as_bfp8_tiles(
+                          tt::stl::make_const_span(physical_data), /*row_major_input=*/false, /*is_exp_a=*/false, tile)
+                    : pack_as_bfp4_tiles(
+                          tt::stl::make_const_span(physical_data), /*row_major_input=*/false, /*is_exp_a=*/false, tile);
 
             Tensor tensor(HostBuffer(std::move(packed_block_floats)), spec);
             if (device != nullptr) {
@@ -615,7 +617,7 @@ void memcpy(
 
 void memcpy(void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
     ZoneScoped;
-    if (auto mesh_device = src.mesh_device()) {
+    if (auto mesh_device = src.device()) {
         memcpy(mesh_device->mesh_command_queue(), dst, src, region, blocking);
     } else {
         memcpy(src.device()->command_queue(), dst, src, region, blocking);
@@ -653,7 +655,7 @@ void memcpy(
 
 void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
     ZoneScoped;
-    if (auto mesh_device = dst.mesh_device()) {
+    if (auto mesh_device = dst.device()) {
         memcpy(mesh_device->mesh_command_queue(), dst, src, region);
     } else {
         memcpy(dst.device()->command_queue(), dst, src, region);
@@ -701,13 +703,13 @@ void memcpy(
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
     ZoneScoped;
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        if (auto mesh_device = src.mesh_device()) {
+        if (auto mesh_device = src.device()) {
             memcpy(mesh_device->mesh_command_queue(), dst, src, region);
         } else {
             memcpy(src.device()->command_queue(), dst, src, region);
         }
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        if (auto mesh_device = dst.mesh_device()) {
+        if (auto mesh_device = dst.device()) {
             memcpy(mesh_device->mesh_command_queue(), dst, src, region);
         } else {
             memcpy(dst.device()->command_queue(), dst, src, region);

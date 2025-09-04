@@ -7,11 +7,10 @@
 #include "debug/dprint.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric.h"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
 #ifdef TEST_ENABLE_FABRIC_TRACING
@@ -81,7 +80,6 @@ inline void setup_header_routing_2d(
         if constexpr (use_dynamic_routing) {
             fabric_set_unicast_route(
                 (MeshPacketHeader*)packet_header,
-                direction,  // Ignored: Dynamic Routing does not need outgoing_direction specified
                 my_dev_id,  // Ignored: Dynamic Routing does not need src chip ID
                 dst_dev_id,
                 dst_mesh_id,
@@ -89,7 +87,6 @@ inline void setup_header_routing_2d(
         } else {
             fabric_set_unicast_route(
                 (LowLatencyMeshPacketHeader*)packet_header,
-                direction,
                 my_dev_id,
                 dst_dev_id,
                 dst_mesh_id,  // Ignored since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
@@ -210,6 +207,8 @@ void kernel_main() {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* bwd_packet_header;
 
     /***************** setup forward dir *****************/
+    uint32_t fwd_eth_channel = get_arg_val<uint32_t>(rt_args_idx);
+    uint32_t fwd_dir = get_router_direction(fwd_eth_channel);
     fwd_fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
@@ -223,13 +222,7 @@ void kernel_main() {
         DPRINT << "fwd_start_distance" << fwd_start_distance << ", fwd_range" << fwd_range << ENDL();
     } else {  // 2D
         setup_header_routing_2d(
-            fwd_packet_header,
-            (eth_chan_directions)fwd_fabric_connection.direction,
-            fwd_range,
-            my_dev_id,
-            fwd_dev_id,
-            fwd_mesh_id,
-            ew_dim);
+            fwd_packet_header, (eth_chan_directions)fwd_dir, fwd_range, my_dev_id, fwd_dev_id, fwd_mesh_id, ew_dim);
     }
 
     /***************** setup bawkward dir *****************/
@@ -239,7 +232,8 @@ void kernel_main() {
         bwd_range = get_arg_val<uint32_t>(rt_args_idx++);           // for multicast only
         bwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);          // for 2d unicast only
         bwd_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);         // for 2d unicast only
-
+        uint32_t bwd_eth_channel = get_arg_val<uint32_t>(rt_args_idx);
+        uint32_t bwd_dir = get_router_direction(bwd_eth_channel);
         bwd_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
@@ -252,13 +246,7 @@ void kernel_main() {
             setup_header_routing_1d(bwd_packet_header, bwd_start_distance, bwd_range);
         } else {  // 2D
             setup_header_routing_2d(
-                bwd_packet_header,
-                (eth_chan_directions)bwd_fabric_connection.direction,
-                bwd_range,
-                my_dev_id,
-                bwd_dev_id,
-                bwd_mesh_id,
-                ew_dim);
+                bwd_packet_header, (eth_chan_directions)bwd_dir, bwd_range, my_dev_id, bwd_dev_id, bwd_mesh_id, ew_dim);
         }
     }
 

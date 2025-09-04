@@ -24,9 +24,15 @@ class CCL1D:
             self.from_sems.append([])
             self.to_sems.append([])
             for _ in range(2):
-                self.gather_sems[-1].append(ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0))
+                self.gather_sems[-1].append(
+                    [
+                        ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
+                        ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
+                    ]
+                )  # use two semaphores to use minimal version of all_gather_async
                 self.from_sems[-1].append(ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0))
                 self.to_sems[-1].append(ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0))
+
         self.sem_cnt = [0, 0]
 
     def get_max_links(self, axis):

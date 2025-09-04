@@ -3,15 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dev_msgs.h"
-#include <cstddef>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
-#include <memory>
 #include <numeric>
 #include <string>
-#include <vector>
 
-#include "core_config.h"  // ProgrammableCoreType
 #include "dev_mem_map.h"  // MEM_LOCAL_BASE
 #include "hal_types.hpp"
 #include "hw/inc/wormhole/eth_l1_address_map.h"
@@ -57,6 +53,13 @@ static constexpr float INF_WHB0 = 1.7014e+38;
 namespace tt {
 
 namespace tt_metal {
+
+namespace wormhole {
+
+// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
+#include "core_config.h"  // ProgrammableCoreType
+
+}
 
 class HalJitBuildQueryWormhole : public hal_1xx::HalJitBuildQueryBase {
 public:
@@ -211,6 +214,7 @@ public:
 };
 
 void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
+    using namespace wormhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
         static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));
@@ -259,7 +263,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::HOST)] =
         std::lcm(PCIE_ALIGNMENT, PCIE_ALIGNMENT);
 
-    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr) {
+    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr, bool) {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // Move addresses in the local memory range to l1 (copied by kernel)
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
@@ -302,7 +306,17 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->noc_ucast_addr_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_UNICAST_ADDR_Y(addr); };
     this->noc_local_addr_func_ = [](uint64_t addr) -> uint64_t { return NOC_LOCAL_ADDR(addr); };
 
-    this->eth_fw_arg_addr_func_ = [&](uint32_t arg_index) -> uint32_t { return 0; };
+    this->eth_fw_arg_addr_func_ = [&](int, uint32_t) -> uint32_t { return 0; };
+
+    this->device_features_func_ = [](DispatchFeature feature) -> bool {
+        switch (feature) {
+            case DispatchFeature::ETH_MAILBOX_API: return false;
+            case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
+            case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
+            default: TT_THROW("Invalid Wormhole dispatch feature {}", static_cast<int>(feature));
+        }
+    };
 
     this->num_nocs_ = NUM_NOCS;
     this->noc_node_id_ = NOC_NODE_ID;
