@@ -26,7 +26,7 @@ void mesh_to_mesh_barrier(
     }
     std::unordered_set<Rank> seen;
     TT_FATAL(
-        std::any_of(ranks.begin(), ranks.end(), [&seen](Rank rank) { return !seen.insert(rank).second; }),
+        std::none_of(ranks.begin(), ranks.end(), [&seen](Rank rank) { return !(seen.insert(rank).second); }),
         "Barrier cannot be used for synchronization within the same rank.");
     TT_FATAL(
         std::any_of(
@@ -40,14 +40,12 @@ void mesh_to_mesh_barrier(
         std::vector<RequestPtr> requests;
         int sync_msg = 1;
         for (auto rank_itr = ranks.begin() + 1; rank_itr != ranks.end(); ++rank_itr) {
-            requests.push_back(distributed_context->issend(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)),
-                *rank_itr,
-                Tag{0}));
+            distributed_context->ssend(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)), *rank_itr, Tag{0});
         }
-        for (auto& request : requests) {
-            [[maybe_unused]] auto status = request->wait();
-        }
+        // for (auto& request : requests) {
+        //     [[maybe_unused]] auto status = request->wait();
+        // }
     } else {
         int sync_msg = 0;
         distributed_context->recv(

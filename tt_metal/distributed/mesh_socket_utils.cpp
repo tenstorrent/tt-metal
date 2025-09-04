@@ -442,7 +442,7 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     for (const auto& host_rank : control_plane.get_mesh_graph().get_host_ranks(peer_mesh_id)) {
         peer_ranks.push_back(control_plane.get_distributed_rank(peer_mesh_id, host_rank.value()));
     }
-    std::vector<int> expected_descriptor_size_bytes;
+    std::vector<int> expected_descriptor_size_bytes(peer_ranks.size());
     for (size_t i = 0; i < peer_ranks.size(); ++i) {
         const auto peer_rank = peer_ranks[i];
         auto msg_header_size = context->snoop_incoming_msg_size(Rank{peer_rank}, desc.exchange_tag);
@@ -452,8 +452,7 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
             sizeof(int),
             msg_header_size);
         context->recv(
-            tt::stl::Span<std::byte>(
-                reinterpret_cast<std::byte*>(expected_descriptor_size_bytes.data() + i), sizeof(int)),
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&expected_descriptor_size_bytes[i]), sizeof(int)),
             Rank{peer_rank},
             desc.exchange_tag  // Read the descriptor over the specified tag
         );
@@ -470,7 +469,7 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
         TT_FATAL(
             descriptor_size_bytes == expected_descriptor_size_bytes[0],
             "Expected {} bytes in the socket descriptor, but got {} bytes during multi-host handshake.",
-            expected_descriptor_size_bytes,
+            expected_descriptor_size_bytes[0],
             descriptor_size_bytes);
 
         // Allocate a buffer to receive the serialized descriptor

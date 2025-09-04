@@ -114,6 +114,12 @@ void append_fabric_connection_rt_args(
 
     const auto& fabric_context = control_plane.get_fabric_context();
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
+    const auto host_rank =
+        control_plane.get_mesh_graph().get_host_rank_for_chip(src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
+    if (host_rank.has_value() && host_rank.value() != control_plane.get_local_host_rank_id_binding()) {
+        log_info(tt::LogFabric, "Skipping append_fabric_connection_rt_args for remote host rank");
+        return;
+    }
 
     // Make an exception for TG gateway connections. TG gateways are on a different mesh compared to remote chips
     // but the routing is simple and doesnt need any special inter-mesh handling
@@ -128,7 +134,9 @@ void append_fabric_connection_rt_args(
     // get the direction in which the data will be forwarded from the src_fabric_node_id
     std::optional<RoutingDirection> forwarding_direction;
     if (is_2d_fabric) {
+        log_info(tt::LogFabric, "Getting forwarding direction for 2D fabric");
         forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+        log_info(tt::LogFabric, "Got Forwarding direction");
     } else {
         // TODO: Workaround for #22524 routing tables not having wraparound links
         // for 1D fabric, we loop to match the dst chip since we need to ensure src and dst are on the same line
@@ -157,6 +165,7 @@ void append_fabric_connection_rt_args(
 
     const auto candidate_eth_chans =
         control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
+    log_info(tt::LogFabric, "Got active fabric eth channels");
     TT_FATAL(
         link_idx < candidate_eth_chans.size(),
         "Requested link index {} is out of bounds. {} ethernet channels available to forward b/w src {} and dst {}",
@@ -167,6 +176,7 @@ void append_fabric_connection_rt_args(
 
     const auto forwarding_links =
         get_forwarding_link_indices_in_direction(src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
+    log_info(tt::LogFabric, "Got forwarding links");
     TT_FATAL(
         std::find(forwarding_links.begin(), forwarding_links.end(), link_idx) != forwarding_links.end(),
         "Requested link index {} cannot be used for forwarding b/w src {} and dst {}. Valid forwarding links are {}",
@@ -176,6 +186,7 @@ void append_fabric_connection_rt_args(
         forwarding_links);
 
     const auto fabric_router_channel = candidate_eth_chans[link_idx];
+    log_info(tt::LogFabric, "Got fabric router channel");
     auto worker_teardown_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);
     auto worker_buffer_index_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);
     if (core_type == CoreType::WORKER) {

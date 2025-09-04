@@ -1,0 +1,95 @@
+# MeshSocket Test Configuration Example
+# This file demonstrates a basic test configuration with explicit socket definitions for multiprocess 2x2 T3k
+# use command to run:
+#  tt-run --mpi-args "--allow-run-as-root --tag-output" --rank-binding tests/tt_metal/distributed/config/1x2_dual_big_mesh_multiprocess_rank_bindings.yaml ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_t3k_big_multi_mesh.yaml
+
+physical_mesh:
+   mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x2_dual_big_mesh.yaml"
+   eth_coord_mapping: [
+    [[0, 0, 0, 0, 0], [0, 1, 0, 0, 0]],
+    [[0, 2, 0, 0, 0], [0, 3, 0, 0, 0]],
+    [[0, 0, 1, 0, 0], [0, 1, 1, 0, 0]],
+    [[0, 2, 1, 0, 0], [0, 3, 1, 0, 0]]
+    ]
+
+# Fabric configuration (required)
+fabric_config:
+  topology: Mesh
+  routing_type: Dynamic
+
+# Test definitions (required)
+tests:
+  - name: "basic_point_to_point_1"
+    num_iterations: 5
+    memory_config:
+      fifo_size: 1024
+      page_size: 256
+      data_size: 4096
+      num_transactions: 20
+    sockets:
+      - sender_mesh_id: 0
+        receiver_mesh_id: 1
+        connections:
+          - sender:
+              mesh_coord: [0, 0]
+              core_coord: [0, 0]
+            receiver:
+              mesh_coord: [0, 1]
+              core_coord: [0, 0]
+  - name: "basic_point_to_point_2"
+    num_iterations: 5
+    memory_config:
+      fifo_size: 1024
+      page_size: 256
+      data_size: 4096
+      num_transactions: 20
+    sockets:
+      - sender_mesh_id: 0
+        receiver_mesh_id: 1
+        connections:
+          - sender:
+              mesh_coord: [1, 1]
+              core_coord: [0, 0]
+            receiver:
+              mesh_coord: [1, 0]
+              core_coord: [0, 0]
+  - name: "basic_point_to_point_3"
+    num_iterations: 5
+    memory_config:
+      fifo_size: 1024
+      page_size: 256
+      data_size: 4096
+      num_transactions: 20
+    sockets:
+      - sender_mesh_id: 0
+        receiver_mesh_id: 1
+        connections:
+          - sender:
+              mesh_coord: [0, 0]
+              core_coord: [0, 0]
+            receiver:
+              mesh_coord: [0, 1]
+              core_coord: [0, 0]
+  - name: "broadcast_pattern"
+    num_iterations: 5
+    memory_config:
+      fifo_size: 1024
+      page_size: 256
+      data_size: 4096
+      num_transactions: 20
+    sockets:
+      - sender_mesh_id: 0
+        receiver_mesh_id: 1
+        connections:
+          - sender:
+              mesh_coord: [0, 0]
+              core_coord: [0, 0]
+            receiver:
+              mesh_coord: [1, 0]
+              core_coord: [0, 0]
+          - sender:
+              mesh_coord: [0, 0]
+              core_coord: [0, 0]
+            receiver:
+              mesh_coord: [0, 1]
+              core_coord: [0, 0]

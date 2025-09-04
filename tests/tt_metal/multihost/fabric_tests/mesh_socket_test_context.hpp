@@ -18,6 +18,7 @@
 
 using MeshId = tt::tt_fabric::MeshId;
 using ControlPlane = tt::tt_fabric::ControlPlane;
+using MeshHostRankId = tt::tt_fabric::MeshHostRankId;
 
 namespace tt::tt_fabric::mesh_socket_tests {
 
@@ -35,6 +36,7 @@ public:
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& get_mesh_device() const;
     const tt::tt_fabric::MeshGraph& get_mesh_graph() const;
     const std::unordered_map<Rank, tt::tt_fabric::MeshId>& get_rank_to_mesh_mapping() const;
+    const MeshId& get_local_mesh_id() const { return local_mesh_id_; }
     std::mt19937 get_rng() const { return gen_; }
 
 private:
@@ -67,6 +69,7 @@ private:
     // Control plane and mesh configuration
     ControlPlane* control_plane_ptr_;
     MeshId local_mesh_id_;
+    MeshHostRankId local_host_rank_id_;
     std::unordered_map<Rank, tt::tt_fabric::MeshId> rank_to_mesh_mapping_;
 
     // Random number generation

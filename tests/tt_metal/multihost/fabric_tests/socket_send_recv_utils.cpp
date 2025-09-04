@@ -9,7 +9,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <vector>
-
+#include "impl/context/metal_context.hpp"
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/fabric.hpp>
 
@@ -59,8 +60,18 @@ bool test_socket_send_recv(
     auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    auto sender_rank = Rank{*socket.get_config().sender_mesh_id};
-    auto recv_rank = Rank{*socket.get_config().receiver_mesh_id};
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    std::unordered_set<Rank> sender_ranks;
+    std::unordered_set<Rank> recv_ranks;
+    auto sender_mesh_id = socket.get_config().sender_mesh_id;
+    auto recv_mesh_id = socket.get_config().receiver_mesh_id;
+    for (const auto& host_rank : control_plane.get_mesh_graph().get_host_ranks(sender_mesh_id)) {
+        sender_ranks.insert(control_plane.get_distributed_rank(sender_mesh_id, host_rank.value()));
+    }
+    for (const auto& host_rank : control_plane.get_mesh_graph().get_host_ranks(recv_mesh_id)) {
+        recv_ranks.insert(control_plane.get_distributed_rank(recv_mesh_id, host_rank.value()));
+    }
     std::set<CoreRange> sender_core_range;
     std::set<CoreRange> recv_core_range;
     for (const auto& connection : socket.get_config().socket_connection_config) {
@@ -75,19 +86,19 @@ bool test_socket_send_recv(
     if (!gen.has_value()) {
         // Exchange seed between sender and receiver and create local generator
         uint32_t seed;
-        if (distributed_context->rank() == sender_rank) {
+        if (sender_ranks.contains(distributed_context->rank())) {
             seed = std::chrono::steady_clock::now().time_since_epoch().count();
-            log_info(tt::LogTest, "Sending seed {} to rank {}", seed, *recv_rank);
+            log_info(tt::LogTest, "Sending seed {} to rank {}", seed, *recv_ranks.begin());
             distributed_context->send(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
-                recv_rank,                                    // send to receiver host
+                *recv_ranks.begin(),                          // send to receiver host
                 tt::tt_metal::distributed::multihost::Tag{0}  // exchange seed over tag 0
             );
-        } else if (distributed_context->rank() == recv_rank) {
-            log_info(tt::LogTest, "Receiving seed from rank {}", *sender_rank);
+        } else if (recv_ranks.contains(distributed_context->rank())) {
+            log_info(tt::LogTest, "Receiving seed from rank {}", *sender_ranks.begin());
             distributed_context->recv(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
-                sender_rank,                                  // recv from sender host
+                *sender_ranks.begin(),                        // recv from sender host
                 tt::tt_metal::distributed::multihost::Tag{0}  // exchange seed over tag 0
             );
         }
@@ -104,9 +115,10 @@ bool test_socket_send_recv(
         src_vec.insert(src_vec.end(), src_vec_per_core.begin(), src_vec_per_core.end());
     }
     const auto reserved_packet_header_CB_index = tt::CB::c_in0;
-
+    log_info(tt::LogTest, "Enqueuing workloads for {} transactions", num_txns);
     for (int i = 0; i < num_txns; i++) {
-        if (distributed_context->rank() == sender_rank) {
+        if (sender_ranks.contains(distributed_context->rank())) {
+            log_info(tt::LogTest, "Enqueuing sender workload for txn {}", i);
             auto sender_data_shard_params = ShardSpecBuffer(
                 sender_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sender_core_range_set.num_cores(), 1});
 
@@ -122,6 +134,13 @@ bool test_socket_send_recv(
             std::unordered_set<MeshCoreCoord> mesh_core_coords;
 
             for (const auto& connection : socket.get_config().socket_connection_config) {
+                log_info(tt::LogTest, "Sender MeshCoord: {}", connection.sender_core.device_coord);
+                auto host_rank = mesh_graph.get_host_rank_for_chip(
+                    sender_mesh_id, mesh_graph.coordinate_to_chip(sender_mesh_id, connection.sender_core.device_coord));
+                auto sender_rank = control_plane.get_distributed_rank(sender_mesh_id, host_rank.value());
+                // if (sender_rank != distributed_context->rank()) {
+                //     continue;
+                // }
                 if (mesh_core_coords.find(connection.sender_core) != mesh_core_coords.end()) {
                     continue;
                 }
@@ -132,11 +151,12 @@ bool test_socket_send_recv(
                     sender_data_buffer,
                     src_vec,
                     connection.sender_core.device_coord);
-
+                log_info(tt::LogTest, "Getting Fabric Node Ids");
                 auto sender_fabric_node_id = mesh_device_->get_fabric_node_id(connection.sender_core.device_coord);
+                log_info(tt::LogTest, "Sender fabric node id: {}", sender_fabric_node_id);
                 auto recv_fabric_node_id =
                     socket.get_fabric_node_id(SocketEndpoint::RECEIVER, connection.receiver_core.device_coord);
-
+                log_info(tt::LogTest, "Recv fabric node id: {}", recv_fabric_node_id);
                 auto sender_program = CreateProgram();
 
                 auto sender_kernel = CreateKernel(
@@ -161,19 +181,24 @@ bool test_socket_send_recv(
                 CreateCircularBuffer(sender_program, sender_core, sender_cb_reserved_packet_header_config);
 
                 std::vector<uint32_t> sender_rtas;
+                log_info(tt::LogTest, "Appending Fabric Connection RT Args");
                 tt_fabric::append_fabric_connection_rt_args(
                     sender_fabric_node_id, recv_fabric_node_id, 0, sender_program, {sender_core}, sender_rtas);
-
+                log_info(tt::LogTest, "Appended Fabric Connection RT Args");
                 tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_core, sender_rtas);
+                log_info(tt::LogTest, "Adding Program to Mesh Workload");
                 AddProgramToMeshWorkload(
                     sender_mesh_workload,
                     std::move(sender_program),
                     MeshCoordinateRange(connection.sender_core.device_coord));
+                log_info(tt::LogTest, "Added Program to Mesh Workload");
             }
+            log_info(tt::LogTest, "Enqueuing Mesh Workload");
             // Run workload performing Data Movement over the socket
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), sender_mesh_workload, false);
             Finish(mesh_device_->mesh_command_queue());
-        } else if (distributed_context->rank() == recv_rank) {
+        } else if (recv_ranks.contains(distributed_context->rank())) {
+            log_info(tt::LogTest, "Enqueuing receiver workload for txn {}", i);
             auto recv_data_shard_params = ShardSpecBuffer(
                 recv_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {recv_core_range_set.num_cores(), 1});
 
@@ -188,10 +213,21 @@ bool test_socket_send_recv(
 
             auto recv_mesh_workload = CreateMeshWorkload();
             for (const auto& connection : socket.get_config().socket_connection_config) {
+                log_info(tt::LogTest, "Rec MeshCoord: {}", connection.receiver_core.device_coord);
+                auto host_rank = mesh_graph.get_host_rank_for_chip(
+                    recv_mesh_id, mesh_graph.coordinate_to_chip(recv_mesh_id, connection.receiver_core.device_coord));
+                auto recv_rank = control_plane.get_distributed_rank(recv_mesh_id, host_rank.value());
+                // if (recv_rank != distributed_context->rank()) {
+                //     log_info(tt::LogTest, "Skipping receiver workload");
+                //     continue;
+                // }
                 auto recv_core = connection.receiver_core.core_coord;
+                log_info(tt::LogTest, "Getting Fab Node Ids");
                 auto sender_fabric_node_id =
                     socket.get_fabric_node_id(SocketEndpoint::SENDER, connection.sender_core.device_coord);
+                log_info(tt::LogTest, "Sender fabric node id: {}", sender_fabric_node_id);
                 auto recv_fabric_node_id = mesh_device_->get_fabric_node_id(connection.receiver_core.device_coord);
+                log_info(tt::LogTest, "Recv fabric node id: {}", recv_fabric_node_id);
 
                 auto recv_program = CreateProgram();
 
@@ -222,15 +258,23 @@ bool test_socket_send_recv(
                     MeshCoordinateRange(connection.receiver_core.device_coord));
             }
             // Run receiver workload using the created socket
+            log_info(tt::LogTest, "Enqueuing receiver workload");
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), recv_mesh_workload, false);
+            log_info(tt::LogTest, "Enqueued receiver workload");
             auto& core_to_core_id = recv_data_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
+            log_info(tt::LogTest, "Reading receiver data");
             for (const auto& connection : socket.get_config().socket_connection_config) {
+                log_info(tt::LogTest, "Reading receiver data for core {}", connection.receiver_core.device_coord);
                 std::vector<uint32_t> recv_data_readback;
                 ReadShard(
                     mesh_device_->mesh_command_queue(),
                     recv_data_readback,
                     recv_data_buffer,
                     connection.receiver_core.device_coord);
+                if (recv_data_readback.size() == 0) {
+                    log_info(tt::LogTest, "Skipping receiver data readback");
+                    continue;
+                }
                 uint32_t idx = core_to_core_id.at(connection.receiver_core.core_coord);
                 std::vector<uint32_t> recv_data_readback_per_core(
                     recv_data_readback.begin() + idx * data_size / sizeof(uint32_t),

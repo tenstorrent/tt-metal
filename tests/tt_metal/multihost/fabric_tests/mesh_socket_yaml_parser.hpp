@@ -22,6 +22,7 @@ namespace tt::tt_fabric::mesh_socket_tests {
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using CoreCoord = tt::tt_metal::CoreCoord;
 using Rank = tt::tt_metal::distributed::multihost::Rank;
+using MeshId = tt::tt_fabric::MeshId;
 
 enum class RoutingType : uint32_t {
     LowLatency = 0,
@@ -81,8 +82,8 @@ struct SocketConnectionConfig {
 
 struct TestSocketConfig {
     std::vector<SocketConnectionConfig> connections;
-    Rank sender_rank;
-    Rank receiver_rank;
+    MeshId sender_mesh_id;
+    MeshId receiver_mesh_id;
 };
 
 struct PatternExpansionConfig {

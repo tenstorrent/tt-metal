@@ -25,10 +25,11 @@ MeshSocketTestContext::~MeshSocketTestContext() { cleanup(); }
 void MeshSocketTestContext::initialize() {
     log_info(tt::LogTest, "Initializing MeshSocketTestContext...");
     const auto mesh_id_str = std::string(std::getenv("TT_MESH_ID"));
+    const auto host_rank_str = std::string(std::getenv("TT_MESH_HOST_RANK"));
+    local_host_rank_id_ = MeshHostRankId{std::stoi(host_rank_str)};
+    log_info(tt::LogTest, "local_host_rank_id {}", local_host_rank_id_);
     local_mesh_id_ = MeshId{std::stoi(mesh_id_str)};
-    if (config_.physical_mesh_config.has_value()) {
-        initialize_and_validate_custom_physical_config(config_.physical_mesh_config.value());
-    }
+    log_info(tt::LogTest, "local_mesh_id {}", local_mesh_id_);
 
     distributed_context_ = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
@@ -41,6 +42,10 @@ void MeshSocketTestContext::initialize() {
     local_rank_ = distributed_context_->rank();
     log_info(tt::LogTest, "local_rank {}", *local_rank_);
 
+    if (config_.physical_mesh_config.has_value()) {
+        initialize_and_validate_custom_physical_config(config_.physical_mesh_config.value());
+    }
+
     setup_fabric_configuration();
     control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -51,6 +56,10 @@ void MeshSocketTestContext::initialize() {
     TT_FATAL(mesh_device_, "Failed to create MeshDevice");
     log_info(tt::LogTest, "MeshDevice created successfully with shape: {}", mesh_device_->shape());
 
+    const auto mesh_graph = control_plane_ptr_->get_mesh_graph();
+    for (const auto& mesh_coord : mesh_graph.get_coord_range(local_mesh_id_, local_host_rank_id_)) {
+        log_info(tt::LogTest, "Mesh coord: {}", mesh_coord);
+    }
     rank_to_mesh_mapping_ = create_rank_to_mesh_mapping();
     share_seed();
     expand_test_configurations();
@@ -110,12 +119,14 @@ void MeshSocketTestContext::initialize_and_validate_custom_physical_config(
 
     // ethernet coordinate chip mapping, which should be migrated away from
     std::map<FabricNodeId, chip_id_t> chip_to_eth_coord_mapping;
-    for (std::uint32_t mesh_id = 0; mesh_id < eth_coord_mapping.size(); mesh_id++) {
-        if (mesh_id == *local_mesh_id_) {
-            for (std::uint32_t chip_id = 0; chip_id < eth_coord_mapping[mesh_id].size(); chip_id++) {
-                const auto& eth_coord = eth_coord_mapping[mesh_id][chip_id];
-                chip_to_eth_coord_mapping.insert(
-                    {FabricNodeId(MeshId{mesh_id}, chip_id), cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
+    for (std::uint32_t rank = 0; rank < eth_coord_mapping.size(); rank++) {
+        if (rank == *local_rank_) {
+            for (std::uint32_t chip_id = 0; chip_id < eth_coord_mapping[rank].size(); chip_id++) {
+                const auto& eth_coord = eth_coord_mapping[rank][chip_id];
+                // assume each host has the same topology
+                auto fab_node_id =
+                    FabricNodeId(local_mesh_id_, *local_host_rank_id_ * eth_coord_mapping[rank].size() + chip_id);
+                chip_to_eth_coord_mapping.insert({fab_node_id, cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
             }
         }
     }
@@ -126,6 +137,7 @@ void MeshSocketTestContext::initialize_and_validate_custom_physical_config(
 void MeshSocketTestContext::run_test(const ParsedTestConfig& test) {
     if (!should_participate_in_test(test)) {
         log_info(tt::LogTest, "Current rank not participating in test '{}'", test.name);
+        distributed_context_->barrier();
         return;
     }
 
@@ -140,7 +152,7 @@ void MeshSocketTestContext::run_test(const ParsedTestConfig& test) {
         log_info(tt::LogTest, "--- Iteration {}/{} ---", iteration + 1, num_iterations);
 
         for (size_t socket_idx = 0; socket_idx < sockets.size(); ++socket_idx) {
-            log_info(tt::LogTest, "Executing socket {}/{}", socket_idx + 1, sockets.size());
+            log_info(tt::LogTest, "Executing socket {}/{} on rank {}", socket_idx + 1, sockets.size(), *local_rank_);
             execute_socket_test(sockets[socket_idx], test);
         }
     }
@@ -179,8 +191,8 @@ std::vector<tt::tt_metal::distributed::MeshSocket> MeshSocketTestContext::create
     std::vector<tt::tt_metal::distributed::MeshSocket> sockets;
 
     for (const auto& socket_config : test.sockets) {
-        bool is_sender = (socket_config.sender_rank == local_rank_);
-        bool is_receiver = (socket_config.receiver_rank == local_rank_);
+        bool is_sender = (socket_config.sender_mesh_id == local_mesh_id_);
+        bool is_receiver = (socket_config.receiver_mesh_id == local_mesh_id_);
 
         if (is_sender || is_receiver) {
             auto mesh_socket_config = convert_to_socket_config(socket_config, test.memory_config);
@@ -207,8 +219,8 @@ tt::tt_metal::distributed::SocketConfig MeshSocketTestContext::convert_to_socket
     tt::tt_metal::distributed::SocketConfig config{
         .socket_connection_config = connections,
         .socket_mem_config = socket_mem_config,
-        .sender_mesh_id = tt::tt_fabric::MeshId{*test_socket_config.sender_rank},
-        .receiver_mesh_id = tt::tt_fabric::MeshId{*test_socket_config.receiver_rank},
+        .sender_mesh_id = test_socket_config.sender_mesh_id,
+        .receiver_mesh_id = test_socket_config.receiver_mesh_id,
         .distributed_context = distributed_context_};
 
     return config;
@@ -238,7 +250,7 @@ void MeshSocketTestContext::execute_socket_test(
 
 bool MeshSocketTestContext::should_participate_in_test(const ParsedTestConfig& test) const {
     for (const auto& socket_config : test.sockets) {
-        if (socket_config.sender_rank == local_rank_ || socket_config.receiver_rank == local_rank_) {
+        if (socket_config.sender_mesh_id == local_mesh_id_ || socket_config.receiver_mesh_id == local_mesh_id_) {
             return true;
         }
     }
@@ -264,13 +276,13 @@ std::unordered_map<Rank, tt::tt_fabric::MeshId> MeshSocketTestContext::create_ra
         uint32_t mesh_id_val;
         std::memcpy(&mesh_id_val, recv_buffer.data() + rank * sizeof(uint32_t), sizeof(uint32_t));
         log_info(tt::LogTest, "Rank {} is in mesh {}", rank, mesh_id_val);
-        TT_FATAL(
-            !std::any_of(
-                rank_to_mesh_id.begin(),
-                rank_to_mesh_id.end(),
-                [&mesh_id_val](const auto& pair) { return *(pair.second) == mesh_id_val; }),
-            "Mesh id {} is already in use",
-            mesh_id_val);
+        // TT_FATAL(
+        //     !std::any_of(
+        //         rank_to_mesh_id.begin(),
+        //         rank_to_mesh_id.end(),
+        //         [&mesh_id_val](const auto& pair) { return *(pair.second) == mesh_id_val; }),
+        //     "Mesh id {} is already in use",
+        //     mesh_id_val);
         rank_to_mesh_id[Rank{rank}] = tt::tt_fabric::MeshId{mesh_id_val};
     }
 
