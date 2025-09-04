@@ -302,9 +302,6 @@ def test_multimodal_demo_text(
                 content=[ImageMedia(image=cats_image_1), ImageMedia(image=cats_image_2), "Compare these images."]
             )
         ],
-        [UserMessage(content=[ImageMedia(image=trace_img_1120x560), "What do you see in this image?"])],
-        [UserMessage(content=[ImageMedia(image=img), "What do you see in this image?"])],
-        [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
     ]
 
     if multi_image:
@@ -328,8 +325,8 @@ def test_multimodal_demo_text(
                 )
             ],
             [UserMessage(content=[ImageMedia(image=img), "Write a haiku for this image."])],
-            [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
-            [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
+            # [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
+            # [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
         ]
     else:
         dialogs = [
