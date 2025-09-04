@@ -22,7 +22,6 @@ Checks: >
   -bugprone-nondeterministic-pointer-iteration-order,
   -bugprone-optional-value-conversion,
   -bugprone-sizeof-expression,
-  -bugprone-suspicious-stringview-data-usage,
   -bugprone-switch-missing-default-case,
   -bugprone-unchecked-optional-access,
   -bugprone-unhandled-self-assignment,
