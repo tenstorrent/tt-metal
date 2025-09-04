@@ -1,6 +1,12 @@
 name: Package and release (dev wheels)
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry-run: If true, do not upload tag or draft release."
+        required: false
+        default: false
+        type: boolean
   schedule:
     # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
     # dev testing and builds for beginning of work week
@@ -22,6 +28,7 @@ jobs:
       fetch_depth: 0
       bump_each_commit: false
       tag_type: dev
+      dry_run: ${{ inputs.dry_run }}
 
   regression-testing:
     needs: create-tag
@@ -49,6 +56,7 @@ jobs:
         with:
           name: changelog
           path: CHANGELOG.txt
+
   create-release-notes:
     needs: create-changelog
     permissions: read-all
