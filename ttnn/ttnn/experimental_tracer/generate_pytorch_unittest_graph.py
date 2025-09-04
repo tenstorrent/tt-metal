@@ -479,12 +479,22 @@ class MulTensorGroupUnittest(UnitTestOperation):
 
     def generate_code(self) -> str:
         """Generate the code for this mul tensor unit test operation."""
+        # Fix the broken set() pattern with proper parameter generation
+        param_tuples = []
+        for shape in self.input_shape_list:
+            if 0 in shape and 1 in shape:
+                param_tuples.append(f"        ({shape[0]}, {shape[1]})")
+
+        # Remove duplicates while preserving order
+        unique_params = list(dict.fromkeys(param_tuples))
+        params_str = ",\n".join(unique_params) if unique_params else "        ([1, 1, 32, 32], [1, 1, 32, 32])"
+
         return f"""
 
 @pytest.mark.parametrize(
     "input_shape_a, input_shape_b",
     (
-{''.join(set(f'        ({shape[0]}, {shape[1]}),' for shape in self.input_shape_list if 0 in shape and 1 in shape))}
+{params_str},
     )
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
@@ -494,9 +504,16 @@ def test_mul_tensor(device, input_shape_a, input_shape_b, dtype, layout):
     if device.core_grid.y == 7:
         pytest.skip("Issue #6984: Compute Grid size too small")
 
+    # Skip incompatible combinations: bfloat8_b/bfloat4_b requires TILE_LAYOUT
+    if (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b) and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("bfloat8_b/bfloat4_b requires TILE_LAYOUT, skipping ROW_MAJOR_LAYOUT combination")
+
     torch_input_tensor_a = torch.randn(input_shape_a, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn(input_shape_b, dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor_a * torch_input_tensor_b
+
+    torch_input_tensor_a = torch.permute(torch_input_tensor_a, (0, 2, 3, 1))
+    torch_input_tensor_b = torch.permute(torch_input_tensor_b, (0, 2, 3, 1))
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=layout, device=device, dtype=dtype)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=layout, device=device, dtype=dtype)
@@ -505,6 +522,7 @@ def test_mul_tensor(device, input_shape_a, input_shape_b, dtype, layout):
     output_tensor = ttnn.multiply(input_tensor_a, input_tensor_b)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
 """
 
