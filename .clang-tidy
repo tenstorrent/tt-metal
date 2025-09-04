@@ -19,7 +19,6 @@ Checks: >
   -bugprone-integer-division,
   -bugprone-multi-level-implicit-pointer-conversion,
   -bugprone-narrowing-conversions,
-  -bugprone-nondeterministic-pointer-iteration-order,
   -bugprone-optional-value-conversion,
   -bugprone-sizeof-expression,
   -bugprone-suspicious-stringview-data-usage,
