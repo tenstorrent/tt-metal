@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+import os
+from datetime import datetime
 from tracer_backend import trace_torch_model
 from generate_pytorch_unittest_graph import (
     PytorchLayerUnitTestGraph,
@@ -38,6 +40,46 @@ allowed_modes = [
 ]
 
 allowed_dtypes = ["float32", "float64", "int32", "int64"]
+
+
+def generate_folder_name(model, input_shapes, input_dtypes):
+    """Generate folder name based on model, input shapes, and dtypes with datetime."""
+    # Format input shapes as strings
+    shape_strs = []
+    for shape in input_shapes:
+        shape_str = "x".join(map(str, shape))
+        shape_strs.append(shape_str)
+
+    # Join all shapes with underscore
+    shapes_part = "_".join(shape_strs)
+
+    # Convert dtypes to strings and join with underscore
+    dtypes_part = "_".join(str(dtype) for dtype in input_dtypes)
+
+    # Get current date and time
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Create folder name: model_shapes_dtypes_timestamp
+    folder_name = f"{model}_{shapes_part}_{dtypes_part}_{timestamp}"
+
+    return folder_name
+
+
+def generate_file_name(prefix, model, input_shapes, input_dtypes):
+    """Generate file name with prefix based on model and input shapes only."""
+    # Format input shapes as strings
+    shape_strs = []
+    for shape in input_shapes:
+        shape_str = "x".join(map(str, shape))
+        shape_strs.append(shape_str)
+
+    # Join all shapes with underscore
+    shapes_part = "_".join(shape_strs)
+
+    # Create file name: prefix_model_shapes (no dtypes or date)
+    file_name = f"{prefix}_{model}_{shapes_part}"
+
+    return file_name
 
 
 def get_parser():
@@ -188,6 +230,15 @@ def main(args_dict):
         summary(torch_model, input_size=args.input_shape)
         print("Finished torch summary.\n\n\n")
     print("Started info tracing: ")
+
+    # Generate folder and file names
+    folder_name = generate_folder_name(args.model, args.input_shape, args.input_dtype)
+    base_dir = "generated"
+    output_dir = os.path.join(base_dir, folder_name)
+
+    # Create directories if they don't exist
+    os.makedirs(output_dir, exist_ok=True)
+
     operation_graph = trace_torch_model(
         torch_model,
         args.input_shape,
@@ -195,16 +246,44 @@ def main(args_dict):
         dump_visualization=True,
         save_original_tensors=not args.no_infer,
     )
+
+    # Generate files with new naming convention
     pytorch_graph = PytorchGraph(operation_graph)
-    pytorch_graph.dump_to_python_file("graph.py", True)
+    graph_filename = generate_file_name("graph", args.model, args.input_shape, args.input_dtype) + ".py"
+    graph_filepath = os.path.join(output_dir, graph_filename)
+    pytorch_graph.dump_to_python_file(graph_filepath, True)
+
     pytorch_excel_graph = PytorchExcelGraph(operation_graph)
-    pytorch_excel_graph.dump_to_excel_file("graph.xlsx")
+    excel_filename = generate_file_name("graph", args.model, args.input_shape, args.input_dtype) + ".xlsx"
+    excel_filepath = os.path.join(output_dir, excel_filename)
+    pytorch_excel_graph.dump_to_excel_file(excel_filepath)
+
     graph = PytorchLayerUnitTestGraph(
         PytorchLayerUnitTestGraphConfig(
             operation_graph,
         )
     )
-    graph.dump_to_python_file("test.py", True)
+    test_filename = generate_file_name("test", args.model, args.input_shape, args.input_dtype) + ".py"
+    test_filepath = os.path.join(output_dir, test_filename)
+    graph.dump_to_python_file(test_filepath, True)
+
+    # Handle the operation_graph_viz.json file
+    viz_filename = generate_file_name("operation_graph_viz", args.model, args.input_shape, args.input_dtype) + ".json"
+    viz_filepath = os.path.join(output_dir, viz_filename)
+
+    # Check if operation_graph_viz.json was generated and move it
+    if os.path.exists("operation_graph_viz.json"):
+        os.rename("operation_graph_viz.json", viz_filepath)
+        viz_generated = True
+    else:
+        viz_generated = False
+
+    print(f"Files generated in: {output_dir}")
+    print(f"- {graph_filename}")
+    print(f"- {excel_filename}")
+    print(f"- {test_filename}")
+    if viz_generated:
+        print(f"- {viz_filename}")
 
 
 if __name__ == "__main__":
