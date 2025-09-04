@@ -42,12 +42,13 @@ public:
     enum class NodeKind : uint8_t { Mesh = 0, Graph = 1, Device = 2 };
 
     // NOTE: Instance Data and ConnectionData are subject to change as Physical discovery is implemented
+    // These will be moved to Mesh Graph object once MGD 1.0 is deprecated
     struct InstanceData {
         const LocalNodeId local_id;        // instance id from proto or computed device index
         const std::string name;
-        const std::string type;         // points into proto_ storage
-        const NodeKind kind;
-        std::variant<const proto::MeshDescriptor*, const proto::GraphDescriptor*> desc;
+        const std::string type;
+        const NodeKind kind; // Type of instance (mesh, graph, device)
+        std::variant<const proto::MeshDescriptor*, const proto::GraphDescriptor*> desc; // Pointer to the descriptor that this instance is based on
         std::unordered_set<GlobalNodeId> sub_instances; // direct list of child GlobalNodeIds
         std::unordered_map<LocalNodeId, GlobalNodeId> sub_instances_local_id_to_global_id; // child LocalId -> GlobalId
         std::vector<GlobalNodeId> hierarchy; // path from root using GlobalNodeIds
@@ -77,6 +78,7 @@ public:
             }
     };
 
+    // backwards_compatible will enable all checks related to MGD 1.0. This will limit the functionality of MGD 2.0
     explicit MeshGraphDescriptor(const std::string& text_proto,  const bool backwards_compatible = false);
     explicit MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path,  const bool backwards_compatible = false);
     ~MeshGraphDescriptor();
@@ -85,13 +87,7 @@ public:
     void print_node(const GlobalNodeId id, int indent_level = 0);
     void print_all_nodes();
 
-    const InstanceData & top_level() const {
-        auto it = instances_.find(top_level_id_);
-        TT_FATAL(it != instances_.end(), "Top-level instance id {} not found", top_level_id_);
-        return it->second;
-    }
-    bool is_graph(const InstanceData& instance) const { return instance.kind == NodeKind::Graph; }
-    bool is_mesh(const InstanceData& instance) const { return instance.kind == NodeKind::Mesh; }
+    // Instance access API
     const InstanceData& get_instance(GlobalNodeId id) const {
         auto it = instances_.find(id);
         TT_FATAL(it != instances_.end(), "Instance id {} not found", id);
@@ -102,6 +98,15 @@ public:
         TT_FATAL(it != connections_.end(), "Connection id {} not found", connection_id);
         return it->second;
     }
+    const InstanceData & top_level() const {
+        auto it = instances_.find(top_level_id_);
+        TT_FATAL(it != instances_.end(), "Top-level instance id {} not found", top_level_id_);
+        return it->second;
+    }
+
+    // Instance type checks
+    bool is_graph(const InstanceData& instance) const { return instance.kind == NodeKind::Graph; }
+    bool is_mesh(const InstanceData& instance) const { return instance.kind == NodeKind::Mesh; }
 
 
     // Typed enumeration
@@ -134,7 +139,7 @@ public:
         TT_FATAL(it != connections_by_source_device_id_.end(), "No connections found for source device id {}", source_device_id);
         return it->second;
     }
-    
+
 
 private:
     const bool backwards_compatible_;
@@ -177,6 +182,7 @@ private:
 
     static void validate_legacy_requirements(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
 
+    // Populates the MGD Graph from the proto file
     void populate();
 
     // Populate Descriptors

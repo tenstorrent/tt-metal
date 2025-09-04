@@ -716,10 +716,10 @@ void MeshGraphDescriptor::populate_connections() {
 void MeshGraphDescriptor::add_to_fast_lookups(const InstanceData& instance) {
     // Add to type-based lookup
     instances_by_type_[instance.type].push_back(instance.global_id);
-    
+
     // Add to name-based lookup
     instances_by_name_[instance.name].push_back(instance.global_id);
-    
+
     // Add to kind-specific lookups
     switch (instance.kind) {
         case NodeKind::Mesh:
@@ -737,10 +737,10 @@ void MeshGraphDescriptor::add_to_fast_lookups(const InstanceData& instance) {
 void MeshGraphDescriptor::add_connection_to_fast_lookups(const MeshGraphDescriptor::ConnectionData& connection, const std::string& type) {
     // Add to instance-based lookup
     connections_by_instance_id_[connection.parent_instance_id].push_back(connection.connection_id);
-    
+
     // Add to type-based lookup
     connections_by_type_[type].push_back(connection.connection_id);
-    
+
     // Add to source device lookup
     if (!connection.nodes.empty()) {
         connections_by_source_device_id_[connection.nodes[0]].push_back(connection.connection_id);
@@ -946,7 +946,7 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
 
         TT_ASSERT(nodes.size() >= 2, "Graph descriptor connections must have at least two nodes");
 
-        // Add the connection in the forward direction
+        // Add the connection in every direction of the connection
         for (const auto& node : nodes) {
             const auto src_device_id = node;
 
