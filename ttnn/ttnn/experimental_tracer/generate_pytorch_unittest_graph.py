@@ -1557,12 +1557,22 @@ class ExpandGroupUnittest(UnitTestOperation):
 
     def generate_code(self) -> str:
         """Generate the code for this expand unit test operation."""
+        # Fix the broken set() pattern with proper parameter generation
+        param_tuples = []
+        for shape in self.input_shape_list:
+            if 0 in shape:
+                param_tuples.append(f"        {shape[0]}")
+
+        # Remove duplicates while preserving order
+        unique_params = list(dict.fromkeys(param_tuples))
+        params_str = ",\n".join(unique_params) if unique_params else "        [1, 32, 64, 64]"
+
         return f"""
 
 @pytest.mark.parametrize(
     "input_shape",
     (
-{''.join(set(f'        {shape[0]},' for shape in self.input_shape_list if 0 in shape))}
+{params_str},
     )
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
@@ -1574,7 +1584,20 @@ def test_expand(device, input_shape, dtype, layout):
 
     torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
     expand_shape = list(input_shape)
-    expand_shape[0] = expand_shape[0] * 2  # Double the batch size
+
+    # Only expand singleton dimensions (size 1) - this is the PyTorch expand rule
+    if expand_shape[0] == 1:
+        expand_shape[0] = 2  # Expand singleton batch dimension
+    else:
+        # If first dimension is not singleton, find and expand the first singleton dimension
+        for i in range(len(expand_shape)):
+            if expand_shape[i] == 1:
+                expand_shape[i] = 2  # Expand the first singleton dimension found
+                break
+        else:
+            # If no singleton dimensions found, skip this test case
+            pytest.skip(f"No singleton dimensions to expand in shape {{input_shape}}")
+
     torch_output_tensor = torch_input_tensor.expand(expand_shape)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=dtype)
