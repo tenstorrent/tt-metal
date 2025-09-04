@@ -148,5 +148,30 @@ TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
     }
 }
 
+TEST(ExampleDeviceTest, CreateDevices) {
+    auto all_device_ids = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
+    std::cout << "number of devices: " << all_device_ids.size() << std::endl;
+    auto device_map =
+        tt::tt_metal::detail::CreateDevices(std::vector<chip_id_t>(all_device_ids.begin(), all_device_ids.end()));
+    for (const auto& device_id : all_device_ids) {
+        std::cout << "device id: " << device_id << std::endl;
+        EXPECT_EQ(device_map.at(device_id)->id(), device_id);
+    }
+    tt::tt_metal::detail::CloseDevices(device_map);
+}
+
+TEST(ExampleDeviceTest, MeshDevice) {
+    auto all_device_ids = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
+    std::cout << "number of devices: " << all_device_ids.size() << std::endl;
+    auto mesh = tt::tt_metal::distributed::MeshDevice::create(MeshDeviceConfig(std::nullopt));
+    std::cout << "mesh shape: " << mesh->shape() << std::endl;
+    std::cout << "mesh devices: " << mesh->get_devices().size() << std::endl;
+    for (const auto& device_id : all_device_ids) {
+        std::cout << "device id: " << device_id << std::endl;
+        EXPECT_EQ(mesh->get_device(device_id)->id(), device_id);
+    }
+    mesh->close();
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed

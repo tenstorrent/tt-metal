@@ -16,6 +16,18 @@ from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 #######
 # Test MultiDevice Initialization, Open/Close
 #######
+def test_mesh_device_open_close(silicon_arch_name, silicon_arch_wormhole_b0):
+    """Manually open and close multi-device"""
+    num_pcie_devices = ttnn.get_num_pcie_devices()
+    print(f"num_pcie_devices: {num_pcie_devices}")
+    print(f"num_devices: {ttnn.get_num_devices()}")
+
+    multi_device = ttnn.open_mesh_device()
+    print(f"multi_device MeshShape: {multi_device.shape}")
+    print(f"multi_device Num Devices: {multi_device.get_num_devices()}")
+    ttnn.close_mesh_device(multi_device)
+
+
 def test_mesh_device_open_close_explicit(silicon_arch_name, silicon_arch_wormhole_b0):
     """Manually open and close multi-device"""
     num_pcie_devices = ttnn.get_num_pcie_devices()
@@ -778,7 +790,6 @@ def test_fabric_with_submeshes(t3k_mesh_device):
     submeshes = t3k_mesh_device.create_submeshes(ttnn.MeshShape(1, 4))
 
 
-@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
 def test_multihost_sanity(mesh_device):
     torch.manual_seed(0)
 
