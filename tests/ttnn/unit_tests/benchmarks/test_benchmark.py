@@ -194,11 +194,11 @@ matmul_shapes_bfloat4_b = [
 
 # (dtype, math_fidelity, use_trace)
 matmul_configs = [
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False),
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False),
-    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False),
+    # (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False),
+    # (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
+    # (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False),
+    # (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False),
+    # (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False),
     (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, True),
     (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, True),
     (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True),
@@ -207,7 +207,7 @@ matmul_configs = [
 ]
 
 
-@pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
+# @pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])

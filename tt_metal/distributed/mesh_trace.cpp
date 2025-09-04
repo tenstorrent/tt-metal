@@ -155,10 +155,17 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
     size_t page_size = trace_dispatch::compute_interleaved_trace_buf_page_size(
         unpadded_size, mesh_cq.device()->allocator()->get_num_banks(BufferType::DRAM));
     size_t padded_size = round_up(unpadded_size, page_size);
+    // todo print unpadded_size and padded_size
+    log_info(tt::LogMetal, "unpadded_size {}, padded size {}", unpadded_size, padded_size);
 
     const auto current_trace_buffers_size = mesh_cq.device()->get_trace_buffers_size();
     mesh_cq.device()->set_trace_buffers_size(current_trace_buffers_size + padded_size);
     auto trace_region_size = mesh_cq.device()->allocator()->get_config().trace_region_size;
+    log_info(
+        tt::LogMetal,
+        "current_trace_buffers_size {}, trace_region_size {}",
+        current_trace_buffers_size,
+        trace_region_size);
     TT_FATAL(
         mesh_cq.device()->get_trace_buffers_size() <= trace_region_size,
         "Creating trace buffers of size {}B on MeshDevice {}, but only {}B is allocated for trace region.",

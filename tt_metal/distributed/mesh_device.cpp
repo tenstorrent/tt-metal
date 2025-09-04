@@ -811,6 +811,8 @@ void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) {
 
     sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(trace_id);
 
+    log_info(tt::LogMetal, "trace buffer size: {}", this->trace_buffers_size_);
+
     // Only enable allocations once all captured traces are released
     if (this->trace_buffers_size_ == 0) {
         this->mark_allocations_safe();
@@ -877,7 +879,10 @@ void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, b
 }
 
 uint32_t MeshDevice::get_trace_buffers_size() const { return trace_buffers_size_; }
-void MeshDevice::set_trace_buffers_size(uint32_t size) { trace_buffers_size_ = size; }
+void MeshDevice::set_trace_buffers_size(uint32_t size) {
+    log_info(tt::LogMetal, "set trace_buffers_size_ to {}", size);
+    trace_buffers_size_ = size;
+}
 
 // Dispatch and initialization
 bool MeshDevice::initialize(
