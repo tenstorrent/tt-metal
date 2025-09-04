@@ -61,9 +61,6 @@ Tensor all_gather(const Tensor& tensor) {
     }
 
     return Tensor(
-        tt::tt_metal::HostStorage{std::move(all_gather_buffer)},
-        tensor.tensor_spec(),
-        tt::tt_metal::AllGatherTensor{},
-        tensor.tensor_topology());
+        tt::tt_metal::HostStorage{std::move(all_gather_buffer)}, tensor.tensor_spec(), tensor.tensor_topology());
 }
 }  // namespace ttnn::distributed::host_ccl
