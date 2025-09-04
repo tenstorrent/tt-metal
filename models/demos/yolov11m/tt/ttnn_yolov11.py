@@ -59,7 +59,7 @@ class TtnnYoloV11:
         x = self.c3k2_1(self.device, x)
         x = self.conv3(self.device, x)
         x = self.c3k2_2(self.device, x)
-        x4 = ttnn.clone(x)
+        x4 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.conv5(self.device, x)
         x = self.c3k2_3(self.device, x)
         x6 = x
