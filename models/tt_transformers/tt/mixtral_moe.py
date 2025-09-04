@@ -22,7 +22,7 @@ class TtMoeLayer(LightweightModule):
         assert self.tile_size == 32, "tile size must be 32"
         self.num_devices = args.num_devices
         assert self.num_devices == 8, "num devices must be 8 for Mixtral MoE"
-        self.tt_ccl=tt_ccl
+        self.tt_ccl = tt_ccl
 
         gate_name = f"layers.{layer_num}.block_sparse_moe.gate.weight"
         if args.dummy_weights:
@@ -136,35 +136,12 @@ class TtMoeLayer(LightweightModule):
         weights.deallocate(True)
         weights_1SB1.deallocate(True)
 
-<<<<<<< HEAD
-        # All gather
-        if mode == "prefill":
-            output = tt_all_reduce(
-                results_11BH,
-                self.mesh_device,
-                cluster_axis=0,
-                tt_ccl=self.tt_ccl,
-                dim=3,
-                num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-                num_all_gather_links=self.args.num_all_gather_links,
-                sharded=(mode == "decode"),
-                memory_config=(w2_out.memory_config() if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG),
-                dtype=self.args.ccl_dtype,
-                use_composite=False,
-                topology=self.args.ccl_topology(),
-            )
-            # Ensure dim 0 and 1 are 1
-            original_shape = output.shape
-            output = ttnn.reshape(
-                output, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
-            )
-=======
         seq_len = results_11BH.shape[-2]
->>>>>>> 88a94dad02 (update testcase with fabric ccl)
 
         if seq_len >= 2048 and mode == "decode":  # Reshape back to intended shape
             results_11BH = ttnn.reshape(results_11BH, [1, 1, seq_len, self.model_args.dim])
 
+        # All gather
         output = tt_all_reduce(
             results_11BH,
             self.mesh_device,
@@ -179,23 +156,6 @@ class TtMoeLayer(LightweightModule):
             use_composite=False,
             topology=self.args.ccl_topology(),
         )
-
-<<<<<<< HEAD
-            output = tt_all_reduce(
-                results_11BH,
-                self.mesh_device,
-                cluster_axis=0,
-                tt_ccl=self.tt_ccl,
-                dim=3,
-                num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-                num_all_gather_links=self.args.num_all_gather_links,
-                sharded=(mode == "decode"),
-                memory_config=(results_11BH.memory_config() if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG),
-                dtype=self.args.ccl_dtype,
-                use_composite=False,
-                topology=self.args.ccl_topology(),
-            )
-=======
         # Ensure dim 0 and 1 are 1
         original_shape = output.shape
         output = ttnn.reshape(
@@ -203,11 +163,17 @@ class TtMoeLayer(LightweightModule):
         )
 
         if mode == "decode":  # Decode mode
->>>>>>> 88a94dad02 (update testcase with fabric ccl)
             results_11BH.deallocate(True)
             output = ttnn.to_memory_config(
                 output,
                 self.model_config["DECODE_RESIDUAL_MEMCFG"],
             )
+
+        output = ttnn.to_memory_config(
+            output,
+            memory_config=ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type=ttnn.BufferType.DRAM
+            ),
+        )
 
         return output

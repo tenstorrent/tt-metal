@@ -16,7 +16,7 @@ from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
 from models.utility_functions import comp_pcc, skip_for_grayskull
 
-# pytest models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py::test_model_inference[wormhole_b0-1layer-performance-max128k-3k-page_params0-default_attention-8]
+# pytest models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py
 
 
 def convert2ref(state_dict):
