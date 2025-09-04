@@ -22,7 +22,7 @@ inline void _calculate_typecast_fp16b_to_uint16_()
         TTI_SFPSETCC(0, 0, 0, 0);
         TTI_SFPLOADI(0, 0, 0);
         TTI_SFPENCC(0, 0, 0, 0);
-        TTI_SFP_STOCH_RND(0, 0, 2, 0, 1, 14);
+        TTI_SFP_STOCH_RND(0, 0, 2, 0, 1, 6);
         TTI_SFPSTORE(1, 6, 3, 0);
         sfpi::dst_reg++;
     }
@@ -36,7 +36,7 @@ inline void _calculate_typecast_uint16_to_fp16b_()
     {
         TTI_SFPLOAD(0, 6, 3, 0);
         TTI_SFPCAST(0, 1, 0);
-        TTI_SFP_STOCH_RND(0, 0, 3, 1, 2, 9);
+        TTI_SFP_STOCH_RND(0, 0, 3, 1, 2, 1);
         TTI_SFPSTORE(2, 0, 3, 0);
         sfpi::dst_reg++;
     }
@@ -50,7 +50,7 @@ inline void _calculate_typecast_int32_to_fp16b_()
     {
         TTI_SFPLOAD(0, 12, 3, 0);
         TTI_SFPCAST(0, 1, 0);
-        TTI_SFP_STOCH_RND(0, 0, 3, 1, 2, 9);
+        TTI_SFP_STOCH_RND(0, 0, 3, 1, 2, 1);
         TTI_SFPSTORE(2, 0, 3, 0);
         sfpi::dst_reg++;
     }
@@ -109,7 +109,7 @@ inline void _calculate_typecast_fp32_to_fp16b_()
     for (int d = 0; d < ITERATIONS; d++)
     {
         TTI_SFPLOAD(0, 0, 3, 0);
-        TTI_SFP_STOCH_RND(0, 0, 2, 0, 1, 9);
+        TTI_SFP_STOCH_RND(0, 0, 2, 0, 1, 1);
         TTI_SFPSTORE(1, 0, 3, 0);
         sfpi::dst_reg++;
     }
@@ -205,7 +205,7 @@ inline void _calculate_typecast_uint32_to_fp16b_()
         TTI_SFPLOAD(0, 4, 3, 0);
         TTI_SFPSETSGN(0, 0, 1, 1);
         TTI_SFPCAST(1, 2, 0);
-        TTI_SFP_STOCH_RND(0, 0, 4, 2, 3, 9);
+        TTI_SFP_STOCH_RND(0, 0, 4, 2, 3, 1);
         TTI_SFPSETCC(0, 0, 0, 0);
         TTI_SFPADDI(0x4f00, 3, 0); // 2^31
         TTI_SFPENCC(0, 0, 0, 0);
