@@ -34,7 +34,7 @@ void compressed_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
 
         // Store the 4-byte routing field value directly as uint32_t
         uint32_t field_offset = dst_chip_id * SINGLE_ROUTE_SIZE;
-        uint32_t* route_ptr = reinterpret_cast<uint32_t*>(&paths.raw[field_offset]);
+        uint32_t* route_ptr = reinterpret_cast<uint32_t*>(&paths[field_offset]);
         *route_ptr = routing_field_value;
     }
 }
@@ -55,7 +55,7 @@ void compressed_routing_path_t<2, false>::calculate_chip_to_all_routing_fields(
         uint16_t dst_col = dst_chip_id / ew_dim;
         uint16_t dst_row = dst_chip_id % ew_dim;
 
-        uint8_t* route_buffer = &paths.raw[dst_chip_id * SINGLE_ROUTE_SIZE];
+        uint8_t* route_buffer = &paths[dst_chip_id * SINGLE_ROUTE_SIZE];
         uint16_t hop_index = 0;
         uint16_t byte_index = 0;
         uint8_t current_packed_byte = 0;
@@ -126,12 +126,12 @@ void compressed_routing_path_t<1, true>::calculate_chip_to_all_routing_fields(
     for (uint16_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
         if (src_chip_id == dst_chip_id) {
             // Noop to self
-            paths.one[dst_chip_id].set(0);
+            paths[dst_chip_id].set(0);
             continue;
         }
 
         uint8_t hops = (dst_chip_id > src_chip_id) ? (dst_chip_id - src_chip_id) : (src_chip_id - dst_chip_id);
-        paths.one[dst_chip_id].set(hops);
+        paths[dst_chip_id].set(hops);
     }
 }
 
@@ -142,7 +142,7 @@ void compressed_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
     for (uint16_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
         if (src_chip_id == dst_chip_id) {
             // Self route - no movement needed
-            paths.two[dst_chip_id].set(0, 0, 0, 0, 0);
+            paths[dst_chip_id].set(0, 0, 0, 0, 0);
             continue;
         }
 
@@ -163,7 +163,7 @@ void compressed_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
         uint8_t ew_direction = (dst_row > src_row) ? 1 : 0;
         uint8_t turn_after_ns = ns_hops;  // XY routing: complete NS first, then EW
 
-        paths.two[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, turn_after_ns);
+        paths[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, turn_after_ns);
     }
 }
 

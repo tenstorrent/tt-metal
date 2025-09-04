@@ -38,7 +38,7 @@ inline bool decode_route_to_buffer_common(
         return false;
     }
 
-    const uint8_t* packed_route = &routing_path.paths.raw[dst_chip_id * route_size];
+    const uint8_t* packed_route = &routing_path.paths[dst_chip_id * route_size];
     // Copy packed data directly to output buffer
     for (uint16_t i = 0; i < route_size; ++i) {
         out_route_buffer[i] = packed_route[i];
@@ -73,7 +73,7 @@ inline bool compressed_routing_path_t<2, true>::decode_route_to_buffer(
     }
 
     // Get compressed route data
-    const auto& compressed_route = paths.two[dst_chip_id];
+    const auto& compressed_route = paths[dst_chip_id];
     uint8_t ns_hops = compressed_route.get_ns_hops();
     uint8_t ew_hops = compressed_route.get_ew_hops();
     uint8_t ns_direction = compressed_route.get_ns_direction();
@@ -146,7 +146,7 @@ inline bool compressed_routing_path_t<1, true>::decode_route_to_buffer(
         return false;
     }
 
-    const auto& compressed_route = paths.one[dst_chip_id];
+    const auto& compressed_route = paths[dst_chip_id];
     uint8_t hops = compressed_route.get_hops();
     if (hops == 0) {
         // Noop to self

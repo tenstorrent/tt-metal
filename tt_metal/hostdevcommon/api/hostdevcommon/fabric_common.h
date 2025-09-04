@@ -6,6 +6,8 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <array>
+#include <type_traits>
 
 namespace tt::tt_fabric {
 
@@ -163,13 +165,14 @@ struct __attribute__((packed)) compressed_routing_path_t {
         compressed ? ((dim == 1) ? COMPRESSED_ROUTE_SIZE_1D : COMPRESSED_ROUTE_SIZE_2D)
                    : ((dim == 1) ? SINGLE_ROUTE_SIZE_1D : SINGLE_ROUTE_SIZE_2D);
 
-    // Compressed paths using bitfield structures
-    union {
-        // 16 bytes for 1D or 2048 bytes for 2D
-        std::uint8_t raw[MAX_CHIPS_LOWLAT * SINGLE_ROUTE_SIZE];  // 64 or 34768 bytes
-        compressed_route_1d_t one[MAX_CHIPS_LOWLAT];             // 16 bytes Only valid when dim == 1
-        compressed_route_2d_t two[MAX_CHIPS_LOWLAT];             // 2048 bytes Only valid when dim == 2
-    } paths = {};
+    typename std::conditional<
+        !compressed,
+        std::uint8_t[MAX_CHIPS_LOWLAT * SINGLE_ROUTE_SIZE],  // raw for uncompressed
+        typename std::conditional<
+            dim == 1,
+            compressed_route_1d_t[MAX_CHIPS_LOWLAT],  // one for compressed 1D
+            compressed_route_2d_t[MAX_CHIPS_LOWLAT]   // two for compressed 2D
+            >::type>::type paths = {};
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
     // Routing calculation methods
@@ -179,6 +182,10 @@ struct __attribute__((packed)) compressed_routing_path_t {
     inline bool decode_route_to_buffer(uint16_t dst_chip_id, uint8_t* out_route_buffer) const;
 #endif
 };
+static_assert(sizeof(compressed_routing_path_t<1, false>) == 64, "1D uncompressed routing path must be 64 bytes");
+static_assert(sizeof(compressed_routing_path_t<2, false>) == 32768, "2D uncompressed routing path must be 32768 bytes");
+static_assert(sizeof(compressed_routing_path_t<1, true>) == 16, "1D compressed routing path must be 16 bytes");
+static_assert(sizeof(compressed_routing_path_t<2, true>) == 2048, "2D compressed routing path must be 2048 bytes");
 
 struct tensix_routing_l1_info_t {
     uint32_t mesh_id;  // Current mesh ID
