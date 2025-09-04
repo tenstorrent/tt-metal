@@ -83,6 +83,8 @@ private:
 
     size_t buffer_size_;
     bool map_to_noc_;
+    // Offset from the aligned mapped base to the actual host buffer start
+    size_t host_offset_ = 0;
 
     // Map from device ID to SysmemBuffer (keyed by MMIO device ID)
     std::unordered_map<chip_id_t, std::unique_ptr<tt::umd::SysmemBuffer>> device_buffers_;
