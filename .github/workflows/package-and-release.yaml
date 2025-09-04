@@ -190,6 +190,7 @@ jobs:
       version: ${{ needs.create-tag.outputs.version }}
       tag-latest:  ${{ needs.release-precheck.outputs.is-release-candidate != 'true' }}
       wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
+      dry_run: ${{ inputs.dry_run }}
 
   release-docs:
     needs: [
@@ -205,4 +206,5 @@ jobs:
       docker-image: ${{ needs.regression-testing.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.regression-testing.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
+      dry_run: ${{ inputs.dry_run }}
     secrets: inherit
