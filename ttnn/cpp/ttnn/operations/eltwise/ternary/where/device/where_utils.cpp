@@ -204,8 +204,6 @@ WhereBroadcastType get_broadcast_type(
         return WhereBroadcastType::NONE;
     }
 
-    // Removed incorrect early check for outer broadcast - outer broadcast supports different ranks
-
     bool same_width = (predicate_shape[-1] == true_shape[-1]);
     bool same_height = (predicate_shape[-2] == true_shape[-2]);
 

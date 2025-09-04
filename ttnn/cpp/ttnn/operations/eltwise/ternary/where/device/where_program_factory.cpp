@@ -620,20 +620,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             // Determine if this is height broadcasting
             is_height_bcast = true_is_bcast && (true_h == 1 && pred_h > 1);
 
-            log_info(
-                tt::LogOp,
-                "[COL_BCAST] pred_shape: h={}, w={}, true_shape: h={}, w={}",
-                pred_h,
-                pred_w,
-                true_h,
-                true_w);
-            log_info(
-                tt::LogOp,
-                "[COL_BCAST] pred_is_bcast={}, true_is_bcast={}, is_height_bcast={}",
-                pred_is_bcast,
-                true_is_bcast,
-                is_height_bcast);
-
             // Check for multi-dimensional broadcasting: if ranks differ, true tensor needs broadcasting
             if (pred_shape.rank() != true_shape.rank()) {
                 true_is_bcast = true;
@@ -695,7 +681,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         // Set broadcast defines based on actual detection
         reader_defines["SRC_BCAST_PREDICATE"] = pred_is_bcast ? "1" : "0";
         reader_defines["SRC_BCAST_TRUE"] = true_is_bcast ? "1" : "0";
-        reader_defines["SRC_HEIGHT_BCAST_TRUE"] = (true_is_bcast && is_height_bcast) ? "1" : "0";
         reader_defines["SRC_BCAST_FALSE"] = false_is_bcast ? "1" : "0";
 
         // Add BCAST_LLK define (set to 0 for now, can be optimized later)
@@ -722,7 +707,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
 
         reader_defines["BCAST_LLK"] = "0";
     } else if (variant == WhereVariant::TTS && broadcast_type == WhereBroadcastType::COL_BCAST) {
-        // TTS column broadcast: use simplified reader (no complex broadcast logic)
+        // TTS column broadcast
         reader_defines = make_dataflow_defines(
             predicate_tensor.dtype(),
             value_true_tensor.value().dtype(),  // CB1 uses true tensor dtype
@@ -737,8 +722,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
 
         // Set broadcast defines for TTS column broadcast
         reader_defines["SRC_BCAST_PREDICATE"] = pred_is_bcast ? "1" : "0";
-        reader_defines["SRC_BCAST_TRUE"] = true_is_bcast ? "1" : "0";  // CB1 uses true tensor broadcast pattern
-        reader_defines["SRC_HEIGHT_BCAST_TRUE"] = (true_is_bcast && is_height_bcast) ? "1" : "0";
+        reader_defines["SRC_BCAST_TRUE"] = true_is_bcast ? "1" : "0";  // CB1 uses true tensor
         reader_defines["SRC_BCAST_FALSE"] = "0";                       // False is scalar
 
         // Add height broadcast flag for TTS
