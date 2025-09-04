@@ -365,12 +365,12 @@ namespace {
         const auto& ids = desc.instances_by_type(type);
         EXPECT_EQ(ids.size(), expected_count) << "Should have exactly " << expected_count << " " << type << " instances";
     }
-    
+
     void check_instance_exists_by_name(const MeshGraphDescriptor& desc, const std::string& name, size_t expected_count = 1) {
         const auto& ids = desc.instances_by_name(name);
         EXPECT_EQ(ids.size(), expected_count) << "Should have exactly " << expected_count << " instance(s) with name '" << name << "'";
     }
-    
+
     void check_instance_type(const MeshGraphDescriptor& desc, uint32_t global_id, bool should_be_graph) {
         const auto & inst = desc.get_instance(global_id);
         if (should_be_graph) {
@@ -379,7 +379,7 @@ namespace {
             EXPECT_TRUE(desc.is_mesh(inst)) << "Instance should be mesh";
         }
     }
-    
+
     std::set<std::string> get_instance_names_by_type(const MeshGraphDescriptor& desc, const std::string& type) {
         std::set<std::string> names;
         auto ids = desc.instances_by_type(type);
@@ -389,11 +389,11 @@ namespace {
         }
         return names;
     }
-    
+
     void check_instances_have_names(const MeshGraphDescriptor& desc, const std::string& type, const std::vector<std::string>& expected_names) {
         auto names = get_instance_names_by_type(desc, type);
         for (const auto& expected_name : expected_names) {
-            EXPECT_TRUE(names.find(expected_name) != names.end()) 
+            EXPECT_TRUE(names.find(expected_name) != names.end())
                 << "Should have " << type << " instance '" << expected_name << "'";
         }
     }
@@ -455,26 +455,26 @@ TEST(MeshGraphDescriptorTests, TestInstanceCreation) {
 
     // Test instance creation and hierarchy
     MeshGraphDescriptor desc(text_proto_file_path);
-    
+
     // Check hierarchy levels with helper functions
     check_instance_count_by_type(desc, "CLUSTER", 1);
     check_instance_count_by_type(desc, "POD", 2);
     check_instance_count_by_type(desc, "MESH", 5);
-    
+
     // Check specific instance names exist
     check_instances_have_names(desc, "CLUSTER", {"G2"});
     check_instances_have_names(desc, "POD", {"G0", "G1"});
     check_instances_have_names(desc, "MESH", {"M0", "M1", "M2", "M3", "M4"});
-    
+
     // Check instance types (graph vs mesh)
     auto cluster_ids = desc.instances_by_type("CLUSTER");
     auto pod_ids = desc.instances_by_type("POD");
     auto mesh_ids = desc.instances_by_type("MESH");
-    
+
     for (uint32_t id : cluster_ids) check_instance_type(desc, id, true);   // CLUSTER should be graph
     for (uint32_t id : pod_ids) check_instance_type(desc, id, true);       // POD should be graph
     for (uint32_t id : mesh_ids) check_instance_type(desc, id, false);     // mesh should be mesh
-    
+
     // Check hierarchy relationships
     check_instance_exists_by_name(desc, "G0");
     check_instance_exists_by_name(desc, "G1");
@@ -484,7 +484,7 @@ TEST(MeshGraphDescriptorTests, TestInstanceCreation) {
     check_sub_instances(desc, "G0", 2, {"M0", "M1"});
     check_sub_instances(desc, "G1", 3, {"M3", "M2", "M4"});
     check_sub_instances(desc, "G2", 2, {"G1", "G0"});
-    
+
     // Verify total instance count
     size_t total = desc.all_graphs().size() + desc.all_meshes().size();
     EXPECT_EQ(total, 8) << "Should have exactly 8 total instances (1 CLUSTER + 2 POD + 5 mesh)";
@@ -1034,4 +1034,3 @@ TEST(MeshGraphDescriptorTests, DuplicateGraphDescriptorTypeInHierarchyError) {
 // TODO: Test directional connections
 
 }  // namespace tt::tt_fabric::fabric_router_tests
-

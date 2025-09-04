@@ -77,8 +77,8 @@ public:
             }
     };
 
-    explicit MeshGraphDescriptor(const std::string& text_proto);
-    explicit MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path);
+    explicit MeshGraphDescriptor(const std::string& text_proto,  const bool backwards_compatible = false);
+    explicit MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path,  const bool backwards_compatible = false);
     ~MeshGraphDescriptor();
 
     // Debugging/inspection
@@ -134,9 +134,11 @@ public:
         TT_FATAL(it != connections_by_source_device_id_.end(), "No connections found for source device id {}", source_device_id);
         return it->second;
     }
-    
+
 
 private:
+    const bool backwards_compatible_;
+
     // Descriptor fast lookup
     std::unique_ptr<const proto::MeshGraphDescriptor> proto_;
     std::unordered_map<std::string, const proto::MeshDescriptor*> mesh_desc_by_name_;
@@ -161,7 +163,7 @@ private:
 
 
     static void set_defaults(proto::MeshGraphDescriptor& proto);
-    static std::vector<std::string> static_validate(const proto::MeshGraphDescriptor& proto);
+    static std::vector<std::string> static_validate(const proto::MeshGraphDescriptor& proto, const bool backwards_compatible = false);
 
     // Helper methods for validation that return their own error lists
     static void validate_basic_structure(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);

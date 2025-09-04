@@ -63,7 +63,7 @@ std::string get_validation_report(const std::vector<std::string>& error_messages
 }
 }  // namespace
 
-MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto) : top_level_id_(static_cast<GlobalNodeId>(-1)) {
+MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) : top_level_id_(static_cast<GlobalNodeId>(-1)), backwards_compatible_(backwards_compatible) {
     proto::MeshGraphDescriptor temp_proto;
     google::protobuf::TextFormat::Parser parser;
 
@@ -85,8 +85,8 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto) : top_le
     populate();
 }
 
-MeshGraphDescriptor::MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path) :
-    MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string())) {}
+MeshGraphDescriptor::MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path, const bool backwards_compatible) :
+    MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string()), backwards_compatible) {}
 
 MeshGraphDescriptor::~MeshGraphDescriptor() = default;
 
@@ -123,7 +123,7 @@ void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
     }
 }
 
-std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshGraphDescriptor& proto) {
+std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshGraphDescriptor& proto, const bool backwards_compatible) {
     std::vector<std::string> all_errors;
 
     // Run validation groups with early exit checkpoints
@@ -148,7 +148,9 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshG
     }
 
     {
-        validate_legacy_requirements(proto, all_errors);
+        if (backwards_compatible) {
+            validate_legacy_requirements(proto, all_errors);
+        }
         if (!all_errors.empty()) return all_errors;
     }
 
@@ -234,7 +236,7 @@ void MeshGraphDescriptor::validate_names(const proto::MeshGraphDescriptor& proto
         if (type == "DEVICE" || type == "MESH") {
             error_messages.push_back(
                 fmt::format(
-                    "Graph descriptor type cannot be DEVICE or MESH (Graph: {})", 
+                    "Graph descriptor type cannot be DEVICE or MESH (Graph: {})",
                     graph.name()
                 )
             );
@@ -492,13 +494,51 @@ void MeshGraphDescriptor::validate_legacy_requirements(const proto::MeshGraphDes
     uint32_t first_channels_count = proto.mesh_descriptors(0).channels().count();
     for (const auto& mesh : proto.mesh_descriptors()) {
         if (mesh.channels().count() != first_channels_count) {
-            error_messages.push_back( 
-                fmt::format( "Channel count must all be exactly the same (Mesh: {})", mesh.name()
+            error_messages.push_back(
+                fmt::format( "MGD 1.0 Compatibility requirement: Channel count must all be exactly the same (Mesh: {})", mesh.name()
             ));
         }
     }
 
     // Check that there is only a CLUSTER level graphs
+    if (proto.graph_descriptors_size() != 1) {
+        error_messages.push_back(
+            fmt::format(
+                "MGD 1.0 Compatibility requirement: There can only be one CLUSTER level graph (Graph: {})", proto.graph_descriptors(0).name()
+            )
+        );
+    }
+    for (const auto& graph : proto.graph_descriptors()) {
+        if (graph.type() != "FABRIC") {
+            error_messages.push_back(
+                fmt::format(
+                    "MGD 1.0 Compatibility requirement: There can only be one CLUSTER level graph (Graph: {})", graph.name()
+                )
+            );
+        }
+    }
+
+    // Connections have to be specific down to the device level
+    for (const auto& graph : proto.graph_descriptors()) {
+        for (const auto& connection : graph.connections()) {
+            for (const auto& node : connection.nodes()) {
+                if (!node.mesh().has_device_id()) {
+                    error_messages.push_back(
+                        fmt::format( "MGD 1.0 Compatibility requirement: Connections have to be specific down to the device level (Graph: {})", graph.name())
+                    );
+                }
+            }
+        }
+    }
+
+    // Disable graph layout topologies for now
+    for (const auto& graph : proto.graph_descriptors()) {
+        if (graph.has_graph_topology()) {
+            error_messages.push_back(
+                fmt::format( "MGD 1.0 Compatibility requirement: Graph layout topologies are not supported (Graph: {})", graph.name())
+            );
+        }
+    }
 }
 
 void MeshGraphDescriptor::populate_descriptors() {
@@ -862,7 +902,7 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(const GlobalNod
             // Find the referenced instance
             GlobalNodeId ref_instance_id = find_instance_by_ref(graph_id, node);
             auto & ref_instance = instances_.at(ref_instance_id);
-            
+
             // Check that the referenced instances have the same type
             if (type.empty()) {
                 type = ref_instance.type;
@@ -1016,4 +1056,3 @@ void MeshGraphDescriptor::print_all_nodes() {
     print_node(top_level_id_, 0);
 }
 }  // namespace tt::tt_fabric
-
