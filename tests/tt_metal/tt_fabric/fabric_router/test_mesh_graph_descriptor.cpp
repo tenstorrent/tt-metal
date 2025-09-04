@@ -332,6 +332,33 @@ TEST(MeshGraphDescriptorTests, GraphMustHaveTopologyOrConnections) {
                 ::testing::HasSubstr("Graph descriptor must have either graph_topology or connections defined (Graph: G1)"))));
 }
 
+TEST(MeshGraphDescriptorTests, GraphMustHaveAtLeastOneConnection) {
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 2 ] }
+        }
+
+        graph_descriptors: {
+            name: "G0"
+            type: "fabric"
+            instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+        }
+
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+                ::testing::HasSubstr("Graph descriptor must have either graph_topology or connections defined (Graph: G0)"))));
+}
+
 // Helper functions for hierarchy testing
 namespace {
     void check_instance_count_by_type(const MeshGraphDescriptor& desc, const std::string& type, size_t expected_count) {
@@ -463,14 +490,14 @@ TEST(MeshGraphDescriptorTests, TestInstanceCreation) {
     EXPECT_EQ(total, 8) << "Should have exactly 8 total instances (1 CLUSTER + 2 POD + 5 mesh)";
 
     // Check hierarchy chains
-    expect_hierarchy_names(desc, "G2", {"G2"});
-    expect_hierarchy_names(desc, "G0", {"G2", "G0"});
-    expect_hierarchy_names(desc, "G1", {"G2", "G1"});
-    expect_hierarchy_names(desc, "M0", {"G2", "G0", "M0"});
-    expect_hierarchy_names(desc, "M1", {"G2", "G0", "M1"});
-    expect_hierarchy_names(desc, "M2", {"G2", "G1", "M2"});
-    expect_hierarchy_names(desc, "M3", {"G2", "G1", "M3"});
-    expect_hierarchy_names(desc, "M4", {"G2", "G1", "M4"});
+    expect_hierarchy_names(desc, "G2", {});
+    expect_hierarchy_names(desc, "G0", {"G2"});
+    expect_hierarchy_names(desc, "G1", {"G2"});
+    expect_hierarchy_names(desc, "M0", {"G2", "G0"});
+    expect_hierarchy_names(desc, "M1", {"G2", "G0"});
+    expect_hierarchy_names(desc, "M2", {"G2", "G1"});
+    expect_hierarchy_names(desc, "M3", {"G2", "G1"});
+    expect_hierarchy_names(desc, "M4", {"G2", "G1"});
 
 
     // Simple device check for one mesh (M2): just count and a few local IDs
@@ -480,21 +507,33 @@ TEST(MeshGraphDescriptorTests, TestInstanceCreation) {
 }
 
 namespace {
-    void check_connections(MeshGraphDescriptor& desc,
-                           const std::vector<MeshGraphDescriptor::ConnectionId>& connections,
-                           const std::unordered_set<MeshGraphDescriptor::LocalNodeId>& expected_nodes) {
-
-        for (const auto& connection_id : connections) {
+    void check_connections(
+        MeshGraphDescriptor& desc,
+        const std::vector<MeshGraphDescriptor::ConnectionId>& connections,
+        const std::unordered_set<MeshGraphDescriptor::LocalNodeId>& expected_nodes,
+        uint32_t expected_channel_count,
+        bool expected_directional,
+        MeshGraphDescriptor::GlobalNodeId expected_parent_instance_id,
+        const std::unordered_set<std::string>& expected_node_names
+    ) {
+        for (size_t idx = 0; idx < connections.size(); ++idx) {
+            const auto connection_id = connections[idx];
             const auto& connection = desc.get_connection(connection_id);
 
-            auto global_nodes = connection.nodes;
+            EXPECT_EQ(connection.count, expected_channel_count);
+            EXPECT_EQ(connection.directional, expected_directional);
+            EXPECT_EQ(connection.parent_instance_id, expected_parent_instance_id);
 
-            // Skip the first node, it's the source
-            auto real_nodes = std::vector<MeshGraphDescriptor::GlobalNodeId>(global_nodes.begin() + 1, global_nodes.end());
-            for (const auto& node : real_nodes) {
-                auto local_node = desc.get_instance(node).local_id;
-                EXPECT_TRUE(expected_nodes.contains(local_node))
-                    << "Connection " << connection_id << " should have node " << local_node;
+            const auto& global_nodes = connection.nodes;
+
+
+            auto dst_nodes = std::vector<MeshGraphDescriptor::GlobalNodeId>(global_nodes.begin() + 1, global_nodes.end());
+            for (const auto& node : dst_nodes) {
+                auto & instance = desc.get_instance(node);
+                EXPECT_TRUE(expected_nodes.contains(instance.local_id))
+                    << "Connection " << connection_id << " should have node " << instance.local_id;
+                EXPECT_TRUE(expected_node_names.contains(instance.name))
+                    << "Connection " << connection_id << " should have node " << instance.name;
             }
         }
     }
@@ -543,19 +582,43 @@ TEST(MeshGraphDescriptorTests, TestIntraMeshConnections) {
     auto device_0 = desc.instances_by_name("D0")[0];
     auto connections = desc.connections_by_source_device_id(device_0);
     ASSERT_EQ(connections.size(), 4);
-    check_connections(desc, connections, {1, 3, 5});
+    check_connections(
+        desc,
+        connections,
+        {1, 3, 5},
+        1u,
+        false,
+        mesh_ids[0],
+        {"D1","D3", "D5"}
+    );
 
     auto device_1 = desc.instances_by_name("D1")[0];
     connections = desc.connections_by_source_device_id(device_1);
     ASSERT_EQ(connections.size(), 5);
-    check_connections(desc, connections, {2, 4, 0, 5});
+    check_connections(
+        desc,
+        connections,
+        {2, 4, 0, 5},
+        1u,
+        false,
+        mesh_ids[0],
+        {"D0", "D2", "D4", "D5"}
+    );
 
     auto device_2 = desc.instances_by_name("D2")[0];
     connections = desc.connections_by_source_device_id(device_2);
     ASSERT_EQ(connections.size(), 3);
-    check_connections(desc, connections, {1, 5});
-
+    check_connections(
+        desc,
+        connections,
+        {1, 5},
+        1u,
+        false,
+        mesh_ids[0],
+        {"D1", "D5"}
+    );
 }
+
 
 TEST(MeshGraphDescriptorTests, GraphInstancesWithDifferentGraphTypesError) {
     std::string text_proto = R"proto(
@@ -688,4 +751,287 @@ TEST(MeshGraphDescriptorTests, MissingDescriptorReferencesInInstancesError) {
             )));
 }
 
+TEST(MeshGraphDescriptorTests, IntermeshConnectionsExplicitMultiLevelInvalid) {
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "POD"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          connections: {
+            nodes: {
+              mesh: { mesh_descriptor: "M0" mesh_id: 0 } # << Mesh Level
+            }
+            nodes: {
+              mesh: { mesh_descriptor: "M0" mesh_id: 1 device_id: 1 } # << One level down
+            }
+            channels: { count: 1 }
+            directional: false
+          }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Graph descriptor G0 connections must reference instances within same type")
+            )));
+}
+
+TEST(MeshGraphDescriptorTests, IntermeshConnectionsExplicitMultiLevelInvalidChild) {
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "POD"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          connections: {
+            nodes: {
+              graph: { graph_descriptor: "G0" graph_id: 0 } #<< These are wrong
+            }
+            nodes: {
+              graph: { graph_descriptor: "G0" graph_id: 1} #<< These are wrong
+            }
+            channels: { count: 1 }
+            directional: false
+          }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Graph descriptor G0 does not match referenced instance M0")
+            )));
+}
+
+TEST(MeshGraphDescriptorTests, IntermeshConnectionsExplicitMultiLevel) {
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "POD"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          connections: {
+            nodes: {
+              mesh: { mesh_descriptor: "M0" mesh_id: 0 }
+            }
+            nodes: {
+              mesh: { mesh_descriptor: "M0" mesh_id: 1 }
+            }
+            channels: { count: 1 }
+            directional: false
+          }
+        }
+
+        graph_descriptors: {
+          name: "G1"
+          type: "CLUSTER"
+          instances: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+          instances: { graph: { graph_descriptor: "G0" graph_id: 1 } }
+
+          # Explicit connections across multiple levels:
+          # Connect device 0 in mesh M0(0) of G_POD(0) to device 1 in mesh M0(1) of G_POD(1)
+          connections: {
+            nodes: {
+              graph: {
+                graph_descriptor: "G0" graph_id: 0
+                sub_ref: {
+                  mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 }
+                }
+              }
+            }
+            nodes: {
+              graph: {
+                graph_descriptor: "G0" graph_id: 1
+                sub_ref: {
+                  mesh: { mesh_descriptor: "M0" mesh_id: 1 device_id: 1 }
+                }
+              }
+            }
+            channels: { count: 2 }
+            directional: false
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G1" graph_id: 0 } }
+    )proto";
+
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+
+    MeshGraphDescriptor desc(text_proto);
+
+    {
+        auto cluster_id = desc.instances_by_type("CLUSTER")[0];
+        auto connections = desc.connections_by_instance_id(cluster_id);
+        ASSERT_EQ(connections.size(), 2);
+        check_connections(
+            desc,
+            connections,
+            {0, 1},
+            2u,
+            false,
+            cluster_id,
+            {"D0", "D1"}
+        );
+    }
+    {
+        auto pod_ids = desc.instances_by_type("POD");
+
+        for (auto pod_id : pod_ids) {
+            auto connections = desc.connections_by_instance_id(pod_id);
+            ASSERT_EQ(connections.size(), 2);
+            check_connections(
+                desc,
+                connections,
+                {0, 1},
+                1u,
+                false,
+                pod_id,
+                {"M0"}
+            );
+        }
+    }
+}
+
+TEST(MeshGraphDescriptorTests, IntermeshConnectionsGraphTopologyAllToAll) {
+    log_info(tt::LogTest, "NOTE: This test is skipped because topology connections are not yet implemented");
+    GTEST_SKIP();
+    // Topology shorthand case: two POD graphs, each containing two meshes.
+    // The CLUSTER graph uses graph_topology: ALL_TO_ALL with channels.
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G_POD"
+          type: "POD"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 1 } }
+        }
+
+        graph_descriptors: {
+          name: "G_CLUSTER"
+          type: "CLUSTER"
+          instances: { graph: { graph_descriptor: "G_POD" graph_id: 0 } }
+          instances: { graph: { graph_descriptor: "G_POD" graph_id: 1 } }
+          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 2 } }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G_CLUSTER" graph_id: 0 } }
+    )proto";
+
+    // Parsing and defaults should succeed
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+
+    MeshGraphDescriptor desc(text_proto);
+
+    {
+        auto cluster_id = desc.instances_by_type("CLUSTER")[0];
+        auto connections = desc.connections_by_instance_id(cluster_id);
+        ASSERT_EQ(connections.size(), 2);
+        check_connections(
+            desc,
+            connections,
+            {0, 1},
+            2u,
+            false,
+            cluster_id,
+            {"D0", "D1"}
+        );
+    }
+    {
+        auto pod_ids = desc.instances_by_type("POD");
+
+        for (auto pod_id : pod_ids) {
+            auto connections = desc.connections_by_instance_id(pod_id);
+            ASSERT_EQ(connections.size(), 2);
+            check_connections(
+                desc,
+                connections,
+                {0, 1},
+                1u,
+                false,
+                pod_id,
+                {"M0"}
+            );
+        }
+    }
+}
+
+TEST(MeshGraphDescriptorTests, DuplicateGraphDescriptorTypeInHierarchyError) {
+    // Parent and child graphs share the same type (POD) which should be rejected
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 1 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G_POD_CHILD"
+          type: "POD"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 1 } }
+        }
+
+        graph_descriptors: {
+          name: "G_POD_PARENT"
+          type: "POD"
+          instances: { graph: { graph_descriptor: "G_POD_CHILD" graph_id: 0 } }
+          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 1 } }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G_POD_PARENT" graph_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Graph descriptor type"),
+                ::testing::HasSubstr("already exists in hierarchy"),
+                ::testing::HasSubstr("POD")
+            )));
+}
+
+// TODO: Test directional connections
+
 }  // namespace tt::tt_fabric::fabric_router_tests
+

@@ -531,14 +531,25 @@ void MeshGraphDescriptor::populate_descriptors() {
 }
 
 MeshGraphDescriptor::GlobalNodeId MeshGraphDescriptor::populate_instance(const proto::NodeRef& node_ref, std::vector<GlobalNodeId>& hierarchy) {
+    GlobalNodeId global_id;
     if (node_ref.has_mesh()) {
-        return populate_mesh_instance(node_ref.mesh(), hierarchy);
+        global_id = populate_mesh_instance(node_ref.mesh(), hierarchy);
     } else if (node_ref.has_graph()) {
-        return populate_graph_instance(node_ref.graph(), hierarchy);
+        global_id = populate_graph_instance(node_ref.graph(), hierarchy);
+    } else {
+        TT_THROW("Invalid NodeRef: neither mesh nor graph set");
+        return -1;
     }
 
-    TT_THROW("Invalid NodeRef: neither mesh nor graph set");
-    return -1;
+    auto & instance = instances_.at(global_id);
+
+    // Check that graph descriptor type is not alreadyt in the hierarchy
+    for (const auto& id : hierarchy) {
+        auto & instance_in_hierarchy = instances_.at(id);
+        TT_FATAL(instance_in_hierarchy.type != instance.type, "Graph descriptor type {} already exists in hierarchy", instance.type);
+    }
+
+    return global_id;
 }
 
 MeshGraphDescriptor::GlobalNodeId MeshGraphDescriptor::populate_mesh_instance(const proto::MeshRef& mesh_ref, std::vector<GlobalNodeId>& hierarchy) {
@@ -558,9 +569,7 @@ MeshGraphDescriptor::GlobalNodeId MeshGraphDescriptor::populate_mesh_instance(co
     auto emplace_result = instances_.emplace(data.global_id, std::move(data));
     auto & instance = emplace_result.first->second;
 
-    hierarchy.push_back(instance.global_id);
     instance.hierarchy = hierarchy;
-    hierarchy.pop_back();
 
     // Populate devices in the mesh
     uint32_t num_devices = 1;
@@ -568,13 +577,14 @@ MeshGraphDescriptor::GlobalNodeId MeshGraphDescriptor::populate_mesh_instance(co
         num_devices *= dim;
     }
 
+    hierarchy.push_back(instance.global_id);
     for (LocalNodeId i = 0; i < num_devices; ++i) {
         auto device_id = populate_device_instance(i, hierarchy);
 
         instance.sub_instances.insert(device_id);
         instance.sub_instances_local_id_to_global_id.emplace(i, device_id);
     }
-
+    hierarchy.pop_back();
 
     mesh_instances_.push_back(instance.global_id);
     instances_by_type_["MESH"].push_back(instance.global_id);
@@ -593,11 +603,11 @@ MeshGraphDescriptor::GlobalNodeId MeshGraphDescriptor::populate_device_instance(
     };
     auto global_id = data.global_id;
     instances_.emplace(global_id, std::move(data));
-    auto & instance = instances_.at(global_id);
+    auto it_instance = instances_.find(global_id);
+    TT_FATAL(it_instance != instances_.end(), "Failed to create device instance for global id {}", global_id);
+    auto & instance = it_instance->second;
 
-    hierarchy.push_back(instance.global_id);
     instance.hierarchy = hierarchy;
-    hierarchy.pop_back();
 
     device_instances_.push_back(instance.global_id);
     instances_by_type_["DEVICE"].push_back(instance.global_id);
@@ -623,18 +633,20 @@ MeshGraphDescriptor::GlobalNodeId MeshGraphDescriptor::populate_graph_instance(c
     auto emplace_result = instances_.emplace(data.global_id, std::move(data));
     auto & instance = emplace_result.first->second;
 
-    hierarchy.push_back(instance.global_id);
     instance.hierarchy = hierarchy;
 
     // Populate sub-instances from the graph descriptor
     std::unordered_set<GlobalNodeId> children_global_ids;
     children_global_ids.reserve(graph_desc->instances_size());
 
+    hierarchy.push_back(instance.global_id);
     std::string_view child_graph_type;
     for (const auto& sub_ref : graph_desc->instances()) {
         GlobalNodeId child = populate_instance(sub_ref, hierarchy);
 
-        const auto & child_instance = instances_.at(child);
+        auto it_child = instances_.find(child);
+        TT_FATAL(it_child != instances_.end(), "Child instance id {} not found while populating graph instance", child);
+        const auto & child_instance = it_child->second;
 
         // Check that the child instance created has the same type as rest of the graph descriptor
         if (child_instance.kind == NodeKind::Graph) {
@@ -650,7 +662,6 @@ MeshGraphDescriptor::GlobalNodeId MeshGraphDescriptor::populate_graph_instance(c
         children_global_ids.insert(child_instance.global_id);
         instance.sub_instances_local_id_to_global_id.emplace(child_instance.local_id, child_instance.global_id);
     }
-
     hierarchy.pop_back();
 
     instance.sub_instances = std::move(children_global_ids);
@@ -715,7 +726,8 @@ namespace {
                     .nodes = {src_device_id, dst_device_id},
                     .count = channels_count,
                     .policy = policy,
-                    .directional = false
+                    .directional = false,
+                    .parent_instance_id = instance.global_id,
                 });
             }
         }
@@ -728,7 +740,7 @@ namespace {
 
 void MeshGraphDescriptor::populate_intra_mesh_connections(const GlobalNodeId mesh_id) {
 
-    auto instance = instances_.at(mesh_id);
+    auto & instance = instances_.at(mesh_id);
 
     auto mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
 
@@ -759,7 +771,7 @@ void MeshGraphDescriptor::populate_intra_mesh_connections(const GlobalNodeId mes
 }
 
 void MeshGraphDescriptor::populate_intra_mesh_express_connections(const GlobalNodeId mesh_id) {
-    auto instance = instances_.at(mesh_id);
+    auto & instance = instances_.at(mesh_id);
     auto mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
     for (const auto& express_connection : mesh_desc->express_connections()) {
         auto src_device_id = instance.sub_instances_local_id_to_global_id.at(express_connection.src());
@@ -769,7 +781,8 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(const GlobalNo
             .nodes = {src_device_id, dst_device_id},
             .count = mesh_desc->channels().count(),
             .policy = mesh_desc->channels().policy(),
-            .directional = false
+            .directional = false,
+            .parent_instance_id = mesh_id,
         };
 
         connections_.emplace(data.connection_id, std::move(data));
@@ -781,7 +794,8 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(const GlobalNo
             .nodes = {dst_device_id, src_device_id},
             .count = mesh_desc->channels().count(),
             .policy = mesh_desc->channels().policy(),
-            .directional = false
+            .directional = false,
+            .parent_instance_id = mesh_id,
         };
 
         auto id = data_reverse.connection_id;
@@ -791,9 +805,129 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(const GlobalNo
         connections_by_source_device_id_[dst_device_id].push_back(id);
     }
 }
-void MeshGraphDescriptor::populate_inter_mesh_connections(const GlobalNodeId graph_id) {
 
+MeshGraphDescriptor::GlobalNodeId MeshGraphDescriptor::find_instance_by_ref(GlobalNodeId parent_instance_id, const proto::NodeRef& node_ref) {
+    auto & parent_instance = instances_.at(parent_instance_id);
+
+    if (node_ref.has_mesh()) {
+        // Check the instance id exists References are indexed by local id
+        auto local_instance_id = node_ref.mesh().mesh_id();
+        auto it2 = parent_instance.sub_instances_local_id_to_global_id.find(local_instance_id);
+        TT_FATAL(it2 != parent_instance.sub_instances_local_id_to_global_id.end(), "Mesh instance id {} not found in parent instance", local_instance_id);
+
+        auto global_instance_id = it2->second;
+        auto & referenced_instance = instances_.at(global_instance_id);
+
+        // Check if the mesh descriptor already exists
+        auto descriptor_name = node_ref.mesh().mesh_descriptor();
+        TT_FATAL(descriptor_name == referenced_instance.name, "Mesh descriptor {} does not match referenced instance {}", descriptor_name, referenced_instance.name);
+
+        // Check sub instance exists
+        if (node_ref.mesh().has_device_id()) {
+            auto device_id = node_ref.mesh().device_id();
+            auto & mesh_instance = instances_.at(global_instance_id);
+            auto it = mesh_instance.sub_instances_local_id_to_global_id.find(device_id);
+            TT_FATAL(it != mesh_instance.sub_instances_local_id_to_global_id.end(), "Device id {} not found in mesh instance", device_id);
+            return it->second;
+        }
+
+        return global_instance_id;
+
+    } else if (node_ref.has_graph()) {
+        auto instance_id = node_ref.graph().graph_id();
+        auto it = parent_instance.sub_instances_local_id_to_global_id.find(instance_id);
+        TT_FATAL(it != parent_instance.sub_instances_local_id_to_global_id.end(), "Graph instance id {} not found in parent instance", instance_id);
+
+        auto global_instance_id = it->second;
+        auto & referenced_instance = instances_.at(global_instance_id);
+
+        auto descriptor_name = node_ref.graph().graph_descriptor();
+        TT_FATAL(descriptor_name == referenced_instance.name, "Graph descriptor {} does not match referenced instance {}", descriptor_name, referenced_instance.name);
+
+        if (node_ref.graph().has_sub_ref()) {
+            return find_instance_by_ref(global_instance_id, node_ref.graph().sub_ref());
+        }
+
+        return global_instance_id;
+
+    }
+    TT_THROW("Invalid NodeRef: neither mesh nor graph set");
+    return -1;
 }
+
+void MeshGraphDescriptor::populate_inter_mesh_connections(const GlobalNodeId graph_id) {
+    populate_inter_mesh_manual_connections(graph_id);
+    populate_inter_mesh_topology_connections(graph_id);
+}
+
+void MeshGraphDescriptor::populate_inter_mesh_manual_connections(const GlobalNodeId graph_id) {
+    auto & instance = instances_.at(graph_id);
+
+    auto graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
+
+    TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
+
+    for (const auto& connection : graph_desc->connections()) {
+
+        std::string_view type;
+
+        std::vector<GlobalNodeId> nodes;
+
+        for (const auto& node : connection.nodes()) {
+            // Find the referenced instance
+            GlobalNodeId ref_instance_id = find_instance_by_ref(graph_id, node);
+            auto & ref_instance = instances_.at(ref_instance_id);
+            
+            // Check that the referenced instances have the same type
+            if (type.empty()) {
+                type = ref_instance.type;
+            } else {
+                TT_FATAL(type == ref_instance.type, "Graph descriptor {} connections must reference instances within same type", instance.name);
+            }
+
+            nodes.push_back(ref_instance_id);
+        }
+
+        TT_ASSERT(nodes.size() >= 2, "Graph descriptor connections must have at least two nodes");
+
+        // Add the connection in the forward direction
+        for (const auto& node : nodes) {
+            // Add the same nodes but make sure src is first
+            auto src_device_id = node;
+            std::vector<GlobalNodeId> ordered_nodes;
+            ordered_nodes.push_back(src_device_id);
+            for (const auto& node : nodes) {
+                if (node != src_device_id) {
+                    ordered_nodes.push_back(node);
+                }
+            }
+
+            ConnectionData data{
+                .nodes = nodes,
+                .count = connection.channels().count(),
+                .policy = connection.channels().policy(),
+                .directional = connection.directional(),
+                .parent_instance_id = graph_id,
+            };
+
+            auto id = data.connection_id;
+            connections_.emplace(data.connection_id, std::move(data));
+            connections_by_instance_id_[graph_id].push_back(id);
+            connections_by_type_[instance.type].push_back(id);
+            connections_by_source_device_id_[src_device_id].push_back(id);
+
+            // if directional, then only add the single direction
+            if (connection.directional()) {
+                break;
+            }
+        }
+    }
+}
+
+void MeshGraphDescriptor::populate_inter_mesh_topology_connections(const GlobalNodeId graph_id) {
+    // TODO: This is to be implemented in seperate PR
+}
+
 
 void MeshGraphDescriptor::print_node(GlobalNodeId id, int indent_level) {
     std::string indent(indent_level * 2, ' ');

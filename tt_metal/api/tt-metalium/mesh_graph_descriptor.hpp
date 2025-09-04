@@ -14,6 +14,8 @@
 #include <variant>
 #include <atomic>
 
+#include "assert.hpp"
+
 // Forward declaration
 namespace tt::tt_fabric {
 
@@ -64,6 +66,7 @@ public:
         const std::uint32_t count;             // ethernet lanes per connection
         const proto::Policy policy;
         const bool directional;
+        const GlobalNodeId parent_instance_id;
 
         const ConnectionId connection_id = generate_next_global_id();
 
@@ -82,11 +85,23 @@ public:
     void print_node(GlobalNodeId id, int indent_level = 0);
     void print_all_nodes();
 
-    const InstanceData & top_level() const { return instances_.at(top_level_id_); }
+    const InstanceData & top_level() const {
+        auto it = instances_.find(top_level_id_);
+        TT_FATAL(it != instances_.end(), "Top-level instance id {} not found", top_level_id_);
+        return it->second;
+    }
     bool is_graph(const InstanceData& instance) const { return instance.kind == NodeKind::Graph; }
     bool is_mesh(const InstanceData& instance) const { return instance.kind == NodeKind::Mesh; }
-    const InstanceData& get_instance(GlobalNodeId id) const { return instances_.at(id); }
-    const ConnectionData& get_connection(ConnectionId connection_id) const { return connections_.at(connection_id); }
+    const InstanceData& get_instance(GlobalNodeId id) const {
+        auto it = instances_.find(id);
+        TT_FATAL(it != instances_.end(), "Instance id {} not found", id);
+        return it->second;
+    }
+    const ConnectionData& get_connection(ConnectionId connection_id) const {
+        auto it = connections_.find(connection_id);
+        TT_FATAL(it != connections_.end(), "Connection id {} not found", connection_id);
+        return it->second;
+    }
 
 
     // Typed enumeration
@@ -94,11 +109,31 @@ public:
     const std::vector<GlobalNodeId>& all_graphs() const { return graph_instances_; }
 
     // Queries
-    const std::vector<GlobalNodeId>& instances_by_name(std::string name) const { return instances_by_name_.at(name); }
-    const std::vector<GlobalNodeId>& instances_by_type(std::string type) const { return instances_by_type_.at(type); } // includes "MESH"
-    const std::vector<ConnectionId>& connections_by_instance_id(GlobalNodeId instance_id) const { return connections_by_instance_id_.at(instance_id); }
-    const std::vector<ConnectionId>& connections_by_type(std::string type) const { return connections_by_type_.at(type); }
-    const std::vector<ConnectionId>& connections_by_source_device_id(GlobalNodeId source_device_id) const { return connections_by_source_device_id_.at(source_device_id); }
+    const std::vector<GlobalNodeId>& instances_by_name(std::string name) const {
+        auto it = instances_by_name_.find(name);
+        TT_FATAL(it != instances_by_name_.end(), "No instances found with name {}", name);
+        return it->second;
+    }
+    const std::vector<GlobalNodeId>& instances_by_type(std::string type) const { // includes "MESH"
+        auto it = instances_by_type_.find(type);
+        TT_FATAL(it != instances_by_type_.end(), "No instances found with type {}", type);
+        return it->second;
+    }
+    const std::vector<ConnectionId>& connections_by_instance_id(GlobalNodeId instance_id) const {
+        auto it = connections_by_instance_id_.find(instance_id);
+        TT_FATAL(it != connections_by_instance_id_.end(), "No connections indexed for instance id {}", instance_id);
+        return it->second;
+    }
+    const std::vector<ConnectionId>& connections_by_type(std::string type) const {
+        auto it = connections_by_type_.find(type);
+        TT_FATAL(it != connections_by_type_.end(), "No connections found for type {}", type);
+        return it->second;
+    }
+    const std::vector<ConnectionId>& connections_by_source_device_id(GlobalNodeId source_device_id) const {
+        auto it = connections_by_source_device_id_.find(source_device_id);
+        TT_FATAL(it != connections_by_source_device_id_.end(), "No connections found for source device id {}", source_device_id);
+        return it->second;
+    }
     
 
 private:
@@ -159,6 +194,10 @@ private:
     void populate_intra_mesh_connections(GlobalNodeId mesh_id);
     void populate_intra_mesh_express_connections(GlobalNodeId mesh_id);
     void populate_inter_mesh_connections(GlobalNodeId graph_id);
+    void populate_inter_mesh_manual_connections(GlobalNodeId graph_id);
+    void populate_inter_mesh_topology_connections(GlobalNodeId graph_id); // TODO: To be implemented in seperate PR
+
+    GlobalNodeId find_instance_by_ref(GlobalNodeId parent_instance_id, const proto::NodeRef& node_ref);
 
 };
 
