@@ -45,6 +45,18 @@ def create_parser() -> argparse.ArgumentParser:
         choices=["mlp", "moe"],
         help="When using --random-weights, request a single layer (mlp supported)",
     )
+    # Teacher-forcing / accuracy verification options
+    p.add_argument("--token-accuracy", action="store_true", help="Enable teacher-forced decode and report accuracy")
+    p.add_argument(
+        "--reference-file",
+        type=str,
+        help="Path to reference .pt/.refpt file containing 'reference_tokens' and optional 'top5_tokens'",
+    )
+    p.add_argument(
+        "--tf-prompt-len",
+        type=int,
+        help="Teacher-forcing prompt length in tokens (from reference file). Defaults to half+1 if omitted.",
+    )
     return p
 
 
@@ -95,6 +107,9 @@ def run_demo(
     cache_dir: str | Path | None = None,
     random_weights: bool = False,
     single_layer: str | None = None,
+    token_accuracy: bool = False,
+    reference_file: str | Path | None = None,
+    tf_prompt_len: int | None = None,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -137,6 +152,20 @@ def run_demo(
                 "--single-layer=moe not supported by Model1D-based demo. Use --single-layer=mlp or drop --random-weights."
             )
 
+        token_acc = None
+        if token_accuracy:
+            if random_weights:
+                raise SystemExit("--token-accuracy requires full-model mode (disable --random-weights)")
+            if tokenizer is None:
+                raise SystemExit("--token-accuracy requires a tokenizer. Ensure model path has tokenizer files.")
+            if not reference_file:
+                raise SystemExit("--token-accuracy requires --reference-file pointing to a .pt/.refpt file")
+
+            # Lazy import to avoid overhead when not used
+            from models.demos.deepseek_v3.demo.token_accuracy import TokenAccuracy
+
+            token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
+
         gen = DeepseekGenerator(
             mesh_device,
             Path(model_path),
@@ -151,15 +180,28 @@ def run_demo(
         if random_weights:
             prompts = [""]
         else:
-            if not prompt:
-                raise SystemExit("A prompt is required unless --random-weights is used.")
-            prompts = [prompt]
+            if token_acc is not None:
+                # Prepare prompt text from reference tokens to align with teacher forcing
+                prompts = [token_acc.prepare_ref_tokens(gen.tokenizer)]
+                # If not overridden, ensure we don’t decode past the available ground truth
+                max_new_tokens = min(max_new_tokens, token_acc.num_gt_tokens())
+            else:
+                if not prompt:
+                    raise SystemExit("A prompt is required unless --random-weights is used.")
+                prompts = [prompt]
 
         # Single-prompt generation
-        generations = gen.generate(prompts, max_new_tokens=max_new_tokens)
+        generations = gen.generate(
+            prompts,
+            max_new_tokens=max_new_tokens,
+            teacher_forcing=token_acc,
+        )
         result = {"tokens": generations[0], "text": None}
         if gen.tokenizer is not None:
             result["text"] = gen.tokenizer.decode(generations[0], skip_special_tokens=True)
+        if token_acc is not None:
+            acc = token_acc.compute_accuracy()
+            result.update({"accuracy_top1": acc.get("top1"), "accuracy_top5": acc.get("top5")})
         return result
     finally:
         # Clean up mesh device(s)
@@ -183,6 +225,9 @@ def main() -> None:
         cache_dir=args.cache_dir,
         random_weights=bool(args.random_weights),
         single_layer=args.single_layer,
+        token_accuracy=bool(args.token_accuracy),
+        reference_file=args.reference_file,
+        tf_prompt_len=args.tf_prompt_len,
     )
 
     print("\n===== Generated =====\n")
