@@ -53,7 +53,6 @@ get_ordered_ethernet_connections(const std::unique_ptr<tt::umd::Cluster>& cluste
 //     return false;
 // }
 
-// TODO: hard-coded address is WH only. Need to add a UMD HAL layer.
 bool is_ethernet_endpoint_up(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const EthernetEndpoint& endpoint,
