@@ -278,6 +278,7 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second}),
         Conv2dConfig{
             .weights_dtype = input_tensor_b.dtype(),
+            .config_tensors_in_dram = this->config_tensors_in_dram,
             .shard_layout = this->memory_config.memory_layout(),
             .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
             .enable_act_double_buffer = enable_act_double_buffer,
@@ -295,11 +296,11 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             has_bias),
         skip_mcast.skip_activation_mcast);
 
-    // TT_FATAL(
-    //     actual_cb_size == l1_usage.CB_allocation_size,
-    //     "Calculated CB size {} does not match with the actual CB size {}",
-    //     l1_usage.CB_allocation_size,
-    //     actual_cb_size);
+    TT_FATAL(
+        actual_cb_size == l1_usage.CB_allocation_size,
+        "Calculated CB size {} does not match with the actual CB size {}",
+        l1_usage.CB_allocation_size,
+        actual_cb_size);
 
     // For now assume that if post_op_l1_allocation_size == 0 op is being run
     // in graph capture NO_DISPATCH mode.

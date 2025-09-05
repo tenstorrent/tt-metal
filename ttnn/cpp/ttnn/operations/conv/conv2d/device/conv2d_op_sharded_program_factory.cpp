@@ -539,8 +539,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         is_conv_1d_depthwise_conv,
         skip_activation_mcast);
 
-    access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size =
-        conv_reader_indices_storage.get_buffer()->page_size();
+    // The actual CB reader size is difficult to calculate in calculate_L1_size. So instead keep the CB size as the
+    // maximum possible size.
+    TT_FATAL(
+        access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size >=
+            conv_reader_indices_storage.get_buffer()->page_size(),
+        "CB page size {} should be greater than the config tensor page size {}",
+        access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size,
+        conv_reader_indices_storage.get_buffer()->page_size());
 
     // call function to allocate circular buffers
     allocate_cbs(cb_info, program, all_cores, a, output, conv_reader_indices_tensor);
