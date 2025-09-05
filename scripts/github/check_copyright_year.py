@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env python3
 """
 Copyright Year Validation Script
@@ -21,13 +25,62 @@ def get_current_year():
     return datetime.now().year
 
 
+def get_new_files(root_dir, extensions=None):
+    """Get NEW files that have been added in the current commit/PR."""
+    if extensions is None:
+        extensions = [".cpp", ".cc", ".h", ".hpp", ".py", ".c", ".cxx"]
+
+    try:
+        # Get NEW files added in the current commit
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "--diff-filter=A", "HEAD~1"], capture_output=True, text=True, cwd=root_dir
+        )
+
+        if result.returncode == 0:
+            new_files = result.stdout.strip().split("\n")
+            new_files = [f for f in new_files if f.strip()]
+
+            # Filter by extensions and check if files exist
+            filtered_files = []
+            for file_path in new_files:
+                if any(file_path.endswith(ext) for ext in extensions):
+                    full_path = Path(root_dir) / file_path
+                    if full_path.exists():
+                        filtered_files.append(full_path)
+
+            return filtered_files
+        else:
+            # If HEAD~1 doesn't exist (first commit), get all tracked files
+            result = subprocess.run(["git", "ls-files"], capture_output=True, text=True, cwd=root_dir)
+            if result.returncode == 0:
+                all_files = result.stdout.strip().split("\n")
+                all_files = [f for f in all_files if f.strip()]
+
+                # Filter by extensions
+                filtered_files = []
+                for file_path in all_files:
+                    if any(file_path.endswith(ext) for ext in extensions):
+                        full_path = Path(root_dir) / file_path
+                        if full_path.exists():
+                            filtered_files.append(full_path)
+
+                return filtered_files
+
+    except subprocess.CalledProcessError:
+        # If git commands fail, fall back to checking all files
+        print("Warning: Could not determine new files, checking all files")
+        return None
+
+    return []
+
+
 def get_changed_files(root_dir, extensions=None):
     """Get files that have been changed in the current commit/PR."""
     if extensions is None:
         extensions = [".cpp", ".cc", ".h", ".hpp", ".py", ".c", ".cxx"]
 
     try:
-        # Get files changed in the current commit
+        # Get files changed in the current commit (Added + Modified)
         result = subprocess.run(
             ["git", "diff", "--name-only", "--diff-filter=AM", "HEAD~1"], capture_output=True, text=True, cwd=root_dir
         )
@@ -134,7 +187,7 @@ def extract_copyright_year(file_path):
 
 def validate_copyright_years(root_dir, current_year, verbose=False):
     """Validate that all copyright headers contain the current year."""
-    files_with_old_years = []
+    files_with_issues = []
     files_with_copyright = find_files_with_copyright(root_dir)
 
     if verbose:
@@ -148,31 +201,51 @@ def validate_copyright_years(root_dir, current_year, verbose=False):
             continue
 
         if year != current_year:
-            files_with_old_years.append((file_path, year))
+            files_with_issues.append((file_path, year, "old_year"))
             if verbose:
                 print(f"Found old copyright year {year} in {file_path}")
 
-    return files_with_old_years
+    return files_with_issues
 
 
-def validate_changed_files_copyright_years(changed_files, current_year, verbose=False):
-    """Validate copyright years for a specific list of changed files."""
-    files_with_old_years = []
+def validate_new_files_copyright_years(new_files, current_year, verbose=False):
+    """Validate copyright years for NEW files (must have current year)."""
+    files_with_issues = []
 
-    for file_path in changed_files:
+    for file_path in new_files:
         if has_copyright_header(file_path):
             year = extract_copyright_year(file_path)
             if year is None:
                 if verbose:
                     print(f"Warning: Could not extract year from {file_path}")
+                files_with_issues.append((file_path, None, "invalid_header"))
                 continue
 
             if year != current_year:
-                files_with_old_years.append((file_path, year))
+                files_with_issues.append((file_path, year, "old_year"))
                 if verbose:
-                    print(f"Found old copyright year {year} in {file_path}")
+                    print(f"Found old copyright year {year} in new file {file_path}")
+        else:
+            # New file doesn't have copyright header at all - this is an error
+            files_with_issues.append((file_path, None, "missing_header"))
+            if verbose:
+                print(f"Missing copyright header in new file {file_path}")
 
-    return files_with_old_years
+    return files_with_issues
+
+
+def validate_existing_files_copyright_headers(existing_files, verbose=False):
+    """Validate that existing files have SOME copyright header (year doesn't matter)."""
+    files_with_issues = []
+
+    for file_path in existing_files:
+        if not has_copyright_header(file_path):
+            # Existing file doesn't have copyright header at all - this is an error
+            files_with_issues.append((file_path, None, "missing_header"))
+            if verbose:
+                print(f"Missing copyright header in existing file {file_path}")
+
+    return files_with_issues
 
 
 def main():
@@ -200,7 +273,39 @@ def main():
         if args.verbose:
             print(f"Checking {len(args.files)} files from pre-commit...")
         changed_files = [Path(f) for f in args.files if Path(f).exists()]
-        old_year_files = validate_changed_files_copyright_years(changed_files, current_year, args.verbose)
+
+        # Separate new files from existing files
+        new_files = []
+        existing_files = []
+
+        # Get list of truly new files from git diff
+        try:
+            result = subprocess.run(
+                ["git", "diff", "--name-only", "--diff-filter=A", "HEAD~1"], capture_output=True, text=True, cwd="."
+            )
+            if result.returncode == 0:
+                git_new_files = set(result.stdout.strip().split("\n"))
+                git_new_files.discard("")  # Remove empty strings
+            else:
+                git_new_files = set()
+        except subprocess.CalledProcessError:
+            git_new_files = set()
+
+        for file_path in changed_files:
+            # Check if file is in the list of newly added files from git
+            if str(file_path) in git_new_files:
+                new_files.append(file_path)
+            else:
+                existing_files.append(file_path)
+
+        # Validate new files (must have current year copyright)
+        new_file_issues = validate_new_files_copyright_years(new_files, current_year, args.verbose)
+
+        # Validate existing files (just need some copyright header)
+        existing_file_issues = validate_existing_files_copyright_headers(existing_files, args.verbose)
+
+        old_year_files = new_file_issues + existing_file_issues
+
     elif args.all_files:
         # Check all files
         old_year_files = validate_copyright_years(".", current_year, args.verbose)
@@ -215,20 +320,57 @@ def main():
         else:
             if args.verbose:
                 print(f"Found {len(changed_files)} changed files to check")
-            old_year_files = validate_changed_files_copyright_years(changed_files, current_year, args.verbose)
+
+            # Separate new files from existing files
+            new_files = []
+            existing_files = []
+
+            # Get list of truly new files from git diff
+            try:
+                result = subprocess.run(
+                    ["git", "diff", "--name-only", "--diff-filter=A", "HEAD~1"], capture_output=True, text=True, cwd="."
+                )
+                if result.returncode == 0:
+                    git_new_files = set(result.stdout.strip().split("\n"))
+                    git_new_files.discard("")  # Remove empty strings
+                else:
+                    git_new_files = set()
+            except subprocess.CalledProcessError:
+                git_new_files = set()
+
+            for file_path in changed_files:
+                # Check if file is in the list of newly added files from git
+                if str(file_path) in git_new_files:
+                    new_files.append(file_path)
+                else:
+                    existing_files.append(file_path)
+
+            # Validate new files (must have current year copyright)
+            new_file_issues = validate_new_files_copyright_years(new_files, current_year, args.verbose)
+
+            # Validate existing files (just need some copyright header)
+            existing_file_issues = validate_existing_files_copyright_headers(existing_files, args.verbose)
+
+            old_year_files = new_file_issues + existing_file_issues
 
     if old_year_files:
-        print(f"\n❌ Found {len(old_year_files)} files with old copyright years:")
-        for file_path, year in old_year_files:
-            print(f"  {file_path} (has {year}, should be {current_year})")
+        print(f"\n❌ Found {len(old_year_files)} files with copyright issues:")
+        for file_path, year, issue_type in old_year_files:
+            if issue_type == "missing_header":
+                print(f"  {file_path} (missing copyright header)")
+            else:
+                print(f"  {file_path} (has {year}, should be {current_year})")
 
-        print("\nPlease update these files with the current year copyright header:")
+        print("\nPlease fix the copyright issues:")
+        print("- New files must have current year copyright headers")
+        print("- Existing files must have some copyright header")
+        print(f"\nExample copyright header for new files:")
         print(f"// SPDX-FileCopyrightText: © {current_year} Tenstorrent AI ULC")
         print("//")
         print("// SPDX-License-Identifier: Apache-2.0")
         return 1
     else:
-        print(f"✅ All copyright headers contain the current year ({current_year})")
+        print(f"✅ All files have valid copyright headers")
         return 0
 
 

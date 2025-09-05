@@ -67,7 +67,7 @@ repos:
   hooks:
     - id: check-copyright-year
       name: Check copyright year is current
-      entry: python3 check_copyright_year.py
+      entry: python3 scripts/github/check_copyright_year.py
       language: system
       files: \.(cpp|cc|cxx|c\+\+|h|hpp|py)$
       exclude: ^(python_env/|env/|venv/|third_party/|build/|\.git/)
