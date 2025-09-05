@@ -15,7 +15,8 @@ void kernel_main() {
     constexpr uint32_t W = get_compile_time_arg_val(3);
     constexpr uint32_t H = get_compile_time_arg_val(4);
 
-    const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = src_addr, .page_size = stick_size};
+    constexpr auto s0_args = TensorAccessorArgs<5>();
+    const auto s0 = TensorAccessor(s0_args, src_addr, stick_size);
 
     // Use cb as L1 scratch memory
     uint32_t cb_addr = get_write_ptr(cb_id_in0);
@@ -32,7 +33,7 @@ void kernel_main() {
             // DPRINT << "val: " << val << ENDL();
         }
         if (src0_is_dram) {
-            uint64_t dst_noc_addr = get_noc_addr(h, s0);
+            uint64_t dst_noc_addr = s0.get_noc_addr(h);
             noc_async_write(cb_addr, dst_noc_addr, stick_size);
             noc_async_write_barrier();
         }

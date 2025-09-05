@@ -24,13 +24,9 @@ void kernel_main() {
     constexpr uint32_t bias_ntiles = get_compile_time_arg_val(14);
     constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(15);
     constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(16);
-    uint32_t i = 0;
-    uint32_t noop = get_arg_val<uint32_t>(i++);
-    if (noop) {
-        return;
-    }
 
     // mcast args
+    uint32_t i = 0;
     const uint32_t weights_mcast_sender_noc_x = get_arg_val<uint32_t>(i++);
     const uint32_t weights_mcast_sender_noc_y = get_arg_val<uint32_t>(i++);
     const uint32_t weights_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
