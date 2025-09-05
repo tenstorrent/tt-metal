@@ -2,10 +2,10 @@ import pytest
 import torch
 from typing import Dict
 
-from .tt_pytorch_insemb import PanopticDeepLabInsEmbedHead
-from .tt_pytorch_semSeg import ShapeSpec
+from models.experimental.panoptic_deeplab.reference.pytorch_insemb import PanopticDeepLabInsEmbedHead
+from models.experimental.panoptic_deeplab.reference.pytorch_semSeg import ShapeSpec
 
-from .tt_insemb import TtPanopticDeepLabInsEmbedHead
+from models.experimental.panoptic_deeplab.tt.tt_insemb import TtPanopticDeepLabInsEmbedHead
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
