@@ -1050,103 +1050,105 @@ struct Fabric1DPacketSendTestSpec {
     bool flush = true;
 };
 
-static std::vector<IDevice*> generate_default_line_fabric_under_test(
-    bool use_galaxy, bool use_tg, size_t line_size, tt::tt_fabric::Topology topology, const MeshDeviceView& view) {
-    std::vector<IDevice*> devices_;
+static std::vector<std::shared_ptr<MeshDevice>> generate_default_line_fabric_under_test(
+    bool use_galaxy, bool use_tg, size_t line_size, tt::tt_fabric::Topology topology, MeshDevice& mesh_device) {
+    std::vector<std::shared_ptr<MeshDevice>> devices_;
     if (use_galaxy) {
         if (line_size <= 4) {
             if (use_tg) {
                 if (topology == tt::tt_fabric::Topology::Ring) {
                     devices_ = {
-                        view.get_device(MeshCoordinate(0, 0)),
-                        view.get_device(MeshCoordinate(1, 0)),
-                        view.get_device(MeshCoordinate(1, 1)),
-                        view.get_device(MeshCoordinate(0, 1))};
+                        mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0)),
+                        mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(1, 0)),
+                        mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(1, 1)),
+                        mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1))};
                 } else {
                     devices_ = {
-                        view.get_device(MeshCoordinate(0, 0)),
-                        view.get_device(MeshCoordinate(1, 0)),
-                        view.get_device(MeshCoordinate(2, 0)),
-                        view.get_device(MeshCoordinate(3, 0))};
+                        mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0)),
+                        mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(1, 0)),
+                        mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(2, 0)),
+                        mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(3, 0))};
                 }
             } else {
                 devices_ = {
-                    view.get_device(MeshCoordinate(0, 0)),
-                    view.get_device(MeshCoordinate(0, 1)),
-                    view.get_device(MeshCoordinate(0, 2)),
-                    view.get_device(MeshCoordinate(0, 3))};
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0)),
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1)),
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 2)),
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 3))};
             }
         } else {
             if (topology == tt::tt_fabric::Topology::Ring && use_tg) {
                 devices_ = {
-                    view.get_device(MeshCoordinate(0, 0)),
-                    view.get_device(MeshCoordinate(1, 0)),
-                    view.get_device(MeshCoordinate(2, 0)),
-                    view.get_device(MeshCoordinate(3, 0)),
-                    view.get_device(MeshCoordinate(3, 1)),
-                    view.get_device(MeshCoordinate(2, 1)),
-                    view.get_device(MeshCoordinate(1, 1)),
-                    view.get_device(MeshCoordinate(0, 1))};
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0)),
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(1, 0)),
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(2, 0)),
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(3, 0)),
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(3, 1)),
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(2, 1)),
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(1, 1)),
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1))};
             } else {
                 devices_ = {
-                    view.get_device(MeshCoordinate(0, 0)),
-                    view.get_device(MeshCoordinate(1, 0)),
-                    view.get_device(MeshCoordinate(2, 0)),
-                    view.get_device(MeshCoordinate(3, 0)),
-                    view.get_device(MeshCoordinate(4, 0)),
-                    view.get_device(MeshCoordinate(5, 0)),
-                    view.get_device(MeshCoordinate(6, 0)),
-                    view.get_device(MeshCoordinate(7, 0))};
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0)),
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(1, 0)),
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(2, 0)),
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(3, 0)),
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(4, 0)),
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(5, 0)),
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(6, 0)),
+                    mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(7, 0))};
             }
         }
     } else {
         // Choosing pcie devices so that more links are supported. More links == more (likelihood of) congestion.
         if (line_size == 2) {
-            devices_ = {view.get_device(MeshCoordinate(0, 1)), view.get_device(MeshCoordinate(0, 2))};
+            devices_ = {
+                mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1)),
+                mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 2))};
         } else if (line_size <= 4) {
             devices_ = {
-                view.get_device(MeshCoordinate(0, 0)),
-                view.get_device(MeshCoordinate(0, 1)),
-                view.get_device(MeshCoordinate(0, 2)),
-                view.get_device(MeshCoordinate(0, 3))};
+                mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0)),
+                mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1)),
+                mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 2)),
+                mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 3))};
         } else {
             devices_ = {
-                view.get_device(MeshCoordinate(0, 0)),
-                view.get_device(MeshCoordinate(0, 1)),
-                view.get_device(MeshCoordinate(0, 2)),
-                view.get_device(MeshCoordinate(0, 3)),
-                view.get_device(MeshCoordinate(1, 3)),
-                view.get_device(MeshCoordinate(1, 2)),
-                view.get_device(MeshCoordinate(1, 1)),
-                view.get_device(MeshCoordinate(1, 0))};
+                mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0)),
+                mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1)),
+                mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 2)),
+                mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(0, 3)),
+                mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(1, 3)),
+                mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(1, 2)),
+                mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(1, 1)),
+                mesh_device.create_submesh(MeshShape(1, 1), MeshCoordinate(1, 0))};
         }
     }
 
-    for (auto device : devices_) {
+    for (auto& device : devices_) {
         log_info(
             tt::LogTest,
             "Device {} has fabric node id {}",
-            device->id(),
+            device->get_devices()[0]->id(),
             tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
-                device->id()));
+                device->get_devices()[0]->id()));
     }
 
     return devices_;
 }
 
-static std::vector<std::vector<IDevice*>> generate_line_fabrics_under_test(
+static std::vector<std::vector<std::shared_ptr<MeshDevice>>> generate_line_fabrics_under_test(
     bool use_galaxy,
     bool use_tg,
     size_t line_size,
     tt::tt_fabric::Topology topology,
-    const MeshDevice& mesh_device,
+    MeshDevice& mesh_device,
     size_t num_fabric_rows,
     size_t num_fabric_cols) {
     bool use_default_device_selection = num_fabric_rows == 0 && num_fabric_cols == 0;
-    std::vector<std::vector<IDevice*>> fabrics_under_test;
+    std::vector<std::vector<std::shared_ptr<MeshDevice>>> fabrics_under_test;
     if (use_default_device_selection) {
         fabrics_under_test.push_back(
-            generate_default_line_fabric_under_test(use_galaxy, use_tg, line_size, topology, mesh_device.get_view()));
+            generate_default_line_fabric_under_test(use_galaxy, use_tg, line_size, topology, mesh_device));
     } else {
         fabrics_under_test.reserve(num_fabric_rows + num_fabric_cols);
         TT_FATAL(
@@ -1161,11 +1163,26 @@ static std::vector<std::vector<IDevice*>> generate_line_fabrics_under_test(
             "Available: {}",
             num_fabric_cols,
             mesh_device.num_cols());
-        for (size_t i = 0; i < num_fabric_rows; i++) {
-            fabrics_under_test.push_back(mesh_device.get_view().get_devices_on_row(i));
+        // Create 1x1 submeshes for each row
+        for (size_t row = 0; row < num_fabric_rows; row++) {
+            std::vector<std::shared_ptr<MeshDevice>> row_devices;
+            for (size_t col = 0; col < mesh_device.num_cols(); col++) {
+                MeshShape submesh_shape(1, 1);
+                MeshCoordinate offset(row, col);
+                row_devices.push_back(mesh_device.create_submesh(submesh_shape, offset));
+            }
+            fabrics_under_test.push_back(row_devices);
         }
-        for (size_t i = 0; i < num_fabric_cols; i++) {
-            fabrics_under_test.push_back(mesh_device.get_view().get_devices_on_column(i));
+
+        // Create 1x1 submeshes for each column
+        for (size_t col = 0; col < num_fabric_cols; col++) {
+            std::vector<std::shared_ptr<MeshDevice>> col_devices;
+            for (size_t row = 0; row < mesh_device.num_rows(); row++) {
+                MeshShape submesh_shape(1, 1);
+                MeshCoordinate offset(row, col);
+                col_devices.push_back(mesh_device.create_submesh(submesh_shape, offset));
+            }
+            fabrics_under_test.push_back(col_devices);
         }
     }
 
@@ -1201,6 +1218,11 @@ void create_fabric_fixture(std::unique_ptr<Fabric1DFixture>& test_fixture, bool 
 
 static void wait_for_worker_program_completion(const std::vector<IDevice*>& devices) {
     std::ranges::for_each(devices, [&](IDevice* d) { tt_metal::Finish(d->command_queue(), {}); });
+}
+
+static void wait_for_worker_program_completion(const std::vector<std::shared_ptr<MeshDevice>>& devices) {
+    std::ranges::for_each(
+        devices, [&](std::shared_ptr<MeshDevice> d) { tt_metal::Finish(d->get_devices()[0]->command_queue(), {}); });
 }
 
 static Fabric1DWorkerConfig get_fabric_1d_worker_config(
@@ -1500,12 +1522,12 @@ void Run1DFabricPacketSendTest(
     device_dest_buffers.reserve(line_size);
     for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices.size(); fabric_index++) {
         auto& devices = fabrics_under_test_devices[fabric_index];
-        for (auto* d : devices) {
-            if (std::find(devices_.begin(), devices_.end(), d) == devices_.end()) {
-                devices_.push_back(d);
+        for (auto& d : devices) {
+            if (std::find(devices_.begin(), devices_.end(), d->get_devices()[0]) == devices_.end()) {
+                devices_.push_back(d->get_devices()[0]);
             }
-            auto local_input_buffer =
-                CreateBuffer(InterleavedBufferConfig{d, dest_buffer_size, dest_buffer_size, BufferType::L1});
+            auto local_input_buffer = CreateBuffer(
+                InterleavedBufferConfig{d->get_devices()[0], dest_buffer_size, dest_buffer_size, BufferType::L1});
             device_dest_buffers.push_back(local_input_buffer);
         }
     }
@@ -1539,7 +1561,7 @@ void Run1DFabricPacketSendTest(
         auto& devices = fabrics_under_test_devices[fabric_index];
         auto& worker_devices = fabric_under_test_worker_devices[fabric_index];
         for (size_t i = 0; i < num_devices_with_workers; i++) {
-            worker_devices.push_back(devices[i]);
+            worker_devices.push_back(devices[i]->get_devices()[0]);
         }
         // Worker program setup
         programs_per_fabric[fabric_index] = std::vector<Program>(num_devices_with_workers);
@@ -1563,11 +1585,16 @@ void Run1DFabricPacketSendTest(
         for (size_t i = 0; i < num_devices_with_workers; i++) {
             const size_t line_index = i;
             auto& program = programs[i];
-            auto* device = devices[i];
-
+            auto* device = devices[i]->get_devices()[0];
+            // Convert shared_ptr<MeshDevice> to IDevice* for compatibility
+            std::vector<IDevice*> device_ptrs;
+            device_ptrs.reserve(devices.size());
+            for (auto& device : devices) {
+                device_ptrs.push_back(device->get_devices()[0]);
+            }
             auto worker_config = get_fabric_1d_worker_config(
                 i,
-                devices,
+                device_ptrs,
                 topology,
                 fabric_mode,
                 line_size,
@@ -1786,8 +1813,8 @@ void Run1DFabricPacketSendTest(
     log_trace(tt::LogTest, "Waiting for teardown completion");
     for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices.size(); fabric_index++) {
         auto& devices = fabrics_under_test_devices[fabric_index];
-        for (IDevice* d : devices) {
-            tt_metal::Synchronize(d);
+        for (auto& d : devices) {
+            tt_metal::Synchronize(d->get_devices()[0]);
         }
     }
 
@@ -1897,7 +1924,7 @@ static void validate_sync_core_is_on_a_worker(
 
 static void launch_kernels_and_wait_for_completion(
     const FullMeshTestParams& params,
-    const per_axis_array_t<std::vector<std::vector<IDevice*>>>& fabrics_under_test_devices_per_axis,
+    const per_axis_array_t<std::vector<std::vector<std::shared_ptr<MeshDevice>>>>& fabrics_under_test_devices_per_axis,
     const per_axis_array_t<std::vector<std::vector<KernelHandle>>>& worker_kernel_ids_per_fabric,
     const per_axis_array_t<std::vector<std::vector<size_t>>>& per_fabric_per_device_global_sem_addr_rt_arg,
     std::unordered_map<IDevice*, Program>& device_programs,
@@ -1914,7 +1941,7 @@ static void launch_kernels_and_wait_for_completion(
                         per_fabric_per_device_global_sem_addr_rt_arg[axis][fabric_index];
                     for (size_t k = 0; k < worker_kernel_ids.size(); k++) {
                         auto& devices = fabrics_under_test_devices_per_axis[axis][fabric_index];
-                        auto& program = device_programs.at(devices.at(k));
+                        auto& program = device_programs.at(devices.at(k)->get_devices()[0]);
                         auto& worker_rt_args_by_core = GetRuntimeArgs(program, worker_kernel_ids[k]);
                         auto global_sem_addr_rt_arg_idx = per_device_global_sem_addr_rt_arg[k];
                         for (size_t l = 0; l < params.num_links[axis]; l++) {
@@ -1938,8 +1965,8 @@ static void launch_kernels_and_wait_for_completion(
                 for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices_per_axis[axis].size();
                      fabric_index++) {
                     auto& fabric_worker_devices = fabrics_under_test_devices_per_axis[axis][fabric_index];
-                    for (auto* device : fabric_worker_devices) {
-                        all_worker_devices_set.insert(device);
+                    for (auto& device : fabric_worker_devices) {
+                        all_worker_devices_set.insert(device->get_devices()[0]);
                     }
                 }
             }
@@ -1958,8 +1985,8 @@ static void launch_kernels_and_wait_for_completion(
                  fabric_index++) {
                 auto& worker_devices = fabrics_under_test_devices_per_axis[axis][fabric_index];
                 std::stringstream ss;
-                for (auto* device : worker_devices) {
-                    ss << device->id() << " ";
+                for (auto& device : worker_devices) {
+                    ss << device->get_devices()[0]->id() << " ";
                 }
                 wait_for_worker_program_completion(worker_devices);
             }
@@ -1978,7 +2005,7 @@ static void launch_kernels_and_wait_for_completion(
 static std::tuple<size_t, per_axis_array_t<std::vector<std::vector<Fabric1DWorkerConfig>>>>
 generate_1D_fabric_on_full_mesh_worker_configs(
     const FullMeshTestParams& params,
-    const per_axis_array_t<std::vector<std::vector<IDevice*>>>& fabrics_under_test_devices_per_axis,
+    const per_axis_array_t<std::vector<std::vector<std::shared_ptr<MeshDevice>>>>& fabrics_under_test_devices_per_axis,
     const per_axis_array_t<tt::tt_fabric::Topology>& topologies,
     const std::array<FabricTestMode, FullMeshTestParams::MAX_NUM_AXES>& fabric_modes) {
     per_axis_array_t<std::vector<std::vector<Fabric1DWorkerConfig>>> worker_configs_per_axis_per_fabric_per_device;
@@ -1999,10 +2026,15 @@ generate_1D_fabric_on_full_mesh_worker_configs(
             auto& devices = fabrics_under_test_devices_per_axis[axis][fabric_index];
             for (size_t i = 0; i < num_devices_with_workers; i++) {
                 const size_t line_index = i;
-
+                // Convert shared_ptr<MeshDevice> to IDevice* for compatibility
+                std::vector<IDevice*> device_ptrs;
+                device_ptrs.reserve(devices.size());
+                for (auto& device : devices) {
+                    device_ptrs.push_back(device->get_devices()[0]);
+                }
                 auto worker_config = get_fabric_1d_worker_config(
                     i,
-                    devices,
+                    device_ptrs,
                     topologies[axis],
                     fabric_modes[axis],
                     params.line_size[axis],
@@ -2217,7 +2249,7 @@ void Run1DFullMeshFabricPacketSendTest(
     // FABRIC_DEVICE_FIXTURE test_fixture;
     // auto view = *(test_fixture.view_);
 
-    per_axis_array_t<std::vector<std::vector<IDevice*>>> fabrics_under_test_devices_per_axis;
+    per_axis_array_t<std::vector<std::vector<std::shared_ptr<MeshDevice>>>> fabrics_under_test_devices_per_axis;
     for (size_t axis = 0; axis < MAX_NUM_AXES; axis++) {
         size_t num_fabric_rows = axis == 0 ? params.num_fabric_rows : 0;
         size_t num_fabric_cols = axis == 1 ? params.num_fabric_cols : 0;
@@ -2247,12 +2279,12 @@ void Run1DFullMeshFabricPacketSendTest(
         // Don't need to allocate unique per axis because each axis sends to different workers
         for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices_per_axis[axis].size(); fabric_index++) {
             auto& devices = fabrics_under_test_devices_per_axis[axis][fabric_index];
-            for (auto* d : devices) {
-                if (device_programs.find(d) == device_programs.end()) {
-                    device_programs.insert({d, Program()});
+            for (auto& d : devices) {
+                if (device_programs.find(d->get_devices()[0]) == device_programs.end()) {
+                    device_programs.insert({d->get_devices()[0], Program()});
                 }
-                auto local_input_buffer =
-                    CreateBuffer(InterleavedBufferConfig{d, dest_buffer_size, dest_buffer_size, BufferType::L1});
+                auto local_input_buffer = CreateBuffer(
+                    InterleavedBufferConfig{d->get_devices()[0], dest_buffer_size, dest_buffer_size, BufferType::L1});
                 device_dest_buffers.push_back(local_input_buffer);
             }
         }
@@ -2299,7 +2331,7 @@ void Run1DFullMeshFabricPacketSendTest(
             auto& per_device_global_sem_addr_rt_arg = per_fabric_per_device_global_sem_addr_rt_arg[axis][fabric_index];
             auto& worker_kernel_ids = worker_kernel_ids_per_fabric[axis][fabric_index];
             for (size_t i = 0; i < num_devices_with_workers; i++) {
-                auto* device = devices[i];
+                auto* device = devices[i]->get_devices()[0];
                 auto& program = device_programs.at(device);
 
                 auto worker_cores_vec = setup_worker_core_coords(
