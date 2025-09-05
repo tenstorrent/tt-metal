@@ -15,7 +15,7 @@ class TtBottleRep:
             conv=model_params.conv1.block.conv,
             conv_pth=parameters.conv1.block.conv,
             shard_layout=shard_layout,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             activation_dtype=ttnn.bfloat16,
         )
         self.cv2 = Yolov6l_Conv2D(
@@ -25,7 +25,7 @@ class TtBottleRep:
             shard_layout=shard_layout,
             act_block_h=True,
             act_blocks=32,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             return_height_width=True,
             deallocate_activation=True,
         )

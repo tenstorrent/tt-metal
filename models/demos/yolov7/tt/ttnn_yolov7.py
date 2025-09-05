@@ -207,14 +207,18 @@ class ttnn_detect:
         self.stride = [8.0, 16.0, 32.0]
 
         self.m = []
-        self.convm_1 = Conv([1, 80, 80, 256], (1, 1, 1, 1, 0, 0, 1, 1), parameters["0"], is_reshape=True, activation="")
+        self.convm_1 = Conv(
+            [1, 80, 80, 256], (1, 1, 1, 1, 0, 0, 1, 1), parameters["0"], is_reshape=True, activation=None
+        )
         self.m.append(self.convm_1)
 
-        self.convm_2 = Conv([1, 40, 40, 512], (1, 1, 1, 1, 0, 0, 1, 1), parameters["1"], is_reshape=True, activation="")
+        self.convm_2 = Conv(
+            [1, 40, 40, 512], (1, 1, 1, 1, 0, 0, 1, 1), parameters["1"], is_reshape=True, activation=None
+        )
         self.m.append(self.convm_2)
 
         self.convm_2 = Conv(
-            [1, 20, 20, 1024], (1, 1, 1, 1, 0, 0, 1, 1), parameters["2"], is_reshape=True, activation=""
+            [1, 20, 20, 1024], (1, 1, 1, 1, 0, 0, 1, 1), parameters["2"], is_reshape=True, activation=None
         )
         self.m.append(self.convm_2)
 

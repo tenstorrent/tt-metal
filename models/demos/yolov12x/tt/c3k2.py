@@ -10,16 +10,22 @@ from models.experimental.yolo_common.yolo_utils import concat
 class TtnnC3k:
     def __init__(self, device, parameter, conv_pt):
         self.cv1 = TtYOLOv12xConv2D(
-            conv=parameter.cv1.conv, conv_pth=conv_pt.cv1.conv, device=device, activation="silu"
+            conv=parameter.cv1.conv,
+            conv_pth=conv_pt.cv1.conv,
+            device=device,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2 = TtYOLOv12xConv2D(
-            conv=parameter.cv2.conv, conv_pth=conv_pt.cv2.conv, device=device, activation="silu"
+            conv=parameter.cv2.conv,
+            conv_pth=conv_pt.cv2.conv,
+            device=device,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3 = TtYOLOv12xConv2D(
             conv=parameter.cv3.conv,
             conv_pth=conv_pt.cv3.conv,
             device=device,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             deallocate_activation=True,
         )
         self.k1 = TtnnBottleneck(device, parameter.m[0], conv_pt.m[0])
@@ -62,7 +68,7 @@ class TtnnC3k2:
             conv_pth=conv_pt.cv1.conv,
             device=device,
             config_override=config_override,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             use_1d_systolic_array=use_1d_systolic_array,
             shard_layout=shard_layout,
             deallocate_activation=True,
@@ -71,7 +77,7 @@ class TtnnC3k2:
             conv=parameter.cv2.conv,
             conv_pth=conv_pt.cv2.conv,
             device=device,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             use_1d_systolic_array=use_1d_systolic_array,
             shard_layout=shard_layout,
             config_override=config_override,

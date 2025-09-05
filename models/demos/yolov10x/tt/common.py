@@ -29,7 +29,7 @@ class TtYolov10Conv2D:
         conv_pth,
         bn=None,
         device=None,
-        activation="",
+        activation=None,
         activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
         use_1d_systolic_array=True,
@@ -152,7 +152,7 @@ class Conv:
         use_1d_systolic_array=True,
         auto_shard=False,
         shard_layout=None,
-        activation="",
+        activation=None,
         deallocate_activation=False,
         activation_dtype=ttnn.bfloat8_b,
         enable_act_double_buffer=False,
@@ -161,7 +161,7 @@ class Conv:
         self.enable_identity = enable_identity
         self.enable_act = enable_act
         if not self.enable_identity:
-            activation = "silu"
+            activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
         self.conv = TtYolov10Conv2D(
             parameter.conv,
             conv_pt.conv,

@@ -34,7 +34,7 @@ Tensor optimized_conv_new(
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
-    const std::string& activation,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     const MemoryConfig& memory_config,
@@ -176,11 +176,7 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
 
     const auto& weights_shape = input_tensor_b.padded_shape();
 
-    std::optional<unary::UnaryWithParam> fused_activation = std::nullopt;
-
-    if (!activation.empty()) {
-        fused_activation = unary::utils::string_to_unary_with_param(activation);
-    }
+    std::optional<unary::UnaryWithParam> fused_activation = activation;
 
     // Factory selection logic - choose the appropriate implementation based on memory layout
     tt::tt_metal::operation::ProgramWithCallbacks program_with_cbs;

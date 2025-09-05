@@ -28,6 +28,7 @@ void py_module(py::module& m) {
     auto unary_with_param = static_cast<py::class_<UnaryWithParam>>(m.attr("UnaryWithParam"));
     unary_with_param.def(py::init<UnaryOpType>())
         .def(py::init<UnaryOpType, float>())
+        .def(py::init<UnaryOpType, const std::vector<float>&>())
         .def(py::init<>([](std::pair<UnaryOpType, float> arg) { return UnaryWithParam{arg.first, arg.second}; }))
         .def_readonly("op_type", &UnaryWithParam::op_type);
 
