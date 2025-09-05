@@ -282,8 +282,8 @@ bool flatten_stress(
         std::vector<uint32_t> golden = gold_standard_flatten(*src_vec, {num_tiles_r * 32, num_tiles_c * 32});
         // Set the runtime args asynchronously
         auto compute_runtime_args = {
-            src_dram_buffer->address(), uint32_t{0}, num_tiles_r, num_tiles_c, num_bytes_per_tensor_row};
-        auto writer_runtime_args = {dst_dram_buffer->address(), uint32_t{0}, num_tiles * 32};
+            src_dram_buffer->address(), uint32_t(0), num_tiles_r, num_tiles_c, num_bytes_per_tensor_row};
+        auto writer_runtime_args = {dst_dram_buffer->address(), uint32_t(0), num_tiles * 32};
 
         SetRuntimeArgs(program_, flatten_kernel, core, compute_runtime_args);
         SetRuntimeArgs(program_, unary_writer_kernel, core, writer_runtime_args);

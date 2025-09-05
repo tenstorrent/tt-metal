@@ -77,8 +77,8 @@ Program create_simple_unary_program(Buffer& input, Buffer& output) {
     CoreRange core_range({0, 0});
     CreateCircularBuffer(program, core_range, input_cb_config);
 
-    auto writer_runtime_args = {output.address(), uint32_t{0}, output.num_pages()};
-    auto reader_runtime_args = {input.address(), uint32_t{0}, input.num_pages()};
+    auto writer_runtime_args = {output.address(), uint32_t(0), output.num_pages()};
+    auto reader_runtime_args = {input.address(), uint32_t(0), input.num_pages()};
 
     SetRuntimeArgs(program, writer_kernel, worker, writer_runtime_args);
     SetRuntimeArgs(program, reader_kernel, worker, reader_runtime_args);
