@@ -59,7 +59,6 @@ target_sources(
         core/device.cpp
         core/distributed/api.cpp
         core/distributed/distributed_tensor.cpp
-        core/distributed/distributed_tensor_config.cpp
         core/distributed/distributed_configs.cpp
         core/distributed/host_ccl.cpp
         core/distributed/tensor_topology.cpp
@@ -118,12 +117,13 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_core
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
     FILE_SET
     jit_api
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn
         COMPONENT ttnn-runtime
 )
-install(TARGETS ttnn_core LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 ##################################################
 # Collect all the files and folders that TTNN will use
@@ -201,6 +201,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/conv3d/conv3d_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/copy/typecast/typecast_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/dropout/dropout_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/adaptive_pool/adaptive_pools_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/experimental_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_${PY_BINDING}.cpp
@@ -436,6 +437,10 @@ target_sources(
             cpp/ttnn/operations/creation.hpp
             cpp/ttnn/operations/functions.hpp
             cpp/ttnn/operations/compute_throttle_utils.hpp
+            cpp/ttnn/operations/cb_utils.hpp
+            cpp/ttnn/operations/math.hpp
+            cpp/ttnn/operations/sharding_utilities.hpp
+            cpp/ttnn/operations/trace.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -504,6 +509,7 @@ target_link_libraries(
         TTNN::Ops::Embedding
         TTNN::Ops::Embedding::Backward
         TTNN::Ops::Examples
+        TTNN::Ops::Experimental::AdaptivePool
         TTNN::Ops::Experimental::AutoFormat
         TTNN::Ops::Experimental::BcastTo
         TTNN::Ops::Experimental::CCL
@@ -670,6 +676,7 @@ add_subdirectory(cpp/ttnn/operations/eltwise/unary_backward)
 add_subdirectory(cpp/ttnn/operations/embedding)
 add_subdirectory(cpp/ttnn/operations/embedding_backward)
 add_subdirectory(cpp/ttnn/operations/examples)
+add_subdirectory(cpp/ttnn/operations/experimental/adaptive_pool)
 add_subdirectory(cpp/ttnn/operations/experimental/auto_format)
 add_subdirectory(cpp/ttnn/operations/experimental/bcast_to)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl)

@@ -27,7 +27,7 @@ void kernel_main() {
         noc_async_write(l1_read_addr, dst_noc_addr, block_width_bytes);
         stick_id++;
         l1_read_addr += padded_block_width_bytes;
-        noc_async_write_barrier();
     }
+    noc_async_write_barrier();
     cb_pop_front(cb_id_out0, block_height);
 }
