@@ -594,6 +594,9 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWriteMultiThread) {
     }
 }
 
+template <typename T>
+using vector_aligned_32 = std::vector<T, tt::stl::aligned_allocator<T, 32>>;
+
 TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 
@@ -622,9 +625,13 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
 
     // Prepare destination buffer and pin the entire destination range for the target shard
+    #if 0
     std::vector<uint32_t> dst((bytes_per_device + 32)/ sizeof(uint32_t), 0);
     uint32_t *dst_ptr_aligned = reinterpret_cast<uint32_t*>((reinterpret_cast<uintptr_t>(dst.data()) + 31) & ~31);
     fmt::println(stderr, "dst_ptr_aligned: {}", fmt::ptr(dst_ptr_aligned));
+    #endif
+    vector_aligned_32<uint32_t> dst(bytes_per_device/ sizeof(uint32_t), 0);
+    uint32_t *dst_ptr_aligned = reinterpret_cast<uint32_t*>(dst.data());
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
     auto pinned_unique = mesh_device_->pin_memory(
         coordinate_range_set,
