@@ -99,8 +99,7 @@ class ASPP(nn.Module):
         assert len(dilations) == 3, "ASPP expects 3 dilations, got {}".format(len(dilations))
         self.pool_kernel_size = pool_kernel_size
         self.dropout = dropout
-        use_bias = False
-        # use_bias = norm == ""
+        use_bias = norm == ""
 
         self.shared_weight_tensor_kernel1 = shared_weight_tensor_kernel1
         self.shared_weight_tensor_kernel3 = shared_weight_tensor_kernel3

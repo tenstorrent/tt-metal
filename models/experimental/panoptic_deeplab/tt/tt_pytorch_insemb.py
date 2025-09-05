@@ -19,11 +19,9 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
         self,
         input_shape: Dict[str, ShapeSpec],
         *,
-        # --- Parameters specific to this head ---
         head_channels: int,
         center_loss_weight: float,
         offset_loss_weight: float,
-        # --- Parameters to be passed down to the base DeepLabV3PlusHead ---
         project_channels: List[int],
         aspp_dilations: List[int],
         aspp_dropout: float,
@@ -32,14 +30,12 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
         norm: Union[str, Callable],
         train_size: Optional[Tuple],
         use_depthwise_separable_conv: bool,
-        # --- ALL weights for the shared decoder (base class) ---
         shared_weight_tensor_kernel1: torch.Tensor,
         shared_weight_tensor_kernel3: torch.Tensor,
         shared_weight_tensor_kernel1_output5: torch.Tensor,
         project_conv_weights: Dict[str, torch.Tensor],
         fuse_conv_0_weights: Dict[str, torch.Tensor],
         fuse_conv_1_weights: Dict[str, torch.Tensor],
-        # --- ALL weights specific to this instance head ---
         center_head_0_weight: torch.Tensor,
         center_head_1_weight: torch.Tensor,
         center_predictor_weight: torch.Tensor,
@@ -47,11 +43,6 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
         offset_head_1_weight: torch.Tensor,
         offset_predictor_weight: torch.Tensor,
     ):
-        """
-        Refactored __init__ to accept all weights externally and match the semantic head's structure.
-        """
-        # --- Call the base class constructor to build the shared decoder ---
-        # We pass num_classes=None to ensure it runs in decoder_only mode.
         super().__init__(
             input_shape=input_shape,
             project_channels=project_channels,
@@ -62,9 +53,8 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
             norm=norm,
             train_size=train_size,
             use_depthwise_separable_conv=use_depthwise_separable_conv,
-            num_classes=None,  # Crucial for decoder_only mode
+            num_classes=None,
             predictor_weight=None,
-            # Pass all the shared weights for the decoder part
             shared_weight_tensor_kernel1=shared_weight_tensor_kernel1,
             shared_weight_tensor_kernel3=shared_weight_tensor_kernel3,
             shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
@@ -74,12 +64,10 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
         )
         assert self.decoder_only
 
-        # Store loss weights
         self.center_loss_weight = center_loss_weight
         self.offset_loss_weight = offset_loss_weight
 
         use_bias = norm == ""
-        # The output of the base decoder has decoder_channels[0] channels
         decoder_output_channels = decoder_channels[0]
 
         # --- Build the Center Prediction Branch ---
@@ -112,7 +100,6 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
         nn.init.constant_(self.center_predictor.bias, 0)
 
         # --- Build the Offset Prediction Branch ---
-        # Assuming use_depthwise_separable_conv is False to match the common case
         offset_head_conv1 = Conv2d(
             decoder_output_channels,
             decoder_output_channels,
@@ -144,7 +131,6 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
     def forward(
         self,
         features,
-        # Training-related args are ignored in inference, but kept for signature consistency
         center_targets=None,
         center_weights=None,
         offset_targets=None,
@@ -155,16 +141,13 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
         """
         center, offset = self.layers(features)
 
-        # Upsample center predictions
         center = F.interpolate(center, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
 
-        # Upsample and scale offset predictions
         offset = (
             F.interpolate(offset, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
             * self.common_stride
         )
 
-        # Return format for inference
         return center, offset, {}, {}
 
     def layers(self, features):
@@ -174,14 +157,11 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
         """
         assert self.decoder_only
 
-        # 1. Get the shared feature map from the base class decoder
         y = super().layers(features)
 
-        # 2. Process through the center prediction branch
         center = self.center_head(y)
         center = self.center_predictor(center)
 
-        # 3. Process through the offset prediction branch
         offset = self.offset_head(y)
         offset = self.offset_predictor(offset)
 

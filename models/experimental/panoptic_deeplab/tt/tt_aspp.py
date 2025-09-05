@@ -34,7 +34,6 @@ def get_ttnn_norm(norm_name: str, num_channels: int, device, norm_params: dict =
     if norm_name.lower() in ["bn", "syncbn", "batchnorm"]:
         # BatchNorm / SyncBN implementation
         if norm_params is not None:
-            # Use provided pre-trained parameters - shape should be (1, num_channels, 1, 1) for NCHW format
             weight = ttnn.from_torch(
                 norm_params.get("weight", torch.ones(num_channels, dtype=torch.bfloat16)).view(1, -1, 1, 1),
                 device=device,
@@ -60,7 +59,6 @@ def get_ttnn_norm(norm_name: str, num_channels: int, device, norm_params: dict =
                 dtype=ttnn.bfloat16,
             )
         else:
-            # Default initialization - shape should be (1, num_channels, 1, 1) for NCHW format
             weight = ttnn.ones((1, num_channels, 1, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
             bias = ttnn.zeros((1, num_channels, 1, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
             running_mean = ttnn.zeros(
@@ -71,13 +69,8 @@ def get_ttnn_norm(norm_name: str, num_channels: int, device, norm_params: dict =
             )
 
         def batch_norm_fn(x):
-            # TTNN batch norm expects NCHW format and running statistics for inference mode
-            # Follow the same pattern as the ResNet implementation
-
-            # Convert from NHWC to NCHW for batch_norm
             x_nchw = ttnn.permute(x, (0, 3, 1, 2))
 
-            # Apply batch normalization
             x_normed = ttnn.batch_norm(
                 x_nchw,
                 running_mean=running_mean,
@@ -88,7 +81,6 @@ def get_ttnn_norm(norm_name: str, num_channels: int, device, norm_params: dict =
                 training=False,
             )
 
-            # Convert back to NHWC
             x_nhwc = ttnn.permute(x_normed, (0, 2, 3, 1))
 
             return x_nhwc
@@ -277,8 +269,4 @@ class TtASPP(nn.Module):
         res = self.project_conv(res)
         res = self.project_norm(res)
         res = self.activation(res)
-
-        # if self.training and self.dropout > 0:
-        #    res = ttnn.experimental.dropout(res, probability=self.dropout, scale=1.0 / (1.0 - self.dropout), seed=42)
-        # This is commented out because training is false for torch trace so it means no dropout will be applied
         return res

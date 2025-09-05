@@ -42,11 +42,9 @@ class DeepLabV3PlusHead(nn.Module):
         ignore_value: int = -1,
         num_classes: Optional[int] = None,
         use_depthwise_separable_conv: bool = False,
-        # --- Weights for ASPP ---
         shared_weight_tensor_kernel1: torch.Tensor,
         shared_weight_tensor_kernel3: torch.Tensor,
         shared_weight_tensor_kernel1_output5: torch.Tensor,
-        # --- Refined list of Decoder and Predictor Weights ---
         project_conv_weights: Dict[str, torch.Tensor],
         fuse_conv_0_weights: Dict[str, torch.Tensor],
         fuse_conv_1_weights: Dict[str, torch.Tensor],
@@ -84,21 +82,19 @@ class DeepLabV3PlusHead(nn.Module):
         super().__init__()
         input_shape = sorted(input_shape.items(), key=lambda x: x[1].stride)
 
-        # fmt: off
-        self.in_features      = [k for k, v in input_shape]  # starting from "res2" to "res5"
-        in_channels           = [x[1].channels for x in input_shape]
-        in_strides            = [x[1].stride for x in input_shape]
-        aspp_channels         = decoder_channels[-1]
-        self.ignore_value     = ignore_value
-        self.common_stride    = common_stride  # output stride
-        self.loss_weight      = loss_weight
-        self.loss_type        = loss_type
-        self.decoder_only     = num_classes is None
+        self.in_features = [k for k, v in input_shape]
+        in_channels = [x[1].channels for x in input_shape]
+        in_strides = [x[1].stride for x in input_shape]
+        aspp_channels = decoder_channels[-1]
+        self.ignore_value = ignore_value
+        self.common_stride = common_stride
+        self.loss_weight = loss_weight
+        self.loss_type = loss_type
+        self.decoder_only = num_classes is None
         self.use_depthwise_separable_conv = use_depthwise_separable_conv
         self.shared_weight_tensor_kernel1 = shared_weight_tensor_kernel1
         self.shared_weight_tensor_kernel3 = shared_weight_tensor_kernel3
         self.shared_weight_tensor_kernel1_output5 = shared_weight_tensor_kernel1_output5
-        # fmt: on
 
         assert len(project_channels) == len(self.in_features) - 1, "Expected {} project_channels, got {}".format(
             len(self.in_features) - 1, len(project_channels)
@@ -111,7 +107,7 @@ class DeepLabV3PlusHead(nn.Module):
         use_bias = norm == ""
         for idx, in_channel in enumerate(in_channels):
             decoder_stage = nn.ModuleDict()
-            feature_name = self.in_features[idx]  # e.g., 'res2', 'res3', 'res5'
+            feature_name = self.in_features[idx]
 
             if idx == len(self.in_features) - 1:
                 # ASPP module
@@ -179,7 +175,6 @@ class DeepLabV3PlusHead(nn.Module):
 
             decoder_stage["project_conv"] = project_conv
             decoder_stage["fuse_conv"] = fuse_conv
-
             self.decoder[self.in_features[idx]] = decoder_stage
 
     @classmethod
@@ -220,21 +215,20 @@ class DeepLabV3PlusHead(nn.Module):
 
     def layers(self, features):
         y = None
-        # Reverse feature maps
         feature_keys = self.in_features[::-1]
 
         # --- ASPP Stage ---
         x = features[feature_keys[0]]
         y = self.decoder[feature_keys[0]]["project_conv"](x)
 
-        # --- First Fusion Stage (e.g., res3) ---
+        # --- First Fusion Stage ---
         x = features[feature_keys[1]]
         proj_x = self.decoder[feature_keys[1]]["project_conv"](x)
         y_upsampled = F.interpolate(y, size=proj_x.size()[2:], mode="bilinear", align_corners=False)
         y = torch.cat([proj_x, y_upsampled], dim=1)
         y = self.decoder[feature_keys[1]]["fuse_conv"](y)
 
-        # --- Second Fusion Stage (e.g., res2) ---
+        # --- Second Fusion Stage ---
         x = features[feature_keys[2]]
         proj_x = self.decoder[feature_keys[2]]["project_conv"](x)
         y_upsampled = F.interpolate(y, size=proj_x.size()[2:], mode="bilinear", align_corners=False)
@@ -251,7 +245,7 @@ class DeepLabV3PlusHead(nn.Module):
 
 class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
     """
-    A semantic segmentation head described in :paper:`Panoptic-DeepLab`.
+    A semantic segmentation head described in paper `Panoptic-DeepLab`.
     """
 
     # @configurable
