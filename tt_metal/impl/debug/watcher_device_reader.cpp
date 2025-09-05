@@ -1081,7 +1081,8 @@ void WatcherDeviceReader::Core::LogRunningKernels() const {
     auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
     log_info(tt::LogMetal, "While running kernels:");
     for (size_t i = 0; i < num_processors; i++) {
-        log_info(tt::LogMetal, " {}: {}", get_riscv_name(programmable_core_type_, i), GetKernelName(i));
+        log_info(
+            tt::LogMetal, " {}: {}", get_riscv_name(programmable_core_type_, i), GetKernelName(i));
     }
 }
 

@@ -34,7 +34,8 @@ std::vector<std::string> expected = {
     " 0x001f0020,0x001e001f,0x001d001e,0x001c001d,0x001b001c,0x001a001b,0x0019001a,0x00180019,",
     " 0x00170018,0x00160017,0x00150016,0x00140015,0x00130014,0x00120013,0x00110012,0x00100011,",
     " 0x000f0010,0x000e000f,0x000d000e,0x000c000d,0x000b000c,0x000a000b,0x0009000a,0x00080009,",
-    "]"};
+    "]"
+};
 
 namespace {
 
@@ -123,7 +124,12 @@ void RunTest(
     log_info(tt::LogTest, "Checking file: {}", fixture->log_file_name);
 
     // Check log
-    EXPECT_TRUE(FileContainsAllStringsInOrder(fixture->log_file_name, expected));
+    EXPECT_TRUE(
+        FileContainsAllStringsInOrder(
+            fixture->log_file_name,
+            expected
+        )
+    );
 }
 
 using enum HalProgrammableCoreType;
@@ -153,9 +159,13 @@ TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc0) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
             [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, {TENSIX, COMPUTE, 0});
+            },
+            mesh_device);
     }
-    }
+}
 
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc1) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
             [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
