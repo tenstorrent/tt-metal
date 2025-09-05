@@ -5,8 +5,6 @@
 
 #include <string>
 
-using namespace tt;
-
 namespace tt::tt_metal {
 
 // Log current kernel compile-time arguments
