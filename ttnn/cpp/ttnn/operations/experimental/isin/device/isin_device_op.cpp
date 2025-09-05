@@ -65,22 +65,6 @@ IsInDeviceOperation::tensor_return_value_t IsInDeviceOperation::create_output_te
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.elements_tensor.device());
 }
 
-operation::Hash IsInDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return tt::tt_metal::operation::hash_operation<IsInDeviceOperation>(
-        args.assume_unique,
-        args.invert,
-        args.memory_config,
-        args.single_fetch_subchunk_size,
-        tensor_args.elements_tensor.logical_shape(),
-        tensor_args.elements_tensor.dtype(),
-        tensor_args.elements_tensor.layout(),
-        tensor_args.test_elements_tensor.logical_shape(),
-        tensor_args.test_elements_tensor.dtype(),
-        tensor_args.test_elements_tensor.layout(),
-        tensor_args.optional_out.has_value());
-}
-
 IsInDeviceOperation::invocation_result_t IsInDeviceOperation::invoke(
     const Tensor& elements_tensor,
     const Tensor& test_elements_tensor,

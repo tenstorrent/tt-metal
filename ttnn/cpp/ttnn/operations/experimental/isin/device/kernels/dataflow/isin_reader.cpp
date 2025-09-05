@@ -12,100 +12,11 @@
 
 namespace {
 
-// template <typename elements_number_type, DataType dt>
-// FORCE_INLINE int32_t compare(const elements_number_type& left, const elements_number_type& right) {
-//     return left - right;
-// }
-
-// template <>
-// FORCE_INLINE int32_t compare<uint16_t, DataType::BFLOAT16>(const uint16_t& left, const uint16_t& right) {
-//     const float float_left = *static_cast<float*>(static_cast<uint32_t>(left) << (8 * sizeof(uint16_t)));
-//     const float float_right = *static_cast<float*>(static_cast<uint32_t>(right) << (8 * sizeof(uint16_t)));
-//     return compare<float, DataType::FLOAT>(float_left, float_right);
-// }
-
-// template <typename elements_number_type>
-// FORCE_INLINE void apply_inverse_tagged(elements_number_type* a, std::size_t n, index_hint_number_type* p) {
-//     for (std::size_t i = 0; i < n; ++i) {
-//         if (p[i] >= n) {
-//             continue;  // visited
-//         }
-//         std::size_t j = i;
-//         elements_number_type tmp = std::move(a[i]);  // hold dest slot's future value
-//         while (p[j] < n) {                           // follow cycle
-//             std::size_t src = p[j];
-//             std::swap(tmp, a[src]);  // pull value from source
-//             p[j] += n;               // mark visited
-//             j = src;
-//         }
-//         a[i] = std::move(tmp);  // place last carried value
-//     }
-//     for (std::size_t i = 0; i < n; ++i) {
-//         p[i] -= n;  // untag
-//     }
-// }
-
-// template <typename elements_number_type>
-// FORCE_INLINE void apply_direct_tagged(elements_number_type* a, std::size_t n, index_hint_number_type* p) {
-//     for (std::size_t i = 0; i < n; ++i) {
-//         if (p[i] >= n || p[i] == i) {  // visited or fixed
-//             if (p[i] < n && p[i] == i) {
-//                 p[i] += n;
-//             }
-//             continue;
-//         }
-//         std::size_t j = i;
-//         elements_number_type tmp = std::move(a[i]);
-//         while (p[j] < n && p[j] != i) {
-//             std::size_t to = p[j];
-//             std::swap(tmp, a[to]);  // push value forward
-//             index_hint_number_type nxt = p[j];
-//             p[j] += n;  // mark visited
-//             j = nxt;
-//         }
-//         a[i] = std::move(tmp);
-//         p[j] += n;  // close the cycle
-//     }
-//     for (std::size_t i = 0; i < n; ++i) {
-//         p[i] -= n;  // untag
-//     }
-// }
-
-// template <typename test_elements_number_type, DataType dt>
-// FORCE_INLINE void sort_chunk(const uint32_t& test_elements_l1_read_addr, const uint32_t& subchunk_size) {
-//     constexpr uint32_t test_elements_pod_size = sizeof(test_elements_number_type);
-//     volatile tt_l1_ptr test_elements_number_type* test_elements_chunk_begin_ptr =
-//         reinterpret_cast<volatile tt_l1_ptr test_elements_number_type*>(test_elements_l1_read_addr);
-//     volatile tt_l1_ptr test_elements_number_type* test_elements_chunk_end_ptr =
-//         reinterpret_cast<volatile tt_l1_ptr test_elements_number_type*>(
-//             test_elements_l1_read_addr + test_elements_pod_size * subchunk_size);
-//     std::sort(test_elements_chunk_begin_ptr, test_elements_chunk_end_ptr);
-// }
-
-// template <typename elements_number_type, DataType dt>
-// FORCE_INLINE void sort_chunk(
-//     const uint32_t& elements_l1_read_addr, const uint32_t& index_hint_l1_read_addr, const uint32_t& subchunk_size) {
-//     constexpr uint32_t elements_pod_size = sizeof(elements_number_type);
-//     volatile tt_l1_ptr elements_number_type* elements_chunk_begin_ptr =
-//         reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(elements_l1_read_addr);
-//     volatile tt_l1_ptr elements_number_type* elements_chunk_end_ptr =
-//         reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(
-//             elements_l1_read_addr + elements_pod_size * subchunk_size);
-//     constexpr uint32_t index_hint_pod_size = sizeof(elements_number_type);
-//     volatile tt_l1_ptr index_hint_number_type* index_hint_chunk_begin_ptr =
-//         reinterpret_cast<volatile tt_l1_ptr index_hint_number_type*>(index_hint_l1_read_addr);
-//     volatile tt_l1_ptr index_hint_number_type* index_hint_chunk_end_ptr =
-//         reinterpret_cast<volatile tt_l1_ptr index_hint_number_type*>(
-//             index_hint_l1_read_addr + index_hint_pod_size * subchunk_size);
-//     std::iota(index_hint_chunk_begin_ptr, index_hint_chunk_end_ptr, 0);
-//     std::sort(index_hint_chunk_begin_ptr, index_hint_chunk_end_ptr, [&](const uint32_t& left, const uint32_t& right)
-//     {
-//         return compare<elements_number_type, dt>(elements_chunk_begin_ptr[left], elements_chunk_begin_ptr[right]);
-//     });
-//     apply_inverse_tagged(elements_chunk_begin_ptr, subchunk_size, index_hint_chunk_begin_ptr);
-// }
-
-// template <typename elements_number_type>
+/*
+    This function compares two subchunks of data - one chunk is one stick, and one subchunk
+    is the maximal length of a stick that can fit as much L1 memory as possible - this length
+    is shared betwen rows of `elements`, `test_elements` and `output` tensors.
+*/
 FORCE_INLINE void isin_subchunks(
     const uint32_t& elements_l1_read_addr,
     const uint32_t& test_elements_l1_read_addr,
@@ -127,32 +38,15 @@ FORCE_INLINE void isin_subchunks(
             }
         }
     }
-
-    // for (uint32_t i = 0; i < elements_subchunk_size; ++i) {
-    //     DPRINT << elements_subchunk_ptr[i] << " ";
-    // }
 }
 
-// FORCE_INLINE void recover_ordering(
-//     const uint32_t& output_l1_addr,
-//     const uint32_t& index_hint_l1_read_addr,
-//     const uint32_t& output_l1_write_addr,
-//     const uint32_t& subchunk_size) {
-//     constexpr uint32_t output_pod_size = sizeof(output_number_type);
-//     volatile tt_l1_ptr output_number_type* output_chunk_begin_ptr =
-//         reinterpret_cast<volatile tt_l1_ptr output_number_type*>(output_l1_addr);
-//     volatile tt_l1_ptr output_number_type* output_chunk_end_ptr =
-//         reinterpret_cast<volatile tt_l1_ptr output_number_type*>(output_l1_addr + output_pod_size * subchunk_size);
-//     constexpr uint32_t index_hint_pod_size = sizeof(index_hint_number_type);
-//     volatile tt_l1_ptr index_hint_number_type* index_hint_chunk_begin_ptr =
-//         reinterpret_cast<volatile tt_l1_ptr index_hint_number_type*>(index_hint_l1_read_addr);
-//     volatile tt_l1_ptr index_hint_number_type* index_hint_chunk_end_ptr =
-//         reinterpret_cast<volatile tt_l1_ptr index_hint_number_type*>(
-//             index_hint_l1_read_addr + index_hint_pod_size * subchunk_size);
-
-//     apply_direct_tagged(output_chunk_begin_ptr, subchunk_size, index_hint_chunk_begin_ptr);
-// }
-
+/*
+    When a core begins processing of a given chunk, the output chunk is fully erased with zeroes
+    (or filled with ones, if the invert flag is set) - this makes sure that the output chunk is properly filled
+    since the algorithm marks only the elements from `elements` tensor that are encountered within
+    `test_elements` tensor, so the output chunk get later updated only with the reverted values and
+    then retuened to DRAM
+*/
 FORCE_INLINE void prefill_output(const uint32_t& output_l1_write_addr, const uint32_t& output_subchunk_size) {
     volatile tt_l1_ptr output_number_type* output_chunk_begin_ptr =
         reinterpret_cast<volatile tt_l1_ptr output_number_type*>(output_l1_write_addr);
@@ -176,74 +70,37 @@ void kernel_main() {
     const auto test_elements_addr_gtor =
         TensorAccessor{ctas.test_elements_accessor_args, test_elements_buffer_address, ctas.test_elements_size * 4};
 
-    // if (ctas.test_elements_size <= ctas.singke_fetch_subchunk_size) {
-    //     load_to_cb(
-    //         ctas.test_elements_cb, test_elements_addr_gtor, test_elements_offset, ctas.single_fetch_subchunk_size);
-    //     cb_wait_front(ctas.test_elements_cb, ONE_PAGE);
-    //     for (uint32_t elements_subchunk_id = subchunks_offset,
-    //                 elements_offset = subchunks_offset * ctas.single_fetch_subchunk_size;
-    //         elements_subchunk_id < subchunks_offset + subchunks_per_core;
-    //         ++elements_subchunk_id, elements_offset += ctas.single_fetch_subchunk_size) {
-    //         const uint32_t elements_subchunk_size =
-    //             std::min(ctas.elements_size - elements_offset, ctas.single_fetch_subchunk_size);
-    //         load_to_cb(ctas.elements_cb, elements_addr_gtor, elements_offset, elements_subchunk_size);
-    //         cb_wait_front(ctas.elements_cb, ONE_PAGE);
-    //         cb_reserve_back(ctas.output_cb, ONE_PAGE);
-    //         const uint32_t elements_l1_read_addr = get_read_ptr(ctas.elements_cb);
-    //         const uint32_t output_l1_write_addr = get_write_ptr(ctas.output_cb);
-    //         prefill_output(output_l1_write_addr, elements_subchunk_size);
-
-    //         // if (ctas.test_elements_size > ctas.single_fetch_subchunk_size) {
-    //         //     for (uint32_t test_elements_subchunk_id = 0, test_elements_offset = 0;
-    //         //         test_elements_offset < ctas.test_elements_size;
-    //         //         ++test_elements_subchunk_id, test_elements_offset += ctas.single_fetch_subchunk_size) {
-    //         //         const uint32_t test_elements_subchunk_size =
-    //         //             std::min(ctas.test_elements_size - test_elements_offset, ctas.single_fetch_subchunk_size);
-    //         //         load_to_cb(
-    //         //             ctas.test_elements_cb, test_elements_addr_gtor, test_elements_offset,
-    //         test_elements_subchunk_size);
-    //         //         cb_wait_front(ctas.test_elements_cb, ONE_PAGE);
-    //         //         const uint32_t test_elements_l1_read_addr = get_read_ptr(ctas.test_elements_cb);
-
-    //         //         isin_subchunks(
-    //         //             elements_l1_read_addr,
-    //         //             test_elements_l1_read_addr,
-    //         //             output_l1_write_addr,
-    //         //             elements_subchunk_size,
-    //         //             test_elements_subchunk_size);
-
-    //         //         cb_pop_front(ctas.test_elements_cb, ONE_PAGE);
-    //         //     }
-    //         // }
-
-    //         cb_push_back(ctas.output_cb, ONE_PAGE);
-    //         cb_pop_front(ctas.elements_cb, ONE_PAGE);
-    //     }
-    // } else {
+    /*
+        for every subchunk (part of a stick) of the elements tensor - to wchi an analogous output chunk
+        is related to - is fully processed by the core
+        there is the fact that tensors are flattened before fed to kernels, so they consist only of one stick
+    */
     for (uint32_t elements_subchunk_id = subchunks_offset,
                   elements_offset = subchunks_offset * ctas.single_fetch_subchunk_size;
          elements_subchunk_id < subchunks_offset + subchunks_per_core;
          ++elements_subchunk_id, elements_offset += ctas.single_fetch_subchunk_size) {
+        // either the maximal defined single fetch size or the remainder, which is less than that number
         const uint32_t elements_subchunk_size =
             std::min(ctas.elements_size - elements_offset, ctas.single_fetch_subchunk_size);
         load_to_cb(ctas.elements_cb, elements_addr_gtor, elements_offset, elements_subchunk_size);
         cb_wait_front(ctas.elements_cb, ONE_PAGE);
+        // prepare output mask for writing
         cb_reserve_back(ctas.output_cb, ONE_PAGE);
         const uint32_t elements_l1_read_addr = get_read_ptr(ctas.elements_cb);
         const uint32_t output_l1_write_addr = get_write_ptr(ctas.output_cb);
         prefill_output(output_l1_write_addr, elements_subchunk_size);
 
-        // if (ctas.test_elements_size > ctas.single_fetch_subchunk_size) {
+        // for every subchunk of the test_elements stick
         for (uint32_t test_elements_subchunk_id = 0, test_elements_offset = 0;
              test_elements_offset < ctas.test_elements_size;
              ++test_elements_subchunk_id, test_elements_offset += ctas.single_fetch_subchunk_size) {
+            // same as for elements_subchunk_size
             const uint32_t test_elements_subchunk_size =
                 std::min(ctas.test_elements_size - test_elements_offset, ctas.single_fetch_subchunk_size);
             load_to_cb(
                 ctas.test_elements_cb, test_elements_addr_gtor, test_elements_offset, test_elements_subchunk_size);
             cb_wait_front(ctas.test_elements_cb, ONE_PAGE);
             const uint32_t test_elements_l1_read_addr = get_read_ptr(ctas.test_elements_cb);
-            // DPRINT << "AAAAAAAAAAAAAAAA" << ENDL();
 
             isin_subchunks(
                 elements_l1_read_addr,
@@ -252,15 +109,11 @@ void kernel_main() {
                 elements_subchunk_size,
                 test_elements_subchunk_size);
 
-            // if (new_test_elements_iteration) {
-
-            // }
             cb_pop_front(ctas.test_elements_cb, ONE_PAGE);
         }
-        // }
 
+        // push the output subchunk once it's been checked against test_elements
         cb_push_back(ctas.output_cb, ONE_PAGE);
         cb_pop_front(ctas.elements_cb, ONE_PAGE);
     }
-    // }
 }

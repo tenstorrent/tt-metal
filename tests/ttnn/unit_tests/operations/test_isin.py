@@ -55,7 +55,7 @@ def select_torch_dtype(ttnn_dtype):
         ),
     ],
 )
-def test_isin_normal(elements, test_elements, dtype, layout, device):
+def test_isin_typical_predefined_data(elements, test_elements, dtype, layout, device):
     torch_dtype = select_torch_dtype(dtype)
     elements_torch = torch.tensor(elements, dtype=torch_dtype)
     test_elements_torch = torch.tensor(test_elements, dtype=torch_dtype)
@@ -66,8 +66,10 @@ def test_isin_normal(elements, test_elements, dtype, layout, device):
     torch_isin_result = torch.isin(elements_torch, test_elements_torch)
     ttnn_isin_result = ttnn.experimental.isin(elements_ttnn, test_elements_ttnn)
 
-    assert torch_isin_result.shape == ttnn_isin_result.shape
-    assert torch_isin_result.count_nonzero() == ttnn.to_torch(ttnn_isin_result).count_nonzero()
+    torch_result_from_ttnn = ttnn.to_torch(ttnn_isin_result)
+    assert torch_isin_result.shape == torch_result_from_ttnn.shape
+    assert torch_isin_result.count_nonzero() == torch_result_from_ttnn.count_nonzero()
+    assert torch.equal(torch_isin_result != 0, torch_result_from_ttnn != 0)
 
 
 @pytest.mark.parametrize(
@@ -93,7 +95,7 @@ def test_isin_normal(elements, test_elements, dtype, layout, device):
         ([5, 10, 5, 1, 1, 1, 1, 1, 1, 5], [20]),
     ],
 )
-def test_isin_random(elements_shape, test_elements_shape, device):
+def test_isin_random_data(elements_shape, test_elements_shape, device):
     torch.manual_seed(0)
 
     elements_torch = torch.randint(0, 10000, elements_shape, dtype=torch.int64)
@@ -106,8 +108,10 @@ def test_isin_random(elements_shape, test_elements_shape, device):
     torch_isin_result = torch.isin(elements_torch, test_elements_torch)
     ttnn_isin_result = ttnn.experimental.isin(elements_ttnn, test_elements_ttnn)
 
-    assert torch_isin_result.shape == ttnn_isin_result.shape
-    assert torch_isin_result.count_nonzero() == ttnn.to_torch(ttnn_isin_result).count_nonzero()
+    torch_result_from_ttnn = ttnn.to_torch(ttnn_isin_result)
+    assert torch_isin_result.shape == torch_result_from_ttnn.shape
+    assert torch_isin_result.count_nonzero() == torch_result_from_ttnn.count_nonzero()
+    assert torch.equal(torch_isin_result != 0, torch_result_from_ttnn != 0)
 
 
 @pytest.mark.parametrize(
@@ -116,13 +120,12 @@ def test_isin_random(elements_shape, test_elements_shape, device):
         ([10], [20], 1),
         ([20], [10], 1),
         ([10, 10], [20, 20], 4),
-        # (
-        #     [10, 100, 2, 10, 50], [20, 10, 20, 10], 5
-        # ),
         ([5, 10, 5, 1, 1, 1, 1, 1, 1, 5], [20], 3),
     ],
 )
-def test_isin_callback_random(elements_shape, test_elements_shape, expected_num_program_cache_entries, device):
+def test_isin_program_cache_and_random_data(
+    elements_shape, test_elements_shape, expected_num_program_cache_entries, device
+):
     torch.manual_seed(0)
 
     elements_torch = torch.randint(0, 10000, elements_shape, dtype=torch.int64)
@@ -135,6 +138,8 @@ def test_isin_callback_random(elements_shape, test_elements_shape, expected_num_
         torch_isin_result = torch.isin(elements_torch, test_elements_torch)
         ttnn_isin_result = ttnn.experimental.isin(elements_ttnn, test_elements_ttnn)
 
-    assert torch_isin_result.shape == ttnn_isin_result.shape
-    assert torch_isin_result.count_nonzero() == ttnn.to_torch(ttnn_isin_result).count_nonzero()
+    torch_result_from_ttnn = ttnn.to_torch(ttnn_isin_result)
+    assert torch_isin_result.shape == torch_result_from_ttnn.shape
+    assert torch_isin_result.count_nonzero() == torch_result_from_ttnn.count_nonzero()
+    assert torch.equal(torch_isin_result != 0, torch_result_from_ttnn != 0)
     assert device.num_program_cache_entries() == expected_num_program_cache_entries
