@@ -16,6 +16,7 @@
 #include "tt-metalium/mesh_coord.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
+#include "tt-metalium/pinned_memory.hpp"
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
 #include "tt-metalium/shape.hpp"
@@ -668,6 +669,12 @@ Tensor to_device(
     return Tensor(std::move(mesh_storage), *tensor_spec, tensor.tensor_topology());
 }
 
+struct PinnedMemoryWrapper {
+    std::shared_ptr<tt_metal::PinnedMemory> pinned_memory;
+    std::shared_ptr<tt_metal::distributed::MeshEvent> release_event;
+};
+std::deque<PinnedMemoryWrapper> pinned_memories_cache;
+
 template <typename T>
 void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blocking, ttnn::QueueId cq_id) {
     ZoneScoped;
@@ -686,15 +693,30 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
     ttnn::MeshDevice* device = mesh_buffer->device();
     distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue(*cq_id);
 
-    const auto& distributed_host_buffer = host_tensor.host_storage().buffer();
+    const DistributedHostBuffer& distributed_host_buffer = host_tensor.host_storage().buffer();
+
+    for (auto& pinned_memory : pinned_memories_cache) {
+        EventSynchronize(*pinned_memory.release_event);
+    }
+    pinned_memories_cache.clear();
 
     // Host tensor must have pre-allocated buffers for all device shards.
     // However, it may have some extra shards. Drop them by "unwrapping" the distributed host buffer, and re-wrapping
     // only for those shards that are actually present on device.
     std::vector<std::pair<distributed::MeshCoordinate, std::optional<HostBuffer>>> shards;
     shards.reserve(device_storage.coords.size());
+    std::vector<std::shared_ptr<tt_metal::PinnedMemory>> pinned_memories;
     for (const auto& device_coord : device_storage.coords) {
-        shards.push_back({device_coord, distributed_host_buffer.get_shard(device_coord)});
+        auto shard = distributed_host_buffer.get_shard(device_coord);
+        if (shard.has_value()) {
+            auto pinned_memory = device->pin_memory(distributed::MeshCoordinateRangeSet{distributed::MeshCoordinateRange{device_coord, device_coord}}, 
+                shard->view_bytes().data(),
+                shard->view_bytes().size(),
+                /*map_to_noc=*/true);
+            pinned_memories.push_back(std::move(pinned_memory));
+            shard->set_pinned_memory(pinned_memories.back());
+        }
+        shards.push_back({device_coord, std::move(shard)});
     }
 
     DistributedHostBuffer dst_distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
@@ -716,6 +738,15 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
     }
 
     mesh_cq.enqueue_read(mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
+    std::shared_ptr<tt_metal::distributed::MeshEvent> event = std::make_shared<tt_metal::distributed::MeshEvent>(mesh_cq.enqueue_record_event_to_host());
+    for (auto& pinned_memory : pinned_memories) {
+        pinned_memories_cache.push_back({std::move(pinned_memory), event});
+    }
+    #if 0
+    for (auto& shard : shards) {
+        shard.second->set_pinned_memory(nullptr);
+    }
+    #endif
 
     host_tensor =
         Tensor(HostStorage(std::move(dst_distributed_host_buffer)), device_tensor.tensor_spec(), TensorTopology{});
