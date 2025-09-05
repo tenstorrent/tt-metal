@@ -4605,7 +4605,7 @@ def test_conv2d_activation_reuse(
     enable_split_reader,
     enable_activation_reuse,
 ):
-    if batch == 16 and is_wormhole():
+    if batch == 16 and is_wormhole_b0():
         # not enough memory on WH for this case
         act_block_h_override = 32*4
 
