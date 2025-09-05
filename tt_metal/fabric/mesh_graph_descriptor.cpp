@@ -77,7 +77,7 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
     set_defaults(temp_proto);
 
     // Validate the proto
-    const auto errors = static_validate(temp_proto);
+    const auto errors = static_validate(temp_proto, backwards_compatible);
     TT_FATAL(errors.empty(), "Failed to validate MeshGraphDescriptor textproto: \n{}", get_validation_report(errors));
 
     proto_ = std::make_unique<proto::MeshGraphDescriptor>(temp_proto);
