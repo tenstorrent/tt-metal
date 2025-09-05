@@ -259,7 +259,11 @@ class TtASPP(nn.Module):
         scale_factor = [H // current_h, W // current_w]
 
         pooled = ttnn.to_layout(pooled, ttnn.ROW_MAJOR_LAYOUT)
-        pooled = ttnn.upsample(pooled, scale_factor=scale_factor, mode="bilinear")
+        if pooled.shape[1] == 1 and pooled.shape[2] == 1:
+            mode = "nearest"
+        else:
+            mode = "bilinear"
+        pooled = ttnn.upsample(pooled, scale_factor=scale_factor, mode=mode)
         pooled = ttnn.to_memory_config(pooled, ttnn.DRAM_MEMORY_CONFIG)
 
         res.append(pooled)
