@@ -26,12 +26,11 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
-      nightly:
+      gtest_filter:
         required: false
-        default: false
-        type: boolean
-        description: "Run nightly-only tests"
-
+        default: ""
+        type: string
+        description: "Filter for gtest"
 jobs:
   cpp-unit-tests:
     strategy:
@@ -111,11 +110,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
             mkdir -p generated/test_reports
-            if [ "${{ inputs.nightly }}" = "true" ]; then
-              GTEST_FILTER=""
-            else
-              GTEST_FILTER='--gtest_filter=*-*NIGHTLY_*'
-            fi
+            GTEST_FILTER=${{inputs.gtest_filter}}
             ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
