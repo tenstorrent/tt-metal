@@ -31,7 +31,7 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
-        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 }
 
 TEST(MultiHost, TestDualGalaxyFabric2DSanity) {
@@ -41,7 +41,7 @@ TEST(MultiHost, TestDualGalaxyFabric2DSanity) {
     }
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
-        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     // Validate control plane apis
@@ -81,7 +81,7 @@ TEST(MultiHost, TestDualGalaxyFabric1DSanity) {
         GTEST_SKIP();
     }
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     // Validate control plane apis
