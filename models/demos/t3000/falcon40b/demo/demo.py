@@ -19,7 +19,9 @@ from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconConf
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_common import PytorchFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config, model_config_entries
-from models.utility_functions import enable_persistent_kernel_cache, nearest_32, profiler
+from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.utility_functions import enable_persistent_kernel_cache, nearest_32
 
 END_OF_TEXT = 11
 SPACE = 204
@@ -106,7 +108,7 @@ def initialize_and_fill_kv_cache(
 
     kv_cache = ()
     for i in range(num_layers):
-        logger.info(f"Putting kv cache on devices for layer: {i+1}")
+        logger.info(f"Putting kv cache on devices for layer: {i + 1}")
         k_cache_repeat_interleaved, v_cache_repeat_interleaved = pytorch_layer_present[i]
         k_cache = k_cache_repeat_interleaved[:, ::q_heads_per_kv_heads, ...]
         v_cache = v_cache_repeat_interleaved[:, ::q_heads_per_kv_heads, ...]
@@ -182,41 +184,53 @@ def run_falcon_demo_kv(
     greedy_sampling=False,
 ):
     torch.manual_seed(0)
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
 
+    # Set up warmup iterations and targets dicts for saving benchmark data
+    N_warmup_iter = {}
+    perf_targets = {}
     if perf_mode:
         logger.info("Running in performance measurement mode (invalid outputs)!")
 
+        N_warmup_iter = {"inference_prefill": 5, "inference_decode": 5}
+        perf_targets = {
+            "prefill_t/s": None,
+            "decode_t/s": 36 * batch_size,
+            "decode_t/s/u": 36,
+        }
+
     configuration = FalconConfig(**model_config_entries)
 
-    profiler.start(f"loading_inputs")
+    profiler.start("loading_inputs")
     if len(user_input) == 1:
         input_prompts = user_input
     else:
         input_prompts = load_inputs(user_input, batch_size)
 
-    profiler.end(f"loading_inputs")
+    profiler.end("loading_inputs")
 
     # State dict is needed for embeddings
     logger.info("Loading weights...")
-    profiler.start(f"loading_weights")
+    profiler.start("loading_weights")
 
     model_name = model_location_generator(model_version, model_subdir="Falcon")
     hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
 
+    profiler.end("loading_weights")
     logger.info("Loading weights finished!")
-    profiler.end(f"loading_weights")
 
     ttnn.synchronize_device(mesh_device)
 
     logger.info("Tokenizing inputs...")
-    profiler.start(f"tokenizing_inputs")
+    profiler.start("tokenizing_inputs")
     tokenizer = AutoTokenizer.from_pretrained(model_version)
     prefill_ids, num_users, num_input_tokens = preprocess_and_validate_inputs(
         input_prompts, tokenizer, max_seq_len, perf_mode
     )
-    profiler.end(f"tokenizing_inputs")
+    profiler.end("tokenizing_inputs")
 
     # Update model_config for prefill
     model_config = get_model_config(
@@ -251,12 +265,12 @@ def run_falcon_demo_kv(
 
     ### First prefill run with compile ###
     use_cache = True
-    time_prefill_compile = 0
+    profiler.start("compile_prefill")
     if not prefill_on_host:
         logger.info("Running 1st run prefill stage with compile...")
+
         N = num_users if not perf_mode else 1
         for user_id in tqdm(range(N), desc="Filling kv caches for each user"):
-            time_prefill_compile_start = time.time()
             (
                 tt_prefill_inputs,
                 tt_prefill_attention_mask,
@@ -280,8 +294,7 @@ def run_falcon_demo_kv(
             del tt_prefill_attention_mask
             del tt_logits
 
-            time_prefill_compile += time.time() - time_prefill_compile_start
-
+    profiler.end("compile_prefill")
     ttnn.synchronize_device(mesh_device)
     logger.info("Finished 1st run prefill stage with compile!")
 
@@ -295,9 +308,8 @@ def run_falcon_demo_kv(
     logger.info("Running 1st run decode stage with compile...")
     decode_ids = torch.randint(low=0, high=configuration.vocab_size - 1, size=(batch_size, 1), dtype=torch.int64)
 
-    time_decode_compile = 0
+    profiler.start("compile_decode")
     for kv_cache_len in tqdm(range(num_input_tokens, max_seq_len, 32)):
-        time_decode_compile_start = time.time()
         (
             tt_decode_inputs,
             tt_decode_attention_mask,
@@ -321,8 +333,7 @@ def run_falcon_demo_kv(
             del tt_decode_attention_mask
         del tt_logits
 
-        time_decode_compile += time.time() - time_decode_compile_start
-
+    profiler.end("compile_decode")
     logger.info("Finished 1st run decode stage with compile!")
     ttnn.synchronize_device(mesh_device)
 
@@ -336,7 +347,7 @@ def run_falcon_demo_kv(
     )
 
     logger.info("Moving weights (all layers) to device; might take some time...")
-    profiler.start(f"moving_to_device")
+    profiler.start("moving_to_device")
     tt_FalconCausalLM = TtFalconCausalLM(
         mesh_device,
         state_dict,
@@ -348,12 +359,12 @@ def run_falcon_demo_kv(
         tt_cache_path,
         use_global_cos_sin_cache,
     )
+    profiler.end("moving_to_device")
     logger.info("Moved weights (all layers) to device!")
-    profiler.end(f"moving_to_device")
 
-    profiler.start(f"initializing_KV_cache")
+    profiler.start("initializing_KV_cache")
     kv_cache = tt_FalconCausalLM.initialize_kv_cache()  # Initialized kv cache for all layers
-    profiler.end(f"initializing_KV_cache")
+    profiler.end("initializing_KV_cache")
 
     ### Second prefill run without compile ###
     enable_persistent_kernel_cache()
@@ -361,11 +372,13 @@ def run_falcon_demo_kv(
     post_processor = partial(post_process)
     output_ids = torch.zeros(num_users, 1, dtype=torch.int64)
     logger.info("Running inference prefill stage...")
+    profiler.start("inference_prefill_decode")
+    profiler.start("inference_prefill")
     time_prefill_inference = 0
     if prefill_on_host:
         pytorch_FalconCausalLM = PytorchFalconCausalLM(hugging_face_reference_model, num_layers)
         logger.info("Initializing and filling KV cache")
-        profiler.start(f"initializing_KV_cache_on_host")
+        profiler.start("initializing_KV_cache_on_host")
         pt_logits, kv_cache = initialize_and_fill_kv_cache(
             pytorch_FalconCausalLM,
             model_config,
@@ -376,7 +389,7 @@ def run_falcon_demo_kv(
             max_seq_len,
             mesh_device,
         )
-        profiler.end(f"initializing_KV_cache_on_host")
+        profiler.end("initializing_KV_cache_on_host")
 
         output_ids = torch.zeros(num_users, 1, dtype=torch.int64)
         for user_id in range(num_users):
@@ -388,7 +401,7 @@ def run_falcon_demo_kv(
             N_warmup = 0
         else:
             N = 15
-            N_warmup = 5
+            N_warmup = N_warmup_iter["inference_prefill"]
         for i in tqdm(range(N), desc="Filling kv caches for each user"):
             user_id = i if not perf_mode else 0
             time_prefill_inference_start = time.time()
@@ -429,8 +442,10 @@ def run_falcon_demo_kv(
             if i >= N_warmup:
                 time_prefill_inference += time.time() - time_prefill_inference_start
 
+    profiler.end("inference_prefill")
     logger.info("Finished inference prefill stage!")
     num_users_generated_prefill = num_users if not perf_mode else (N - N_warmup)
+    prefill_time_to_token_per_user = time_prefill_inference / num_users_generated_prefill
 
     generated_ids = torch.concat((prefill_ids[..., :num_input_tokens], output_ids), dim=1)
 
@@ -450,13 +465,14 @@ def run_falcon_demo_kv(
     kv_cache_len = num_input_tokens  # This will increment by one after each decode
     prompt_is_done = [False for _ in range(num_users)]
 
+    profiler.start("inference_decode")
     time_decode_inference = 0
     if not perf_mode:
         N = max_seq_len - num_input_tokens
         N_warmup = 0
     else:
         N = 15
-        N_warmup = 5
+        N_warmup = N_warmup_iter["inference_decode"]
     for output_token_index in range(N):
         time_decode_inference_start = time.time()
         (
@@ -514,8 +530,11 @@ def run_falcon_demo_kv(
             print_output_prompts(generated_ids, tokenizer)
             kv_cache_len += 1
 
+    profiler.end("inference_decode")
+    profiler.end("inference_prefill_decode")
     logger.info("Finished inference decode stage!")
     num_tokens_generated_decode = batch_size * (output_token_index - N_warmup + 1)
+    decode_time_to_token_per_user = time_decode_inference / (output_token_index - N_warmup + 1)
     logger.info(f"Total number of tokens generated in decode: {num_tokens_generated_decode}")
 
     if not perf_mode:
@@ -525,23 +544,31 @@ def run_falcon_demo_kv(
 
     generated_text = tokenizer.batch_decode(generated_ids.tolist())
 
+    profiler.end("run")
+    time_prefill_compile = profiler.get_duration("compile_prefill")
+    time_decode_compile = profiler.get_duration("compile_decode")
+
     measurements = {
-        "preprocessing": profiler.get("tokenizing_inputs"),
-        "loading_weights": profiler.get("loading_weights"),
-        "moving_to_device": profiler.get("moving_to_device"),
-        "initializing_KV_cache": profiler.get("initializing_KV_cache"),
+        "total_demo_time": profiler.get_duration("run"),
+        "preprocessing": profiler.get_duration("tokenizing_inputs"),
+        "loading_weights": profiler.get_duration("loading_weights"),
+        "moving_to_device": profiler.get_duration("moving_to_device"),
+        "initializing_KV_cache": profiler.get_duration("initializing_KV_cache"),
         "compile_prefill": time_prefill_compile if not prefill_on_host else None,
         "compile_decode": time_decode_compile,
         "compile_total": time_prefill_compile + time_decode_compile,
         "inference_prefill": time_prefill_inference,
         "inference_decode": time_decode_inference,
         "inference_total": time_prefill_inference + time_decode_inference,
-        "inference_throughput_prefill": (
-            num_users_generated_prefill / time_prefill_inference if not prefill_on_host else None
-        ),
-        "inference_throughput_decode": num_tokens_generated_decode / time_decode_inference,
+        "prefill_time_to_token": prefill_time_to_token_per_user,  # time to first output token (1 user)
+        "inference_user_throughput_prefill": num_users_generated_prefill / time_prefill_inference,  # users/s
+        "prefill_t/s": num_users_generated_prefill / time_prefill_inference * prefill_ids.shape[1],  # tokens/s
+        "decode_t/s": num_tokens_generated_decode / time_decode_inference,  # tokens/s
+        "decode_t/s/u": num_tokens_generated_decode / time_decode_inference / batch_size,  # tokens/s/user
+        "prefill_decode_t/s/u": 1.0 / (prefill_time_to_token_per_user + decode_time_to_token_per_user),  # tokens/s/user
     }
 
+    logger.info(f"total demo duration: {round(measurements['total_demo_time'], 5)} s")
     logger.info(f"pre processing: {round(measurements['preprocessing'], 5)} s")
     logger.info(f"loading weights (+downloading if not on machine): {round(measurements['loading_weights'], 5)} s")
     logger.info(
@@ -549,20 +576,40 @@ def run_falcon_demo_kv(
     )
     logger.info(f"initializing KV cache: {round(measurements['initializing_KV_cache'], 5)} s")
     if not prefill_on_host:
-        logger.info(f"prefill compile time: {round(measurements['compile_prefill'],5)} s")
+        logger.info(f"prefill compile time: {round(measurements['compile_prefill'], 5)} s")
     logger.info(f"decode compile time: {round(measurements['compile_decode'], 5)} s")
     logger.info(f"total compile time: {round(measurements['compile_total'], 5)} s")
     logger.info(f"prefill inference time: {round(measurements['inference_prefill'], 5)} s")
     logger.info(f"decode inference time: {round(measurements['inference_decode'], 5)} s")
     logger.info(f"total inference time: {round(measurements['inference_total'], 5)} s")
+    logger.info(f"time to first token (prefill, 1st user): {round(measurements['prefill_time_to_token'], 5)} s")
     if not prefill_on_host:
-        logger.info(f"inference throughput prefill: {round(measurements['inference_throughput_prefill'], 5)} users/s")
         logger.info(
-            f"inference throughput prefill | seq_len={prefill_ids.shape[1]}: {round(measurements['inference_throughput_prefill']*prefill_ids.shape[1], 5)} tok/s"
+            f"inference throughput prefill: {round(measurements['inference_user_throughput_prefill'], 5)} users/s"
         )
-    logger.info(f"inference throughput decode: {round(measurements['inference_throughput_decode'], 5)} tok/s")
+        logger.info(
+            f"inference throughput prefill | seq_len={prefill_ids.shape[1]}: {round(measurements['prefill_t/s'], 5)} tok/s"
+        )
+    logger.info(f"inference throughput decode: {round(measurements['decode_t/s'], 5)} tok/s")
+    logger.info(f"inference throughput decode (per user): {round(measurements['decode_t/s/u'], 5)} tok/s/user")
     logger.info(
-        f"inference throughput decode (per user): {round(measurements['inference_throughput_decode']/batch_size, 5)} tok/s/user"
+        f"inference throughput prefill+decode (per user): {round(measurements['prefill_decode_t/s/u'], 5)} tok/s/user"
+    )
+
+    # Save benchmark data (will only save if running in CI environment)
+    benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets=perf_targets)
+    run_type = f"demo_{'perf' if perf_mode else 'generate'}_{mesh_device.get_num_devices()}chip"
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type=run_type,
+        ml_model_name=model_version,
+        ml_model_type="llm",
+        num_layers=num_layers,
+        batch_size=batch_size,
+        config_params=configuration.to_dict(),
+        precision=f"prefill[{model_config_str_for_prefill}]_decode[{model_config_str_for_decode}]",
+        input_sequence_length=num_input_tokens,
+        output_sequence_length=1 if perf_mode else output_token_index + 1,
     )
 
     return generated_text, measurements
