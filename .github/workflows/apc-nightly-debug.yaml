@@ -27,3 +27,12 @@ jobs:
     with:
       build-type: RelWithDebInfo
       version: ${{ matrix.version }}
+
+  nightly-debug-metal-watcher:
+    name: apc nightly debug run with watcher
+    uses: ./.github/workflows/all-post-commit-workflows.yaml
+    secrets: inherit
+    with:
+      build-type: RelWithDebInfo
+      version: "22.04"
+      enable-watcher: true
