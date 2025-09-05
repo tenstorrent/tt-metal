@@ -28,13 +28,13 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Llama-3.1-8B      | T3K  (DP=4) |           |           | 39.6          | 58        |
 | Llama-3.1-8B      | T3K  (DP=8) |           |           | 24.9          | 86        |
 | Llama-3.1-8B      | TG          | 88        | 97        | 29.5          |           |
-| Llama-3.2-11B     | N300        | 91        | 98        | 44.1          | 67        |
-| Llama-3.2-11B     | T3K         | 91        | 98        | 62.7          | 47        |
-| Llama-3.2-11B     | TG          | 87        | 97        | 29.5          |           |
-| Llama-3.1-70B     | T3K         | 96        | 100       | 16.6          | 164       |
-| Llama-3.1-70B     | TG          | 95        | 100       | 12.7          |           |
-| Llama-3.1-70B     | TG   (DP=4) |           |           | 14.8          | 189       |
-| Llama-3.2-90B     | T3K         | 96        | 100       | 6             | 5535      |
+| Llama3.2-11B      | N300        | 91        | 98        | 44.1          | 67        |
+| Llama3.2-11B      | T3K         | 91        | 98        | 62.7          | 47        |
+| Llama3.2-11B      | TG          | 87        | 97        | 29.5          |           |
+| Llama3.1-70B      | T3K         | 96        | 100       | 16.6          | 164       |
+| Llama3.1-70B      | TG          | 95        | 100       | 12.7          |           |
+| Llama3.1-70B      | TG   (DP=4) |           |           | 14.8          | 189       |
+| Llama3.2-90B      | T3K         | 96        | 100       | 6             | 5535      |
 | Qwen2.5-7B        | N300        | 84        | 96        | 24.6          | 92        |
 | Qwen2.5-72B       | T3K         | 99        | 100       | 15.2          | 225       |
 | Qwen2.5-Coder-32B | T3K         | 96        | 99        | 22.4          | 190       |
@@ -68,12 +68,12 @@ Llama 3 models test as insensitive to attention precision and so we use bfp8 att
 | Llama-3.1-8B      | N300        | 96        | 100       | 38.8          | 79        |
 | Llama-3.1-8B      | T3K         | 97        | 100       | 60.8          | 81        |
 | Llama-3.1-8B      | TG          | 95        | 100       | 29.5          |           |
-| Llama-3.2-11B     | N300        | 95        | 100       | 38.3          | 78        |
-| Llama-3.2-11B     | T3K         | 96        | 100       | 61.4          | 53        |
-| Llama-3.2-11B     | TG          | 94        | 100       | 29.5          |           |
-| Llama-3.1-70B     | T3K         | 96        | 100       | 16.5          | 168       |
-| Llama-3.1-70B     | TG          | 95        | 100       | 12.7          |           |
-| Llama-3.2-90B     | T3K         | 96        | 100       | 6             | 5600      |
+| Llama3.2-11B      | N300        | 95        | 100       | 38.3          | 78        |
+| Llama3.2-11B      | T3K         | 96        | 100       | 61.4          | 53        |
+| Llama3.2-11B      | TG          | 94        | 100       | 29.5          |           |
+| Llama3.1-70B      | T3K         | 96        | 100       | 16.5          | 168       |
+| Llama3.1-70B      | TG          | 95        | 100       | 12.7          |           |
+| Llama3.2-90B      | T3K         | 96        | 100       | 6             | 5600      |
 | Qwen2.5-7B        | N300        | 84        | 96        | 24.6          | 92        |
 | Qwen2.5-72B       | T3K         | 99        | 100       | 15.1          | 216       |
 | Qwen2.5-Coder-32B | T3K         | 95        | 99        | 19.7          | 183       |
