@@ -440,7 +440,8 @@ Pre-commit is a framework for managing and maintaining multi-language pre-commit
 
 - Formatting code (e.g., fixing trailing whitespace, enforcing end-of-file newlines)
 - Running linters (e.g., `clang-format`, `black`, `flake8`)
-- Checking for merge conflicts or other common issues.
+- Checking for merge conflicts or other common issues
+- Validating copyright headers and years
 
 For more details on pre-commit, you can visit the [official documentation](https://pre-commit.com/).
 
@@ -466,6 +467,26 @@ To set up pre-commit on your local machine, follow these steps:
    pre-commit run --all-files
    ```
 
+### Copyright Requirements
+
+All source files must include proper SPDX copyright headers. The pre-commit hooks will automatically validate copyright headers and prevent commits that don't meet our standards:
+
+#### For New Files
+- **Must** have current year copyright
+- **Must** include proper SPDX header
+- Pre-commit will **block** commits with old year / without year
+
+#### For Existing Files
+- **Must** have some copyright header (year can be original)
+- **Cannot** be missing copyright entirely
+- Pre-commit will **block** commits with missing headers
+
+**If your commit is blocked:**
+1. Add/update copyright headers as shown above
+2. Use current year (2025) for new files
+3. Keep original year for existing files
+4. Commit again
+
 ### File structure and formats
 
 - Every source file must have the appropriate SPDX header at the top following
@@ -474,7 +495,7 @@ To set up pre-commit on your local machine, follow these steps:
   scripts. For Python files, we are to use this convention:
 
   ```
-  # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+  # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
   # SPDX-License-Identifier: Apache-2.0
   ```
@@ -483,7 +504,7 @@ To set up pre-commit on your local machine, follow these steps:
   convention:
 
   ```
-  // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+  // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
   //
   // SPDX-License-Identifier: Apache-2.0
   ```
