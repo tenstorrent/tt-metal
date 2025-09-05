@@ -10,6 +10,7 @@
 #include <tt-metalium/math.hpp>
 
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/constants.hpp>
 
 #include <tt-metalium/work_split.hpp>
@@ -17,6 +18,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/operations/cb_utils.hpp"
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -260,7 +262,8 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
 
     const uint32_t post_op_l1_allocation_size =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-    auto actual_cb_size = program_with_cbs.program.get_cb_memory_size();
+
+    auto actual_cb_size = calculate_total_cb_size(program_with_cbs.program);
 
     auto kernel_dims =
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second});

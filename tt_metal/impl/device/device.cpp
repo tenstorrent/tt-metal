@@ -282,7 +282,7 @@ void Device::configure_command_queue_programs() {
     configure_dispatch_cores(this);
 
     // Run the cq program
-    command_queue_program.finalize_offsets(this);
+    command_queue_program.impl().finalize_offsets(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
 }
@@ -358,8 +358,7 @@ void Device::init_command_queue_device() {
         watcher_lock.value().unlock();
     }
 
-    // TODO: should get a const ref
-    std::vector<std::vector<CoreCoord>> logical_cores = command_queue_program.logical_cores();
+    std::vector<std::vector<CoreCoord>> logical_cores = command_queue_program.impl().logical_cores();
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const auto& logical_dispatch_cores = logical_cores[index];
@@ -392,7 +391,7 @@ void Device::configure_fabric() {
 
     tt::tt_fabric::configure_fabric_cores(this);
 
-    fabric_program_->finalize_offsets(this);
+    fabric_program_->impl().finalize_offsets(this);
 
     detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
     detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
@@ -400,7 +399,7 @@ void Device::configure_fabric() {
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox (eg, storage cores) have all landed
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
-    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->logical_cores();
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->impl().logical_cores();
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
          programmable_core_type_index++) {
@@ -786,10 +785,11 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
 
         const auto& hal = MetalContext::instance().hal();
         bool noc_translation_enabled =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(this->id());
+            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(
+                this->id());
         bool dram_is_virtualized =
-            noc_translation_enabled &&
-            (hal.get_virtualized_core_types().find(AddressableCoreType::DRAM) != hal.get_virtualized_core_types().end());
+            noc_translation_enabled && (hal.get_virtualized_core_types().find(AddressableCoreType::DRAM) !=
+                                        hal.get_virtualized_core_types().end());
         const metal_SocDescriptor& soc_d =
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id());
         std::vector<CoreCoord> dram_phy_coords;
