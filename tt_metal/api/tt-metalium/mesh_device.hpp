@@ -106,6 +106,7 @@ private:
     // protected by api_mutex_. Operations that reconfigure global state (e.g. setting subdevices or enabling tracing)
     // on the device may not be thread safe.
     std::mutex api_mutex_;
+    bool is_internal_state_initialized = false;
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
