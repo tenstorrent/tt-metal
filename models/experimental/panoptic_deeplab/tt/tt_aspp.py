@@ -13,6 +13,7 @@ from models.experimental.panoptic_deeplab.tt.tt_conv2dWrapper import (
     SliceConfig,
     SliceMode,
 )
+from models.experimental.panoptic_deeplab.tt.tt_upsample_wrapper import TtUpsample
 
 
 def get_ttnn_activation(activation_name: str):
@@ -220,6 +221,9 @@ class TtASPP(nn.Module):
 
         self.project_norm = get_ttnn_norm(norm, out_channels, device=self.device, norm_params=None)
 
+        # Initialize upsample wrapper for global pooling branch
+        self.pool_upsample = TtUpsample.create(device=device, scale_factor=(1, 1), mode="bilinear")
+
     def forward(self, x):
         input_shape = x.shape
         N = x.shape[0]  # Batch size
@@ -268,12 +272,13 @@ class TtASPP(nn.Module):
         current_h, current_w = pooled.shape[1], pooled.shape[2]
         scale_factor = [H // current_h, W // current_w]
 
-        pooled = ttnn.to_layout(pooled, ttnn.ROW_MAJOR_LAYOUT)
+        # Set appropriate mode and scale factor for upsample
         if pooled.shape[1] == 1 and pooled.shape[2] == 1:
-            mode = "nearest"
+            self.pool_upsample._mode = "nearest"
         else:
-            mode = "bilinear"
-        pooled = ttnn.upsample(pooled, scale_factor=scale_factor, mode=mode)
+            self.pool_upsample._mode = "bilinear"
+        self.pool_upsample._scale_factor = scale_factor
+        pooled = self.pool_upsample(pooled)
         pooled = ttnn.to_memory_config(pooled, ttnn.DRAM_MEMORY_CONFIG)
 
         res.append(pooled)
