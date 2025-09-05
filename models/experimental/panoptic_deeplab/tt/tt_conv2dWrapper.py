@@ -248,7 +248,6 @@ class TtConv2d:
                     return_output_dim=True,
                     return_weights_and_bias=True,
                     conv_config=conv_config,
-                    # compute_config=compute_config,
                     memory_config=memory_config,
                     slice_config=slice_config,
                     dtype=ttnn.bfloat16,

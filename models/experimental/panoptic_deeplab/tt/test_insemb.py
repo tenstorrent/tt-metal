@@ -2,15 +2,11 @@ import pytest
 import torch
 from typing import Dict
 
-# Importujte sve potrebne klase
-# PyTorch verzije
 from .tt_pytorch_insemb import PanopticDeepLabInsEmbedHead
 from .tt_pytorch_semSeg import ShapeSpec
 
-# TTNN verzije
 from .tt_insemb import TtPanopticDeepLabInsEmbedHead
 
-# Pomoćne funkcije
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
 
@@ -25,15 +21,10 @@ def test_ttnn_wholeInsEmbed(device):
 
     torch.manual_seed(0)
 
-    # 1. Definicija Konfiguracije Modela (uglavnom ista kao SemSeg)
-    # Dimenzije dekodera su identične jer je baza ista
     target_project_channels = [32, 64]
     target_decoder_channels = [256, 256, 256]
-    # Head kanali za InsEmbed su često drugačiji, ali možemo koristiti istu vrijednost
-    target_head_channels = 128  # Ovo je čest izbor za InsEmbed
+    target_head_channels = 128
 
-    # 2. Kreiranje SVIH potrebnih težina (weights)
-    # --- Težine za ZAJEDNIČKI DEKODER (identične kao u SemSeg testu) ---
     w_aspp_k1 = torch.randn(256, 2048, 1, 1, dtype=torch.bfloat16)
     w_aspp_k3 = torch.randn(256, 2048, 3, 3, dtype=torch.bfloat16)
     w_aspp_k1_out5 = torch.randn(256, 1280, 1, 1, dtype=torch.bfloat16)
@@ -47,21 +38,18 @@ def test_ttnn_wholeInsEmbed(device):
     fuse_conv_0_weights = {"res2": w_res2_fuse0, "res3": w_res3_fuse0}
     fuse_conv_1_weights = {"res2": w_res2_fuse1, "res3": w_res3_fuse1}
 
-    # --- NOVO: Težine specifične za Instance Embedding Head ---
-    # Ulaz u head je izlaz dekodera (256 kanala)
     decoder_output_channels = target_decoder_channels[0]
 
-    # Center Head grana
+    # Center Head branch
     w_center_head_0 = torch.randn(decoder_output_channels, decoder_output_channels, 3, 3, dtype=torch.bfloat16)
     w_center_head_1 = torch.randn(target_head_channels, decoder_output_channels, 3, 3, dtype=torch.bfloat16)
     w_center_predictor = torch.randn(1, target_head_channels, 1, 1, dtype=torch.bfloat16)  # Izlaz je 1 kanal
 
-    # Offset Head grana
+    # Offset Head branch
     w_offset_head_0 = torch.randn(decoder_output_channels, decoder_output_channels, 3, 3, dtype=torch.bfloat16)
     w_offset_head_1 = torch.randn(target_head_channels, decoder_output_channels, 3, 3, dtype=torch.bfloat16)
     w_offset_predictor = torch.randn(2, target_head_channels, 1, 1, dtype=torch.bfloat16)  # Izlaz su 2 kanala
 
-    # 3. Priprema PyTorch Modela i Ulaza (identično kao u SemSeg)
     torch_features: Dict[str, torch.Tensor] = {
         "res2": torch.randn(1, 256, 128, 256, dtype=torch.bfloat16),
         "res3": torch.randn(1, 512, 64, 128, dtype=torch.bfloat16),
@@ -83,7 +71,6 @@ def test_ttnn_wholeInsEmbed(device):
         "res5": res5_shape,
     }
 
-    # --- Instanciranje PyTorch modela sa novim težinama ---
     torch_model = PanopticDeepLabInsEmbedHead(
         input_shape=input_shape_pytorch,
         project_channels=target_project_channels,
@@ -94,17 +81,15 @@ def test_ttnn_wholeInsEmbed(device):
         train_size=(512, 1024),
         norm="SyncBN",
         head_channels=target_head_channels,
-        center_loss_weight=200.0,  # Iz vašeg traga
-        offset_loss_weight=0.01,  # Iz vašeg traga
+        center_loss_weight=200.0,
+        offset_loss_weight=0.01,
         use_depthwise_separable_conv=False,
-        # Težine za dekoder
         shared_weight_tensor_kernel1=w_aspp_k1,
         shared_weight_tensor_kernel3=w_aspp_k3,
         shared_weight_tensor_kernel1_output5=w_aspp_k1_out5,
         project_conv_weights=project_conv_weights,
         fuse_conv_0_weights=fuse_conv_0_weights,
         fuse_conv_1_weights=fuse_conv_1_weights,
-        # Nove težine za InsEmbed head
         center_head_0_weight=w_center_head_0,
         center_head_1_weight=w_center_head_1,
         center_predictor_weight=w_center_predictor,
@@ -115,13 +100,11 @@ def test_ttnn_wholeInsEmbed(device):
     torch_model = torch_model.to(dtype=torch.bfloat16)
     torch_model.eval()
 
-    # 4. Priprema TTNN Modela i Ulaza (identično kao u SemSeg)
     ttnn_features: Dict[str, ttnn.Tensor] = {
         name: ttnn.from_torch(tensor.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         for name, tensor in torch_features.items()
     }
 
-    # --- Instanciranje TTNN modela sa svim težinama ---
     ttnn_model = TtPanopticDeepLabInsEmbedHead(
         input_shape=input_shape_pytorch,
         device=device,
@@ -133,14 +116,12 @@ def test_ttnn_wholeInsEmbed(device):
         train_size=(512, 1024),
         norm="SyncBN",
         head_channels=target_head_channels,
-        # Težine za dekoder
         shared_weight_tensor_kernel1=w_aspp_k1,
         shared_weight_tensor_kernel3=w_aspp_k3,
         shared_weight_tensor_kernel1_output5=w_aspp_k1_out5,
         project_conv_weights=project_conv_weights,
         fuse_conv_0_weights=fuse_conv_0_weights,
         fuse_conv_1_weights=fuse_conv_1_weights,
-        # Nove težine za InsEmbed head
         center_head_0_weight=w_center_head_0,
         center_head_1_weight=w_center_head_1,
         center_predictor_weight=w_center_predictor,
@@ -149,14 +130,10 @@ def test_ttnn_wholeInsEmbed(device):
         offset_predictor_weight=w_offset_predictor,
     )
 
-    # 5. Pokretanje modela i poređenje rezultata
-    # Pokrećemo PyTorch model
     torch_center_out, torch_offset_out, _, _ = torch_model(torch_features)
 
-    # Pokrećemo TTNN model
     ttnn_center_out_tt, ttnn_offset_out_tt, _, _ = ttnn_model(ttnn_features)
 
-    # Konvertovanje i poređenje Center izlaza
     print("\n--- Comparing Center Prediction ---")
     ttnn_center_out_torch = ttnn.to_torch(ttnn_center_out_tt).permute(0, 3, 1, 2)
     passed_center, msg_center = assert_with_pcc(torch_center_out, ttnn_center_out_torch, pcc=0.96)
@@ -164,7 +141,6 @@ def test_ttnn_wholeInsEmbed(device):
     assert passed_center, f"Center comparison FAILED: {msg_center}"
     print("✅ Center Prediction PASSED")
 
-    # Konvertovanje i poređenje Offset izlaza
     print("\n--- Comparing Offset Prediction ---")
     ttnn_offset_out_torch = ttnn.to_torch(ttnn_offset_out_tt).permute(0, 3, 1, 2)
     passed_offset, msg_offset = assert_with_pcc(torch_offset_out, ttnn_offset_out_torch, pcc=0.97)
