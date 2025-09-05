@@ -1,5 +1,9 @@
 #pragma once
 
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 /*
  * telemetry/ethernet/chip_identifier.hpp
  *
@@ -64,10 +68,12 @@ struct fmt::formatter<ChipIdentifier> {
     template <typename FormatContext>
     auto format(const ChipIdentifier& chip, FormatContext& ctx) const -> decltype(ctx.out()) {
         if (chip.galaxy_ubb.has_value()) {
-            return fmt::format_to(ctx.out(), "Tray {}, N{} (Chip {})", 
-                                chip.galaxy_ubb.value().tray_id, 
-                                chip.galaxy_ubb.value().chip_number, 
-                                chip.id);
+            return fmt::format_to(
+                ctx.out(),
+                "Tray {}, N{} (Chip {})",
+                chip.galaxy_ubb.value().tray_id,
+                chip.galaxy_ubb.value().chip_number,
+                chip.id);
         } else {
             return fmt::format_to(ctx.out(), "Chip {}", chip.id);
         }

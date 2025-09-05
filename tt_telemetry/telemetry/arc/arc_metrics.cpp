@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 /*
  * ARC telemetry is described in the ISA documentation:
  * https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/ARCTile/Telemetry.md
@@ -116,8 +120,9 @@ ARCDoubleMetric::ARCDoubleMetric(
     scale_factor_(scale_factor),
     signedness_(signedness) {
     TT_ASSERT(reader_ != nullptr, "ARCTelemetryReader cannot be null");
-    TT_FATAL(signedness == Signedness::UNSIGNED || signedness == Signedness::SIGNED, 
-             "Signedness must be either UNSIGNED or SIGNED");
+    TT_FATAL(
+        signedness == Signedness::UNSIGNED || signedness == Signedness::SIGNED,
+        "Signedness must be either UNSIGNED or SIGNED");
     value_ = 0.0;
 }
 

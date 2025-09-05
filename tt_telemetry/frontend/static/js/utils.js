@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 /*
  * utils.js
  *
@@ -61,17 +65,17 @@ export function formatFloat(value) {
     if (value === null || value === undefined) {
         return 'N/A';
     }
-    
+
     // If it's not a number, return as-is
     if (typeof value !== 'number') {
         return String(value);
     }
-    
+
     // If it's an integer, return without decimal places
     if (Number.isInteger(value)) {
         return String(value);
     }
-    
+
     // Format to 2 decimal places and remove trailing zeros
     return parseFloat(value.toFixed(2)).toString();
 }

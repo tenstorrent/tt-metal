@@ -1,4 +1,7 @@
 import { LitElement, html, css } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js';
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
 
 // METRIC SIDEBAR COMPONENT - Shows detailed information about a selected metric
 export class MetricSidebar extends LitElement {

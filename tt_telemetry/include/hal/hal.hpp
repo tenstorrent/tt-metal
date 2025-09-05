@@ -1,5 +1,9 @@
 #pragma once
 
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 /*
  * hal/hal.hpp
  *
@@ -10,4 +14,4 @@
 #include <llrt/hal.hpp>
 #include <llrt/rtoptions.hpp>
 
-std::unique_ptr<tt::tt_metal::Hal> create_hal(const std::unique_ptr<tt::umd::Cluster> &cluster);
+std::unique_ptr<tt::tt_metal::Hal> create_hal(const std::unique_ptr<tt::umd::Cluster>& cluster);
