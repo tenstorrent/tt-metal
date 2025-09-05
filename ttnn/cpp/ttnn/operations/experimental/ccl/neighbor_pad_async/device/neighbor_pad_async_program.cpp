@@ -247,7 +247,7 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     }
 
     auto override_runtime_arguments_callback =
-        [num_links, reader_kernel_ids, writer_kernel_ids](
+        [num_links, num_directions, reader_kernel_ids, writer_kernel_ids](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -260,27 +260,30 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
             // update readers/writers
             uint32_t core_idx = 0;
             for (uint32_t link = 0; link < num_links; link++) {
-                CoreCoord core = {link, 0};
-                auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_idx]);
-                auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_idx]);
+                // direction 0 means pad left (top), 1 means pad right (bottom)
+                for (uint32_t direction = 0; direction < num_directions; direction++) {
+                    CoreCoord core = {link * num_directions + direction, 0};
+                    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_idx]);
+                    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_idx]);
 
-                auto out_ready_semaphore = static_cast<const ttnn::NeighborPadAsync*>(operation)->final_semaphore;
-                // reader
-                auto& worker_reader_runtime_args = reader_runtime_args[core.x][core.y];
-                worker_reader_runtime_args[0] = input.buffer()->address();
-                worker_reader_runtime_args[1] = output.buffer()->address();
-                worker_reader_runtime_args[8] = out_ready_semaphore.address();
-                // writer
-                auto& worker_writer_runtime_args = writer_runtime_args[core.x][core.y];
-                worker_writer_runtime_args[0] = input.buffer()->address();
-                worker_writer_runtime_args[1] = output.buffer()->address();
-                worker_writer_runtime_args[12] = out_ready_semaphore.address();
+                    auto out_ready_semaphore = static_cast<const ttnn::NeighborPadAsync*>(operation)->final_semaphore;
+                    // reader
+                    auto& worker_reader_runtime_args = reader_runtime_args[core.x][core.y];
+                    worker_reader_runtime_args[0] = input.buffer()->address();
+                    worker_reader_runtime_args[1] = output.buffer()->address();
+                    worker_reader_runtime_args[8] = out_ready_semaphore.address();
+                    // writer
+                    auto& worker_writer_runtime_args = writer_runtime_args[core.x][core.y];
+                    worker_writer_runtime_args[0] = input.buffer()->address();
+                    worker_writer_runtime_args[1] = output.buffer()->address();
+                    worker_writer_runtime_args[12] = out_ready_semaphore.address();
 
-                // if (barrier_semaphore.has_value()) {
-                // 	worker_writer_sender_runtime_args[16] = barrier_semaphore.value().address();
-                // }
+                    // if (barrier_semaphore.has_value()) {
+                    // 	worker_writer_sender_runtime_args[16] = barrier_semaphore.value().address();
+                    // }
 
-                core_idx++;
+                    core_idx++;
+                }
             }
         };
 
