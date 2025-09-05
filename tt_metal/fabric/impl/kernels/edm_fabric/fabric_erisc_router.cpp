@@ -12,7 +12,7 @@
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
@@ -287,7 +287,7 @@ static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_channels_turn_
 // Defined here because sender_channel_0_free_slots_stream_id does not come from
 // fabric_erisc_router_ct_args.hpp
 static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids = {
-    WorkerToFabricEdmSenderImpl<0>::sender_channel_0_free_slots_stream_id,
+    tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id,
     sender_channel_1_free_slots_stream_id,
     sender_channel_2_free_slots_stream_id,
     sender_channel_3_free_slots_stream_id,
