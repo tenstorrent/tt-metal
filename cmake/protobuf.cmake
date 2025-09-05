@@ -65,11 +65,11 @@ function(GENERATE_PROTO_FILES PROTO_FILE)
         WRITE
         ${PROTO_GENERATED_DIR}/.clang-tidy
         "InheritParentConfig: true
-    Checks: >
-        -bugprone-reserved-identifier,
-        -readability-duplicate-include,
-        -cppcoreguidelines-pro-type-static-cast-downcast,
-        -readability-redundant-access-specifiers
-    "
+Checks: >
+  -bugprone-reserved-identifier,
+  -readability-duplicate-include,
+  -cppcoreguidelines-pro-type-static-cast-downcast,
+  -readability-redundant-access-specifiers
+"
     )
 endfunction()
