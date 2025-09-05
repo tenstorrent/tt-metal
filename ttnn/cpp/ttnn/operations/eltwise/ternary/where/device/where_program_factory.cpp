@@ -58,7 +58,7 @@ void set_or_update_runtime_arguments(
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
     constexpr size_t num_reader_args = 27;
     constexpr size_t num_writer_args = 3;
-    constexpr size_t num_kernel_args = 3;
+    constexpr size_t num_kernel_args = 4;
 
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
@@ -179,7 +179,9 @@ void set_or_update_runtime_arguments(
             reader_runtime_args[4] = start_tile_id;                                  // 4: start_id
 
             // Extended broadcast arguments
-            if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
+            if (broadcast_type == WhereBroadcastType::OUTER_BCAST ||
+                broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
+                broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) {
                 reader_runtime_args[5] = aHt * aWt * aC * aN * aD * (aND > 1);   // 5: nD_stride
                 reader_runtime_args[6] = aHt * aWt * aC * aN * (aD > 1);         // 6: d_stride
                 reader_runtime_args[7] = aHt * aWt * aC * (aN > 1);              // 7: n_stride
@@ -331,21 +333,59 @@ void set_or_update_runtime_arguments(
             uint32_t freq = output_Wt;              // Column broadcast frequency
             uint32_t counter = start_tw;            // Column broadcast counter
 
-            std::array compute_runtime_args = {num_tiles_per_core, freq, counter};
+            std::array compute_runtime_args = {num_tiles_per_core, freq, counter, 0u};
 
+            handle_args(program, compute_kernel_id, core, compute_runtime_args);
+        } else if (
+            variant == WhereVariant::TTS && (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
+                                             broadcast_type == WhereBroadcastType::SCALAR_B_BCAST)) {
+            // Get output shape dimensions for freq/counter calculation
+            const auto& output_shape = output.padded_shape();
+            const auto& tile = output.tensor_spec().tile();
+            uint32_t output_Ht = output_shape[-2] / tile.get_height();
+            uint32_t output_Wt = output_shape[-1] / tile.get_width();
+
+            // Calculate freq and counter like binary_ng for scalar broadcast
+            auto HtWt = output_Ht * output_Wt;
+            uint32_t start_t = start_tile_id % HtWt;
+            uint32_t freq = HtWt;        // scalar broadcast frequency
+            uint32_t counter = start_t;  // scalar broadcast counter
+
+            auto bit_cast_scalar =
+                pack_scalar_runtime_arg(operation_attributes.value_false_scalar.value(), output.dtype());
+            std::array compute_runtime_args = {num_tiles_per_core, freq, counter, bit_cast_scalar};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else if (variant == WhereVariant::TTS) {
             auto bit_cast_scalar =
                 pack_scalar_runtime_arg(operation_attributes.value_false_scalar.value(), output.dtype());
-            std::array compute_runtime_args = {num_tiles_per_core, bit_cast_scalar, 0u};
+            std::array compute_runtime_args = {num_tiles_per_core, bit_cast_scalar, 0u, 0u};
+            handle_args(program, compute_kernel_id, core, compute_runtime_args);
+        } else if (
+            variant == WhereVariant::TST && (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
+                                             broadcast_type == WhereBroadcastType::SCALAR_B_BCAST)) {
+            // Get output shape dimensions for freq/counter calculation
+            const auto& output_shape = output.padded_shape();
+            const auto& tile = output.tensor_spec().tile();
+            uint32_t output_Ht = output_shape[-2] / tile.get_height();
+            uint32_t output_Wt = output_shape[-1] / tile.get_width();
+
+            // Calculate freq and counter like binary_ng for scalar broadcast
+            auto HtWt = output_Ht * output_Wt;
+            uint32_t start_t = start_tile_id % HtWt;
+            uint32_t freq = HtWt;        // scalar broadcast frequency
+            uint32_t counter = start_t;  // scalar broadcast counter
+
+            auto bit_cast_scalar =
+                pack_scalar_runtime_arg(operation_attributes.value_true_scalar.value(), output.dtype());
+            std::array compute_runtime_args = {num_tiles_per_core, freq, counter, bit_cast_scalar};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else if (variant == WhereVariant::TST) {
             auto bit_cast_scalar =
                 pack_scalar_runtime_arg(operation_attributes.value_true_scalar.value(), output.dtype());
-            std::array compute_runtime_args = {num_tiles_per_core, bit_cast_scalar, 0u};
+            std::array compute_runtime_args = {num_tiles_per_core, bit_cast_scalar, 0u, 0u};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else {  // TTT variant without subtile bcast
-            std::array compute_runtime_args = {num_tiles_per_core, 0u, 0u};
+            std::array compute_runtime_args = {num_tiles_per_core, 0u, 0u, 0u};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         }
         start_tile_id += num_tiles_per_core;
