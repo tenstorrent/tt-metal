@@ -17,6 +17,9 @@ from helpers.format_config import InputOutputFormat
 from helpers.log_utils import _format_log
 from helpers.target_config import TestTargetConfig, initialize_test_target_from_pytest
 
+# imports for pytest fixtures
+from helpers.perf import perf_report  # noqa: F401  # isort:skip
+
 
 def init_llk_home():
     if "LLK_HOME" in os.environ:

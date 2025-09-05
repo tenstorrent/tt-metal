@@ -15,30 +15,14 @@ from helpers.param_config import (
 )
 from helpers.perf import (
     ALL_RUN_TYPES,
-    PerfReport,
-    delete_benchmark_dir,
-    dump_report,
-    dump_scatter,
     perf_benchmark,
     update_report,
 )
 
-TEST_NAME = "eltwise_binary_fpu_perf"
-
-report = PerfReport()
-
-
-@pytest.fixture(scope="module")
-def report_fixture():
-    delete_benchmark_dir(TEST_NAME)
-    yield
-    dump_report(TEST_NAME, report)
-    dump_scatter(TEST_NAME, report)
-
 
 @pytest.mark.perf
 @parametrize(
-    test_name=TEST_NAME,
+    test_name="eltwise_binary_fpu_perf",
     formats=input_output_formats(
         [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Float16_b]
     ),
@@ -53,7 +37,7 @@ def report_fixture():
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 def test_perf_eltwise_binary_fpu(
-    report_fixture, test_name, formats, mathop, tile_count, math_fidelity, dest_acc
+    perf_report, test_name, formats, mathop, tile_count, math_fidelity, dest_acc
 ):
 
     # MathFidelity is only used for Elwmul
@@ -70,4 +54,4 @@ def test_perf_eltwise_binary_fpu(
     }
 
     results = perf_benchmark(test_config, ALL_RUN_TYPES)
-    update_report(report, test_config, results)
+    update_report(perf_report, test_config, results)

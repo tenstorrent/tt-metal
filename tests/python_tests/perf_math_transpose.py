@@ -7,32 +7,15 @@ from helpers.format_arg_mapping import DestAccumulation, Transpose
 from helpers.format_config import DataFormat
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf import (
-    PerfReport,
     PerfRunType,
-    delete_benchmark_dir,
-    dump_report,
-    dump_scatter,
     perf_benchmark,
     update_report,
 )
 
-TEST_NAME = "math_transpose_perf"
-
-
-report = PerfReport()
-
-
-@pytest.fixture(scope="module")
-def report_fixture():
-    delete_benchmark_dir(TEST_NAME)
-    yield
-    dump_report(TEST_NAME, report)
-    dump_scatter(TEST_NAME, report)
-
 
 @pytest.mark.perf
 @parametrize(
-    test_name=TEST_NAME,
+    test_name="math_transpose_perf",
     formats=input_output_formats(
         [
             # DataFormat.Float16_b,     # Waiting for resolution of issue 549
@@ -43,7 +26,7 @@ def report_fixture():
     math_transpose_faces=[Transpose.No, Transpose.Yes],
 )
 def test_perf_math_transpose(
-    report_fixture,
+    perf_report,
     test_name,
     formats,
     unpack_transpose_faces,
@@ -78,4 +61,4 @@ def test_perf_math_transpose(
     }
 
     results = perf_benchmark(test_config, run_types=[PerfRunType.L1_TO_L1])
-    update_report(report, test_config, results)
+    update_report(perf_report, test_config, results)
