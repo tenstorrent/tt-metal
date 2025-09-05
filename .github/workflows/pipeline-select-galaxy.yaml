@@ -28,7 +28,7 @@ on:
         description: "You can specify only one topology. Default is 'topology-6u'."
         required: true
         type: string
-        default: "in-service,config-tg"
+        default: "in-service,topology-6u"
       galaxy-quick:
         required: false
         type: boolean
