@@ -35,7 +35,7 @@ permissions:
 jobs:
   regression-testing:
     name: Regression testing (${{ inputs.version }})
-    uses: ./.github/workflows/release-regression-testing.yaml
+    uses: ./.github/workflows/release-build-and-regression-test.yaml
     secrets: inherit
     with:
       version: ${{ inputs.version }}
