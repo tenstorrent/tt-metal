@@ -15,14 +15,15 @@ namespace tt_metal {
 
 struct ProfilerStateManager {
 public:
-    ProfilerStateManager() {
-        this->device_profiler_map = {};
-        this->device_host_time_pair = {};
-        this->device_device_time_pair = {};
-        this->smallest_host_time = {};
-        this->do_sync_on_close = true;
-        this->sync_set_devices = {};
-    };
+    ProfilerStateManager() :
+        device_profiler_map({}),
+        device_host_time_pair({}),
+        device_device_time_pair({}),
+        smallest_host_time({}),
+        do_sync_on_close(true),
+        sync_set_devices({}) {
+
+        };
     ~ProfilerStateManager() {
         this->device_profiler_map.clear();
         this->device_host_time_pair.clear();
