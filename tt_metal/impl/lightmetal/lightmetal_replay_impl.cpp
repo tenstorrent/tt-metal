@@ -358,7 +358,9 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
         case ::tt::tt_metal::flatbuffer::CommandType::NONE:
             TT_THROW("LightMetalReplay execute encountered unsupported cmd type NONE");
             break;
-        default: TT_THROW("LightMetalReplay execute encountered unsupported cmd type {}", command->cmd_type()); break;
+        default:
+            TT_THROW("LightMetalReplay execute encountered unsupported cmd type {}", command->cmd_type());
+            break;
     }
 }
 
