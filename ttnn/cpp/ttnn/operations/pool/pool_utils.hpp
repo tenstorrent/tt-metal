@@ -147,4 +147,12 @@ void validate_input_params(
     uint32_t dilation_w,
     bool is_in_tiled);
 
+bool is_global_pool(
+    uint32_t input_h,
+    uint32_t input_w,
+    const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
+    const std::array<uint32_t, 4>& padding,
+    bool count_include_pad);
+
 }  // namespace ttnn::operations::pool
