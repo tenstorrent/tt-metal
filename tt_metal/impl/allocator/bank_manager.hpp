@@ -152,6 +152,14 @@ private:
 
     // Invalidate caches stored on states that depend on the given state
     void invalidate_allocated_ranges_cache_for_dependent_states(StateDependencies::StateId state);
+
+    // Compute and cache the merged allocated ranges of all dependent states for the given state
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& compute_merged_allocated_ranges(
+        StateDependencies::StateId state);
+
+    // Compute available address ranges for the given state and request, after subtracting merged neighbor allocations
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> compute_available_addresses(
+        StateDependencies::StateId state, DeviceAddr size_per_bank, DeviceAddr address_limit);
 };
 
 }  // namespace tt_metal
