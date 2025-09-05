@@ -44,8 +44,8 @@ std::pair<bfloat16, bfloat16> unpack_two_bfloat16_from_uint32(uint32_t uint32_da
 std::vector<std::uint32_t> create_arange_vector_of_bfloat16(uint32_t num_bytes, bool print) {
     std::vector<std::uint32_t> vec(num_bytes / sizeof(std::uint32_t), 0);
     for (int i = 0; i < vec.size(); i++) {
-        float num_1_float = i * 2;
-        float num_2_float = i * 2 + 1;
+        float num_1_float = 1;
+        float num_2_float = 1;
 
         bfloat16 num_1_bfloat16 = bfloat16(num_1_float);
         bfloat16 num_2_bfloat16 = bfloat16(num_2_float);

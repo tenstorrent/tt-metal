@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api/reduce.h"
+#include "/localdev/vbabic/tt-metal/tt_metal/hw/inc/debug/dprint_tensix.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -25,16 +26,12 @@ void MAIN {
             acquire_dst();
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 cb_wait_front(tt::CBIndex::c_0, onetile);
-#if (MATH_ONLY == 1)
-                UNPACK((llk_unpack_AB(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0)));
-                // REDUCE_OP is expected to come from add_define
-                reduce_tile_math(reduce_dst_idx);
-#elif (MATH_ONLY == 0)
                 // REDUCE_OP is expected to come from add_define
                 reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
-#endif
                 cb_pop_front(tt::CBIndex::c_0, onetile);
             }
+
+            dprint_tensix_dest_reg(reduce_dst_idx);  // is 0 always
 
             cb_reserve_back(tt::CBIndex::c_16, onetile);
             pack_tile(reduce_dst_idx, tt::CBIndex::c_16);
