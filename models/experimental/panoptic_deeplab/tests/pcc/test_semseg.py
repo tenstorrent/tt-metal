@@ -3,7 +3,7 @@ import pytest
 from typing import Dict
 import ttnn
 
-from models.experimental.panoptic_deeplab.reference.pytorch_semSeg import PanopticDeepLabSemSegHead, ShapeSpec
+from models.experimental.panoptic_deeplab.reference.pytorch_semseg import PanopticDeepLabSemSegHead, ShapeSpec
 from models.experimental.panoptic_deeplab.tt.tt_semseg import TtPanopticDeepLabSemSegHead
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
