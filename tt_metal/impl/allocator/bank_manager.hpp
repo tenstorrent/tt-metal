@@ -131,8 +131,8 @@ private:
     ttsl::SmallVector<std::unordered_set<DeviceAddr>> allocated_buffers_{};
     ttsl::SmallVector<std::unique_ptr<allocator::Algorithm>> allocators_{};
 
-    // Per-state cache: merged occupied ranges of all other states (size-independent)
-    ttsl::SmallVector<std::optional<std::vector<std::pair<DeviceAddr, DeviceAddr>>>> neighbors_occupied_cache_{};
+    // Per-state cache of: merged allocated ranges of all other dependent states
+    ttsl::SmallVector<std::optional<std::vector<std::pair<DeviceAddr, DeviceAddr>>>> allocated_ranges_cache_{};
 
     /*****************************
      * State-independent methods *
@@ -150,8 +150,8 @@ private:
     allocator::Algorithm* get_allocator_for_state(StateDependencies::StateId state);
     const allocator::Algorithm* get_allocator_for_state(StateDependencies::StateId state) const;
 
-    // Invalidate caches stored on states that depend on the given state (its neighbors)
-    void invalidate_neighbor_caches(StateDependencies::StateId changed_state);
+    // Invalidate caches stored on states that depend on the given state
+    void invalidate_allocated_ranges_cache_for_dependent_states(StateDependencies::StateId state);
 };
 
 }  // namespace tt_metal

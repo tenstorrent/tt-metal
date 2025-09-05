@@ -116,7 +116,7 @@ void BankManager::init_allocators_across_states(DeviceAddr size_bytes, uint32_t 
     const uint32_t n = state_dependencies_.num_states();
     allocators_.resize(n);
     allocated_buffers_.resize(n);
-    neighbors_occupied_cache_.resize(n);
+    allocated_ranges_cache_.resize(n);
 
     // Reverse edges now built inside StateDependencies
     for (uint32_t state = 0; state < n; ++state) {
@@ -230,15 +230,14 @@ const allocator::Algorithm* BankManager::get_allocator_for_state(BankManager::St
     return const_cast<BankManager*>(this)->get_allocator_for_state(state);
 }
 
-void BankManager::invalidate_neighbor_caches(BankManager::StateDependencies::StateId changed_state) {
-    if (changed_state.value >= state_dependencies_.num_states()) {
+void BankManager::invalidate_allocated_ranges_cache_for_dependent_states(
+    BankManager::StateDependencies::StateId state) {
+    if (state.value >= state_dependencies_.num_states()) {
         return;
     }
-    const auto& neighbors = state_dependencies_.dependencies[changed_state.value];
-    for (const auto dep_state : neighbors) {
-        if (dep_state.value < neighbors_occupied_cache_.size()) {
-            neighbors_occupied_cache_[dep_state.value].reset();
-        }
+    const auto& dependent_states = state_dependencies_.dependencies[state.value];
+    for (const auto dep_state : dependent_states) {
+        allocated_ranges_cache_[dep_state.value].reset();
     }
 }
 
@@ -327,7 +326,7 @@ uint64_t BankManager::allocate_buffer(
     };
 
     // Build or fetch cached merged occupied ranges of neighbors (excluding current state)
-    if (!neighbors_occupied_cache_[state.value].has_value()) {
+    if (!allocated_ranges_cache_[state.value].has_value()) {
         // Collect occupied ranges per neighbor: from allocator's allocated addresses
         std::vector<std::vector<std::pair<DeviceAddr, DeviceAddr>>> neighbor_used_lists;
         neighbor_used_lists.reserve(neighbors.size());
@@ -367,7 +366,7 @@ uint64_t BankManager::allocate_buffer(
                 coalesced.back().second = std::max(coalesced.back().second, r.second);
             }
         }
-        neighbors_occupied_cache_[state.value] = std::move(coalesced);
+        allocated_ranges_cache_[state.value] = std::move(coalesced);
     }
 
     // Current state free ranges minus occupied ranges of neighbors
@@ -375,7 +374,7 @@ uint64_t BankManager::allocate_buffer(
         clamp_ranges(alloc->available_addresses(size_per_bank));
     std::sort(
         current_ranges.begin(), current_ranges.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-    const auto& occupied = neighbors_occupied_cache_[state.value].value();
+    const auto& occupied = allocated_ranges_cache_[state.value].value();
     std::vector<std::pair<DeviceAddr, DeviceAddr>> allowed;
     allowed.reserve(current_ranges.size());
     size_t j = 0;
@@ -446,7 +445,7 @@ uint64_t BankManager::allocate_buffer(
     TT_FATAL(address.has_value(), "Allocator failed to place at chosen address {}", chosen.value());
     allocated_buffers_[state.value].insert(address.value());
     // Allocation in this state invalidates caches in states that depend on this state
-    this->invalidate_neighbor_caches(state);
+    this->invalidate_allocated_ranges_cache_for_dependent_states(state);
     return address.value();
 }
 
@@ -456,7 +455,7 @@ void BankManager::deallocate_buffer(DeviceAddr address, BankManager::StateDepend
     alloc->deallocate(address);
     allocated_buffers_[state.value].erase(address);
     // Deallocation in this state invalidates caches in states that depend on this state
-    this->invalidate_neighbor_caches(state);
+    this->invalidate_allocated_ranges_cache_for_dependent_states(state);
 }
 
 void BankManager::deallocate_all() {
@@ -467,10 +466,7 @@ void BankManager::deallocate_all() {
             alloc->deallocate(addr);
         }
         allocated_buffers_[state.value].clear();
-    }
-    // After bulk deallocation, conservatively clear all caches
-    for (auto& per_state_cache : neighbors_occupied_cache_) {
-        per_state_cache.reset();
+        allocated_ranges_cache_[state.value].reset();
     }
 }
 
@@ -480,9 +476,7 @@ void BankManager::clear() {
             allocators_[state.value]->clear();
             allocated_buffers_[state.value].clear();
         }
-    }
-    for (auto& per_state_cache : neighbors_occupied_cache_) {
-        per_state_cache.reset();
+        allocated_ranges_cache_[state.value].reset();
     }
 }
 
@@ -500,7 +494,7 @@ BankManager&& BankManager::operator=(BankManager&& that) noexcept {
     interleaved_address_limit_ = that.interleaved_address_limit_;
     alignment_bytes_ = that.alignment_bytes_;
     state_dependencies_ = std::move(that.state_dependencies_);
-    neighbors_occupied_cache_ = std::move(that.neighbors_occupied_cache_);
+    allocated_ranges_cache_ = std::move(that.allocated_ranges_cache_);
     return std::move(*this);
 }
 
