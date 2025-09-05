@@ -51,7 +51,7 @@ Mesh: [
 },
 ]
 
-Graph: [
+RelaxedGraph: [
   [M0, M4, 2],
   [M1, M4, 2],
   [M2, M4, 2],

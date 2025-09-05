@@ -396,7 +396,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         !(yaml["RelaxedGraph"] && yaml["Graph"]),
         "Mesh Graph Descriptor cannot specify both RelaxedGraph and Graph connections.");
     if (yaml["RelaxedGraph"]) {
-        for (const auto& connection : yaml["Graph"]) {
+        for (const auto& connection : yaml["RelaxedGraph"]) {
             auto src_mesh_str = connection[0].as<std::string>();
             auto dst_mesh_str = connection[1].as<std::string>();
             auto num_chans = connection[2].as<uint32_t>();
