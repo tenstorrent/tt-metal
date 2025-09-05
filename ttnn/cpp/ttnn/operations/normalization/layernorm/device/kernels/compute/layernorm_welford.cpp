@@ -133,14 +133,14 @@ void MAIN {
             ACQ();
 
             uint32_t start_N = 0;
+            transpose_wh_init_short(cb_x);
+            welford_init();
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
                 cb_wait_front(cb_x, wt + blk);
                 for (uint32_t j = 0; j < blk; j++) {
                     // Welford's needs transposed input tile
-                    transpose_wh_init_short(cb_x);
                     transpose_wh_tile(cb_x, wt + j, dst0);
-                    welford_init();
-                    welford(dst0, dst1, dst2, start_N, W);
+                    welford_tile<dst0, dst1, dst2, true, true>(start_N, W, 0, 0);
                     start_N += tile_width;
                 }
             }

@@ -146,11 +146,11 @@ void MAIN {
                 // in short init that causes accuracy to drop
                 reconfig_data_format_srca(cb_result_or_input);
                 transpose_wh_init(cb_result_or_input, cb_result_or_input);
+                welford_init();
                 for (uint32_t j = 0; j < blk; j++) {
                     cb_wait_front(cb_result_or_input, j + 1);
                     transpose_wh_tile(cb_result_or_input, j, dst0);
-                    welford_init();
-                    welford(dst0, dst1, dst2, (wt + j) * tile_width, W);
+                    welford_tile<dst0, dst1, dst2, true, true>((wt + j) * tile_width, W, 0, 0);
                 }
                 tile_regs_commit();
 
