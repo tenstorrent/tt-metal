@@ -26,7 +26,6 @@ class TtDeepLabV3PlusHead(nn.Module):
         common_stride: int,
         norm: str,
         train_size: Optional[Tuple],
-        # --- All weights must be provided externally ---
         shared_weight_tensor_kernel1: torch.Tensor,
         shared_weight_tensor_kernel3: torch.Tensor,
         shared_weight_tensor_kernel1_output5: torch.Tensor,
@@ -74,7 +73,7 @@ class TtDeepLabV3PlusHead(nn.Module):
             decoder_stage = {}
             feature_name = self.in_features[idx]
 
-            if idx == len(self.in_features) - 1:  # ASPP stage
+            if idx == len(self.in_features) - 1:
                 if train_size is not None:
                     train_h, train_w = train_size
                     encoder_stride = in_strides[-1]
@@ -98,7 +97,7 @@ class TtDeepLabV3PlusHead(nn.Module):
                 )
                 decoder_stage["project_conv"] = project_conv
                 decoder_stage["fuse_conv_0"] = None
-            else:  # Low-level feature stages
+            else:
                 proj_out_ch = project_channels[idx]
                 project_conv = _create_tt_conv2d(
                     weight=project_conv_weights[feature_name],
@@ -153,22 +152,18 @@ class TtDeepLabV3PlusHead(nn.Module):
         y = None
         feature_keys = self.in_features[::-1]
 
-        # --- Stage 1: ASPP (on the coarsest feature map, e.g., 'res5') ---
-        # This corresponds to the first key in our reversed list.
+        # --- Stage 1: ASPP ---
         aspp_feature_key = feature_keys[0]
         x = features[aspp_feature_key]
         stage = self.decoder[aspp_feature_key]
-        # The 'project_conv' for this stage is the entire TtASPP module.
         y = stage["project_conv"](x)
         y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
 
         # --- Subsequent Fusion Stages (e.g., 'res3', then 'res2') ---
-        # We loop through the remaining, higher-resolution features.
-        for i, f_key in enumerate(feature_keys[1:]):  # Start from the second feature
+        for i, f_key in enumerate(feature_keys[1:]):
             previous_y = y
             x = features[f_key]
             stage = self.decoder[f_key]
-            # 1. Project the low-level features with a 1x1 Conv, followed by Norm and Activation.
             proj_x = stage["project_conv"](x)
             proj_x = stage["project_norm"](proj_x)
             proj_x = self.activation(proj_x)
@@ -178,16 +173,12 @@ class TtDeepLabV3PlusHead(nn.Module):
             scale_w = proj_x.shape[2] // y.shape[2]
             y_upsampled = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
 
-            # Get original dimensions before flattening
             orig_batch, orig_height, orig_width, orig_channels = y_upsampled.shape
 
             # Channel slicing for upsample operation - always slice by 2 (except first iteration)
-            # Check if this is the first iteration (i == 0 means first fusion stage)
             if i == 0:
-                # First iteration - no slicing, use original upsample pattern
                 y_upsampled = ttnn.upsample(y_upsampled, scale_factor=(scale_h, scale_w), mode="bilinear")
             else:
-                # All other iterations - always slice by 2
                 split_factor = 2
                 channels_per_slice = orig_channels // split_factor
                 print(f"Using channel slicing for upsample: {orig_channels} channels split into {split_factor} slices")
@@ -195,13 +186,10 @@ class TtDeepLabV3PlusHead(nn.Module):
                 for slice_idx in range(split_factor):
                     start_ch = slice_idx * channels_per_slice
                     end_ch = (slice_idx + 1) * channels_per_slice
-
-                    # Slice the tensor along channel dimension (NHWC format, channel is dim 3)
                     y_slice = ttnn.slice(
                         y_upsampled, [0, 0, 0, start_ch], [orig_batch, orig_height, orig_width, end_ch]
                     )
 
-                    # Upsample the slice using original pattern
                     y_slice_upsampled = ttnn.upsample(y_slice, scale_factor=(scale_h, scale_w), mode="bilinear")
                     y_slice_upsampled = ttnn.to_memory_config(y_slice_upsampled, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -214,7 +202,6 @@ class TtDeepLabV3PlusHead(nn.Module):
             y_upsampled = ttnn.to_memory_config(y_upsampled, ttnn.DRAM_MEMORY_CONFIG)
             y_upsampled = ttnn.to_layout(y_upsampled, ttnn.TILE_LAYOUT)
 
-            # 3. Fuse the features by concatenating along the channel dimension (dim=3 for NHWC).
             y = ttnn.concat([proj_x, y_upsampled], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             ttnn.deallocate(previous_y)
@@ -269,18 +256,15 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         input_shape: Dict[str, ShapeSpec],
         device: ttnn.Device,
         *,
-        # --- Parameters for this class ---
         head_channels: int,
         num_classes: int,
         norm: str,
-        # --- Parameters that will be passed down to the base class ---
         project_channels: List[int],
         aspp_dilations: List[int],
         aspp_dropout: float,
         decoder_channels: List[int],
         common_stride: int,
         train_size: Optional[Tuple],
-        # --- ALL weights for base class & this class ---
         shared_weight_tensor_kernel1: torch.Tensor,
         shared_weight_tensor_kernel3: torch.Tensor,
         shared_weight_tensor_kernel1_output5: torch.Tensor,
@@ -291,7 +275,6 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         panoptic_head_1_weight: torch.Tensor,
         panoptic_predictor_weight: torch.Tensor,
     ):
-        # Call the base class __init__ in decoder_only mode
         super().__init__(
             input_shape=input_shape,
             device=device,
@@ -312,12 +295,9 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             fuse_conv_1_weights=fuse_conv_1_weights,
         )
         assert self.decoder_only
-
-        # Create the specific head and predictor layers for this class
         use_bias = norm == ""
         decoder_out_ch = decoder_channels[0]
 
-        # Helper to create TTNN Conv2d
         def _create_tt_conv2d(
             weight: torch.Tensor, in_ch: int, out_ch: int, kernel_size: int, stride: int, padding: int, use_bias: bool
         ):
@@ -339,23 +319,16 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         """
         The forward pass for the Panoptic head in inference mode.
         """
-        # 1. Get the final logits from the full pipeline (base decoder + this head + this predictor)
         y = self.layers(features)
 
-        # 2. Perform the final upsampling to match the target output size
-        # This mirrors the behavior of the PyTorch version's forward pass
         y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
         y = ttnn.upsample(y, scale_factor=self.common_stride)  # mode="bilinear" has OOM for 32MB on 16 banks
         y = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
-
-        # 3. Return the results in the (tensor, dict) format expected by the test
         return y, {}
 
     def layers(self, features: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:
-        # 1. Get the refined feature map from the base class decoder
         y = super().layers(features)
 
-        # 2. Apply the specific head layers of this class
         y = self.head_0(
             y,
             slice_config=ttnn.Conv2dSliceConfig(
@@ -376,6 +349,5 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         y = self.head_norm_1(y)
         y = self.activation(y)
 
-        # 3. Apply the final predictor
         y = self.predictor(y)
         return y
