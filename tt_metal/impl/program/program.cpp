@@ -540,7 +540,8 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         // Get the extent of the kernels in x, y
         CoreCoord base = {std::numeric_limits<decltype(base.x)>::max(), std::numeric_limits<decltype(base.y)>::max()};
         grid_extent_[programmable_core_type_index] = {0, 0};
-        for (auto [id, kernel] : kernels_[programmable_core_type_index]) {
+        const auto& handle_to_kernel = kernels_[programmable_core_type_index];
+        for (auto [id, kernel] : handle_to_kernel) {
             for (auto core : kernel->logical_cores()) {
                 if (core.x > grid_extent_[programmable_core_type_index].x)
                     grid_extent_[programmable_core_type_index].x = core.x;
@@ -559,7 +560,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         size_t grid_size = grid_extent_[programmable_core_type_index].x * grid_extent_[programmable_core_type_index].y;
         std::vector<bool> valid(grid_size, false);
         std::vector<std::set<KernelHandle>> grid(grid_size);
-        for (auto [id, kernel] : kernels_[programmable_core_type_index]) {
+        for (auto [id, kernel] : handle_to_kernel) {
             for (auto core : kernel->logical_cores()) {
                 int core_index = core.y * grid_extent_[programmable_core_type_index].x + core.x;
                 valid[core_index] = true;
@@ -573,7 +574,9 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
             for (auto x = base.x; x < grid_extent_[programmable_core_type_index].x; x++) {
                 int index = y * grid_extent_[programmable_core_type_index].x + x;
                 if (valid[index]) {
-                    map[grid[index]].insert(CoreRange({x, y}, {x, y}));
+                    // grid is not used any more. Avoid copy construction by moving.
+                    auto [it, inserted] = map.try_emplace(std::move(grid[index]));
+                    it->second.insert(CoreRange({x, y}, {x, y}));
                 }
             }
         }
@@ -619,7 +622,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                                     uint32_t first_unused_index = (uint32_t)__builtin_ctz(~used_cbs);
                                     std::string kernels_str;
                                     for (auto id : kernels) {
-                                        std::shared_ptr<Kernel> kernel = get_kernel(id);
+                                        std::shared_ptr<Kernel> kernel = handle_to_kernel.at(id);
                                         if (!kernels_str.empty()) {
                                             kernels_str += ", ";
                                         }
@@ -682,8 +685,8 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 min_remote_cb_start_index);
             std::vector<KernelHandle> kernel_ids(kernels.begin(), kernels.end());
             // Sort kernel ids by dispatch class, so loops over this array will be in dispatch class order
-            std::sort(kernel_ids.begin(), kernel_ids.end(), [this](KernelHandle a, KernelHandle b) {
-                return get_kernel(a)->dispatch_class() < get_kernel(b)->dispatch_class();
+            std::sort(kernel_ids.begin(), kernel_ids.end(), [&handle_to_kernel](KernelHandle a, KernelHandle b) {
+                return handle_to_kernel.at(a)->dispatch_class() < handle_to_kernel.at(b)->dispatch_class();
             });
             kernel_groups_[programmable_core_type_index].push_back(std::make_shared<KernelGroup>(
                 *this,
