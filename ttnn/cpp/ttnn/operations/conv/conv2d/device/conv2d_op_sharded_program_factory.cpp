@@ -45,7 +45,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
     bool enable_split_reader,
-    bool full_inner_dim) {
+    bool full_inner_dim,
+    bool config_tensors_in_dram) {
     distributed::MeshDevice* device = a.device();
     TT_FATAL(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
@@ -93,7 +94,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t per_core_out_matrix_height_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
     const bool block_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     const bool height_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
-
     const bool slice_inner_dim = height_sharded || !full_inner_dim;
 
     uint32_t conv_act_c_blocks;
@@ -380,10 +380,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     // create sharded ttnn config tensors
     Tensor conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
-        conv_sharded_input_top_left_indices, parallel_config);
+        conv_sharded_input_top_left_indices, parallel_config, config_tensors_in_dram);
     conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
-        conv_reader_indices_tensor, parallel_config, block_sharded, a.device());
+        conv_reader_indices_tensor, parallel_config, block_sharded, a.device(), config_tensors_in_dram);
 
+    log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor);
     const tt::tt_metal::DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
 
     TT_FATAL(act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0, "Error");
@@ -518,6 +519,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     Conv2dConfig conv_config = Conv2dConfig{
         .weights_dtype = b.dtype(),
+        .config_tensors_in_dram = config_tensors_in_dram,
         .shard_layout = a.memory_config().memory_layout(),
         .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
         .enable_act_double_buffer = enable_act_double_buffer,
@@ -537,8 +539,19 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         is_conv_1d_depthwise_conv,
         skip_activation_mcast);
 
-    access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size = conv_sharded_input_top_left_indices[0].size();
-
+    if (config_tensors_in_dram) {
+        // The actual CB reader size is difficult to calculate in calculate_L1_size. So instead keep the CB size as the
+        // maximum possible size.
+        TT_FATAL(
+            access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size >=
+                conv_reader_indices_storage.get_buffer()->page_size(),
+            "CB page size {} should be greater than the config tensor page size {}",
+            access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size,
+            conv_reader_indices_storage.get_buffer()->page_size());
+    } else {
+        access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size =
+            conv_reader_indices_storage.get_buffer()->page_size();
+    }
     // call function to allocate circular buffers
     allocate_cbs(cb_info, program, all_cores, a, output, conv_reader_indices_tensor);
 
@@ -648,6 +661,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     std::map<std::string, std::string> writer_defines;
     std::map<std::string, std::string> writer_mcast_sender_defines;
     std::map<std::string, std::string> compute_defines;
+
+    if (config_tensors_in_dram) {
+        reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
+        reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->address());
+        reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->page_size());
+        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_storage.get_buffer()).append_to(reader_compile_time_args);
+    }
+
     if (skip_activation_mcast) {
         reader_defines["SKIP_MCAST"] = "1";
     }
@@ -871,6 +892,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                 reader_rt_args.insert(reader_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
                 reader_rt_args.push_back(core_y_i);                // act_mcast_sender_id
                 reader_rt_args.push_back(bottom_core_physical.x);  // act_mcast_sender_noc_x
+                reader_rt_args.push_back(core_x_i);                // dram config reader index
             } else {
                 CoreCoord curr_core = {core_x_i, core_y_i};
                 auto core_physical = device->worker_core_from_logical_core(curr_core);
@@ -885,10 +907,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                 reader_rt_args.insert(reader_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
                 reader_rt_args.push_back(core_x_i);         // act_mcast_sender_id
                 reader_rt_args.push_back(core_physical.y);  // act_mcast_sender_noc_x
+                reader_rt_args.push_back(core_y_i);         // dram config reader index
             }
             reader_rt_args.insert(reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());
         } else {
-            reader_rt_args = {(uint32_t)noop_core};
+            reader_rt_args = {(uint32_t)noop_core, core_i};
         }
         SetRuntimeArgs(program, reader_id, core, reader_rt_args);
 

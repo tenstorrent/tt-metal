@@ -201,7 +201,7 @@ std::vector<CBInfo> get_cb_info(
         .name = Conv2dCb::READER_INDICES,
         .num_pages = 1,
         .page_size = pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT * 2,  // 2B per indexß
-        .is_globally_allocated = true,
+        .is_globally_allocated = conv_config.config_tensors_in_dram == false,
         .data_format = tt::DataFormat::UInt16});
 
     // L1 scratchpad CB
@@ -255,7 +255,7 @@ void allocate_cbs(
 
         std::tie(cb.index, cb.handle) =
             tt::tt_metal::create_cb(cb_index++, program, all_cores, cb.page_size, cb.num_pages, cb.data_format, buffer);
-        log_debug(
+        log_trace(
             tt::LogOp,
             "Allocated circular buffer {} with index {}, num pages {}, page size {}, globally allocated: {}",
             enchantum::to_string(cb.name),
