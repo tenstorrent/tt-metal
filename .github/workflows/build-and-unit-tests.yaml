@@ -45,7 +45,7 @@ jobs:
               ./build/test/tt_metal/unit_tests_api --gtest_filter=$GTEST_FILTER
               rm -rf /tmp/kernels
               mkdir -p /tmp/kernels
-              TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*:$GTEST_FILTER
+              TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.${GTEST_FILTER}
           - name: data_movement
             cmd: |
               ./build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER
