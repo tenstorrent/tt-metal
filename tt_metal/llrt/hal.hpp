@@ -216,6 +216,9 @@ private:
     std::vector<uint32_t> mem_read_alignments_;
     std::vector<uint32_t> mem_write_alignments_;
     std::vector<uint32_t> mem_alignments_with_pcie_;
+    // Architecture-defined PCIe address range
+    uint64_t pcie_addr_lower_bound_{};
+    uint64_t pcie_addr_upper_bound_{};
     uint32_t num_nocs_{};
     uint32_t noc_addr_node_id_bits_{};
     uint32_t noc_node_id_ = 0;
@@ -395,6 +398,11 @@ public:
         TT_ASSERT(jit_build_query_ != nullptr);
         return *jit_build_query_;
     }
+
+    // Returns the supported PCIe address range for the current architecture
+    uint64_t get_pcie_addr_lower_bound() const;
+    // Inclusive upper bound
+    uint64_t get_pcie_addr_upper_bound() const;
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
