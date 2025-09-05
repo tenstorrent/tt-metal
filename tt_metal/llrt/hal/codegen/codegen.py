@@ -175,15 +175,14 @@ class CodeGen:
         return Struct(name, fields, arrays.labels, structs.labels)
 
     def generate_interface_header(self):
-        print(
-            "#pragma once\n"
-            "#include <array>\n"
-            "#include <cstddef>\n"
-            "#include <cstdint>\n"
-            f'#include "{self.driver_include_path}"'
+        print("#pragma once\n")
+        my_includes = set(
+            ["#include <array>", "#include <cstddef>", "#include <cstdint>", f'#include "{self.driver_include_path}"']
         )
         for include in self.includes:
+            my_includes.discard(include)
             print(include)
+        print(*my_includes, sep="\n")
         if self.interface_ns:
             print(f"namespace {self.interface_ns} {{")
         self.emit_types()
