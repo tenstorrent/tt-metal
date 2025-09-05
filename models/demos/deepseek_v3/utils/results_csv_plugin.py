@@ -13,7 +13,6 @@ import contextvars
 import pytest
 from loguru import logger
 
-import ttnn
 
 
 # Per-session and per-test state
@@ -46,6 +45,9 @@ def _get_git_commit() -> str:
 
 def _get_ttnn_version() -> str:
     try:
+        import importlib
+
+        ttnn = importlib.import_module("ttnn")
         return getattr(ttnn, "__version__", "unknown") or "unknown"
     except Exception:
         return "unknown"

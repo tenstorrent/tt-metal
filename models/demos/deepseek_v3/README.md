@@ -117,3 +117,52 @@ Notes
 - This is disabled by default. If neither `--results-csv` nor `TT_TEST_RESULTS_CSV` is set, no CSV is produced and the plugin does nothing.
 - Metrics are captured by intercepting calls to `comp_pcc`, `comp_allclose`, and `comp_ulp` in `models.common.utility_functions` (and the `models.utility_functions` alias). If a test computes multiple metrics, all are recorded in order in `metrics_json`.
 - The `module` column is inferred from parameterized class fixtures (when used) or otherwise from the test filename.
+
+## TTNN Op Tracing (opt-in)
+
+Capture every `ttnn` (and `ttnn.experimental`) op call made during module tests to a JSONL file so you can auto‑generate op‑level tests with real shapes and configs.
+
+- Enable by providing a path:
+  - CLI: `pytest models/demos/deepseek_v3/tests --ops-jsonl /path/to/op_calls.jsonl`
+  - Env: `TT_OP_RESULTS_JSONL=/path/to/op_calls.jsonl`
+- Format: JSON Lines; one record per op call, including:
+  - Linking: `run_id`, `test_nodeid`, inferred `module`, per‑test `op_index`.
+  - Op: `op_name` (e.g., `ttnn.linear`), `duration_ms`, timestamps.
+  - Inputs: Tensor shapes/dtypes and memory configs.
+  - Configs: Serialized op configs/program configs/memory configs present in kwargs.
+  - Output tensor metadata; errors if the op raised.
+- Implementation: pytest plugin at `models/demos/deepseek_v3/utils/op_capture_plugin.py` uses an import hook to wrap `ttnn` callables.
+
+### Replaying a single op
+
+Use the helper to reconstruct and execute a captured op call with random inputs of the recorded shapes/configs.
+
+- Programmatic:
+  - `from models.demos.deepseek_v3.utils.op_replay import replay_op_record`
+  - `result = replay_op_record(record_dict, mesh_device)`
+- CLI (requires hardware):
+  - `python -m models.demos.deepseek_v3.utils.op_replay --jsonl /path/to/op_calls.jsonl --index 0`
+  - The helper opens a default mesh (1xN or 4x8) and prints the output shape.
+
+The helper reconstructs:
+- Random torch inputs → TTNN tensors with recorded dtype/layout/memory_config and sharding dims.
+- Config objects (memory/program configs, dataclasses) via the shared serializer.
+- MeshDevice is not loaded from JSON; the helper uses the active device you provide (or default in the CLI).
+
+Notes
+
+- This is disabled by default; when not enabled it adds zero overhead.
+- No source changes required; the plugin wraps `ttnn` via an import hook and also retrofits already‑imported `ttnn` modules.
+- Serializer module: `models/demos/deepseek_v3/utils/serialize_configs.py` provides `to_jsonable` and `from_jsonable` for config objects and placeholders (TensorRef, MeshDevice).
+
+### Generating pytest op tests from JSONL
+
+Create reproducible pytest tests from captured JSONL:
+
+- CLI:
+  - `python -m models.demos.deepseek_v3.utils.generate_op_tests \
+      --jsonl /path/to/op_calls.jsonl \
+      --out-dir models/demos/deepseek_v3/tests/op_repros \
+      --tests-per-group 1`
+  - This writes `test_generated_ops.py` that replays a small sample per op signature using `replay_op_record` and the existing `mesh_device` fixture from `conftest.py`.
+  - Run them: `pytest models/demos/deepseek_v3/tests/op_repros/test_generated_ops.py -q`

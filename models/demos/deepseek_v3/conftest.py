@@ -107,4 +107,5 @@ def set_deterministic_env():
 
 pytest_plugins = [
     "models.demos.deepseek_v3.utils.results_csv_plugin",
+    "models.demos.deepseek_v3.utils.op_capture_plugin",
 ]
