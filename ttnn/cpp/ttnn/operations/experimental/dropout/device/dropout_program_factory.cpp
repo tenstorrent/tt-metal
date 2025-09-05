@@ -359,7 +359,7 @@ DropoutMeshWorkloadFactory::cached_mesh_workload_t DropoutMeshWorkloadFactory::c
             auto single_device_program = DropoutProgramFactory::create(
                 override_per_device_seed(args, mesh_coord, tensor_args.input), tensor_args, output);
             shared_variables[mesh_coord_range] = std::move(single_device_program.shared_variables);
-            workload.add_program(mesh_coord_range, std::move(single_device_program.program));
+            workload->add_program(mesh_coord_range, std::move(single_device_program.program));
         }
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};

@@ -145,14 +145,14 @@ public:
 
     void enqueue_program(const MeshCoordinate& mesh_coord, tt::tt_metal::Program program) {
         MeshCoordinateRange device(mesh_coord, mesh_coord);
-        tt::tt_metal::distributed::AddProgramToMeshWorkload(*mesh_workload_, std::move(program), device);
+        tt::tt_metal::distributed::mesh_workload_.add_program( device, std::move( std::move(program)));
     }
 
     void run_programs() {
         tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload_, true);
     }
 
-    void wait_for_programs() { tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue()); }
+    void wait_for_programs() { mesh_device_->mesh_command_queue().finish(); }
 
     void close_devices() {
         if (!are_devices_open_) {

@@ -70,7 +70,7 @@ void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_->id());
     } else {
         if (auto mesh_buffer = buffer_.get_mesh_buffer()) {
-            distributed::EnqueueWriteMeshBuffer(mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer);
+            mesh_buffer->device()->mesh_command_queue().enqueue_write_mesh_buffer(mesh_buffer, host_buffer.data(), true);
         } else {
             EnqueueWriteBuffer(device_->command_queue(), *buffer_.get_buffer(), host_buffer, false);
         }

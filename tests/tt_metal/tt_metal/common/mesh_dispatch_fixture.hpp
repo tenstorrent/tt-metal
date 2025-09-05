@@ -33,11 +33,11 @@ public:
         const bool skip_finish = false) {
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
         if (!skip_finish) {
-            distributed::Finish(mesh_device->mesh_command_queue());
+            mesh_device->mesh_command_queue().finish();
         }
     }
     void FinishCommands(std::shared_ptr<distributed::MeshDevice> mesh_device) {
-        distributed::Finish(mesh_device->mesh_command_queue());
+        mesh_device->mesh_command_queue().finish();
     }
     void WriteBuffer(
         std::shared_ptr<distributed::MeshDevice> mesh_device,

@@ -200,6 +200,7 @@ public:
     CommandQueue& command_queue(size_t cq_id = 0) override;
 
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
+    MeshTraceId begin_mesh_trace(uint8_t cq_id);  // Creates new trace ID and begins trace capture
     void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
     void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
     void replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
@@ -207,6 +208,12 @@ public:
     std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
+
+    bool using_slow_dispatch() const override;
+    bool using_fast_dispatch() const override;
+    
+    // Synchronize all or specific command queues
+    void synchronize(std::optional<uint8_t> cq_id = std::nullopt, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
     // Initialization APIs
     bool initialize(

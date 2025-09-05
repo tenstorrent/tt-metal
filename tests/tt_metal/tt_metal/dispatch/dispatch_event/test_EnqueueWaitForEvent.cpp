@@ -36,7 +36,7 @@ namespace local_test_functions {
 
 void FinishAllCqs(vector<std::reference_wrapper<distributed::MeshCommandQueue>>& cqs) {
     for (uint i = 0; i < cqs.size(); i++) {
-        distributed::Finish(cqs[i]);
+        cqs[i].finish();
     }
 }
 }  // namespace local_test_functions
@@ -63,8 +63,8 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEventSynchronizeSanity)
             for (uint i = 0; i < cqs.size(); i++) {
                 log_debug(
                     tt::LogTest, "j : {} Recording and Host Syncing on event for CQ ID: {}", j, cqs[i].get().id());
-                auto event = sync_events[i].emplace_back(distributed::EnqueueRecordEventToHost(cqs[i]));
-                distributed::EventSynchronize(event);
+                auto event = sync_events[i].emplace_back(cqs[i].get().enqueue_record_event_to_host());
+                event.synchronize();
                 // Can check events fields after prev sync w/ async CQ.
                 EXPECT_EQ(event.mesh_cq_id(), cqs[i].get().id());
                 EXPECT_EQ(event.id(), cmds_issued_per_cq[i] + 1);
@@ -75,7 +75,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEventSynchronizeSanity)
         // Sync on earlier events again per CQ just to show it works.
         for (uint i = 0; i < cqs.size(); i++) {
             for (size_t j = 0; j < num_events; j++) {
-                distributed::EventSynchronize(sync_events.at(i)[j]);
+                sync_events.at(i)[j].synchronize();
             }
         }
 
@@ -102,8 +102,8 @@ TEST_F(UnitMeshMultiCQSingleDeviceEventFixture, TestEventsEventSynchronizeSanity
     for (size_t j = 0; j < num_events; j++) {
         for (uint i = 0; i < cqs.size(); i++) {
             log_debug(tt::LogTest, "j : {} Recording and Host Syncing on event for CQ ID: {}", j, cqs[i].get().id());
-            auto event = sync_events[i].emplace_back(distributed::EnqueueRecordEventToHost(cqs[i]));
-            distributed::EventSynchronize(event);
+            auto event = sync_events[i].emplace_back(cqs[i].get().enqueue_record_event_to_host());
+            event.synchronize();
             // Can check events fields after prev sync w/ async CQ.
             EXPECT_EQ(event.mesh_cq_id(), cqs[i].get().id());
             EXPECT_EQ(event.id(), cmds_issued_per_cq[i] + 1);
@@ -114,7 +114,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceEventFixture, TestEventsEventSynchronizeSanity
     // Sync on earlier events again per CQ just to show it works.
     for (uint i = 0; i < cqs.size(); i++) {
         for (size_t j = 0; j < num_events; j++) {
-            distributed::EventSynchronize(sync_events.at(i)[j]);
+            sync_events.at(i)[j].synchronize();
         }
     }
 
@@ -140,10 +140,10 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEnqueueWaitForEventSani
             for (uint i = 0; i < cqs.size(); i++) {
                 log_debug(
                     tt::LogTest, "j : {} Recording and Device Syncing on event for CQ ID: {}", j, cqs[i].get().id());
-                auto event = distributed::EnqueueRecordEvent(cqs[i]);
+                auto event = cqs[i].get().enqueue_record_event();
                 EXPECT_EQ(event.mesh_cq_id(), cqs[i].get().id());
                 EXPECT_EQ(event.id(), events_issued_per_cq[i] + 1);
-                distributed::EnqueueWaitForEvent(cqs[i], event);
+                cqs[i].enqueue_wait_for_event(event);
                 events_issued_per_cq[i] += num_events_per_cq;
             }
         }
@@ -180,10 +180,10 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEnqueueWaitForEventCros
                     j,
                     cqs[cq_idx_record].get().id(),
                     cqs[cq_idx_wait].get().id());
-                auto event = distributed::EnqueueRecordEvent(cqs[cq_idx_record]);
+                auto event = cqs[cq_idx_record].get().enqueue_record_event();
                 EXPECT_EQ(event.mesh_cq_id(), cqs[cq_idx_record].get().id());
                 EXPECT_EQ(event.id(), cmds_issued_per_cq[i] + 1);
-                distributed::EnqueueWaitForEvent(cqs[cq_idx_wait], event);
+                cqs[cq_idx_wait].enqueue_wait_for_event(event);
 
                 // Note: Removed host sync here since EnqueueRecordEvent creates device-only events
                 // that don't notify the host. Host sync would require EnqueueRecordEventToHost.
@@ -233,12 +233,12 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                 log_debug(tt::LogTest, "buf_idx: {} Doing Write to cq_id: {} of data: {}", buf_idx, i, srcs[i]);
 
                 distributed::WriteShard(cqs[i], buffers[i], srcs[i], distributed::MeshCoordinate(0, 0), false);
-                auto event = sync_events[i].emplace_back(distributed::EnqueueRecordEvent(cqs[i]));
+                auto event = sync_events[i].emplace_back(cqs[i].get().enqueue_record_event());
             }
 
             for (uint i = 0; i < cqs.size(); i++) {
                 auto event = sync_events[i][buf_idx];
-                distributed::EnqueueWaitForEvent(cqs[i], event);
+                cqs[i].enqueue_wait_for_event(event);
                 vector<uint32_t> result;
                 distributed::ReadShard(cqs[i], result, buffers[i], zero_coord_, true);  // Blocking.
                 bool local_pass = (srcs[i] == result);
@@ -315,8 +315,8 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                     cq_write.get().id());
 
                 distributed::WriteShard(cq_write, buffers[i], srcs[i], zero_coord_, false);
-                auto event = distributed::EnqueueRecordEvent(cq_write);
-                distributed::EnqueueWaitForEvent(cq_read, event);
+                auto event = cq_write.enqueue_record_event();
+                cq_read.enqueue_wait_for_event(event);
                 distributed::ReadShard(cq_read, result, buffers[i], zero_coord_, true);
                 bool local_pass = (srcs[i] == result);
                 log_debug(
@@ -402,10 +402,10 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
 
                     distributed::WriteShard(cq_write, buffers.back(), write_data.back(), zero_coord_, false);
                     if (use_events) {
-                        distributed::MeshEvent event_sync_read_after_write = distributed::EnqueueRecordEvent(cq_write);
+                        distributed::MeshEvent event_sync_read_after_write = cq_write.enqueue_record_event();
 
                         // Issue wait for write to complete, and non-blocking read from the second CQ.
-                        distributed::EnqueueWaitForEvent(cq_read, event_sync_read_after_write);
+                        cq_read.enqueue_wait_for_event(event_sync_read_after_write);
                     }
                     distributed::ReadShard(cq_read, read_results.back(), buffers.back(), zero_coord_, false);
                     log_debug(
@@ -419,15 +419,15 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                     // If more loops, Record Event on second CQ and wait for it to complete on first CQ before next
                     // loop's write.
                     if (use_events && j < num_wr_rd_per_buf - 1) {
-                        distributed::MeshEvent event_sync_write_after_read = distributed::EnqueueRecordEvent(cq_read);
-                        distributed::EnqueueWaitForEvent(cq_write, event_sync_write_after_read);
+                        distributed::MeshEvent event_sync_write_after_read = cq_read.enqueue_record_event();
+                        cq_write.enqueue_wait_for_event(event_sync_write_after_read);
                     }
                 }
 
                 // Basically like Finish, but use host sync on event to ensure all read cmds are finished.
                 if (use_events) {
-                    auto event_done_reads = distributed::EnqueueRecordEventToHost(cq_read);
-                    distributed::EventSynchronize(event_done_reads);
+                    auto event_done_reads = cq_read.enqueue_record_event_to_host();
+                    event_done_reads.synchronize();
                 }
 
                 TT_ASSERT(write_data.size() == read_results.size());

@@ -336,8 +336,8 @@ create_mesh_workloads(
 
     std::vector<tt_metal::distributed::MeshWorkload> mesh_workloads;
     for (auto& program : programs) {
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
-        tt_metal::distributed::AddProgramToMeshWorkload(
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
+        tt_metal::distributed::workload.add_program(
             mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
         mesh_workloads.push_back(std::move(mesh_workload));
     }
@@ -632,8 +632,8 @@ std::shared_ptr<tt_metal::distributed::MeshBuffer> create_and_transfer_data_shar
     } else {
         input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device);
     }
-    tt_metal::distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), input_buffer, input_vec, false);
-    tt_metal::distributed::Finish(device->mesh_command_queue());
+    tt_metal::device->mesh_command_queue().enqueue_write_mesh_buffer(input_buffer, input_vec.data(), false);
+    device->mesh_command_queue().finish();
 
     log_info(tt::LogTest, "created sharded tensor");
 
@@ -918,7 +918,7 @@ int main(int argc, char** argv) {
                     tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
                 }
             }
-            tt_metal::distributed::Finish(device->mesh_command_queue());
+            device->mesh_command_queue().finish();
             for ([[maybe_unused]] auto& mesh_workload : mesh_workloads) {
                 tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
             }

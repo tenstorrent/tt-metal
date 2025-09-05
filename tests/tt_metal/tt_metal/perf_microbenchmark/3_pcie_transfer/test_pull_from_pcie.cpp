@@ -313,8 +313,8 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Num tests {}", num_tests);
 
         // Create MeshWorkload for kernel execution
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
-        tt_metal::distributed::AddProgramToMeshWorkload(
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
+        tt_metal::distributed::workload.add_program(
             mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
 
         for (uint32_t i = 0; i < num_tests; ++i) {
@@ -322,7 +322,7 @@ int main(int argc, char** argv) {
             std::thread t1([&]() {
                 if (enable_kernel_read) {
                     tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
-                    tt_metal::distributed::Finish(device->mesh_command_queue());
+                    device->mesh_command_queue().finish();
                 }
             });
 

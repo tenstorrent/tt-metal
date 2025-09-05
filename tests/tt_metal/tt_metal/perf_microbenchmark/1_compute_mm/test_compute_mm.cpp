@@ -604,8 +604,8 @@ int main(int argc, char** argv) {
 
         log_info(LogTest, "Num tests {}", num_tests);
         // Create MeshWorkload
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
-        tt_metal::distributed::AddProgramToMeshWorkload(
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
+        tt_metal::distributed::workload.add_program(
             mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
 
         for (uint32_t i = 0; i < num_tests; ++i) {
@@ -633,7 +633,7 @@ int main(int argc, char** argv) {
                 std::chrono::duration<double, std::nano> duration{};
                 auto t_begin = std::chrono::high_resolution_clock::now();
                 tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
-                tt_metal::distributed::Finish(device->mesh_command_queue());
+                device->mesh_command_queue().finish();
                 auto t_end = std::chrono::high_resolution_clock::now();
                 log_debug(LogTest, "EnqueueMeshWorkload done");
                 tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
@@ -1684,7 +1684,7 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_and_transfer_data_
 
     // Write data to the mesh buffer
     auto& mesh_cq = device->mesh_command_queue();
-    tt::tt_metal::distributed::EnqueueWriteMeshBuffer(mesh_cq, input_buffer, activations, true);
+    tt::tt_metal::mesh_cq.enqueue_write_mesh_buffer(input_buffer, activations.data(), true);
 
     return input_buffer;
 }
@@ -1715,7 +1715,7 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_and_transfer_data_
 
     // Write data to the mesh buffer
     auto& mesh_cq = device->mesh_command_queue();
-    tt::tt_metal::distributed::EnqueueWriteMeshBuffer(mesh_cq, input_buffer, activations, true);
+    tt::tt_metal::mesh_cq.enqueue_write_mesh_buffer(input_buffer, activations.data(), true);
 
     return input_buffer;
 }

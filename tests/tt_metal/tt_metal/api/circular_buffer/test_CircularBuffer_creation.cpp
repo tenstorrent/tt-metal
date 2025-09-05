@@ -89,7 +89,7 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
     initialize_program(program, cr_set);
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::workload->add_program( device_range, std::move( std::move(program)));
     auto& program_ = workload.get_programs().at(device_range);
 
     uint32_t l1_unreserved_base = devices_.at(0)->allocator()->get_base_allocator_addr(HalMemType::L1);

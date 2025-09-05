@@ -32,8 +32,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_mesh_workload(
         ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
     auto final_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
-    tt::tt_metal::distributed::Synchronize(
-        mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
+    mesh_device->synchronize(std::nullopt, {});  // interaction with subdevice needs to be investigated
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(
@@ -44,7 +43,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_mesh_workload(
             tensor_return_value,
             init_barrier_semaphore,
             final_barrier_semaphore);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+        workload->add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
     return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));

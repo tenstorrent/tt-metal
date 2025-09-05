@@ -430,7 +430,7 @@ int main(int argc, char** argv) {
                         }
                         page++;
                     }
-                    if (EventQuery(sync_event)) {
+                    if (sync_event->query()) {
                         done = true;
                     }
                 }

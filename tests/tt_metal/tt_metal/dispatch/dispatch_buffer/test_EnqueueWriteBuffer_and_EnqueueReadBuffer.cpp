@@ -367,7 +367,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             result.resize(buf_size / sizeof(uint32_t));
 
             if (cq_write and not cq_read) {
-                distributed::Finish(cq);
+                cq.finish();
             }
 
             if (cq_read) {
@@ -2132,7 +2132,7 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestNonblockingReads) {
 
         vector<uint32_t> result_b(bufb->size() / sizeof(uint32_t));
         distributed::ReadShard(mesh_device->mesh_command_queue(), result_b, bufb, distributed::MeshCoordinate(0, 0));
-        distributed::Finish(mesh_device->mesh_command_queue());
+        mesh_device->mesh_command_queue().finish();
 
         EXPECT_EQ(src_a, result_a);
         EXPECT_EQ(src_b, result_b);

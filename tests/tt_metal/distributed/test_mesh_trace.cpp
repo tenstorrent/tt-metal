@@ -118,33 +118,33 @@ TEST_F(MeshTraceTestSuite, Sanity) {
             auto workload = std::make_shared<MeshWorkload>();
             auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
                 1, mesh_device_->compute_with_storage_grid_size(), seed);
-            AddProgramToMeshWorkload(*workload, std::move(*programs[0]), all_devices);
+            workload->add_program( all_devices, std::move( std::move(*programs[0])));
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
             mesh_workloads.push_back(workload);
         }
 
         std::vector<MeshTraceId> trace_ids = {};
         for (int trace_idx = 0; trace_idx < num_traces; trace_idx++) {
-            auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+            auto trace_id = mesh_device_.get()->begin_mesh_trace(0);
             for (int workload_idx = 0; workload_idx < num_workloads_per_trace; workload_idx++) {
                 EnqueueMeshWorkload(
                     mesh_device_->mesh_command_queue(),
                     *mesh_workloads[trace_idx * num_workloads_per_trace + workload_idx],
                     false);
             }
-            EndTraceCapture(mesh_device_.get(), 0, trace_id);
+            mesh_device_.get()->end_mesh_trace(0, trace_id);
             trace_ids.push_back(trace_id);
         }
 
         for (int i = 0; i < num_iters; i++) {
             for (auto trace_id : trace_ids) {
-                ReplayTrace(mesh_device_.get(), 0, trace_id, false);
+                mesh_device_.get()->replay_mesh_trace(0, trace_id, false);
             }
         }
         Finish(mesh_device_->mesh_command_queue());
 
         for (auto trace_id : trace_ids) {
-            ReleaseTrace(mesh_device_.get(), trace_id);
+            mesh_device_.get()->release_mesh_trace(trace_id);
         }
     }
 }
@@ -169,24 +169,24 @@ TEST_F(MeshTraceTest2x4, EltwiseBinaryMeshTrace) {
     // Create first workload: running addition on top row and multiplication on bottom row
     auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, src0_bufs, src1_bufs, intermed_bufs_0);
-    auto mesh_workload = CreateMeshWorkload();
-    AddProgramToMeshWorkload(mesh_workload, std::move(*programs[0]), row_0);
-    AddProgramToMeshWorkload(mesh_workload, std::move(*programs[1]), row_1);
+    auto mesh_workload = MeshWorkload();
+    mesh_workload.add_program( row_0, std::move( std::move(*programs[0])));
+    mesh_workload.add_program( row_1, std::move( std::move(*programs[1])));
     // Create second workload: running addition on top row (src1 + intermed0) and multiplication on
     // bottom row (src1 * intermed0)
     auto programs_1 = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, intermed_bufs_0, src1_bufs, intermed_bufs_1);
-    auto mesh_workload_1 = CreateMeshWorkload();
-    AddProgramToMeshWorkload(mesh_workload_1, std::move(*programs_1[1]), row_0);
-    AddProgramToMeshWorkload(mesh_workload_1, std::move(*programs_1[0]), row_1);
+    auto mesh_workload_1 = MeshWorkload();
+    mesh_workload_1.add_program( row_0, std::move( std::move(*programs_1[1])));
+    mesh_workload_1.add_program( row_1, std::move( std::move(*programs_1[0])));
     // Create third workload: running addition on 1st col (src1 + intermed1), multiplication on
     // second col (src1 * intermed1) and subtraction on the third col( src1 - intermed1)
     auto programs_2 = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, intermed_bufs_1, src1_bufs, output_bufs);
-    auto mesh_workload_2 = CreateMeshWorkload();
-    AddProgramToMeshWorkload(mesh_workload_2, std::move(*programs_2[0]), col_0);
-    AddProgramToMeshWorkload(mesh_workload_2, std::move(*programs_2[1]), col_1);
-    AddProgramToMeshWorkload(mesh_workload_2, std::move(*programs_2[2]), col_2);
+    auto mesh_workload_2 = MeshWorkload();
+    mesh_workload_2.add_program( col_0, std::move( std::move(*programs_2[0])));
+    mesh_workload_2.add_program( col_1, std::move( std::move(*programs_2[1])));
+    mesh_workload_2.add_program( col_2, std::move( std::move(*programs_2[2])));
 
     // Initialize inputs
     std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->size(), 2);
@@ -194,10 +194,8 @@ TEST_F(MeshTraceTest2x4, EltwiseBinaryMeshTrace) {
     // Write inputs for all cores across the Mesh
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
         for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
-            EnqueueWriteMeshBuffer(
-                mesh_device_->mesh_command_queue(), src0_bufs[col_idx * worker_grid_size.y + row_idx], src0_vec);
-            EnqueueWriteMeshBuffer(
-                mesh_device_->mesh_command_queue(), src1_bufs[col_idx * worker_grid_size.y + row_idx], src1_vec);
+            mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(src0_bufs[col_idx * worker_grid_size.y + row_idx], src0_vec.data(), true);
+            mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(src1_bufs[col_idx * worker_grid_size.y + row_idx], src1_vec.data(), true);
         }
     }
     // Compile workloads
@@ -205,15 +203,15 @@ TEST_F(MeshTraceTest2x4, EltwiseBinaryMeshTrace) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload_1, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload_2, false);
     // Capture trace
-    auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+    auto trace_id = mesh_device_.get()->begin_mesh_trace(0);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload_1, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload_2, false);
-    EndTraceCapture(mesh_device_.get(), 0, trace_id);
+    mesh_device_.get()->end_mesh_trace(0, trace_id);
 
     // Run workload multiple times
     for (int i = 0; i < 1000; i++) {
-        ReplayTrace(mesh_device_.get(), 0, trace_id, false);
+        mesh_device_.get()->replay_mesh_trace(0, trace_id, false);
     }
     // Verify outputs
     std::vector<uint32_t> expected_values = {18, 18, 45, 12, 12, 12, 27, 6};
@@ -235,7 +233,7 @@ TEST_F(MeshTraceTest2x4, EltwiseBinaryMeshTrace) {
             }
         }
     }
-    ReleaseTrace(mesh_device_.get(), trace_id);
+    mesh_device_.get()->release_mesh_trace(trace_id);
 }
 
 TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
@@ -269,29 +267,29 @@ TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
     MeshCoordinateRange all_devices(mesh_device_->shape());
 
     // Initialize and construct all MeshWorkloads running on different SubDevices
-    auto waiter_0 = CreateMeshWorkload();
-    auto syncer_0 = CreateMeshWorkload();
-    auto incrementer_0 = CreateMeshWorkload();
+    auto waiter_0 = MeshWorkload();
+    auto syncer_0 = MeshWorkload();
+    auto incrementer_0 = MeshWorkload();
 
-    auto waiter_1 = CreateMeshWorkload();
-    auto syncer_1 = CreateMeshWorkload();
-    auto incrementer_1 = CreateMeshWorkload();
+    auto waiter_1 = MeshWorkload();
+    auto syncer_1 = MeshWorkload();
+    auto incrementer_1 = MeshWorkload();
 
-    auto waiter_2 = CreateMeshWorkload();
-    auto syncer_2 = CreateMeshWorkload();
-    auto incrementer_2 = CreateMeshWorkload();
+    auto waiter_2 = MeshWorkload();
+    auto syncer_2 = MeshWorkload();
+    auto incrementer_2 = MeshWorkload();
 
-    AddProgramToMeshWorkload(waiter_0, std::move(waiter_program_0), left_col);
-    AddProgramToMeshWorkload(syncer_0, std::move(syncer_program_0), left_col);
-    AddProgramToMeshWorkload(incrementer_0, std::move(incrementer_program_0), left_col);
+    waiter_0.add_program( left_col, std::move( std::move(waiter_program_0)));
+    syncer_0.add_program( left_col, std::move( std::move(syncer_program_0)));
+    incrementer_0.add_program( left_col, std::move( std::move(incrementer_program_0)));
 
-    AddProgramToMeshWorkload(waiter_1, std::move(waiter_program_1), right_col);
-    AddProgramToMeshWorkload(syncer_1, std::move(syncer_program_1), right_col);
-    AddProgramToMeshWorkload(incrementer_1, std::move(incrementer_program_1), right_col);
+    waiter_1.add_program( right_col, std::move( std::move(waiter_program_1)));
+    syncer_1.add_program( right_col, std::move( std::move(syncer_program_1)));
+    incrementer_1.add_program( right_col, std::move( std::move(incrementer_program_1)));
 
-    AddProgramToMeshWorkload(waiter_2, std::move(waiter_program_2), all_devices);
-    AddProgramToMeshWorkload(syncer_2, std::move(syncer_program_2), all_devices);
-    AddProgramToMeshWorkload(incrementer_2, std::move(incrementer_program_2), all_devices);
+    waiter_2.add_program( all_devices, std::move( std::move(waiter_program_2)));
+    syncer_2.add_program( all_devices, std::move( std::move(syncer_program_2)));
+    incrementer_2.add_program( all_devices, std::move( std::move(incrementer_program_2)));
 
     // Compile all MeshWorkloads
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_0, false);
@@ -316,7 +314,7 @@ TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
     Finish(mesh_device_->mesh_command_queue());
 
     // Capture trace
-    auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+    auto trace_id = mesh_device_.get()->begin_mesh_trace(0);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_0, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_0, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_0, false);
@@ -326,14 +324,14 @@ TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_2, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_2, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_2, false);
-    EndTraceCapture(mesh_device_.get(), 0, trace_id);
+    mesh_device_.get()->end_mesh_trace(0, trace_id);
 
     // Run trace on all SubDevices in the Mesh
     for (uint32_t i = 0; i < num_iters; i++) {
-        ReplayTrace(mesh_device_.get(), 0, trace_id, false);
+        mesh_device_.get()->replay_mesh_trace(0, trace_id, false);
     }
     Finish(mesh_device_->mesh_command_queue());
-    ReleaseTrace(mesh_device_.get(), trace_id);
+    mesh_device_.get()->release_mesh_trace(trace_id);
 }
 
 TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
@@ -442,17 +440,17 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         {0, num_cols_in_workload}, {mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
 
     // Create and initialize MeshWorkloads
-    auto syncer_mesh_workload = CreateMeshWorkload();
-    auto datacopy_mesh_workload = CreateMeshWorkload();
-    auto add_mesh_workload = CreateMeshWorkload();
+    auto syncer_mesh_workload = MeshWorkload();
+    auto datacopy_mesh_workload = MeshWorkload();
+    auto add_mesh_workload = MeshWorkload();
     // Sync program goes to entire Mesh
-    AddProgramToMeshWorkload(syncer_mesh_workload, std::move(sync_and_incr_program), devices);
+    syncer_mesh_workload.add_program( devices, std::move( std::move(sync_and_incr_program)));
     // Datacopy goes to top row
-    AddProgramToMeshWorkload(datacopy_mesh_workload, std::move(datacopy_program), left_col);
+    datacopy_mesh_workload.add_program( left_col, std::move( std::move(datacopy_program)));
     // First addition goes to bottom row
-    AddProgramToMeshWorkload(datacopy_mesh_workload, std::move(add_program), right_col);
+    datacopy_mesh_workload.add_program( right_col, std::move( std::move(add_program)));
     // Second addition goes to bottom row
-    AddProgramToMeshWorkload(add_mesh_workload, std::move(add_program_2), right_col);
+    add_mesh_workload.add_program( right_col, std::move( std::move(add_program_2)));
 
     // Compile and load workloads
     mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
@@ -466,14 +464,14 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     }
 
     // Capture Trace
-    auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+    auto trace_id = mesh_device_.get()->begin_mesh_trace(0);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), datacopy_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
-    EndTraceCapture(mesh_device_.get(), 0, trace_id);
+    mesh_device_.get()->end_mesh_trace(0, trace_id);
     // Run trace and verify outputs
     for (int i = 0; i < 50; i++) {
-        ReplayTrace(mesh_device_.get(), 0, trace_id, false);
+        mesh_device_.get()->replay_mesh_trace(0, trace_id, false);
 
         std::vector<uint32_t> src_vec(input_buf->size() / sizeof(uint32_t));
         std::iota(src_vec.begin(), src_vec.end(), i);
@@ -481,7 +479,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         // program goes through an independent path (UMD) and can go out of order wrt the
         // buffer data
         mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
+        mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(input_buf, src_vec.data(), true);
 
         for (auto device : mesh_device_->get_devices()) {
             tt::tt_metal::MetalContext::instance().get_cluster().write_core(
@@ -502,7 +500,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
             }
         }
     }
-    ReleaseTrace(mesh_device_.get(), trace_id);
+    mesh_device_.get()->release_mesh_trace(trace_id);
 }
 
 TEST_F(MeshTraceTestSuite, MeshTraceAsserts) {
@@ -514,11 +512,11 @@ TEST_F(MeshTraceTestSuite, MeshTraceAsserts) {
     auto workload = std::make_shared<MeshWorkload>();
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         1, mesh_device_->compute_with_storage_grid_size(), seed);
-    AddProgramToMeshWorkload(*workload, std::move(*programs[0]), all_devices);
-    auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+    workload->add_program( all_devices, std::move( std::move(*programs[0])));
+    auto trace_id = mesh_device_.get()->begin_mesh_trace(0);
     EXPECT_THROW(EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, true), std::runtime_error);
     EXPECT_THROW(Finish(mesh_device_->mesh_command_queue()), std::runtime_error);
-    EndTraceCapture(mesh_device_.get(), 0, trace_id);
+    mesh_device_.get()->end_mesh_trace(0, trace_id);
 }
 
 // Sweep Tests on T3K and TG
@@ -540,22 +538,22 @@ void run_heterogenous_trace_sweep(
             for (auto& program_grid : workload_grid) {
                 auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
                     1, mesh_device->compute_with_storage_grid_size(), seed);
-                AddProgramToMeshWorkload(*workload, std::move(*programs[0]), program_grid);
+                workload->add_program( program_grid, std::move( std::move(*programs[0])));
             }
             EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false);
             mesh_workloads.push_back(workload);
         }
     }
-    auto trace_id = BeginTraceCapture(mesh_device.get(), 0);
+    auto trace_id = mesh_device.get()->begin_mesh_trace(0);
     for (auto& workload : mesh_workloads) {
         EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *workload, false);
     }
-    EndTraceCapture(mesh_device.get(), 0, trace_id);
+    mesh_device.get()->end_mesh_trace(0, trace_id);
     for (int i = 0; i < 50; i++) {
-        ReplayTrace(mesh_device.get(), 0, trace_id, false);
+        mesh_device.get()->replay_mesh_trace(0, trace_id, false);
     }
     Finish(mesh_device->mesh_command_queue());
-    ReleaseTrace(mesh_device.get(), trace_id);
+    mesh_device.get()->release_mesh_trace(trace_id);
 }
 
 class MeshTraceSweepTest2x4 : public MeshTraceTest2x4,

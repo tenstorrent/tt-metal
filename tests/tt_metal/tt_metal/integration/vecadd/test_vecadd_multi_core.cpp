@@ -150,7 +150,7 @@ bool vecadd_multi_core(
     distributed::WriteShard(cq, a, a_data, zero_coord);
     distributed::WriteShard(cq, b, b_data, zero_coord);
     // Enqueue the program
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::workload->add_program( device_range, std::move( std::move(program)));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     log_debug(LogTest, "Kernel execution finished");

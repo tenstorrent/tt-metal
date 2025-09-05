@@ -75,7 +75,7 @@ ApplyDeviceDelayDeviceOperation::ApplyDeviceDelayMeshWorkload::create_mesh_workl
     log_info(tt::LogAlways, "Creating delay mesh workload");
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+        workload->add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
     log_info(tt::LogAlways, "Created delay mesh workload");

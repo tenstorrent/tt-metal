@@ -390,18 +390,18 @@ private:
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
         const distributed::MeshTraceId trace_id =
-            distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
+            this->device_.get()->begin_mesh_trace(mesh_command_queue.id());
         for (auto& workload : this->workloads) {
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
         }
-        distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), trace_id);
+        this->device_.get()->end_mesh_trace(mesh_command_queue.id(), trace_id);
         return trace_id;
     }
 
     void run_trace(const distributed::MeshTraceId trace_id) {
         auto& mesh_command_queue = this->device_->mesh_command_queue();
         for (uint32_t i = 0; i < NUM_TRACE_ITERATIONS; i++) {
-            distributed::ReplayTrace(this->device_.get(), mesh_command_queue.id(), trace_id, false);
+            this->device_.get()->replay_mesh_trace(mesh_command_queue.id(), trace_id, false);
         }
     }
 };

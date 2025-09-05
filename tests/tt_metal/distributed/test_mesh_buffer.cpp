@@ -290,9 +290,9 @@ TEST_F(MeshBufferTest2x4, SweepShardAndConcat) {
             std::vector<uint32_t> src_vec =
                 std::vector<uint32_t>(global_buffer_shape.height() * global_buffer_shape.width(), 0);
             std::iota(src_vec.begin(), src_vec.end(), 0);
-            EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, src_vec);
+            mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(mesh_buffer, src_vec.data(), true);
             std::vector<uint32_t> dst_vec = {};
-            EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst_vec, mesh_buffer);
+            mesh_device_->mesh_command_queue().enqueue_read_mesh_buffer(dst_vec.data(), mesh_buffer, true);
 
             EXPECT_EQ(dst_vec, src_vec);
         }
@@ -407,10 +407,10 @@ TEST_F(MeshBufferTestSuite, RowMajorShardingAndReplication) {
 
         auto mesh_buffer_read_view = MeshBuffer::create(
             sharded_read_view_config, per_device_buffer_config, mesh_device_.get(), mesh_buffer->address());
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, src_vec);
+        mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(mesh_buffer, src_vec.data(), true);
         std::vector<uint32_t> dst_vec =
             std::vector<uint32_t>(global_buffer_read_shape.height() * global_buffer_read_shape.width(), 0);
-        EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst_vec, mesh_buffer_read_view);
+        mesh_device_->mesh_command_queue().enqueue_read_mesh_buffer(dst_vec.data(), mesh_buffer_read_view, true);
 
         for (int i = 0; i < dst_vec.size(); i++) {
             EXPECT_EQ(dst_vec[i], i % (src_vec.size()));
@@ -458,10 +458,10 @@ TEST_F(MeshBufferTestSuite, ColMajorShardingAndReplication) {
         auto mesh_buffer_read_view = MeshBuffer::create(
             sharded_read_view_config, per_device_buffer_config, mesh_device_.get(), mesh_buffer->address());
 
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, src_vec);
+        mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(mesh_buffer, src_vec.data(), true);
         std::vector<uint32_t> dst_vec =
             std::vector<uint32_t>(global_buffer_read_shape.height() * global_buffer_read_shape.width(), 0);
-        EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst_vec, mesh_buffer_read_view);
+        mesh_device_->mesh_command_queue().enqueue_read_mesh_buffer(dst_vec.data(), mesh_buffer_read_view, true);
         for (int i = 0; i < dst_vec.size(); i++) {
             EXPECT_EQ(
                 (i / global_buffer_read_shape.width()) * global_buffer_shape.width() + i % global_buffer_shape.width(),

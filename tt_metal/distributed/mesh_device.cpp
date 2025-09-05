@@ -665,6 +665,29 @@ CoreCoord MeshDevice::dram_grid_size() const {
         this->get_devices(), [](const auto* device) { return device->dram_grid_size(); });
 }
 
+bool MeshDevice::using_slow_dispatch() const {
+    return validate_and_get_reference_value(
+        this->get_devices(), [](const auto* device) { return device->using_slow_dispatch(); });
+}
+
+bool MeshDevice::using_fast_dispatch() const {
+    return validate_and_get_reference_value(
+        this->get_devices(), [](const auto* device) { return device->using_fast_dispatch(); });
+}
+
+void MeshDevice::synchronize(std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    if (!this->is_initialized()) {
+        return;
+    }
+    if (cq_id.has_value()) {
+        this->mesh_command_queue(*cq_id).finish(sub_device_ids);
+    } else {
+        for (uint8_t id = 0; id < this->num_hw_cqs(); ++id) {
+            this->mesh_command_queue(id).finish(sub_device_ids);
+        }
+    }
+}
+
 // Device property methods that can be delegated to reference device
 CoreCoord MeshDevice::grid_size() const {
     return validate_and_get_reference_value(
@@ -819,6 +842,12 @@ void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) {
 
 std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& trace_id) {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->get_trace(trace_id);
+}
+
+MeshTraceId MeshDevice::begin_mesh_trace(uint8_t cq_id) {
+    auto trace_id = MeshTrace::next_id();
+    begin_mesh_trace(cq_id, trace_id);
+    return trace_id;
 }
 
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {

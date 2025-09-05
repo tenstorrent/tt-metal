@@ -135,10 +135,10 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneFromAllCon
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     // LAUNCH PROGRAM - Use mesh workload approach
-    auto mesh_workload = distributed::CreateMeshWorkload();
+    auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};
     auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+    distributed::mesh_workload.add_program( target_devices, std::move( std::move(program)));
 
     auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);

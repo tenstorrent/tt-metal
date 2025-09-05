@@ -71,7 +71,7 @@ bool reader_cb_writer(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::workload->add_program( device_range, std::move( std::move(program)));
     auto& program_ = workload.get_programs().at(device_range);
 
     std::string reader_kernel_name = "";
@@ -204,7 +204,7 @@ bool reader_datacopy_writer(std::shared_ptr<distributed::MeshDevice> mesh_device
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::workload->add_program( device_range, std::move( std::move(program)));
     auto& program_ = workload.get_programs().at(device_range);
 
     distributed::DeviceLocalBufferConfig in_config{

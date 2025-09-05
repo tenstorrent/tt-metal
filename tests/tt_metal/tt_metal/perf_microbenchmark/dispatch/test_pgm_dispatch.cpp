@@ -419,7 +419,7 @@ ProgramExecutor create_standard_executor(
     // Create mesh workloads
     mesh_workloads.resize(programs.size());
     for (auto i = 0; i < programs.size(); i++) {
-        AddProgramToMeshWorkload(
+        workload.add_program(
             mesh_workloads[i], std::move(programs[i]), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
     }
     std::function warmup_func{[&info, &mesh_cq, &mesh_workloads]() {
@@ -452,7 +452,7 @@ ProgramExecutor create_load_prefetcher_executor(
     // Create mesh workload
     mesh_workloads.resize(programs.size());
     for (auto i = 0; i < programs.size(); i++) {
-        AddProgramToMeshWorkload(
+        workload.add_program(
             mesh_workloads[i], std::move(programs[i]), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
     }
 
@@ -482,9 +482,9 @@ MeshTraceId setup_trace_if_enabled(
     MeshTraceId tid;
     if (info.use_trace) {
         const std::size_t cq_id = 0;
-        tid = BeginTraceCapture(mesh_device.get(), cq_id);
+        tid = mesh_device.get()->begin_mesh_trace(cq_id);
         executor.execute_programs();
-        EndTraceCapture(mesh_device.get(), cq_id, tid);
+        mesh_device.get()->end_mesh_trace(cq_id, tid);
         Finish(mesh_device->mesh_command_queue(cq_id));
     }
     return tid;
@@ -504,14 +504,14 @@ void run_benchmark_timing_loop(
     for ([[maybe_unused]] auto _ : state) {
         auto start = std::chrono::system_clock::now();
         if (info.use_trace) {
-            ReplayTrace(mesh_device.get(), cq_id, tid, false);
+            mesh_device.get()->replay_mesh_trace(cq_id, tid, false);
         } else {
             execute_func();
         }
         if (info.time_just_finish) {
             start = std::chrono::system_clock::now();
         }
-        Finish(mesh_cq);
+        mesh_cq.finish();
         auto end = std::chrono::system_clock::now();
 
         if constexpr (std::is_same_v<T, benchmark::State>) {

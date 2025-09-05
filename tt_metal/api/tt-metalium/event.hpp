@@ -20,6 +20,10 @@ struct Event {
     // With async CQ, must wait until event is populated by child thread before using.
     // Opened #5988 to track removing this, and finding different solution.
     void wait_until_ready();
+    
+    // Method equivalents for EventSynchronize() and EventQuery() functions
+    void synchronize();
+    bool query();
 };
 
 }  // namespace tt::tt_metal

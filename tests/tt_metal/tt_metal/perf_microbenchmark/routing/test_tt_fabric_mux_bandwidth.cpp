@@ -496,7 +496,7 @@ int main(int argc, char** argv) {
 
     log_info(tt::LogTest, "Launching programs");
     auto& cq = mesh_device->mesh_command_queue();
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+    distributed::mesh_workload.add_program( device_range, std::move( std::move(program)));
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
 
     log_info(tt::LogTest, "Waiting for workers to complete");
@@ -528,7 +528,7 @@ int main(int argc, char** argv) {
         device, drainer_logical_core, drainer_kernel_config.get_termination_signal_address(), termiation_signal);
 
     log_info(tt::LogTest, "Waiting for programs");
-    tt::tt_metal::distributed::Finish(cq);
+    cq.finish();
 
     log_info(tt::LogTest, "Collecting results");
 

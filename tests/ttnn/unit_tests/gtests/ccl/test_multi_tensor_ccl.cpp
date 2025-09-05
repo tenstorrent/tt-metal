@@ -70,7 +70,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherCommandProcessorAsync) {
     }
     auto semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
     std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {semaphore};
-    tt::tt_metal::distributed::Synchronize(mesh_device_.get(), std::nullopt, std::vector<SubDeviceId>());
+    mesh_device_.get()->synchronize(std::nullopt, std::vector<SubDeviceId>());
 
     auto all_gathered = ttnn::experimental::all_gather_command_processor_async(
         tensors,
@@ -105,7 +105,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, ReduceScatterAsync) {
     auto from_remote_multi_device_global_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
     auto to_remote_multi_device_global_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
 
-    tt::tt_metal::distributed::Synchronize(mesh_device_.get(), std::nullopt, std::vector<SubDeviceId>());
+    mesh_device_.get()->synchronize(std::nullopt, std::vector<SubDeviceId>());
     auto reduced = ttnn::experimental::reduce_scatter_async(
         tensors,
         3,
@@ -141,7 +141,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllReduceAsync) {
     auto from_remote_multi_device_global_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
     auto to_remote_multi_device_global_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
     auto semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
-    tt::tt_metal::distributed::Synchronize(mesh_device_.get(), std::nullopt, std::vector<SubDeviceId>());
+    mesh_device_.get()->synchronize(std::nullopt, std::vector<SubDeviceId>());
 
     auto all_reduced = ttnn::experimental::all_reduce_async(
         tensors,

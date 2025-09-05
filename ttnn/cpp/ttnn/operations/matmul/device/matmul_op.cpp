@@ -2610,11 +2610,11 @@ MeshCoordinateRange get_range_from_mesh_coords(const ttnn::MeshCoordinateRangeSe
 
 operation::CacheableMeshWorkload<std::vector<Tensor>> create_homogenous_mesh_workload(
     tt::tt_metal::operation::ProgramWithCallbacks& matmul_program, const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    tt::tt_metal::distributed::MeshWorkload matmul_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+    tt::tt_metal::distributed::MeshWorkload matmul_workload = tt::tt_metal::distributed::MeshWorkload();
     std::unordered_map<MeshCoordinateRange, MatmulCallback> callbacks = {};
 
     auto workload_device_range = get_range_from_mesh_coords(tensor_coords);
-    AddProgramToMeshWorkload(matmul_workload, std::move(matmul_program.program), workload_device_range);
+    matmul_workload->add_program( workload_device_range, std::move( std::move(matmul_program.program)));
     callbacks[workload_device_range] = std::move(matmul_program.override_runtime_arguments_callback.value());
     return {.workload = std::move(matmul_workload), .per_program_callbacks = std::move(callbacks)};
 }
@@ -2752,10 +2752,9 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                         false,
                         false,
                         false);
-                    AddProgramToMeshWorkload(
-                        dram_sharded_mm_workload,
-                        std::move(dram_sharded_mm_program.program),
-                        MeshCoordinateRange(coord, coord));
+                    dram_sharded_mm_workload.add_program(
+                        MeshCoordinateRange(coord, coord),
+                        std::move(dram_sharded_mm_program.program));
                     callbacks[MeshCoordinateRange(coord, coord)] =
                         std::move(dram_sharded_mm_program.override_runtime_arguments_callback.value());
                 }

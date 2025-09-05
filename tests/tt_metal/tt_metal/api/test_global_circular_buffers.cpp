@@ -123,7 +123,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
         global_cb_config.remote_index(remote_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
         global_cb_config.index(local_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
         tt::tt_metal::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        distributed::workload->add_program( device_range, std::move( std::move(program)));
         auto& program_ = workload.get_programs().at(device_range);
         EXPECT_THROW(program_.finalize_offsets(device), std::exception);
     }

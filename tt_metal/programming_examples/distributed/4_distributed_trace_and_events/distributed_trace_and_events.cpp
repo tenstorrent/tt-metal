@@ -209,27 +209,23 @@ int main() {
         SUBTRACT_OP_ID);
     // Create MeshWorkloads and add programs to them. A MeshWorkload allows a program to target
     // multiple Physical Devices in the Virtual Mesh.
-    auto add_mesh_workload = CreateMeshWorkload();
-    auto multiply_and_subtract_mesh_workload = CreateMeshWorkload();
-    AddProgramToMeshWorkload(
-        add_mesh_workload, std::move(*add_program), all_devices);  // Addition runs on the full grid (sub_device 1)
-    AddProgramToMeshWorkload(
-        multiply_and_subtract_mesh_workload,
-        std::move(*multiply_program),
-        top_row);  // Multiplication runs on the top row (sub_device 2)
-    AddProgramToMeshWorkload(
-        multiply_and_subtract_mesh_workload,
-        std::move(*subtract_program),
-        bottom_row);  // Subtraction runs on the bottom row (sub device 2)
+    auto add_mesh_workload = MeshWorkload();
+    auto multiply_and_subtract_mesh_workload = MeshWorkload();
+    add_mesh_workload.add_program(
+        all_devices, std::move(*add_program));  // Addition runs on the full grid (sub_device 1)
+    multiply_and_subtract_mesh_workload.add_program(
+        top_row, std::move(*multiply_program));  // Multiplication runs on the top row (sub_device 2)
+    multiply_and_subtract_mesh_workload.add_program(
+        bottom_row, std::move(*subtract_program));  // Subtraction runs on the bottom row (sub device 2)
 
     // =========== Step 4: Compile and Load Workloads on the Mesh ===========
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), add_mesh_workload, true);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), multiply_and_subtract_mesh_workload, true);
     // =========== Step 5: Trace the MeshWorkloads using the Workload Dispatch CQ ===========
-    auto trace_id = BeginTraceCapture(mesh_device.get(), workload_cq_id);
+    auto trace_id = mesh_device.get()->begin_mesh_trace(workload_cq_id);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), add_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), multiply_and_subtract_mesh_workload, false);
-    EndTraceCapture(mesh_device.get(), workload_cq_id, trace_id);
+    mesh_device.get()->end_mesh_trace(workload_cq_id, trace_id);
 
     // =========== Step 6: Populate inputs ===========
     uint32_t workload_0_src0_val = 2;
@@ -249,23 +245,23 @@ int main() {
     // =========== Step 7: Write inputs on MeshCQ1 ===========
     // IO is done through MeshCQ1 and Workload dispatch is done through MeshCQ0. Use MeshEvents to synchronize the
     // independent MeshCQs.
-    EnqueueWriteMeshBuffer(data_movement_cq, add_src0_buf, add_src0_vec);
-    EnqueueWriteMeshBuffer(data_movement_cq, add_src1_buf, add_src1_vec);
-    EnqueueWriteMeshBuffer(data_movement_cq, mul_sub_src0_buf, mul_sub_src0_vec);
-    EnqueueWriteMeshBuffer(data_movement_cq, mul_sub_src1_buf, mul_sub_src1_vec);
+    data_movement_cq.enqueue_write_mesh_buffer(add_src0_buf, add_src0_vec.data(), true);
+    data_movement_cq.enqueue_write_mesh_buffer(add_src1_buf, add_src1_vec.data(), true);
+    data_movement_cq.enqueue_write_mesh_buffer(mul_sub_src0_buf, mul_sub_src0_vec.data(), true);
+    data_movement_cq.enqueue_write_mesh_buffer(mul_sub_src1_buf, mul_sub_src1_vec.data(), true);
     // Synchronize
     MeshEvent write_event = EnqueueRecordEvent(data_movement_cq);
-    EnqueueWaitForEvent(workload_cq, write_event);
+    workload_cq.enqueue_wait_for_event(write_event);
     // =========== Step 8: Run MeshTrace on MeshCQ0 ===========
-    ReplayTrace(mesh_device.get(), workload_cq_id, trace_id, false);
+    mesh_device.get()->replay_mesh_trace(workload_cq_id, trace_id, false);
     // Synchronize
     MeshEvent trace_event = EnqueueRecordEvent(workload_cq);
-    EnqueueWaitForEvent(data_movement_cq, trace_event);
+    data_movement_cq.enqueue_wait_for_event(trace_event);
     // =========== Step 9: Read Outputs on MeshCQ1 ===========
     std::vector<bfloat16> add_dst_vec = {};
     std::vector<bfloat16> mul_sub_dst_vec = {};
-    EnqueueReadMeshBuffer(data_movement_cq, add_dst_vec, add_output_buf);
-    EnqueueReadMeshBuffer(data_movement_cq, mul_sub_dst_vec, mul_sub_output_buf);
+    data_movement_cq.enqueue_read_mesh_buffer(add_dst_vec.data(), add_output_buf, true);
+    data_movement_cq.enqueue_read_mesh_buffer(mul_sub_dst_vec.data(), mul_sub_output_buf, true);
 
     // =========== Step 10: Verify Outputs ===========
     bool pass = true;
@@ -279,7 +275,7 @@ int main() {
             pass &= (mul_sub_dst_vec[i].to_float() == workload_1_src0_val - workload_1_src1_val);
         }
     }
-    ReleaseTrace(mesh_device.get(), trace_id);
+    mesh_device.get()->release_mesh_trace(trace_id);
     if (pass) {
         std::cout << "Running EltwiseBinary MeshTraces on 2 MeshCQs Passed!" << std::endl;
         return 0;

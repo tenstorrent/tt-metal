@@ -123,7 +123,7 @@ int main(int argc, char** argv) {
             */
             std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
                 dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-            distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, input_vec, false);
+            cq.enqueue_write_mesh_buffer(input_dram_buffer, input_vec.data(), false);
 
             const std::array<uint32_t, 8> runtime_args = {
                 l1_buffer->address(),
@@ -138,11 +138,11 @@ int main(int argc, char** argv) {
                 core,
                 runtime_args
             );
-            distributed::AddProgramToMeshWorkload(
+            distributed::workload.add_program(
                 mesh_workload, std::move(program), distributed::MeshCoordinateRange(device->shape()));
             distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
             log_info(tt::LogTest, "Started program");
-            distributed::Finish(cq);
+            cq.finish();
             log_info(tt::LogTest, "Finished program");
 
             /*

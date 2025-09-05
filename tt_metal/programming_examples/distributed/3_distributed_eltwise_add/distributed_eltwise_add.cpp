@@ -129,22 +129,22 @@ int main() {
 
     // Write data to distributed buffers
     auto& cq = mesh_device->mesh_command_queue();
-    EnqueueWriteMeshBuffer(cq, a, a_data, false /* blocking */);
-    EnqueueWriteMeshBuffer(cq, b, b_data, false /* blocking */);
+    cq.enqueue_write_mesh_buffer(a, a_data.data(), false /* blocking */);
+    cq.enqueue_write_mesh_buffer(b, b_data.data(), false /* blocking */);
 
     // Create program for distributed computation
     auto program = CreateEltwiseAddProgram(a, b, c, tile_size_bytes, num_tiles);
 
     // Create mesh workload and broadcast the program across all devices
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device->shape());
 
-    AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+    mesh_workload.add_program( device_range, std::move( std::move(program)));
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
     // Read back results
     std::vector<uint32_t> result_data(a_data.size(), 0);
-    EnqueueReadMeshBuffer(cq, result_data, c, true /* blocking */);
+    cq.enqueue_read_mesh_buffer(result_data.data(), c, true /* blocking */);
 
     // Verify results
     auto transform_to_golden = [val_to_add](const bfloat16& a) { return bfloat16(a.to_float() + val_to_add); };
