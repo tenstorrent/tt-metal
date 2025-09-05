@@ -1269,7 +1269,7 @@ void SetRuntimeArgs(
     const Program& program,
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    std::initializer_list<const uint32_t> runtime_args) {
+    std::initializer_list<uint32_t> runtime_args) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
     ZoneScoped;
@@ -1303,7 +1303,7 @@ void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::S
 }
 
 void SetCommonRuntimeArgs(
-    const Program& program, KernelHandle kernel_id, std::initializer_list<const uint32_t> runtime_args) {
+    const Program& program, KernelHandle kernel_id, std::initializer_list<uint32_t> runtime_args) {
     ZoneScoped;
     if (runtime_args.size() != 0) {
         detail::GetKernel(program, kernel_id)->set_common_runtime_args(runtime_args);
