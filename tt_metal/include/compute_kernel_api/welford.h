@@ -83,7 +83,7 @@ ALWI void welford_tile(uint32_t current_row, uint32_t final_row, uint32_t num_sk
 //  * value.
 //  */
 ALWI void welford_M2_to_var(uint32_t scale_factor) {
-    welford_tile<0, 1, 2, false, true>(scale_factor, scale_factor, 0, 0, 0);
+    welford_tile<0, 1, 2, false, true>(scale_factor, scale_factor, 0, 0);
 }
 
 /**

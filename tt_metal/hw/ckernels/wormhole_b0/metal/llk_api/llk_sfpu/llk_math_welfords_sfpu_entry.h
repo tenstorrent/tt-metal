@@ -5,7 +5,7 @@
 #pragma once
 
 #include "llk_sfpu_types.h"
-#include "llk_math_welfords_sfpu_entry.h"
+#include "llk_math_welfords_sfpu.h"
 #include "llk_math_welfords_sfpu_params.h"
 
 namespace ckernel {
@@ -27,10 +27,8 @@ inline void llk_math_welfords_sfpu(
         m2_dst_index,
         current_row,
         final_row,
-        num_skip_rows,
-        reciprocal_lut_ptr,
         reformat_dst_to_col_on_end,
-        convert_M2_to_var_on_end);
+        num_skip_rows);
 }
 
 }  // namespace ckernel
