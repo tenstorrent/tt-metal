@@ -18,13 +18,9 @@ sfpi_inline sfpi::vFloat _sfpu_selu_exp_21f_(sfpi::vFloat val) {
         sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));
         sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));
 
-        constexpr float POLY_D1 = 0.40196114e-7f;
-        constexpr int POLY_D2 = 0xf94ee7;
-        constexpr int POLY_D3 = 0x560e;
-
-        sfpi::vFloat d1 = sfpi::vFloat(POLY_D1);
-        sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(POLY_D2) + zif, 0);
-        sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(POLY_D3) + zif, 0);
+        sfpi::vFloat d1 = sfpi::vFloat(sfpi::vConstFloatPrgm0);
+        sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vConstIntPrgm1 + zif, 0);
+        sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vConstIntPrgm2 + zif, 0);
         d2 = d1 * d2;
         zif = sfpu::_float_to_int32_(d2 * d3);
 
@@ -40,18 +36,18 @@ sfpi_inline sfpi::vFloat _sfpu_selu_exp_21f_(sfpi::vFloat val) {
 
 // SELU(x) = scale ∗ ( max(0, x) + min(0, α ∗ (exp(x)−1) ) )
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS>
-inline void calculate_selu(uint param0, uint param1) {
-    sfpi::vFloat scale = Converter::as_float(param0);
-    sfpi::vFloat alpha = Converter::as_float(param1);
+inline void calculate_selu(uint scale, uint alpha) {
+    sfpi::vFloat scale_value = Converter::as_float(scale);
+    sfpi::vFloat alpha_value = Converter::as_float(alpha);
 #pragma GCC unroll 8
 
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v >= 0.0f) { sfpi::dst_reg[0] = v * scale; }
+        v_if(v >= 0.0f) { sfpi::dst_reg[0] = v * scale_value; }
         v_else {
             sfpi::vFloat exp_calc = _sfpu_selu_exp_21f_(v);
             sfpi::vFloat minus_mul = exp_calc - 1.0f;
-            sfpi::vFloat result = minus_mul * alpha * scale;
+            sfpi::vFloat result = minus_mul * alpha_value * scale_value;
 
             if constexpr (!is_fp32_dest_acc_en) {
                 result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
@@ -61,6 +57,12 @@ inline void calculate_selu(uint param0, uint param1) {
         v_endif;
         sfpi::dst_reg++;
     }
+}
+
+inline void selu_init() {
+    sfpi::vConstFloatPrgm0 = 0.40196114e-7f;
+    sfpi::vConstIntPrgm1 = 0xf94ee7;
+    sfpi::vConstIntPrgm2 = 0x560e;
 }
 
 }  // namespace sfpu
