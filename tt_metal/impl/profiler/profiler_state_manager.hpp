@@ -16,18 +16,26 @@ namespace tt_metal {
 
 struct ProfilerStateManager {
 public:
-    ProfilerStateManager() : do_sync_on_close(true), thread_pool(create_device_bound_thread_pool(64)) {};
+    ProfilerStateManager() : do_sync_on_close(true) {};
 
     ~ProfilerStateManager() = default;
 
     void cleanup_device_profilers() {
+        ZoneScoped;
         std::vector<std::thread> threads;
-        for (auto& [device_id, profiler] : this->device_profiler_map) {
-            threads.emplace_back([&profiler]() { profiler.cleanup(); });
+        threads.reserve(this->device_profiler_map.size());
+
+        for (auto it = this->device_profiler_map.begin(); it != this->device_profiler_map.end(); ++it) {
+            threads.emplace_back([it]() {
+                DeviceProfiler& profiler = it->second;
+                profiler.dumpDeviceResults();
+            });
         }
+
         for (auto& thread : threads) {
             thread.join();
         }
+
         this->device_profiler_map.clear();
     }
 
@@ -49,7 +57,7 @@ public:
 
     std::unordered_set<chip_id_t> sync_set_devices{};
 
-    std::shared_ptr<ThreadPool> thread_pool{};
+    // std::shared_ptr<ThreadPool> thread_pool{};
 
     std::mutex mid_run_dump_mutex{};
 };
