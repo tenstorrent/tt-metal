@@ -15,8 +15,7 @@
 #include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_xy_pair.h>
-
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 namespace tt_metal {

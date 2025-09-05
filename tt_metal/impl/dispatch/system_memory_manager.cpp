@@ -28,8 +28,7 @@
 #include <umd/device/types/xy_pair.h>
 #include <tracy/Tracy.hpp>
 #include <utils.hpp>
-
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 
