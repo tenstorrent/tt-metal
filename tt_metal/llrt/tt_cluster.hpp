@@ -35,6 +35,7 @@
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/harvesting.h>
+#include <umd/device/types/cluster_types.hpp>
 
 namespace tt {
 enum class ARCH;
@@ -49,7 +50,6 @@ namespace tt_metal {
 class Hal;
 }
 }  // namespace tt
-struct tt_device_params;
 
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
