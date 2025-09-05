@@ -7,7 +7,7 @@
 using elements_number_type = uint32_t;
 using output_number_type = uint32_t;
 
-// choose the right C++ POD type at compile-time
+// choose the right C++ POD type at compile-time that matches size
 template <DataFormat df>
 struct df_to_std {
     using std_type = void;
@@ -69,6 +69,7 @@ struct IsInCTAs {
     const output_accessor_args_type output_accessor_args;
 };
 
+// get compile-time arguments by any kernel
 FORCE_INLINE constexpr auto get_ctas() {
     constexpr auto elements_args = TensorAccessorArgs<10>();
     constexpr auto test_elements_args = TensorAccessorArgs<elements_args.next_compile_time_args_offset()>();
@@ -89,6 +90,7 @@ FORCE_INLINE constexpr auto get_ctas() {
         output_args};
 }
 
+// load from DRAM to L1
 template <typename addr_gen_type>
 FORCE_INLINE void load_to_cb(
     const uint32_t& cb, const addr_gen_type& addr_gtor, const uint32_t& offset, const uint32_t& subchunk_size) {
@@ -104,6 +106,7 @@ FORCE_INLINE void load_to_cb(
     cb_push_back(cb, ONE_PAGE);
 }
 
+// srite from L1 to DRAM
 template <typename addr_gen_type>
 FORCE_INLINE void write_to_dram(
     const uint32_t& cb, const addr_gen_type& addr_gtor, const uint32_t& offset, const uint32_t& subchunk_size) {

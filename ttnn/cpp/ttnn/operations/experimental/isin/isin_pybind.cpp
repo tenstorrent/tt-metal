@@ -13,7 +13,21 @@ namespace ttnn::operations::experimental::isin::detail {
 using namespace ttnn;
 
 void bind_isin_operation(py::module& module) {
-    auto doc = "";
+    auto doc =
+        R"doc(
+            This operator returns a uint32 tensor of the same specification as
+            the elements tensor with those of the elements filled out with nonzero
+            values (this rule can be inverted with the invert flag) that correspond
+            to those of the values from the elements tensor that are contained in the
+            test_elements tensor.
+
+            Parameters:
+                * `elements` (Tensor): integers to be masked with 0s or 1s depending no their extence in test_elements
+                * `test_elements` (Tensor): all integers
+
+            Keyword Arguments:
+                * `invert` (bool): invert nonzero output with zeroes and vice versa
+        )doc";
 
     using OperationType = decltype(ttnn::experimental::isin);
     bind_registered_operation(
@@ -27,9 +41,9 @@ void bind_isin_operation(py::module& module) {
                const bool& assume_unique,
                const bool& invert,
                const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& opt_out,
+               const std::optional<Tensor>& optional_out,
                const QueueId& queue_id = DefaultQueueId) -> Tensor {
-                return self(queue_id, elements, test_elements, assume_unique, invert, memory_config, opt_out);
+                return self(queue_id, elements, test_elements, assume_unique, invert, memory_config, optional_out);
             },
             py::arg("elements").noconvert(),
             py::arg("test_elements").noconvert(),
