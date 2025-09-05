@@ -218,7 +218,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e ARCH_NAME=${{ inputs.arch }}
             ${{ matrix.test-group.civ2-compatible && '-e TT_GH_CI_INFRA=1' || '' }}
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -v /mnt/MLPerf:/mnt/MLPerf
             --cap-add=ALL
             --security-opt seccomp=unconfined
             --ulimit nproc=65536:65536
