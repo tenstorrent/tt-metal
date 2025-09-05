@@ -20,6 +20,10 @@ on:
         required: false
         type: string
         default: "config-tg"
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
 
 jobs:
   tg-demo-all-post-commit-tests:
@@ -66,6 +70,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
       - name: Run TG all-post-commit tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
