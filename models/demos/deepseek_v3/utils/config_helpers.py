@@ -592,7 +592,7 @@ def save_and_get_path(path, tensor):
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
-    ttnn.dump_tensor(path, tensor, enable_multihost_format=True)
+    ttnn.dump_tensor(path, tensor)
     ttnn.deallocate(tensor)
     return str(path)
 
