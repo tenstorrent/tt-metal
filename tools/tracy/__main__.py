@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import threading
 from pathlib import Path
 
 from tracy import *
+from tracy.serve_wasm import launch_server_subprocess
 
 
 def main():
@@ -109,6 +111,9 @@ def main():
     parser.add_option(
         "--tracy-tools-folder", dest="binary_folder", action="store", help="Tracy tools folder", type="string"
     )
+    parser.add_option(
+        "--no-capture-tool", dest="noCapture", action="store_true", help="Do not run Tracy capture tool", default=False
+    )
 
     if not sys.argv[1:]:
         parser.print_usage()
@@ -189,6 +194,7 @@ def main():
             doReport, captureProcess = run_report_setup(options.verbose, outputFolder, binaryFolder, port)
 
         if not doReport:
+        if options.noCapture:
             code = None
             if options.module:
                 import runpy
@@ -232,8 +238,14 @@ def main():
                 sys.stdout = None
                 sys.exit(exc.errno)
         else:
-            originalArgs.remove("-r")
-            osCmd = " ".join(originalArgs[1:])
+            if not port:
+                logger.error("No available port found")
+                sys.exit(1)
+            logger.info(f"Using port {port}")
+            captureProcess = run_report_setup(options.verbose, outputFolder, binaryFolder, port)
+
+            originalArgs = ["--no-capture-tool"] + originalArgs[1:]
+            osCmd = " ".join(originalArgs)
 
             testCommand = f"python3 -m tracy {osCmd}"
 
@@ -266,14 +278,17 @@ def main():
 
             try:
                 captureProcess.communicate(timeout=15)
-                generate_report(
-                    outputFolder,
-                    binaryFolder,
-                    options.name_append,
-                    options.child_functions,
-                    options.collect_noc_traces,
-                    options.device_analysis_types,
-                )
+                launch_server_subprocess()
+                # Start the WASM server as a daemon with defaults
+                if options.report:
+                    generate_report(
+                        outputFolder,
+                        binaryFolder,
+                        options.name_append,
+                        options.child_functions,
+                        options.collect_noc_traces,
+                        options.device_analysis_types,
+                    )
             except subprocess.TimeoutExpired as e:
                 captureProcess.terminate()
                 captureProcess.communicate()

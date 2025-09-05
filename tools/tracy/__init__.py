@@ -118,7 +118,7 @@ def run_report_setup(verbose, outputFolder, binFolder, port):
         logger.error(f"Tracy tools were not found. Please make sure you are on a Tracy-enabled build (default).")
         sys.exit(1)
 
-    return toolsReady, captureProcess
+    return captureProcess
 
 
 def generate_report(
