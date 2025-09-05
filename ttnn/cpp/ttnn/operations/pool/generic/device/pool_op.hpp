@@ -41,13 +41,13 @@ struct Pool2D {
 
     struct MultiCore {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader0_kernel;
-            tt::tt_metal::KernelHandle reader1_kernel;
-            tt::tt_metal::KernelHandle compute_kernel;
-            tt::tt_metal::CBHandle raw_in_cb;
-            tt::tt_metal::CBHandle raw_in_idx_cb;
-            tt::tt_metal::CBHandle out_cb;
-            tt::tt_metal::CBHandle out_idx_cb;
+            tt::tt_metal::KernelHandle reader0_kernel{};
+            tt::tt_metal::KernelHandle reader1_kernel{};
+            tt::tt_metal::KernelHandle compute_kernel{};
+            tt::tt_metal::CBHandle raw_in_cb{};
+            tt::tt_metal::CBHandle raw_in_idx_cb{};
+            tt::tt_metal::CBHandle out_cb{};
+            tt::tt_metal::CBHandle out_idx_cb{};
             uint32_t ncores{};
             tt::tt_metal::DeviceStorage reader_indices_storage;
             tt::tt_metal::DeviceStorage scalar_config_storage;
