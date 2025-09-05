@@ -18,21 +18,23 @@ std::string unary_with_param_to_string(const UnaryWithParam& unary_op);
 bool get_op_approx_mode(UnaryOpType op_type);
 using DataType = tt::tt_metal::DataType;
 
+template <typename T = float>
 std::pair<std::string, std::string> get_op_init_and_func(
     UnaryOpType op_type,
-    const std::vector<float>& params = {},
+    const std::vector<T>& params = {},
     const std::string& idst = "0",
     std::optional<DataType> input_dtype = std::nullopt);
 
+template <typename T = float>
 std::map<std::string, std::string> get_defines(
     UnaryOpType op_type,
-    const std::optional<std::vector<float>>& params = std::nullopt,
+    const std::optional<std::vector<std::type_identity_t<T>>>& params = std::nullopt,
     const std::string& id = "0",
     const std::string& idst = "0",
     std::optional<DataType> input_dtype = std::nullopt);
 
 std::map<std::string, std::string> get_block_defines(
-    const std::vector<UnaryWithParam>& op_chain,
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
     const std::string& block_id = "0",
     const std::string& idst = "0",
     std::optional<DataType> input_dtype = std::nullopt);
