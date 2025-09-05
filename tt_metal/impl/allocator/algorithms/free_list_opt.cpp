@@ -99,7 +99,7 @@ void FreeListOpt::init() {
     meta_block_is_allocated_.push_back(true);
     free_blocks_segregated_by_size_[get_size_segregated_index(max_size_bytes_)].push_back(0);
 
-    // Invalidate caches
+    // Invalidate allocated addresses cache
     allocated_addresses_cache_.reset();
 }
 
@@ -170,6 +170,7 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
     if (!bottom_up) {
         offset = block_size_[target_block_index] - alloc_size;
     }
+    // Allocated addresses cache is invalidated by allocate_in_block
     size_t allocated_block_index = allocate_in_block(target_block_index, alloc_size, offset);
     DeviceAddr start_address = block_address_[allocated_block_index];
     if (start_address + offset_bytes_ < address_limit) {
@@ -208,6 +209,7 @@ std::optional<DeviceAddr> FreeListOpt::allocate_at_address(DeviceAddr absolute_s
     segregated_list.erase(it);
 
     size_t offset = start_address - block_address_[target_block_index];
+    // Allocated addresses cache is invalidated by allocate_in_block
     size_t alloc_block_index = allocate_in_block(target_block_index, alloc_size, offset);
     update_lowest_occupied_address(start_address);
     return absolute_start_address;
@@ -257,7 +259,7 @@ size_t FreeListOpt::allocate_in_block(size_t block_index, DeviceAddr alloc_size,
     block_is_allocated_[block_index] = true;
     insert_block_to_alloc_table(block_address_[block_index], block_index);
 
-    // Invalidate caches as allocation state will change
+    // Invalidate allocated addresses cache as allocation state will change
     allocated_addresses_cache_.reset();
 
     return block_index;
@@ -335,7 +337,7 @@ void FreeListOpt::deallocate(DeviceAddr absolute_address) {
     // Update the segregated list
     insert_block_to_segregated_list(block_index);
 
-    // Invalidate caches as allocation state will change
+    // Invalidate allocated addresses cache as allocation state will change
     allocated_addresses_cache_.reset();
 }
 
@@ -578,7 +580,7 @@ void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
         insert_block_to_segregated_list(block_to_shrink);
     }
 
-    // Although shrink affects free space, invalidate to be safe
+    // Although shrink affects free space, invalidate allocated addresses cache to be safe
     allocated_addresses_cache_.reset();
 }
 
@@ -625,7 +627,7 @@ void FreeListOpt::reset_size() {
     max_size_bytes_ += shrink_size_;
     shrink_size_ = 0;
 
-    // Free space changed; invalidate to be safe
+    // Free space changed; invalidate allocated addresses cache to be safe
     allocated_addresses_cache_.reset();
 }
 

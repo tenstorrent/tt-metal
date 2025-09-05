@@ -128,8 +128,7 @@ private:
     ttsl::SmallVector<std::unique_ptr<allocator::Algorithm>> allocators_{};
 
     // Per-state cache: merged occupied ranges of all other states (size-independent)
-    ttsl::SmallVector<std::vector<std::pair<DeviceAddr, DeviceAddr>>> neighbors_occupied_cache_{};
-    ttsl::SmallVector<uint8_t> neighbors_occupied_cache_valid_{};  // 0 = invalid, 1 = valid
+    ttsl::SmallVector<std::optional<std::vector<std::pair<DeviceAddr, DeviceAddr>>>> neighbors_occupied_cache_{};
 
     // State-independent methods
     void validate_bank_id(uint32_t bank_id) const;

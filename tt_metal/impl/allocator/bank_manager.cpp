@@ -117,7 +117,6 @@ void BankManager::init_allocators_across_states(DeviceAddr size_bytes, uint32_t 
     allocators_.resize(n);
     allocated_buffers_.resize(n);
     neighbors_occupied_cache_.resize(n);
-    neighbors_occupied_cache_valid_.assign(n, 0);
 
     // Reverse edges now built inside StateDependencies
     for (uint32_t state = 0; state < n; ++state) {
@@ -237,8 +236,8 @@ void BankManager::invalidate_neighbor_caches(BankManager::StateDependencies::Sta
     }
     const auto& neighbors = state_dependencies_.dependencies[changed_state.value];
     for (const auto dep_state : neighbors) {
-        if (dep_state.value < neighbors_occupied_cache_valid_.size()) {
-            neighbors_occupied_cache_valid_[dep_state.value] = 0;
+        if (dep_state.value < neighbors_occupied_cache_.size()) {
+            neighbors_occupied_cache_[dep_state.value].reset();
         }
     }
 }
@@ -328,7 +327,7 @@ uint64_t BankManager::allocate_buffer(
     };
 
     // Build or fetch cached merged occupied ranges of neighbors (excluding current state)
-    if (!neighbors_occupied_cache_valid_[state.value]) {
+    if (!neighbors_occupied_cache_[state.value].has_value()) {
         // Collect occupied ranges per neighbor: from allocator's allocated addresses
         std::vector<std::vector<std::pair<DeviceAddr, DeviceAddr>>> neighbor_used_lists;
         neighbor_used_lists.reserve(neighbors.size());
@@ -369,7 +368,6 @@ uint64_t BankManager::allocate_buffer(
             }
         }
         neighbors_occupied_cache_[state.value] = std::move(coalesced);
-        neighbors_occupied_cache_valid_[state.value] = 1;
     }
 
     // Current state free ranges minus occupied ranges of neighbors
@@ -377,7 +375,7 @@ uint64_t BankManager::allocate_buffer(
         clamp_ranges(alloc->available_addresses(size_per_bank));
     std::sort(
         current_ranges.begin(), current_ranges.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-    const auto& occupied = neighbors_occupied_cache_[state.value];
+    const auto& occupied = neighbors_occupied_cache_[state.value].value();
     std::vector<std::pair<DeviceAddr, DeviceAddr>> allowed;
     allowed.reserve(current_ranges.size());
     size_t j = 0;
@@ -472,9 +470,8 @@ void BankManager::deallocate_all() {
     }
     // After bulk deallocation, conservatively clear all caches
     for (auto& per_state_cache : neighbors_occupied_cache_) {
-        per_state_cache.clear();
+        per_state_cache.reset();
     }
-    std::fill(neighbors_occupied_cache_valid_.begin(), neighbors_occupied_cache_valid_.end(), static_cast<uint8_t>(0));
 }
 
 void BankManager::clear() {
@@ -485,9 +482,8 @@ void BankManager::clear() {
         }
     }
     for (auto& per_state_cache : neighbors_occupied_cache_) {
-        per_state_cache.clear();
+        per_state_cache.reset();
     }
-    std::fill(neighbors_occupied_cache_valid_.begin(), neighbors_occupied_cache_valid_.end(), static_cast<uint8_t>(0));
 }
 
 BankManager::~BankManager() {
@@ -505,7 +501,6 @@ BankManager&& BankManager::operator=(BankManager&& that) noexcept {
     alignment_bytes_ = that.alignment_bytes_;
     state_dependencies_ = std::move(that.state_dependencies_);
     neighbors_occupied_cache_ = std::move(that.neighbors_occupied_cache_);
-    neighbors_occupied_cache_valid_ = std::move(that.neighbors_occupied_cache_valid_);
     return std::move(*this);
 }
 
