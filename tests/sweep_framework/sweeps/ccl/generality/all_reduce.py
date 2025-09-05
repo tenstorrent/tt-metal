@@ -20,42 +20,75 @@ TIMEOUT = 45
 # Get the number of available devices to dynamically generate mesh shapes
 NUM_DEVICES = ttnn.get_num_devices()
 
+MODEL_SHAPES = [
+    [1, 1, 1, 4096],
+    [1, 1, 1, 2048],
+    ["B", 32, 2048, 8],
+    ["B", 32, 2048, 16],
+    ["B", 32, 4096, 16],
+    ["B", 32, 2048, 64],
+    [1, 1, 32, 32],
+    ["B", 32, 4096, 32],
+    ["B", 32, 4096, 64],
+    [1, 1, 32, 32],
+    [1, 1, 1, 32],
+    [1, 1, 1, 1],
+    [1, 1, 1, 16],
+    [1, 1, 1, 8],
+    [1, 1, 8, 8],
+    [1, 1, 16, 16],
+    [1, 1, 1, 1],
+    [1, 1, 1, 16],
+    [1, 1, 16, 16],
+]
+
+MODEL_BATCH = [1, 4, 8, 16, 32]
+
+
+def _model_shape_iterator(model_shapes, batch_params):
+    for shape in model_shapes:
+        if "B" in shape:
+            for b in batch_params:
+                yield [b if x == "B" else x for x in shape]
+        else:
+            yield shape
+
 
 # Define the parameter space for the sweep test
 parameters = {
-    "suite_1": {
+    "generality_suite": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
-        "fabric_config": [ttnn.FabricConfig.FABRIC_1D],
+        "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
         "num_links": [1],
         "input_shape": [
-            [1, 1, 32, 256],
-            # [1, 1, 4096, 32],
-            # [1, 1, 32, 16384],
-            # [1, 1, 1, 4096],
-            # [1, 1, 1, 2048],
-            # [1, 32, 2048, 8],
-            # [8, 32, 2048, 8],
-            # [1, 32, 2048, 16],
-            # [2, 32, 2048, 16],
-            # [1, 32, 4096, 16],
-            # [1, 32, 2048, 64],
-            # [8, 32, 2048, 64],
-            # [1, 1, 32, 32],
-            # [1, 1, 1, 32],
-            # [1, 1, 1, 1],
-            # [1, 1, 1, 8],
-            # [1, 1, 1, 16],
-            # [1, 1, 8, 8],
-            # [1, 1, 16, 16]
+            [1, 1, 32, 32],
+            [1, 1, 32, 1280],
+            [1, 1, 32, 31],
+            [1, 1, 1, 32, 32],
+            [2, 32, 32],
+            [1, 1, 32, 16384],
+            [1, 1, 1, 2048],
         ],
-        "cluster_axis": [0, 1],
+        "cluster_axis": [0, 1, None],
         "math_op": [ttnn.ReduceType.Sum],
-        "layout": [ttnn.TILE_LAYOUT],  # ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],  # ttnn.bfloat8_b, ttnn.uint32],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-            # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
-        ],
+        "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16],
+        "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
+        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
+        "num_iters": [1],
+    },
+    # parameters from:
+    # https://docs.google.com/spreadsheets/d/18lQ_dJpodMkoDFZjt7TfHdt0cEGsa5GCxxRKDzErGvM/edit?usp=sharing
+    "model_suite": {
+        "mesh_shape": [(2, 4)],
+        "fabric_config": [ttnn.FabricConfig.FABRIC_1D],
+        "num_links": [1],
+        "input_shape": _model_shape_iterator(MODEL_SHAPES, MODEL_BATCH),
+        "cluster_axis": [0, 1, None],
+        "math_op": [ttnn.ReduceType.Sum],
+        "layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat16],
+        "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
         "topology": [ttnn.Topology.Linear],
         "num_iters": [1],
     },
