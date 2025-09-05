@@ -92,7 +92,7 @@ private:
     std::unordered_map<uint16_t, tracy::MarkerDetails> hash_to_zone_src_locations;
 
     // Device-Core tracy context
-    std::unordered_map<std::pair<uint16_t, CoreCoord>, TracyTTCtx, pair_hash<uint16_t, CoreCoord>>
+    std::unordered_map<std::pair<chip_id_t, CoreCoord>, std::unique_ptr<TracyTTCtx>, pair_hash<chip_id_t, CoreCoord>>
         device_tracy_contexts;
 
     // (cpu time, device time, frequency) for sync propagated from root device
@@ -102,7 +102,7 @@ private:
     std::unordered_map<CoreCoord, SyncInfo> core_sync_info;
 
     // (Device ID, Core Coord) pairs that keep track of cores which need to have their Tracy contexts updated
-    std::unordered_set<std::pair<chip_id_t, CoreCoord>, pair_hash<chip_id_t, CoreCoord>> device_cores;
+    // std::unordered_set<std::pair<chip_id_t, CoreCoord>, pair_hash<chip_id_t, CoreCoord>> device_cores;
 
     // Storage for all core's control buffers
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_control_buffers;
@@ -175,8 +175,8 @@ private:
     // Track the smallest timestamp read
     void updateFirstTimestamp(uint64_t timestamp);
 
-    // Get tracy context for the core
-    void updateTracyContext(std::pair<uint32_t, CoreCoord> device_core);
+    // Update tracy context for the core
+    void updateTracyContext(const std::pair<chip_id_t, CoreCoord>& device_core);
 
     // Iterate over all markers and update their data if needed
     void processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers);
@@ -188,11 +188,7 @@ public:
 
     ~DeviceProfiler();
 
-    // Thread pool for profiler
-    std::shared_ptr<tt::tt_metal::ThreadPool> thread_pool;
-
-    // Mutex for profiler thread pool
-    // std::mutex* profiler_thread_pool_mutex = nullptr;
+    void cleanup();
 
     // Device-core Syncdata
     std::map<CoreCoord, SyncInfo> device_core_sync_info;
@@ -251,6 +247,9 @@ public:
     // Update sync info for this device
     void setSyncInfo(const SyncInfo& sync_info);
 
+    // Initialize tracy contexts that haven't been initialized yet
+    void initializeMissingTracyContexts(bool blocking = true);
+
     // Get marker details for the marker corresponding to the given timer id
     tracy::MarkerDetails getMarkerDetails(uint16_t timer_id) const;
 
@@ -269,9 +268,9 @@ public:
 // device_markers_per_core_risc_map. These are direct references to the original objects, not copies of the data.
 // Thread safety warning: device_markers_per_core_risc_map MUST NOT be modified (no insertions, deletions, or rehashing)
 // while these references are in use, as this could invalidate the references and cause undefined behavior.
-// std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDeviceMarkersVector(
-//     const std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>>&
-//         device_markers_per_core_risc_map);
+std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDeviceMarkersVector(
+    const std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>>&
+        device_markers_per_core_risc_map);
 
 bool useFastDispatch(IDevice* device);
 

@@ -6,7 +6,7 @@ source scripts/tools_setup_common.sh
 
 set -eo pipefail
 
-run_mid_run_tracy_push() {
+run_mid_run_data_dump() {
     echo "Smoke test, checking mid-run device data dump for hangs"
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
@@ -116,7 +116,7 @@ run_profiling_test() {
 
     run_async_tracing_T3000_test
 
-    run_mid_run_tracy_push
+    run_mid_run_data_dump
 
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360
 

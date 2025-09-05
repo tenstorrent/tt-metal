@@ -6,6 +6,7 @@
 
 #include <unordered_set>
 
+#include "thread_pool.hpp"
 #include "core_coord.hpp"
 #include "profiler.hpp"
 
@@ -16,21 +17,25 @@ namespace tt_metal {
 struct ProfilerStateManager {
 public:
     ProfilerStateManager() {
-        this->device_profiler_map = {};
-        this->device_host_time_pair = {};
-        this->device_device_time_pair = {};
-        this->smallest_host_time = {};
         this->do_sync_on_close = true;
-        this->sync_set_devices = {};
+
+        // TODO: have a different thread pool for device, but make the thread pool of size 4 or 8
+        constexpr uint32_t thread_pool_size = 64;
+        this->thread_pool = create_device_bound_thread_pool(thread_pool_size);
     };
-    ~ProfilerStateManager() {
+
+    ~ProfilerStateManager() = default;
+
+    void cleanup_device_profilers() {
+        std::vector<std::thread> threads;
+        for (auto& [device_id, profiler] : this->device_profiler_map) {
+            threads.emplace_back([&profiler]() { profiler.cleanup(); });
+        }
+        for (auto& thread : threads) {
+            thread.join();
+        }
         this->device_profiler_map.clear();
-        this->device_host_time_pair.clear();
-        this->device_device_time_pair.clear();
-        this->smallest_host_time.clear();
-        this->do_sync_on_close = false;
-        this->sync_set_devices.clear();
-    };
+    }
 
     ProfilerStateManager& operator=(const ProfilerStateManager&) = delete;
     ProfilerStateManager& operator=(ProfilerStateManager&&) = delete;
@@ -46,9 +51,13 @@ public:
         device_device_time_pair{};
     std::unordered_map<chip_id_t, uint64_t> smallest_host_time{};
 
-    bool do_sync_on_close = false;
+    bool do_sync_on_close{};
 
     std::unordered_set<chip_id_t> sync_set_devices{};
+
+    std::shared_ptr<ThreadPool> thread_pool{};
+
+    std::mutex mid_run_dump_mutex{};
 };
 
 }  // namespace tt_metal
