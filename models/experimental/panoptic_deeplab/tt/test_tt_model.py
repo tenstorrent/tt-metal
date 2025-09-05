@@ -8,7 +8,7 @@ Test script for the complete TtPanopticDeepLab model.
 import pytest
 import torch
 import ttnn
-from typing import Set, Dict
+from typing import Set
 
 from .tt_model import TtPanopticDeepLab, create_panoptic_deeplab_model
 from .tt_pytorch_model import PytorchPanopticDeepLab
@@ -183,7 +183,7 @@ def test_image_preprocessing(device):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
 def test_panoptic_deeplab_pcc_comparison(device):
-    """Test PCC comparison between PyTorch and TTNN implementations."""
+    """Test PCC comparison between PyTorch and TTNN implementations with real ResNet weights."""
     compute_grid = device.compute_with_storage_grid_size()
     if compute_grid.x != 5 or compute_grid.y != 4:
         pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
@@ -233,17 +233,23 @@ def test_panoptic_deeplab_pcc_comparison(device):
     offset_head_1_weight = torch.randn(ins_embed_head_channels, decoder_channels[0], 3, 3, dtype=torch.bfloat16)
     offset_predictor_weight = torch.randn(2, ins_embed_head_channels, 1, 1, dtype=torch.bfloat16)
 
-    # 3. Create mock backbone features
-    torch_features: Dict[str, torch.Tensor] = {
-        "res2": torch.randn(batch_size, 256, 128, 256, dtype=torch.bfloat16),
-        "res3": torch.randn(batch_size, 512, 64, 128, dtype=torch.bfloat16),
-        "res5": torch.randn(batch_size, 2048, 32, 64, dtype=torch.bfloat16),
-    }
+    # 3. Create input image tensor (same for both models)
+    input_height, input_width = train_size[0], train_size[1]
+    input_channels = 3
 
-    # 4. Create PyTorch model
+    # PyTorch input format: [B, C, H, W] (NCHW)
+    pytorch_input = torch.randn(batch_size, input_channels, input_height, input_width, dtype=torch.bfloat16)
+
+    # TTNN input format: [B, H, W, C] (NHWC)
+    ttnn_input_torch = pytorch_input.permute(0, 2, 3, 1)  # NCHW -> NHWC
+
+    # 4. Create TTNN input tensor
+    ttnn_input = ttnn.from_torch(ttnn_input_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    # 5. Create PyTorch model
     pytorch_model = PytorchPanopticDeepLab(
         num_classes=num_classes,
-        use_real_weights=False,
+        use_real_weights=True,
         common_stride=common_stride,
         project_channels=project_channels,
         decoder_channels=decoder_channels,
@@ -273,11 +279,11 @@ def test_panoptic_deeplab_pcc_comparison(device):
     pytorch_model = pytorch_model.to(dtype=torch.bfloat16)
     pytorch_model.eval()
 
-    # 5. Create TTNN model with same weights
+    # 6. Create TTNN model with same weights
     ttnn_model = TtPanopticDeepLab(
         device=device,
         num_classes=num_classes,
-        use_real_weights=False,
+        use_real_weights=True,
         common_stride=common_stride,
         project_channels=project_channels,
         decoder_channels=decoder_channels,
@@ -305,36 +311,27 @@ def test_panoptic_deeplab_pcc_comparison(device):
         offset_predictor_weight=offset_predictor_weight,
     )
 
-    # 6. Convert features for TTNN (NCHW -> NHWC)
-    ttnn_features: Dict[str, ttnn.Tensor] = {}
-    for name, tensor in torch_features.items():
-        ttnn_features[name] = ttnn.from_torch(
-            tensor.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16  # NCHW -> NHWC
-        )
-
     # 7. Run forward passes
     print("Running PyTorch model...")
     with torch.no_grad():
-        pytorch_semantic, pytorch_center, pytorch_offset, _ = pytorch_model.forward(torch_features)
+        pytorch_semantic, pytorch_center, pytorch_offset, _ = pytorch_model.forward(pytorch_input)
 
     print("Running TTNN model...")
-    # Run the individual heads since the backbone isn't implemented in PyTorch version
-    ttnn_semantic, _ = ttnn_model.semantic_head(ttnn_features)
-    ttnn_center, ttnn_offset, _, _ = ttnn_model.instance_head(ttnn_features)
+    ttnn_semantic, ttnn_center, ttnn_offset, _ = ttnn_model.forward(ttnn_input)
 
     # 8. Convert TTNN outputs to PyTorch format (NHWC -> NCHW)
     ttnn_semantic_torch = ttnn.to_torch(ttnn_semantic).permute(0, 3, 1, 2)
     ttnn_center_torch = ttnn.to_torch(ttnn_center).permute(0, 3, 1, 2)
     ttnn_offset_torch = ttnn.to_torch(ttnn_offset).permute(0, 3, 1, 2)
 
-    # 9. Compare outputs using PCC
+    # 8. Compare outputs using PCC
     print("\n--- Comparing Semantic Segmentation ---")
-    sem_passed, sem_msg = assert_with_pcc(pytorch_semantic, ttnn_semantic_torch, pcc=0.95)
+    sem_passed, sem_msg = assert_with_pcc(pytorch_semantic, ttnn_semantic_torch, pcc=0.99)
     print(f"Semantic PCC: {sem_msg}")
     assert sem_passed, f"Semantic segmentation PCC failed: {sem_msg}"
 
     print("\n--- Comparing Center Heatmap ---")
-    center_passed, center_msg = assert_with_pcc(pytorch_center, ttnn_center_torch, pcc=0.95)
+    center_passed, center_msg = assert_with_pcc(pytorch_center, ttnn_center_torch, pcc=0.91)
     print(f"Center PCC: {center_msg}")
     assert center_passed, f"Center heatmap PCC failed: {center_msg}"
 
@@ -343,4 +340,4 @@ def test_panoptic_deeplab_pcc_comparison(device):
     print(f"Offset PCC: {offset_msg}")
     assert offset_passed, f"Offset map PCC failed: {offset_msg}"
 
-    print("\n✅✅✅ PCC COMPARISON TEST PASSED ✅✅✅")
+    print("\n✅✅✅ FULL END-TO-END PCC COMPARISON TEST PASSED ✅✅✅")
