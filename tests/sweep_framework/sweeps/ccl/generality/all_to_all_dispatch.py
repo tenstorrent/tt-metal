@@ -23,7 +23,7 @@ def _pd(val: int):
 
 
 parameters = {
-    "suite_1": {
+    "generality_suite": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES, limit=2),
         "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
         "input_shape": [

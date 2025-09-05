@@ -22,7 +22,7 @@ NUM_DEVICES = ttnn.get_num_devices()
 
 
 parameters = {
-    "suite_1": {
+    "generality_suite": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
         "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
         "num_links": [1],
