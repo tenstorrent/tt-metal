@@ -126,7 +126,7 @@ class TtMambaBlock(torch.nn.Module):
             compute_kernel_config=self.compute_kernel_config,
             core_grid=x.device().core_grid,
             dtype=self.configs["dtype"]["activations"],
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
 
         x_ssm = ttnn.linear(

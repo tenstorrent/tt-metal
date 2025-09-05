@@ -17,7 +17,7 @@ class TtYOLOv7Conv2D:
         deallocate=False,
         deallocate_activation=False,
         height_sharding=True,
-        activation="silu",
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         groups=1,
         dtype=ttnn.bfloat8_b,
         num_cores_nhw=None,
