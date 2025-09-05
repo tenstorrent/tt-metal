@@ -26,7 +26,11 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
-
+      gtest_filter:
+        required: false
+        default: ""
+        type: string
+        description: "Filter for gtest"
 jobs:
   cpp-unit-tests:
     strategy:
@@ -42,7 +46,8 @@ jobs:
               ./build/test/ttnn/unit_tests_ttnn_ccl
               ./build/test/ttnn/unit_tests_ttnn_ccl_ops
           - name: dispatch
-            cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch" # 15 minutes
+            cmd: |
+              TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch $GTEST_FILTER
           - name: dispatch multicmd queue
             cmd: |
               TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQ*Fixture.*
@@ -60,11 +65,12 @@ jobs:
           - name: tools
             cmd: |
               ./tests/scripts/run_tools_tests.sh
-              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*-*NIGHTLY_*
+              ./build/test/tt_metal/unit_tests_debug_tools
           - name: ttnn tensor accessor
             cmd: "./build/test/ttnn/unit_tests_ttnn_accessor"
           - name: data movement
-            cmd: ./build/test/tt_metal/unit_tests_data_movement --gtest_filter=*-*NIGHTLY_*
+            cmd: |
+              ./build/test/tt_metal/unit_tests_data_movement $GTEST_FILTER
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image }}
@@ -104,6 +110,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
             mkdir -p generated/test_reports
+            GTEST_FILTER="--gtest_filter=${{inputs.gtest_filter}}"
             ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
