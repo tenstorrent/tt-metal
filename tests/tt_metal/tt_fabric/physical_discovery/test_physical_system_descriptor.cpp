@@ -129,10 +129,7 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
 
     if (*(distributed_context.rank()) == 0) {
         // Dump the Generated Physical System Descriptor
-        log_info(tt::LogTest, "Dumping Physical System Descriptor to YAML");
         physical_system_desc.dump_to_yaml();
-        log_info(tt::LogTest, "Dumping Physical System Descriptor to Text Proto");
-        physical_system_desc.emit_to_text_proto();
     }
 }
 

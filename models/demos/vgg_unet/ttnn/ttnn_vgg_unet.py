@@ -53,9 +53,6 @@ class Conv:
             math_approx_mode=True,
         )
         self.conv_output_dtype = conv_param.dtype
-        # check if conv_params contains tile layout and set tile if it does
-        output_layout = ttnn.TILE_LAYOUT if "tile_layout" in conv_param else ttnn.ROW_MAJOR_LAYOUT
-
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
             activation=conv_param.activation,
@@ -63,9 +60,8 @@ class Conv:
             reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
             deallocate_activation=conv_param.deallocate_activation,
             enable_act_double_buffer=conv_param.enable_act_double_buffer,
-            enable_weights_double_buffer=True,
             enable_split_reader=conv_param.enable_split_reader,
-            output_layout=output_layout,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         config_override = None
         if conv_param.act_block_h is not None:
@@ -131,18 +127,12 @@ class Conv_transpose:
             packer_l1_acc=False,
             math_approx_mode=True,
         )
-        # check if conv_params contains tile layout and set tile if it does
-        output_layout = ttnn.TILE_LAYOUT if "tile_layout" in conv_param else ttnn.ROW_MAJOR_LAYOUT
-
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
             shard_layout=conv_param.shard_layout,
             reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
             deallocate_activation=conv_param.deallocate_activation,
-            enable_act_double_buffer=conv_param.enable_act_double_buffer,
-            enable_weights_double_buffer=True,
-            enable_split_reader=conv_param.enable_split_reader,
-            output_layout=output_layout,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         config_override = None
         if conv_param.act_block_h is not None:

@@ -7,7 +7,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/operations/experimental/adaptive_pool/adaptive_pools_pybind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_pybind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_pybind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_pybind.hpp"
@@ -90,8 +89,6 @@ void py_module(py::module& module) {
     cnn::detail::bind_convert_to_hwc(module);
 
     ttnn::operations::experimental::conv3d::detail::py_bind_conv3d(module);
-    adaptive_pool::bind_adaptive_avg_pool2d_operation(module);
-    adaptive_pool::bind_adaptive_max_pool2d_operation(module);
 
     copy::detail::py_bind_typecast(module);
 

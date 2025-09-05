@@ -8,44 +8,120 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <type_traits>
+#include <flatbuffers/reflection.h>
+#include <flatbuffers/verifier.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <cerrno>
 #include <cstring>
 
 #include <flatbuffers/flatbuffers.h>
-#include <flatbuffers/reflection.h>
-#include <flatbuffers/verifier.h>
 
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/cleanup.hpp>
 
+#include "distributed/distributed_tensor_config.hpp"
 #include "tensor/tensor_spec.hpp"
+#include "tt-metalium/distributed_host_buffer.hpp"
+#include "tt-metalium/mesh_coord.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
 #include "tensor/flatbuffer/tensor_flatbuffer.hpp"
 
 namespace tt::tt_metal {
 namespace {
 
+void validate_version(uint8_t version_id) {
+    TT_FATAL(
+        version_id >= 5,
+        "Version {} is no longer supported. Please update your saved data to the supported version (5).",
+        version_id);
+    TT_FATAL(
+        version_id <= VERSION_ID,
+        "Version mismatch: the serialized tensor was created with version {} but is "
+        "being loaded by a loader with version {}. Please update your saved data or your "
+        "loader so that both versions match.",
+        version_id,
+        VERSION_ID);
+}
+
 auto make_file_closer(FILE* file) {
     return ttsl::make_cleanup([file]() {
-        if (file && fclose(file) != 0) {
-            log_warning(tt::LogAlways, "Failed to close file");
+        if (file) {
+            if (fclose(file) != 0) {
+                log_warning(tt::LogAlways, "Failed to close file");
+            }
         }
     });
 }
 
 void safe_fread(void* buffer, size_t size, size_t count, FILE* file) {
-    TT_FATAL(fread(buffer, size, count, file) == count, "Failed to read tensor data, file must be corrupted");
+    if (fread(buffer, size, count, file) != count) {
+        TT_THROW("Failed to read tensor data, file must be corrupted");
+    }
 }
 
 void safe_fwrite(const void* buffer, size_t size, size_t count, FILE* file) {
-    TT_FATAL(fwrite(buffer, size, count, file) == count, "Failed to write tensor data: file write failed");
+    if (fwrite(buffer, size, count, file) != count) {
+        TT_THROW("Failed to write tensor data: file write failed");
+    }
 }
 
 constexpr std::uint32_t kFlatbufferAlignment = alignof(std::uint64_t);
 
 }  // namespace
+
+void dump_memory_config(FILE* output_file, const MemoryConfig& memory_config) {
+    safe_fwrite(&VERSION_ID, sizeof(VERSION_ID), 1, output_file);
+    flatbuffers::FlatBufferBuilder builder;
+    auto flat_config = ttnn::to_flatbuffer(memory_config, builder);
+    builder.Finish(flat_config);
+    uint64_t buf_size = builder.GetSize();
+    safe_fwrite(&buf_size, sizeof(buf_size), 1, output_file);
+    safe_fwrite(builder.GetBufferPointer(), buf_size, 1, output_file);
+}
+
+void dump_memory_config(const std::string& file_name, const MemoryConfig& memory_config) {
+    FILE* output_file = fopen(file_name.c_str(), "wb");
+    if (not output_file) {
+        TT_THROW("Cannot open \"{}\"", file_name);
+    }
+    auto cleanup = make_file_closer(output_file);
+    dump_memory_config(output_file, memory_config);
+}
+
+MemoryConfig load_memory_config(FILE* input_file) {
+    std::uint8_t version_id;
+    safe_fread(&version_id, sizeof(version_id), 1, input_file);
+    validate_version(version_id);
+
+    uint64_t bin_size = 0;
+    safe_fread(&bin_size, sizeof(bin_size), 1, input_file);
+    std::vector<uint8_t> bin(bin_size);
+    safe_fread(bin.data(), bin_size, 1, input_file);
+    flatbuffers::Verifier verifier(bin.data(), bin_size);
+    if (!verifier.VerifyBuffer<ttnn::flatbuffer::MemoryConfig>()) {
+        TT_THROW("MemoryConfig deserialization failed: invalid buffer");
+    }
+    auto mem_config = flatbuffers::GetRoot<ttnn::flatbuffer::MemoryConfig>(bin.data());
+    return ttnn::from_flatbuffer(mem_config);
+}
+
+MemoryConfig load_memory_config(const std::string& file_name) {
+    FILE* input_file = fopen(file_name.c_str(), "rb");
+    if (not input_file) {
+        TT_THROW("Cannot open \"{}\"", file_name);
+    }
+    auto cleanup = make_file_closer(input_file);
+    return load_memory_config(input_file);
+}
 
 void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) {
     FILE* output_file = fopen(file_name.c_str(), "wb");

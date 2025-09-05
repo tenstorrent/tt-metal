@@ -119,7 +119,6 @@ static void* replaceAllocation(void* NewElts, size_t TSize, size_t NewCapacity, 
     if (VSize) {
         memcpy(NewEltsReplace, NewElts, VSize * TSize);
     }
-    // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
     free(NewElts);
     return NewEltsReplace;
 }

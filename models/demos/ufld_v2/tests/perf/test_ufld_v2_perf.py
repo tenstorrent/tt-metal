@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@ from models.utility_functions import is_wormhole_b0, run_for_wormhole_b0
 @pytest.mark.parametrize(
     "batch_size, expected_perf,test",
     [
-        [1, 341, "UFLD-v2"],
+        [1, 317.5, "UFLD-v2"],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

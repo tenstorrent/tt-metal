@@ -8,11 +8,11 @@ import torch
 import ttnn
 from loguru import logger
 
-from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from ....utils.check import assert_quality
-from ....models.transformers.attention_mochi import MochiAttention
-from ....parallel.manager import CCLManager
-from ....utils.padding import pad_vision_seq_parallel
+from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from ...utils.check import assert_quality
+from ...models.transformers.attention_mochi import MochiAttention
+from ...parallel.manager import CCLManager
+from ...utils.padding import pad_vision_seq_parallel
 from diffusers import MochiTransformer3DModel
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 
