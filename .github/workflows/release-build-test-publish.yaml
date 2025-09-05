@@ -2,35 +2,35 @@ name: "[internal] Release, build, test, and publish"
 on:
   workflow_call:
     inputs:
-        dry-run:
-            description: "Dry-run: If true, do not upload tag or draft release."
-            required: false
-            default: false
-            type: boolean
-        version:
-            description: "Ubuntu version for building and testing"
-            required: false
-            default: 22.04
-            type: number
-        tag-version:
-            description: "Tag version to create, e.g. 'rc' for release candidate, 'dev' for dev development, or '' for normal release"
-            required: true
-            default: ""
-            type: string
-        is-release-candidate:
-            description: "If true, this is a release candidate, and some steps will be skipped"
-            required: false
-            default: false
-            type: boolean
+      dry-run:
+        description: "Dry-run: If true, do not upload tag or draft release."
+        required: false
+        default: false
+        type: boolean
+      version:
+        description: "Ubuntu version for building and testing"
+        required: false
+        default: 22.04
+        type: number
+      tag-version:
+        description: "Tag version to create, e.g. 'rc' for release candidate, 'dev' for dev development, or '' for normal release"
+        required: true
+        default: ""
+        type: string
+      is-release-candidate:
+        description: "If true, this is a release candidate, and some steps will be skipped"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
-    actions: read
-    contents: write
-    pull-requests: write
-    pages: write
-    id-token: write
-    packages: write
-    checks: write
+  actions: read
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+  packages: write
+  checks: write
 
 jobs:
   build-artifact:
