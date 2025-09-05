@@ -120,11 +120,11 @@ static tt::tt_metal::HostBuffer create_host_buffer_for_conv_weight(
             auto temp_tensor =
                 Tensor(std::move(data), output_shape, DataType::FLOAT32, Layout::ROW_MAJOR).to_layout(Layout::TILE);
 
-            auto output_float_data = tt::tt_metal::host_buffer::get_as<float>(temp_tensor);
+            auto output_float_data = tt::tt_metal::host_buffer::get_as<const float>(temp_tensor);
             auto output_packed_data =
                 output_dtype == DataType::BFLOAT8_B
-                    ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
-                    : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                    ? pack_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
+                    : pack_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
             return tt::tt_metal::HostBuffer(std::move(output_packed_data));
         } else {
             TT_THROW("Unsupported data type");
@@ -137,11 +137,7 @@ static tt::tt_metal::HostBuffer create_host_buffer_for_conv_weight(
 template <typename T, typename Fn>
 Tensor convert_tensor(const Tensor& input_tensor, const Fn& compute, const TensorSpec& output_spec) {
     TT_FATAL(is_cpu_tensor(input_tensor), "convert_tensor only supports cpu tensors");
-    return Tensor(
-        input_tensor.host_storage().transform(compute),
-        output_spec,
-        input_tensor.distributed_tensor_config(),
-        input_tensor.tensor_topology());
+    return Tensor(input_tensor.host_storage().transform(compute), output_spec, input_tensor.tensor_topology());
 }
 
 template <typename Func, typename... Args>
@@ -168,11 +164,11 @@ Tensor create_tensor_from_owned_buffer(
         if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
             auto tensor =
                 Tensor(std::move(buf), output_shape, DataType::FLOAT32, Layout::ROW_MAJOR).to_layout(Layout::TILE);
-            auto output_float_data = tt::tt_metal::host_buffer::get_as<float>(tensor);
+            auto output_float_data = tt::tt_metal::host_buffer::get_as<const float>(tensor);
             auto output_packed_data =
                 output_dtype == DataType::BFLOAT8_B
-                    ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
-                    : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                    ? pack_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false)
+                    : pack_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
             auto output_uint32_buffer = tt::tt_metal::HostBuffer(std::move(output_packed_data));
             return Tensor(std::move(output_uint32_buffer), output_shape, output_dtype, Layout::TILE);
         }
@@ -787,7 +783,6 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
             TensorSpec(
                 output_shape,
                 tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{})),
-            conv_weight_tensor.distributed_tensor_config(),
             conv_weight_tensor.tensor_topology());
     };
 
