@@ -20,6 +20,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/welford.h"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -54,6 +55,7 @@ void MAIN {
     constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(21);
     constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(22);
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(23);
+    constexpr uint32_t channels_per_group = get_compile_time_arg_val(24);
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -179,11 +181,11 @@ void MAIN {
 
             // Compute Welford values and write to cb_ex_partial
             index_h_offset = index_b_offset + index_g_offset;
-            cb_reserve_back(cb_ex_partial, 1);
+            cb_reserve_back(cb_ex_partial, 2);
             welford_init();
             tile_regs_acquire();
             for (uint32_t i = 0; i < block_h; ++i) {
-                curr_xy_limit += num_cols_per_group;
+                curr_xy_limit += channels_per_group;
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; ++j) {
                     for (uint32_t w = 0; w < subblock_w; ++w) {
@@ -208,13 +210,14 @@ void MAIN {
             welford_final(curr_xy_limit);  // Convert M2 to variance
 
             // Update for next group
-            tile_offset = (tile_offset + num_cols_per_group) % TILE_WIDTH;
+            tile_offset = (tile_offset + channels_per_group) % TILE_WIDTH;
 
             tile_regs_commit();
             tile_regs_wait();
             pack_tile_block(1, cb_ex_partial, 2);
             tile_regs_release();
-            cb_push_back(cb_ex_partial, 1);
+            cb_push_back(cb_ex_partial, 2);
+            DPRINT << "welford done" << ENDL();
 
             // x - E[x]
             reconfig_data_format_srcb(cb_x, cb_ex_global);
@@ -224,7 +227,7 @@ void MAIN {
             sub_tiles_bcast_scalar_init_short(cb_in0, cb_ex_global);
 #endif
             // Wait for final welford values in cb_ex_global
-            cb_wait_front(cb_ex_global, 1);
+            cb_wait_front(cb_ex_global, 2);
             for (uint32_t i = 0; i < block_h; i++) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -248,6 +251,7 @@ void MAIN {
                     index_subblock_w_offset += subblock_w;
                 }
             }
+            DPRINT << "xmm done" << ENDL();
 
             // Mask out the garbage values
             reconfig_data_format_srcb(cb_ex_global, cb_input_mask);
@@ -278,13 +282,14 @@ void MAIN {
             }
             cb_pop_front(cb_input_mask, block_w);
             reconfig_data_format_srcb(cb_input_mask, cb_eps);
+            DPRINT << "Mask done" << ENDL();
 
             // (Var + eps)
             cb_wait_front(cb_eps, 1);
             cb_reserve_back(cb_ex2pe, 1);
             tile_regs_acquire();
             add_tiles_init(cb_ex_global, cb_eps);
-            add_tiles(cb_ex_global, cb_eps, 0, 0, dst0);
+            add_tiles(cb_ex_global, cb_eps, 1, 0, dst0);
             // sqrt(Var + eps)
             sqrt_tile_init();
             sqrt_tile(dst0);
@@ -296,7 +301,9 @@ void MAIN {
             pack_tile(dst0, cb_ex2pe);
             tile_regs_release();
             cb_push_back(cb_ex2pe, 1);
-            cb_pop_front(cb_ex_global, 1);
+            cb_pop_front(cb_ex_global, 2);
+            DPRINT << "ex2pe done" << ENDL();
+
             //  (x - Ex) * 1/[sqrt(Var + eps)]
             index_h_offset = 0;
             mul_tiles_bcast_scalar_init_short(cb_x, cb_ex2pe);
@@ -324,6 +331,7 @@ void MAIN {
                 }
             }
             cb_pop_front(cb_ex2pe, 1);
+            DPRINT << "norm done" << ENDL();
             cb_wait_front(cb_x, block_hw);
             //  add or copy with previous output results
             uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
