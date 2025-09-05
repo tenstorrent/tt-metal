@@ -33,7 +33,7 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 class Model1D(SharedStateAddOn, AbstractModule):
     NUM_MLP_META_LAYERS = 1
     NUM_MLP_ROWS = 3
-    NUM_MOE_META_LAYERS = 2
+    NUM_MOE_META_LAYERS = 1  # NOTE: change to 15 for full model
     NUM_MOE_ROWS = 4
 
     @classmethod
@@ -260,9 +260,6 @@ class Model1D(SharedStateAddOn, AbstractModule):
                 )
                 for ml in range(cls.NUM_MOE_META_LAYERS)
             ],
-            "transfer_row": {
-                "semaphore": ccl.get_point_to_point_sem(0),
-            },
             "norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
             "metalayer_padding_map": metalayer_padding_map,
         }

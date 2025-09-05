@@ -15,15 +15,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, Me
 
 MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 
-<<<<<<< HEAD
-WeightConfig = (
-    dict[str, "WeightConfig | SavedWeight | None"]
-    | list["WeightConfig | SavedWeight | None"]
-    | tuple["WeightConfig | SavedWeight | None"]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
-)
-=======
 WeightConfig = dict[str, "WeightConfig | str | None"] | list["WeightConfig | str | None"]
->>>>>>> 97c8faed3a (enable weight caching)
 
 _PRIMITIVE_COPYABLE_TYPES = bool | int | float | complex | str | bytes | None | Enum
 # In general, we require ModelConfig to be serializable (NOTE: mesh device and classes that hold references to the objects on it are NOT serializable).
@@ -132,9 +124,7 @@ def _merge_model_config_state_items(model_config_item: Any, state_item: Any, mb_
 def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: ttnn.Device | None) -> Any:
     if isinstance(model_state_config_item, FromWeightConfig) and isinstance(weight_config_item, str):
         # Always use multihost format since that's what the test is using
-        return ttnn.load_tensor(
-            weight_config_item, device=model_state_config_item.mesh_device, enable_multihost_format=True
-        )
+        return ttnn.load_tensor(weight_config_item, device=model_state_config_item.mesh_device)
 
     if weight_config_item is None:
         assert not isinstance(
@@ -337,19 +327,3 @@ def _convert_run_config_to_pretty_print(run_config_item: Any, indent: int = 0) -
 def is_op_config(obj: Any) -> bool:
     """Check if the object is an op config instance."""
     return issubclass(type(obj), OpConfigBase) and is_dataclass(obj)
-<<<<<<< HEAD
-
-
-def load_weight(saved_weight: SavedWeight, device: ttnn.Device) -> ttnn.Tensor:
-    """
-    Load a weight tensor from a SavedWeight object to a given mesh device.
-    """
-
-    return ttnn.load_tensor(
-        saved_weight.path,
-    ).to(
-        device=device,
-        mem_config=saved_weight.memory_config,
-    )
-=======
->>>>>>> 97c8faed3a (enable weight caching)

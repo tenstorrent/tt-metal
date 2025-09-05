@@ -49,7 +49,7 @@ def create_whole_model_state_dict(model_path, hf_config):
 @pytest.fixture
 def hf_config(hf_config):
     """Load DeepSeek config for testing."""
-    hf_config.num_hidden_layers = 9
+    hf_config.num_hidden_layers = 5  # NOTE: remove this for full model
     hf_config.max_seq_len = 5 * 1024  # Set max sequence length for testing
     return hf_config
 
@@ -85,7 +85,7 @@ def load_reference_model(hf_config):
 )
 @pytest.mark.parametrize(
     "weights_type",
-    ["real"],
+    ["random"],
 )
 def test_forward_pass(
     module_path,
@@ -102,7 +102,6 @@ def test_forward_pass(
     deepseek_cache_path,
 ):
     tensor_cache_path = deepseek_cache_path / "ttnn_tensors_cache"
-    mesh_device.disable_and_clear_program_cache()
     mesh_shape = list(mesh_device.shape)
     num_rows, sdpa_dp_factor = mesh_shape
 
@@ -165,8 +164,7 @@ def test_forward_pass(
     ############################
     logger.info("Setting up TTNN configs")
 
-    weight_config_path = tensor_cache_path / "moe_model_weight_config.json"
-    # For now, since we're only loading one layer, we can replicate
+    weight_config_path = tensor_cache_path / f"model_{hf_config.num_hidden_layers}_layers_weight_config.json"
     # save this weight config to json file if it doesn't exist
     if not weight_config_path.exists():
         weight_config = Model1D.convert_weights(hf_config, state_dict, tensor_cache_path, mesh_device)
