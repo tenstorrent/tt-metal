@@ -32,7 +32,7 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ matrix.test-group.arch }}
         HF_HUB_OFFLINE: 1
-        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        HF_HOME: /mnt/MLPerf/huggingface
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
