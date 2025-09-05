@@ -94,7 +94,7 @@ jobs:
               echo "run-quick=${{ inputs.galaxy-quick }}" >> $GITHUB_OUTPUT
               echo "run-unit=${{ inputs.tg-unit }}" >> $GITHUB_OUTPUT
               echo "run-frequent=${{ inputs.tg-frequent }}" >> $GITHUB_OUTPUT
-              echo "run-demo=${{ inputs.quick-demo }}" >> $GITHUB_OUTPUT
+              echo "run-demo=${{ inputs.galaxy-demo }}" >> $GITHUB_OUTPUT
               echo "run-model-perf=${{ inputs.tg-model-perf }}" >> $GITHUB_OUTPUT
               echo "run-stress=${{ inputs.tg-stress }}" >> $GITHUB_OUTPUT
               ;;
