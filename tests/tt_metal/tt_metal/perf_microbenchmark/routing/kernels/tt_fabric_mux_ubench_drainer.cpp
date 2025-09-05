@@ -10,6 +10,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 
 #include <cstddef>
 // clang-format on
@@ -46,7 +47,7 @@ void kernel_main() {
     // This mirrors an EDM interface. The Worker -> EDM interface has the worker communicate to the EDM interface via a
     // autoinc stream register where the register holds #slots free.
     constexpr uint32_t slots_free_stream_id =
-        tt::tt_fabric::WorkerToFabricMuxSender<0>::sender_channel_0_free_slots_stream_id;
+        tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id;
     init_ptr_val(slots_free_stream_id, NUM_BUFFERS);
 
     tt::tt_fabric::DrainerChannelBuffer drainer_channel(
