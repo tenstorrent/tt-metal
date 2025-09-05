@@ -233,7 +233,7 @@ def main(args_dict):
 
     # Generate folder and file names
     folder_name = generate_folder_name(args.model, args.input_shape, args.input_dtype)
-    base_dir = "generated"
+    base_dir = "output_folder"
     output_dir = os.path.join(base_dir, folder_name)
 
     # Create directories if they don't exist
