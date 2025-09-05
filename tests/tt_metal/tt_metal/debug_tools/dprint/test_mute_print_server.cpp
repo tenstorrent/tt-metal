@@ -45,7 +45,6 @@ void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice
     Program program = Program();
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
 
     // This tests prints only on a single core
     constexpr CoreCoord core = {0, 0}; // Print on first core only

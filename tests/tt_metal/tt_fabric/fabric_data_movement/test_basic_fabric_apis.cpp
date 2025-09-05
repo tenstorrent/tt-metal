@@ -138,7 +138,6 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
         const auto& src_device = devices[src_idx];
         auto src_fabric_node_id =
             control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_devices()[0]->id());
-        uint32_t src_fabric_chip_id = src_fabric_node_id.chip_id;
 
         std::vector<uint32_t> result_data;
         tt::tt_metal::distributed::ReadShard(
