@@ -19,9 +19,6 @@ target_link_libraries(
     mem_bench
     PRIVATE
         Metalium::Metal
-        TT::Metalium::Common
-        Metalium::Metal::Impl
-        Metalium::Metal::LLRT
         numa
         benchmark::benchmark
 )
