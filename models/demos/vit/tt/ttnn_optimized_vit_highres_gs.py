@@ -971,6 +971,17 @@ def dinov2_head(var0, *args):
 def custom_preprocessor_siglip(torch_model, name):
     import timm
 
+    attention_class = None
+    try:
+        attention_class = timm.layers.attention.Attention
+    except:
+        try:
+            attention_class = timm.models.vision_transformer.Attention
+        except:
+            attention_class = None
+    assert (
+        attention_class is not None
+    ), f"Could not find Attention Class in timm library. Please check version timm={timm.__version__}."
     parameters = {}
     if isinstance(torch_model, timm.layers.patch_embed.PatchEmbed):
         weight = torch_model.proj.weight
@@ -990,7 +1001,7 @@ def custom_preprocessor_siglip(torch_model, name):
         parameters["patch_embeddings"]["projection"]["bias"] = ttnn.from_torch(
             bias.unsqueeze(0), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
         )
-    elif isinstance(torch_model, timm.layers.attention.Attention):
+    elif isinstance(torch_model, attention_class):
         num_heads = 16
         qkv_weight, qkv_bias, proj_weight, proj_bias = (
             torch_model.qkv.weight,
