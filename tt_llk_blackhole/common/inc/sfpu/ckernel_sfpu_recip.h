@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Jason Davies <jason@jasondavies.com>
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include "ckernel_sfpu_rsqrt_compat.h"
 #include "sfpi.h"
 
 namespace ckernel
@@ -11,78 +13,96 @@ namespace ckernel
 namespace sfpu
 {
 
-template <int max_iter = 3>
-sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat in)
+// Computes the reciprocal of a floating point value x.
+template <int max_iter = 2>
+sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat x)
 {
-    // Force sign to 1 (make number negative)
-    sfpi::vFloat val = sfpi::setsgn(in, 1);
+    // sfpi::approx_recip(x) will return ±0 for x = ±inf or x ≥ ±2**126, and ±inf for x = ±0.
+    sfpi::vFloat y = sfpi::approx_recip(x);
 
-    val = setexp(val, 126); // Set exponent to 126 to make the number in 0.5-1
-    // Use 1.44 as first guess at x, ideal value would be 1.33, but we happen to have 1.44 available, so use that to avoid a load
-    sfpi::vFloat vConstLn2Recip = sfpi::vConstFloatPrgm0;
-    sfpi::vFloat two            = sfpi::vConstFloatPrgm1;
-    sfpi::vFloat result         = vConstLn2Recip * (val * vConstLn2Recip + two);
-
-    for (int s_iter = 0; s_iter < (max_iter - 1); s_iter++)
+    // Optionally improve the approximation using Newton-Raphson.
+    if (max_iter > 0)
     {
-        result = result * (val * result + two);
+        // Normally, t = 2.0 - x * y, but we negate this (and negate again using y = y * -t later).
+        // On Blackhole, when x=0 and y=infinity (and vice versa), t=+NaN regardless of the operand signs.
+        // Negating the meaning of t makes it easier to detect NaN using a trivial sign check t>=0.
+        // Equivalently, we could use v_if (t >= 2.0) instead, but SFPI doesn't support SFPLE/SFPGT at the moment.
+        sfpi::vFloat t = x * y - sfpi::vConstFloatPrgm0;
+
+        if (max_iter > 1)
+        {
+            sfpi::vFloat y1 = y * -t - sfpi::vConst0;
+            // If t=NaN, then t>=0.  This check consumes the SFPNOP slot of the preceding SFPMAD.
+            v_if (t < 0)
+            {
+                t = x * y1 - sfpi::vConstFloatPrgm0;
+                y = y1 * -t - sfpi::vConst0;
+            }
+            v_endif;
+        }
+        else
+        {
+            // If t=NaN, then t>=0.  This check cannot be hidden in a SFPNOP slot as it depends on the result of the preceding SFPMAD.
+            v_if (t < 0)
+            {
+                y = y * -t - sfpi::vConst0;
+            }
+            v_endif;
+        }
     }
 
-    sfpi::vInt orig_exp = exexp(in);
-    sfpi::vInt new_exp  = exexp(result);
-
-    // "Subtract" exponents, and re-bias.
-    // Execute: -1 - exp, then exp += 127
-    new_exp -= orig_exp;
-    new_exp += 126;
-
-    v_if (new_exp < 0)
-    {
-        // If rebiased exponent is negative, we need to saturate at 0.
-        // This means the initial number was too big so reciprocal result should be 0
-        result  = 0.0F;
-        new_exp = 0;
-    }
-    v_endif;
-
-    // Set newly denormalized exponent to result exponent field
-    return setexp(result, new_exp);
+    return y;
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
-inline void _calculate_reciprocal_(const int iterations)
+inline void _calculate_reciprocal_internal_(const int iterations)
 {
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        sfpi::vFloat in  = sfpi::dst_reg[0];
-        sfpi::vFloat out = _sfpu_reciprocal_<APPROXIMATION_MODE ? 2 : 3>(in);
+        sfpi::vFloat in = sfpi::dst_reg[0];
 
-        v_if (in < 0.0F)
+        if constexpr (APPROXIMATION_MODE)
         {
-            // Invert sign on calculated value if CC=1 (number is negative)
-            out = -out;
-        }
-        v_endif;
-
-        if constexpr (is_fp32_dest_acc_en || APPROXIMATION_MODE)
-        {
-            sfpi::dst_reg[0] = out;
+            sfpi::dst_reg[0] = _sfpu_reciprocal_<0>(in);
         }
         else
         {
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
+            if constexpr (is_fp32_dest_acc_en)
+            {
+                sfpi::dst_reg[0] = _sfpu_reciprocal_<2>(in);
+            }
+            else
+            {
+                sfpi::vFloat out = _sfpu_reciprocal_<1>(in);
+                sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
+            }
         }
 
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en, bool legacy_compat = false>
+inline void _calculate_reciprocal_(const int iterations)
+{
+    if constexpr (legacy_compat)
+    {
+        _calculate_reciprocal_compat_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(iterations);
+    }
+    else
+    {
+        _calculate_reciprocal_internal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(iterations);
+    }
+}
+
+template <bool APPROXIMATION_MODE, bool legacy_compat = false>
 inline void _init_reciprocal_()
 {
-    sfpi::vConstFloatPrgm0 = 1.442695f; // ln2_recip
-    sfpi::vConstFloatPrgm1 = 2.0f;
+    if constexpr (!APPROXIMATION_MODE && !legacy_compat)
+    {
+        sfpi::vConstFloatPrgm0 = 2.0f;
+    }
 }
 
 } // namespace sfpu

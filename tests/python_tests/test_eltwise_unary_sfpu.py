@@ -48,6 +48,7 @@ from helpers.utils import passed_test
         MathOperation.Reciprocal,
         MathOperation.Sin,
         MathOperation.Sqrt,
+        MathOperation.Rsqrt,
         MathOperation.Square,
         MathOperation.Celu,
         MathOperation.Silu,

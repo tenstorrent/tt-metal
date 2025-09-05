@@ -6,7 +6,6 @@
 
 #include <limits>
 
-#include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpi.h"
 #include "sfpi_fp16.h"
@@ -75,7 +74,7 @@ sfpi_inline sfpi::vFloat _calculate_exponential_body_(sfpi::vFloat in)
 
         v_if (in < 0)
         {
-            out = _sfpu_reciprocal_(out);
+            out = _sfpu_reciprocal_<2>(out);
         }
         v_endif;
     }
@@ -149,7 +148,7 @@ inline sfpi::vFloat _calculate_exponential_piecewise_(sfpi::vFloat in, const uin
 
         v_if (in < 0)
         {
-            result = _sfpu_reciprocal_(result);
+            result = _sfpu_reciprocal_<2>(result);
         }
         v_endif;
     }
@@ -407,9 +406,8 @@ inline void _init_exponential_()
     }
     else
     {
-        sfpi::vConstFloatPrgm0 = 1.442695f; // ln2_recip
-        sfpi::vConstFloatPrgm1 = 2.0f;
-        sfpi::vConstFloatPrgm2 = 0.863281f;
+        // Initialisation for use of _sfpu_reciprocal_<2> in _calculate_exponential_<APPROXIMATION_MODE=false>.
+        _init_reciprocal_<false>();
     }
 }
 

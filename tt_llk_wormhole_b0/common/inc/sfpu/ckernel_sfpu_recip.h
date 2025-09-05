@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Jason Davies <jason@jasondavies.com>
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include "ckernel_sfpu_rsqrt_compat.h"
 #include "sfpi.h"
 
 namespace ckernel
@@ -11,80 +13,121 @@ namespace ckernel
 namespace sfpu
 {
 
-template <int max_iter = 3>
+// Computes the reciprocal of a floating point value x.
+// max_iter specifies the number of Newton-Raphson iterations.
+// max_iter = 2: sufficient for float32 precision (≤1 ulps).
+// max_iter = 1: sufficient for bfloat16/float16 precision (≤0.5 ulps).
+// max_iter = 0: this has the same effect as max_iter=1 at the moment;
+//               it may be replaced with a cheaper approximation in future.
+template <int max_iter = 2>
 sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat in)
 {
-    // Force sign to 1 (make number negative)
-    sfpi::vFloat val = sfpi::setsgn(in, 1);
+    // Combines the sign and exponent of -1.0 with the mantissa of `in`.
+    // Scale the input value to the range [1.0, 2.0), and make it negative.
+    // If in ≠ ±0 and in ≠ ±inf, then x = in * 2**(127-in.Exp).
+    // If in = ±0 or in = ±inf, then x = ±1.
+    // Then negative_x = -x.
+    sfpi::vFloat negative_x = sfpi::setman(sfpi::vConstNeg1, sfpi::reinterpret<sfpi::vInt>(in));
 
-    val = setexp(val, 126); // Set exponent to 126 to make the number in 0.5-1
-    // Use 1.44 as first guess at x, ideal value would be 1.33.
-    // Grayskull has hardwired 1.44 and uses it to avoid a load.
-    // We use it here for consistency.
-    sfpi::vFloat vConstLn2Recip = sfpi::vConstFloatPrgm0;
-    sfpi::vFloat two            = sfpi::vConstFloatPrgm1;
-    sfpi::vFloat result         = vConstLn2Recip * (val * vConstLn2Recip + two);
+    // Quadratic initial estimate: y = k2 - k1*x + k0*x**2.
+    sfpi::vFloat y = sfpi::vConstFloatPrgm1 + sfpi::vConstFloatPrgm0 * negative_x;
 
-    for (int s_iter = 0; s_iter < (max_iter - 1); s_iter++)
+    // Scale factor: we want 1/in = 1/x * scale.
+    // For x ≠ ±0 and x ≠ ±inf, in = x * 2**-(127-in.Exp), so 1/in = 1/x * 2**(127-in.Exp).
+    // Add float32 bias: scale.Exp = 127+127-in.Exp = 254-in.Exp.
+    // For efficiency and handling of x = ±0 and x = ±inf, we set scale.Exp = 255-in.Exp = ~in.Exp.
+    // This is efficiently computed with a single SFPNOT, followed by SFPSETMAN to clear the mantissa at the next opportunity.
+    // The sign doesn't matter as we set the output sign to match the input at the end.
+    // Not only is 255-in.Exp more efficient via SFPNOT, but it also ensures
+    // that in.Exp == 0 results in ±inf, and in.Exp == 255 results in ±0.
+    // See the scale factor adjustment via scale*0.5 below for further details.
+    sfpi::vInt scale_bits = ~sfpi::reinterpret<sfpi::vUInt>(in);
+
+    // Continue with quadratic estimate.
+    y = sfpi::vConstFloatPrgm2 + y * negative_x;
+
+    // Scale factor: set mantissa to zero.
+    sfpi::vFloat scale = sfpi::setman(sfpi::reinterpret<sfpi::vFloat>(scale_bits), 0);
+
+    // First iteration of Newton-Raphson: t = 1.0 - x*y.
+    sfpi::vFloat t = sfpi::vConst1 + negative_x * y;
+
+    // Scale factor adjustment: scale = scale*0.5.
+    // If scale = ±inf, then scale*0.5 = ±inf and scale.Exp=255.
+    // If scale = ±0, then scale*0.5 = 0 and scale.Exp=0.
+    // Otherwise, scale.Exp = scale.Exp-1 = 255-in.Exp-1 = 254-in.Exp.
+    scale *= 0.5f;
+
+    // Continue Newton-Raphson: y = y + y*t.
+    y = y + y * t;
+
+    if constexpr (max_iter > 1)
     {
-        result = result * (val * result + two);
+        // Second iteration of Newton-Raphson: t = 1.0 - x*y; y = y + y*t.
+        t = sfpi::vConst1 + negative_x * y;
+        y = y + y * t;
     }
 
-    sfpi::vInt orig_exp = exexp(in);
-    sfpi::vInt new_exp  = exexp(result);
+    // Apply scaling factor, and set sign to match input.
+    y = y * scale;
+    y = sfpi::setsgn(y, in);
 
-    // "Subtract" exponents, and re-bias.
-    // Execute: -1 - exp, then exp += 127
-    new_exp -= orig_exp;
-    new_exp += 126;
-
-    v_if (new_exp < 0)
-    {
-        // If rebiased exponent is negative, we need to saturate at 0.
-        // This means the initial number was too big so reciprocal result should be 0
-        result  = 0.0F;
-        new_exp = 0;
-    }
-    v_endif;
-
-    // Set newly denormalized exponent to result exponent field
-    return setexp(result, new_exp);
+    return y;
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
-inline void _calculate_reciprocal_(const int iterations)
+inline void _calculate_reciprocal_internal_(const int iterations)
 {
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        sfpi::vFloat in  = sfpi::dst_reg[0];
-        sfpi::vFloat out = _sfpu_reciprocal_<APPROXIMATION_MODE ? 2 : 3>(in);
+        sfpi::vFloat in = sfpi::dst_reg[0];
 
-        v_if (in < 0.0F)
+        if constexpr (APPROXIMATION_MODE)
         {
-            // Invert sign on calculated value if CC=1 (number is negative)
-            out = -out;
-        }
-        v_endif;
-
-        if constexpr (is_fp32_dest_acc_en || APPROXIMATION_MODE)
-        {
-            sfpi::dst_reg[0] = out;
+            sfpi::dst_reg[0] = _sfpu_reciprocal_<0>(in);
         }
         else
         {
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
+            if constexpr (is_fp32_dest_acc_en)
+            {
+                sfpi::dst_reg[0] = _sfpu_reciprocal_<2>(in);
+            }
+            else
+            {
+                sfpi::vFloat out = _sfpu_reciprocal_<1>(in);
+                sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
+            }
         }
 
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en, bool legacy_compat = false>
+inline void _calculate_reciprocal_(const int iterations)
+{
+    if constexpr (legacy_compat)
+    {
+        _calculate_reciprocal_compat_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(iterations);
+    }
+    else
+    {
+        _calculate_reciprocal_internal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(iterations);
+    }
+}
+
+template <bool APPROXIMATION_MODE, bool legacy_compat = false>
 inline void _init_reciprocal_()
 {
-    sfpi::vConstFloatPrgm0 = 1.442695f; // ln2_recip
-    sfpi::vConstFloatPrgm1 = 2.0f;
+    if constexpr (!legacy_compat)
+    {
+        // The polynomial y = k2 - k1*x + k0*x**2 minimises the maximum
+        // absolute error for 1/x over the interval [1,2), found via Sollya.
+        sfpi::vConstFloatPrgm0 = 0.343145549297332763671875f;
+        sfpi::vConstFloatPrgm1 = 1.51471805572509765625f;
+        sfpi::vConstFloatPrgm2 = 2.1642131805419921875f;
+    }
 }
 
 } // namespace sfpu

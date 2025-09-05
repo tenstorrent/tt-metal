@@ -73,6 +73,7 @@ class MathOperation(Enum):
     Log = OpSpec("log", MathOpType.SFPU_UNARY)
     Neg = OpSpec("neg", MathOpType.SFPU_UNARY)
     Reciprocal = OpSpec("reciprocal", MathOpType.SFPU_UNARY)
+    Rsqrt = OpSpec("rsqrt", MathOpType.SFPU_UNARY)
     Sin = OpSpec("sine", MathOpType.SFPU_UNARY)
     Silu = OpSpec("silu", MathOpType.SFPU_UNARY)
     Sqrt = OpSpec("sqrt", MathOpType.SFPU_UNARY)

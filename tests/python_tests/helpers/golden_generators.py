@@ -37,7 +37,7 @@ def check_bfp8_b(operand: list) -> list:
     # tensor = unpack_bfp8_b(tensor_bytes)
     # return tensor
 
-    not_finite = [1.7014118346046923e38, math.inf, -math.inf]
+    not_finite = [math.inf, -math.inf]
     for i, x in enumerate(operand):
         if x in not_finite or math.isnan(x):
             # Zero out the entire row of 16 elements
@@ -637,6 +637,7 @@ class UnarySFPUGolden:
             MathOperation.Cos: self._cos,
             MathOperation.Log: self._log,
             MathOperation.Reciprocal: self._reciprocal,
+            MathOperation.Rsqrt: self._rsqrt,
             MathOperation.Sin: self._sin,
             MathOperation.Sqrt: self._sqrt,
             MathOperation.Square: self._square,
@@ -754,12 +755,19 @@ class UnarySFPUGolden:
 
     def _reciprocal(self, x):
         if x == 0.0:
-            return self.handle_infinite_numbers(1.7014118346046923e38)
+            return self.handle_infinite_numbers(float("inf"))
         return 1 / x
 
     def _sin(self, x):
         # Never not finite, values range from [-1, 1]
         return math.sin(x)
+
+    def _rsqrt(self, x):
+        if x < 0.0:
+            return self.handle_infinite_numbers(float("nan"))
+        if x == 0.0:
+            return self.handle_infinite_numbers(float("inf"))
+        return 1 / math.sqrt(x)
 
     def _sqrt(self, x):
         if x < 0.0:
