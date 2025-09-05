@@ -595,7 +595,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
     // NOTE: This is a special case for the TG mesh graph descriptor.
     // It has to use Ethernet coordinates because ethernet coordinates must be mapped manually to physical chip IDs
     // because the TG intermesh ethernet links could be inverted when mapped to physical chip IDs.
-    if (mesh_graph_desc_filename == "tg_mesh_graph_descriptor.yaml") {
+    if (mesh_graph_desc_filename.starts_with("tg_mesh_graph_descriptor.")) {
         // Add the N150 MMIO devices
         auto eth_coords_per_chip =
             tt::tt_metal::MetalContext::instance().get_cluster().get_all_chip_ethernet_coordinates();

@@ -328,22 +328,28 @@ void MeshGraph::initialize_from_mgd2(const MeshGraphDescriptor& mgd2) {
 
         MeshId mesh_id(mesh_instance.local_id);
         MeshShape mesh_shape(mesh_desc->device_topology().dims().at(0), mesh_desc->device_topology().dims().at(1));
+        MeshShape host_shape(mesh_desc->host_topology().dims().at(0), mesh_desc->host_topology().dims().at(1));
 
         std::vector<MeshHostRankId> mesh_host_ranks_values;
         uint32_t next_rank = 0;
-        for (const auto& host_coord : MeshCoordinateRange(mesh_shape)) {
+        for (const auto& host_coord : MeshCoordinateRange(host_shape)) {
             mesh_host_ranks_values.push_back(MeshHostRankId{next_rank++});
+
+            std::uint32_t board_ns_size = mesh_shape[0] / host_shape[0];
+            std::uint32_t board_ew_size = mesh_shape[1] / host_shape[1];
+
+            TT_ASSERT(mesh_shape[0] % host_shape[0] == 0 && mesh_shape[1] % host_shape[1] == 0, "MeshGraph: Mesh shape {}x{} must be divisible by host shape {}x{}", mesh_shape[0], mesh_shape[1], host_shape[0], host_shape[1]);
 
             // Populate mesh_host_rank_coord_ranges_
             this->mesh_host_rank_coord_ranges_.emplace(
                 std::make_pair(*mesh_id, mesh_host_ranks_values.back()),
                 MeshCoordinateRange(
-                    MeshCoordinate(host_coord[0] * mesh_shape[0], host_coord[1] * mesh_shape[1]),
-                    MeshCoordinate((host_coord[0] + 1) * mesh_shape[0] - 1, (host_coord[1] + 1) * mesh_shape[1] - 1)));
+                    MeshCoordinate(host_coord[0] * board_ns_size, host_coord[1] * board_ew_size),
+                    MeshCoordinate((host_coord[0] + 1) * board_ns_size - 1, (host_coord[1] + 1) * board_ew_size - 1)));
         }
 
         // Populate mesh_host_ranks_
-        this->mesh_host_ranks_[*mesh_id] = tt_metal::distributed::MeshContainer<MeshHostRankId>(mesh_shape, mesh_host_ranks_values);
+        this->mesh_host_ranks_[*mesh_id] = tt_metal::distributed::MeshContainer<MeshHostRankId>(host_shape, mesh_host_ranks_values);
 
         // Populate mesh_to_chip_ids
         std::vector<chip_id_t> chip_ids(mesh_shape[0] * mesh_shape[1]);

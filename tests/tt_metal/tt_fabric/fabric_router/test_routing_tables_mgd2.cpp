@@ -111,6 +111,86 @@ void expect_mesh_to_chip_ids_equal(
     }
 }
 
+void expect_get_host_ranks_equal(
+    const tt::tt_fabric::MeshContainer<tt::tt_fabric::MeshHostRankId>& lhs, 
+    const tt::tt_fabric::MeshContainer<tt::tt_fabric::MeshHostRankId>& rhs,
+    int mesh_id) {
+    // Test get_host_ranks function comparison for specified mesh ID
+    EXPECT_EQ(lhs.size(), rhs.size()) 
+        << "Mesh " << mesh_id << " host ranks count should be equal between MGD versions";
+    EXPECT_EQ(lhs.shape(), rhs.shape()) 
+        << "Mesh " << mesh_id << " host ranks shape should be equal between MGD versions";
+    
+    // Compare host rank values
+    const auto& lhs_values = lhs.values();
+    const auto& rhs_values = rhs.values();
+    EXPECT_EQ(lhs_values.size(), rhs_values.size()) 
+        << "Mesh " << mesh_id << " host ranks values count should be equal between MGD versions";
+    
+    for (size_t i = 0; i < lhs_values.size(); ++i) {
+        EXPECT_EQ(*lhs_values[i], *rhs_values[i]) 
+            << "Mesh " << mesh_id << " host rank " << i << " should be equal between MGD versions";
+    }
+}
+
+void expect_get_chip_ids_equal(
+    const tt::tt_fabric::MeshContainer<chip_id_t>& lhs, 
+    const tt::tt_fabric::MeshContainer<chip_id_t>& rhs,
+    int mesh_id) {
+    // Test get_chip_ids function comparison for specified mesh ID
+    EXPECT_EQ(lhs.size(), rhs.size()) 
+        << "Mesh " << mesh_id << " chip count should be equal between MGD versions";
+    EXPECT_EQ(lhs.shape(), rhs.shape()) 
+        << "Mesh " << mesh_id << " chip shape should be equal between MGD versions";
+    
+    // Compare chip ID values
+    const auto& lhs_values = lhs.values();
+    const auto& rhs_values = rhs.values();
+    EXPECT_EQ(lhs_values.size(), rhs_values.size()) 
+        << "Mesh " << mesh_id << " chip values count should be equal between MGD versions";
+    
+    for (size_t i = 0; i < lhs_values.size(); ++i) {
+        EXPECT_EQ(lhs_values[i], rhs_values[i]) 
+            << "Mesh " << mesh_id << " chip ID " << i << " should be equal between MGD versions";
+    }
+}
+
+void expect_get_chip_ids_submesh_equal(
+    const tt::tt_fabric::MeshContainer<chip_id_t>& lhs, 
+    const tt::tt_fabric::MeshContainer<chip_id_t>& rhs,
+    int mesh_id) {
+    // Test get_chip_ids function comparison for specified mesh ID submesh
+    EXPECT_EQ(lhs.size(), rhs.size()) 
+        << "Mesh " << mesh_id << " submesh chip count should be equal between MGD versions";
+    EXPECT_EQ(lhs.shape(), rhs.shape()) 
+        << "Mesh " << mesh_id << " submesh chip shape should be equal between MGD versions";
+    
+    // Compare chip ID values
+    const auto& lhs_values = lhs.values();
+    const auto& rhs_values = rhs.values();
+    EXPECT_EQ(lhs_values.size(), rhs_values.size()) 
+        << "Mesh " << mesh_id << " submesh chip values count should be equal between MGD versions";
+    
+    for (size_t i = 0; i < lhs_values.size(); ++i) {
+        EXPECT_EQ(lhs_values[i], rhs_values[i]) 
+            << "Mesh " << mesh_id << " submesh chip ID " << i << " should be equal between MGD versions";
+    }
+}
+
+void expect_get_host_rank_for_chip_equal(
+    const std::optional<tt::tt_fabric::MeshHostRankId>& lhs, 
+    const std::optional<tt::tt_fabric::MeshHostRankId>& rhs,
+    int mesh_id) {
+    // Test get_host_rank_for_chip function comparison for specified mesh ID
+    EXPECT_EQ(lhs.has_value(), rhs.has_value()) 
+        << "Mesh " << mesh_id << " chip host rank presence should be consistent between MGD versions";
+    
+    if (lhs.has_value() && rhs.has_value()) {
+        EXPECT_EQ(*lhs.value(), *rhs.value()) 
+            << "Mesh " << mesh_id << " chip host rank should be equal between MGD versions";
+    }
+}
+
 }  // namespace
 
 namespace tt::tt_fabric::fabric_router_tests {
@@ -143,7 +223,7 @@ TEST(MeshGraphValidation, TestTGMeshGraphInitConsistencyCheckMGD2) {
     // MGD 1.0 Path
     const std::filesystem::path tg_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto";
+        "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
     auto mesh_graph = std::make_unique<MeshGraph>(tg_mesh_graph_desc_path.string());
 
     // MGD 2.0 Path
@@ -157,6 +237,23 @@ TEST(MeshGraphValidation, TestTGMeshGraphInitConsistencyCheckMGD2) {
         mesh_graph->get_intra_mesh_connectivity(), mesh_graph2->get_intra_mesh_connectivity());
     expect_inter_mesh_connectivity_equal(
         mesh_graph->get_inter_mesh_connectivity(), mesh_graph2->get_inter_mesh_connectivity());
+    
+    // Compare mesh graph functions between MGD 1.0 and MGD 2.0 for mesh IDs 0 and 4
+    // Test get_host_ranks for mesh 0 and 4
+    expect_get_host_ranks_equal(mesh_graph->get_host_ranks(tt::tt_fabric::MeshId{0}), mesh_graph2->get_host_ranks(tt::tt_fabric::MeshId{0}), 0);
+    expect_get_host_ranks_equal(mesh_graph->get_host_ranks(tt::tt_fabric::MeshId{4}), mesh_graph2->get_host_ranks(tt::tt_fabric::MeshId{4}), 4);
+    
+    // Test get_chip_ids for mesh 0 and 4 (entire mesh)
+    expect_get_chip_ids_equal(mesh_graph->get_chip_ids(tt::tt_fabric::MeshId{0}), mesh_graph2->get_chip_ids(tt::tt_fabric::MeshId{0}), 0);
+    expect_get_chip_ids_equal(mesh_graph->get_chip_ids(tt::tt_fabric::MeshId{4}), mesh_graph2->get_chip_ids(tt::tt_fabric::MeshId{4}), 4);
+    
+    // Test get_chip_ids for mesh 0 and 4 (submesh with host rank 0)
+    expect_get_chip_ids_submesh_equal(mesh_graph->get_chip_ids(tt::tt_fabric::MeshId{0}, tt::tt_fabric::MeshHostRankId{0}), mesh_graph2->get_chip_ids(tt::tt_fabric::MeshId{0}, tt::tt_fabric::MeshHostRankId{0}), 0);
+    expect_get_chip_ids_submesh_equal(mesh_graph->get_chip_ids(tt::tt_fabric::MeshId{4}, tt::tt_fabric::MeshHostRankId{0}), mesh_graph2->get_chip_ids(tt::tt_fabric::MeshId{4}, tt::tt_fabric::MeshHostRankId{0}), 4);
+    
+    // Test get_host_rank_for_chip for mesh 0 and 4 (first chip in each mesh)
+    expect_get_host_rank_for_chip_equal(mesh_graph->get_host_rank_for_chip(tt::tt_fabric::MeshId{0}, 0), mesh_graph2->get_host_rank_for_chip(tt::tt_fabric::MeshId{0}, 0), 0);
+    expect_get_host_rank_for_chip_equal(mesh_graph->get_host_rank_for_chip(tt::tt_fabric::MeshId{4}, 0), mesh_graph2->get_host_rank_for_chip(tt::tt_fabric::MeshId{4}, 0), 4);
 }
 
 TEST_F(ControlPlaneFixture, TestTGControlPlaneInitMGD2) {

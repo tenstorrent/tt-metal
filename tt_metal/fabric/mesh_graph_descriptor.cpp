@@ -295,6 +295,19 @@ void MeshGraphDescriptor::validate_mesh_topology(const proto::MeshGraphDescripto
             );
             continue;
         }
+        
+        // Check that the device topology dimensions are divisible by the host topology dimensions
+        if (mesh.device_topology().dims_size() > 0) {
+            if (mesh.device_topology().dims(0) % mesh.host_topology().dims(0) != 0 || mesh.device_topology().dims(1) % mesh.host_topology().dims(1) != 0) {
+                error_messages.push_back(
+                    fmt::format(
+                        "Device topology dimensions must be divisible by host topology dimensions (Mesh: {})",
+                        mesh.name()
+                    )
+                );
+                continue;
+            }
+        }
     }
 
 }
