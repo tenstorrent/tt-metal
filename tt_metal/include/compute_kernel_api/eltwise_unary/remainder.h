@@ -6,7 +6,8 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_remainder.h"
+#include "ckernel_sfpu_remainder.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -32,14 +33,14 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void remainder_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH((llk_math_eltwise_unary_sfpu_remainder<APPROX>(idst, param0, param1)));
+    MATH(SFPU_UNARY_TWO_PARAM_KERNEL(remainder, RC, APPROX, idst, param0, param1));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void remainder_tile_init(uint32_t param0, uint32_t param1) {
-    MATH((llk_math_eltwise_unary_sfpu_remainder_init<APPROX>(param0, param1)));
+    MATH(SFPU_TWO_PARAM_KERNEL_INIT(remainder, sfpu::init_remainder, APPROX, param0, param1));
 }
 
 }  // namespace ckernel
