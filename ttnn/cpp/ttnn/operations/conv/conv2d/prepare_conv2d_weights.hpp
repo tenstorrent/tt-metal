@@ -41,7 +41,8 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
 // blocks based on output shard width padding. Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout_block_sharded(
     const Tensor& conv_weight_tensor,
-    uint32_t num_channel_shards,
+    uint32_t in_num_channel_shards,
+    uint32_t out_num_channel_shards,
     bool full_inner_dim,
     std::optional<DataType> output_dtype = std::nullopt);
 

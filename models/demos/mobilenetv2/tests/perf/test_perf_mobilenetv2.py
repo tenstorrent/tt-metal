@@ -14,7 +14,7 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [MOBILENETV2_BATCH_SIZE, 3335],
+        [MOBILENETV2_BATCH_SIZE, 3436],
     ],
 )
 def test_perf_device_mobilenetv2(batch_size, expected_perf):

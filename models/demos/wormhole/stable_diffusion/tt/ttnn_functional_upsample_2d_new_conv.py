@@ -6,6 +6,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import reshard_for_output_channels_divisibility
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upsample_nearest_2d import upsample_nearest2d
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     get_default_compute_config,
@@ -103,33 +104,15 @@ class upsample2d:
             "device": self.device,
             "conv_config": conv_config,
         }
-        if not ttnn.is_tensor_storage_on_device(self.conv_weight_tensor):
-            self.conv_weight_tensor = ttnn.prepare_conv_weights(
-                weight_tensor=self.conv_weight_tensor,
-                weights_format="OIHW",
-                input_layout=tt_out.get_layout(),
-                input_memory_config=tt_out.memory_config(),
-                has_bias=True,
-                **conv_kwargs,
-                input_dtype=ttnn.bfloat8_b,
-            )
-            self.conv_bias_tensor = ttnn.prepare_conv_bias(
-                bias_tensor=self.conv_bias_tensor,
-                input_memory_config=tt_out.memory_config(),
-                input_layout=tt_out.get_layout(),
-                **conv_kwargs,
-                input_dtype=ttnn.bfloat8_b,
-            )
 
-            self.conv_weight_tensor = ttnn.to_device(self.conv_weight_tensor, self.device)
-            self.conv_bias_tensor = ttnn.to_device(self.conv_bias_tensor, self.device)
-
-        tt_out = ttnn.conv2d(
+        tt_out, [self.conv_weight_tensor, self.conv_bias_tensor] = ttnn.conv2d(
             input_tensor=tt_out,
             weight_tensor=self.conv_weight_tensor,
             bias_tensor=self.conv_bias_tensor,
             **conv_kwargs,
             compute_config=compute_config,
             dtype=ttnn.bfloat8_b,
+            return_weights_and_bias=True,
         )
+        tt_out = reshard_for_output_channels_divisibility(tt_out, self.conv_out_channels)
         return tt_out

@@ -149,6 +149,30 @@ class ttnn_repconv:
     def __call__(self, x):
         x1 = self.rbr_dense(self.device, x)
         x2 = self.rbr_1x1(self.device, x)
+
+        # Handle memory config mismatch by resharding tensor with smaller core count
+        x1_mem_config = x1.memory_config()
+        x2_mem_config = x2.memory_config()
+
+        # Check if memory configs don't match
+        if x1_mem_config != x2_mem_config:
+            # Only check shard specs if they exist
+            if (
+                hasattr(x1_mem_config, "shard_spec")
+                and x1_mem_config.shard_spec is not None
+                and hasattr(x2_mem_config, "shard_spec")
+                and x2_mem_config.shard_spec is not None
+            ):
+                # Get core counts for comparison
+                x1_cores = x1_mem_config.shard_spec.num_cores()
+                x2_cores = x2_mem_config.shard_spec.num_cores()
+
+                # Reshard the tensor with smaller core count to match the larger one
+                if x1_cores < x2_cores:
+                    x1 = ttnn.to_memory_config(x1, x2_mem_config)
+                elif x2_cores < x1_cores:
+                    x2 = ttnn.to_memory_config(x2, x1_mem_config)
+
         out = ttnn.add(x1, x2)
         out = ttnn.silu(out)
         ttnn.deallocate(x)

@@ -15,9 +15,6 @@ Conv2dSliceConfig = ttnn._ttnn.operations.conv.Conv2dSliceConfig
 Conv2dSliceHeight = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.SliceHeight
 Conv2dSliceWidth = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.SliceWidth
 
-OptimizedConvParallelizationConfig = ttnn._ttnn.operations.conv.OptimizedConvParallelizationConfig
-OptimizedConvBlockConfig = ttnn._ttnn.operations.conv.OptimizedConvBlockConfig
-
 
 def get_conv_output_dim(input, window, stride=1, pad=0, dilation=1):
     """
