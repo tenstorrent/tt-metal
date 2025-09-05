@@ -507,4 +507,16 @@ void validate_input_params(
         padded_input_w);
 }
 
+bool is_global_pool(
+    uint32_t input_h,
+    uint32_t input_w,
+    const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
+    const std::array<uint32_t, 4>& padding,
+    bool count_include_pad) {
+    // Global pooling: kernel size equals input size, stride equals input size, no padding, avg pool type
+    return kernel_size[0] == input_h && kernel_size[1] == input_w &&
+           ((padding[0] == 0 && padding[1] == 0 && padding[2] == 0 && padding[3] == 0) || count_include_pad == false);
+}
+
 }  // namespace ttnn::operations::pool

@@ -63,7 +63,6 @@
 #include "ttnn/operations/normalization/normalization_pybind.hpp"
 #include "ttnn/operations/point_to_point/point_to_point_pybind.hpp"
 #include "ttnn/operations/pool/generic/generic_pools_pybind.hpp"
-#include "ttnn/operations/pool/global_avg_pool/global_avg_pool_pybind.hpp"
 #include "ttnn/operations/pool/upsample/upsample_pybind.hpp"
 #include "ttnn/operations/pool/grid_sample/grid_sample_pybind.hpp"
 #include "ttnn/operations/prefetcher/prefetcher_pybind.hpp"
@@ -154,7 +153,6 @@ void py_module(py::module& module) {
 
     auto m_pool = module.def_submodule("pool", "pooling  operations");
     pool::py_module(m_pool);
-    avgpool::py_module(m_pool);
     upsample::py_module(m_pool);
     grid_sample::py_bind_grid_sample(m_pool);
 

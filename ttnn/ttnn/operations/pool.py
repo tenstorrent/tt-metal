@@ -60,16 +60,6 @@ def golden_maxpool2d(
 ttnn.attach_golden_function(ttnn.max_pool2d, golden_maxpool2d)
 
 
-def golden_global_avg_pool2d(input_tensor: ttnn.Tensor):
-    import torch
-
-    output_size = (1, 1)
-    return torch.nn.functional.global_avg_pool2d(input_tensor, output_size)
-
-
-ttnn.attach_golden_function(ttnn.global_avg_pool2d, golden_global_avg_pool2d)
-
-
 def prepare_grid_sample_grid(*args, **kwargs):
     """
     Precomputes grid sample data for optimized kernel execution.
