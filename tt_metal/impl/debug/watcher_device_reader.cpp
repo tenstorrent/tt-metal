@@ -880,6 +880,7 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
 
 void WatcherDeviceReader::Core::DumpLaunchMessage() const {
     const subordinate_sync_msg_t* subordinate_sync = &mbox_data_->subordinate_sync;
+    const auto& hal = MetalContext::instance().hal();
     fprintf(reader_.f, "rmsg:");
     if (launch_msg_->kernel_config.mode == DISPATCH_MODE_DEV) {
         fprintf(reader_.f, "D");
@@ -916,9 +917,9 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
     }
 
     fprintf(reader_.f, "|");
-    if (launch_msg_->kernel_config.enables &
-        ~(DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0 | DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1 | DISPATCH_CLASS_MASK_ETH_DM0 |
-          DISPATCH_CLASS_MASK_ETH_DM1 | DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE)) {
+    auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
+    uint32_t all_enable_mask = (1u << num_processors) - 1;
+    if (launch_msg_->kernel_config.enables & ~all_enable_mask) {
         LogRunningKernels();
         TT_THROW(
             "Watcher data corruption, unexpected kernel enable on core {}: {} (expected only low bits set)",
@@ -927,37 +928,22 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
     }
 
     // TODO(#17275): Generalize and pull risc data out of HAL
+    std::string_view symbols;
     if (programmable_core_type_ == HalProgrammableCoreType::TENSIX) {
-        if (launch_msg_->kernel_config.enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
-            fprintf(reader_.f, "B");
-        } else {
-            fprintf(reader_.f, "b");
-        }
-
-        if (launch_msg_->kernel_config.enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
-            fprintf(reader_.f, "N");
-        } else {
-            fprintf(reader_.f, "n");
-        }
-
-        if (launch_msg_->kernel_config.enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE) {
-            fprintf(reader_.f, "T");
-        } else {
-            fprintf(reader_.f, "t");
-        }
+        symbols = "BNT";
     } else {
-        if (launch_msg_->kernel_config.enables & DISPATCH_CLASS_MASK_ETH_DM0) {
-            fprintf(reader_.f, "E");
-        } else {
-            fprintf(reader_.f, "e");
-        }
         if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
-            if (launch_msg_->kernel_config.enables & DISPATCH_CLASS_MASK_ETH_DM1) {
-                fprintf(reader_.f, "E");
-            } else {
-                fprintf(reader_.f, "e");
-            }
+            symbols = "EE";
+        } else {
+            symbols = "E";
         }
+    }
+    for (size_t i = 0; i < symbols.size(); i++) {
+        char c = symbols[i];
+        if ((launch_msg_->kernel_config.enables & (1 << i)) == 0) {
+            c = tolower(c);
+        }
+        fputc(c, reader_.f);
     }
 
     fprintf(reader_.f, " h_id:%3d ", launch_msg_->kernel_config.host_assigned_id);

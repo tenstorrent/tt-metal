@@ -471,9 +471,8 @@ KernelGroup::KernelGroup(
                 auto processor_index = hal.get_processor_index(
                     hal.get_programmable_core_type(programmable_core_type_index), processor_class, processor_type);
                 this->launch_msg.kernel_config.watcher_kernel_ids[processor_index] = kernel->get_watcher_kernel_id();
+                this->launch_msg.kernel_config.enables |= 1u << processor_index;
             }
-
-            this->launch_msg.kernel_config.enables |= 1 << class_id;
 
             if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
                 // The code below sets the brisc_noc_id for use by the device firmware
