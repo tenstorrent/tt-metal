@@ -132,7 +132,7 @@ bool runTestsuite(std::shared_ptr<distributed::MeshDevice> mesh_device, const tt
     return runTests(mesh_device, coord, path, path.find_last_of('/') + 1);
 }
 
-using tt::tt_metal::CommandQueueSingleCardProgramFixture;
+using tt::tt_metal::UnitMeshCQSingleCardProgramFixture;
 
 TEST_F(UnitMeshCQFixture, TensixSFPI) {
     CoreCoord core{0, 0};
