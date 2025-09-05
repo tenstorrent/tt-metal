@@ -33,40 +33,140 @@ permissions:
     checks: write
 
 jobs:
-  regression-testing:
-    name: Regression testing (${{ inputs.version }})
-    uses: ./.github/workflows/release-build-and-regression-test.yaml
-    secrets: inherit
-    with:
-      version: ${{ inputs.version }}
+  build-artifact:
+      uses: ./.github/workflows/build-artifact.yaml
+      permissions:
+        packages: write
+      secrets: inherit
+      with:
+        version: ${{ inputs.version || 22.04 }}
+        build-wheel: true
+        fetch-depth: 0
+        skip-tt-train: false
+  build-artifact-profiler:
+      uses: ./.github/workflows/build-artifact.yaml
+      permissions:
+        packages: write
+      secrets: inherit
+      with:
+        version: ${{ inputs.version || 22.04 }}
+        tracy: true
+        build-wheel: true
+        fetch-depth: 0
+        skip-tt-train: false
+
+    # single-card-demos:
+    #   needs: build-artifact
+    #   uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+    #   secrets: inherit
+    #   with:
+    #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+    #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+    #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+    #     arch: wormhole_b0
+    # t3000-demos:
+    #   needs: build-artifact
+    #   uses: ./.github/workflows/t3000-demo-tests-impl.yaml
+    #   secrets: inherit
+    #   with:
+    #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+    #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+    #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+    # t3000-model-perf:
+    #   needs: [build-artifact, build-artifact-profiler]
+    #   uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
+    #   secrets: inherit
+    #   with:
+    #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+    #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+    #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+    #     wheel-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+    #     build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+    # galaxy-4u-demos:
+    #   needs: build-artifact
+    #   uses: ./.github/workflows/tg-demo-tests-impl.yaml
+    #   secrets: inherit
+    #   with:
+    #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+    #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+    #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+    # galaxy-6u-demos:
+    #   needs: build-artifact
+    #   uses: ./.github/workflows/tg-demo-tests-impl.yaml
+    #   secrets: inherit
+    #   with:
+    #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+    #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+    #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+    #     topology: topology-6u
+    # blackhole-single-card-demos:
+    #   needs: build-artifact
+    #   secrets: inherit
+    #   uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
+    #   strategy:
+    #     fail-fast: false
+    #     matrix:
+    #       test-group: [ "P100", "P150" ]
+    #   with:
+    #     runner-label: ${{ matrix.test-group }}
+    #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+    #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+    #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+    # blackhole-multi-card-demos:
+    #   needs: build-artifact
+    #   secrets: inherit
+    #   uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
+    #   strategy:
+    #     fail-fast: false
+    #     matrix:
+    #       test-group:
+    #         - name: LLMBox Demo tests
+    #           runner-label: BH-LLMBox
+    #           extra-tag: pipeline-perf
+    #           num_devices: 4
+    #         - name: DeskBox Demo tests
+    #           runner-label: BH-DeskBox
+    #           extra-tag: pipeline-functional
+    #           num_devices: 2
+    #         # - name: RackBox Demo tests
+    #         #   runner-label: BH-RackBox
+    #         #   extra-tag: pipeline-functional
+    #         #   num_devices: 8
+    #   with:
+    #     runner-label: ${{ matrix.test-group.runner-label }}
+    #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+    #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+    #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+    #     extra-tag: ${{ matrix.test-group.extra-tag }}
+    #     num_devices: ${{ matrix.test-group.num_devices }}
 
 
   create-docker-release-image:
-    needs: regression-testing
+    needs: build-artifact
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
     if: github.ref == 'refs/heads/stable'
     with:
       version: ${{ inputs.tag-version }}
       tag-latest:  ${{ inputs.is-release-candidate != 'true' }}
-      wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       dry_run: ${{ inputs.dry-run }}
 
   release-docs:
-    needs: regression-testing
+    needs: build-artifact
     if: ${{ inputs.is-release-candidate !='true' }}
     uses: ./.github/workflows/docs-latest-public.yaml
     with:
       version: ${{ inputs.tag-version }}
-      docker-image: ${{ needs.regression-testing.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.regression-testing.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       dry_run: ${{ inputs.dry-run }}
     secrets: inherit
 
   publish-wheels:
     name: "Publish wheels to internal PyPI"
-    needs: regression-testing
+    needs: build-artifact
     runs-on: ubuntu-latest
     permissions:
       id-token: write  # Required for AWS OIDC
@@ -89,7 +189,7 @@ jobs:
       - name: Download wheel artifacts
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           path: ./wheels
 
       - name: Publish wheels to internal PyPI
@@ -104,7 +204,7 @@ jobs:
   publish-to-pypi:
     name: >-
       Publish Python 🐍 distribution 📦 to PyPI
-    needs: regression-testing
+    needs: build-artifact
 
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/stable'
@@ -117,7 +217,7 @@ jobs:
     - name: Download all the dists
       uses: actions/download-artifact@v4
       with:
-        name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
+        name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
         path: dist/
     - name: Publish distribution 📦 to PyPI (skipped for dry run)
       if: ${{ !inputs.dry-run }}
