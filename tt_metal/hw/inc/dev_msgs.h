@@ -11,6 +11,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
@@ -137,7 +138,8 @@ enum dispatch_enable_flags : uint8_t {
 };
 
 struct kernel_config_msg_t {
-    volatile uint16_t watcher_kernel_ids[DISPATCH_CLASS_MAX];
+    volatile uint16_t watcher_kernel_ids[NUM_PROCESSORS_PER_CORE_TYPE];
+    volatile uint8_t pad0[4];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
     // Ring buffer of kernel configuration data
@@ -146,8 +148,9 @@ struct kernel_config_msg_t {
     volatile uint16_t local_cb_offset;
     volatile uint16_t remote_cb_offset;
     rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
+    volatile uint8_t pad1[8];
     volatile uint8_t mode;  // dispatch mode host/dev
-    volatile uint8_t pad1[1];
+    volatile uint8_t pad2[1];
     volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
     volatile uint32_t local_cb_mask;
 
@@ -271,15 +274,18 @@ enum riscv_id_t {
     DebugTrisc1 = 3,
     DebugTrisc2 = 4,
     DebugErisc = 5,
-    DebugIErisc = 6,
-    DebugSubordinateIErisc = 7,
-    DebugNumUniqueRiscs
+    DebugSubordinateErisc = 6,
+    DebugIErisc = 7,
+    DebugSubordinateIErisc = 8,
+    DebugNumUniqueRiscs = 9,
+    DebugDebugMaxRiscvId = 15,  // For alignment requirements
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
 
 struct debug_pause_msg_t {
-    volatile uint8_t flags[DebugNumUniqueRiscs];
+    volatile uint8_t flags[NUM_PROCESSORS_PER_CORE_TYPE];
+    uint8_t pad[3];
 };
 
 constexpr static int DEBUG_RING_BUFFER_ELEMENTS = 32;
@@ -295,11 +301,12 @@ struct debug_stack_usage_t {
         // min free stack, offset by +1 (0 == unset)
         volatile uint16_t min_free;
         volatile uint16_t watcher_kernel_id;
-    } cpu[DebugNumUniqueRiscs];
+    } cpu[NUM_PROCESSORS_PER_CORE_TYPE];
+    uint8_t pad[12];
 };
 
 struct debug_eth_link_t {
-    uint8_t link_down;
+    volatile uint8_t link_down;
 };
 
 enum watcher_enable_msg_t {

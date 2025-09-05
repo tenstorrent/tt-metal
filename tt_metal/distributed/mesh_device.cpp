@@ -98,12 +98,15 @@ decltype(auto) validate_and_get_reference_value(
         TT_THROW("{} [{}:{}] failed: MeshDevice has no devices", loc.function_name(), loc.file_name(), loc.line());
     }
 
+    // Forward the callable once to preserve its value category.
+    auto&& callable = std::forward<F>(func);
+
     // Get reference to first device's value
-    decltype(auto) reference_value = std::forward<F>(func)(devices.front());
+    decltype(auto) reference_value = callable(devices.front());
 
     // Validate all other devices match
     for (auto it = devices.begin() + 1; it != devices.end(); ++it) {
-        const auto& current_value = std::forward<F>(func)(*it);
+        decltype(auto) current_value = callable(*it);
         if (current_value != reference_value) {
             TT_THROW(
                 "{} [{}:{}] failed: Device at index {} returned value that differs from reference. "
@@ -182,6 +185,11 @@ uint8_t MeshDevice::num_hw_cqs() const {
 }
 
 bool MeshDevice::is_initialized() const {
+    // TODO: Revisit whether we can simplify this when `MeshDevice` initialization isn't so coupled
+    // with individual device initialization.
+    if (!is_internal_state_initialized) {
+        return false;
+    }
     if (!scoped_devices_) {
         return false;
     }
@@ -324,7 +332,6 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
         device_ids.size());
     std::map<int, std::shared_ptr<MeshDevice>> result;
     for (size_t i = 0; i < device_ids.size(); i++) {
-        submeshes[i]->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
         result[device_ids[i]] = submeshes[i];
     }
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
@@ -499,9 +506,7 @@ CoreCoord MeshDevice::compute_with_storage_grid_size() const {
         this->get_devices(), [](const auto* device) { return device->compute_with_storage_grid_size(); });
 }
 
-tt::ARCH MeshDevice::arch() const {
-    return validate_and_get_reference_value(this->get_devices(), [](const auto* device) { return device->arch(); });
-}
+tt::ARCH MeshDevice::arch() const { return tt::tt_metal::MetalContext::instance().get_cluster().arch(); }
 
 size_t MeshDevice::num_rows() const { return view_->num_rows(); }
 
@@ -590,6 +595,7 @@ bool MeshDevice::close() {
     sub_device_manager_tracker_.reset();
     scoped_devices_.reset();
     parent_mesh_.reset();
+    is_internal_state_initialized = false;
     return true;
 }
 
@@ -667,16 +673,6 @@ CoreCoord MeshDevice::dram_grid_size() const {
         this->get_devices(), [](const auto* device) { return device->dram_grid_size(); });
 }
 
-bool MeshDevice::using_slow_dispatch() const {
-    return validate_and_get_reference_value(
-        this->get_devices(), [](const auto* device) { return device->using_slow_dispatch(); });
-}
-
-bool MeshDevice::using_fast_dispatch() const {
-    return validate_and_get_reference_value(
-        this->get_devices(), [](const auto* device) { return device->using_fast_dispatch(); });
-}
-
 // Device property methods that can be delegated to reference device
 CoreCoord MeshDevice::grid_size() const {
     return validate_and_get_reference_value(
@@ -687,9 +683,8 @@ CoreCoord MeshDevice::logical_grid_size() const {
         this->get_devices(), [](const auto* device) { return device->logical_grid_size(); });
 }
 CoreCoord MeshDevice::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
-    return validate_and_get_reference_value(this->get_devices(), [noc_index, coord](const auto* device) {
-        return device->virtual_noc0_coordinate(noc_index, coord);
-    });
+    TT_FATAL(num_devices() == 1, "virtual_noc0_coordinate() is only supported on unit MeshDevice.");
+    return get_devices().front()->virtual_noc0_coordinate(noc_index, coord);
 }
 std::vector<CoreCoord> MeshDevice::worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const {
     return validate_and_get_reference_value(this->get_devices(), [logical_cores](const auto* device) {
@@ -697,9 +692,10 @@ std::vector<CoreCoord> MeshDevice::worker_cores_from_logical_cores(const std::ve
     });
 }
 std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
-    return validate_and_get_reference_value(this->get_devices(), [noc](auto* device) {
-        return device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
-    });
+    TT_FATAL(
+        num_devices() == 1,
+        "get_optimal_dram_bank_to_logical_worker_assignment() is only supported on unit MeshDevice.");
+    return get_devices().front()->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 }
 CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {
     return validate_and_get_reference_value(this->get_devices(), [logical_coord, core_type](const auto* device) {
@@ -899,6 +895,8 @@ bool MeshDevice::initialize(
     size_t /*worker_l1_size*/,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     bool /*minimal*/) {
+    TT_FATAL(!this->is_initialized(), "MeshDevice is already initialized!");
+
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
     auto sub_devices = {
@@ -915,7 +913,7 @@ bool MeshDevice::initialize(
     // as the number of virtual ethernet cores seen by the MeshDevice
     num_virtual_eth_cores_ = DevicePool::instance().get_max_num_eth_cores_across_all_devices();
     mesh_command_queues_.reserve(this->num_hw_cqs());
-    if (this->using_fast_dispatch()) {
+    if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
             mesh_command_queues_.push_back(std::make_unique<FDMeshCommandQueue>(
                 this,
@@ -932,6 +930,7 @@ bool MeshDevice::initialize(
         }
     }
     Inspector::mesh_device_initialized(this);
+    is_internal_state_initialized = true;
     return true;
 }
 

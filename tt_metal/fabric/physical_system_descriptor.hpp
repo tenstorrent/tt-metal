@@ -17,7 +17,7 @@ namespace tt::tt_metal {
 
 using AsicID = tt::stl::StrongType<uint64_t, struct AsicIDTag>;
 using TrayID = tt::stl::StrongType<uint32_t, struct TrayIDTag>;
-using NID = tt::stl::StrongType<uint32_t, struct NIDTag>;
+using ASICLocation = tt::stl::StrongType<uint32_t, struct ASICLocationTag>;
 using RackID = tt::stl::StrongType<uint32_t, struct RackIDTag>;
 using UID = tt::stl::StrongType<uint32_t, struct UIDTag>;
 using HallID = tt::stl::StrongType<uint32_t, struct HallIDTag>;
@@ -26,7 +26,7 @@ using AisleID = tt::stl::StrongType<uint32_t, struct AisleIDTag>;
 // Specify Physical ASIC Attributes
 struct ASICDescriptor {
     TrayID tray_id;
-    NID n_id;
+    ASICLocation asic_location;
     BoardType board_type = BoardType::UNKNOWN;
     AsicID unique_id;
     std::string host_name;
@@ -91,14 +91,12 @@ class PhysicalSystemDescriptor {
 public:
     PhysicalSystemDescriptor(bool run_discovery = true);
     void run_discovery(bool run_global_discovery = true);
-    void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt);
-
     // ASIC Topology Query APIs
     std::vector<AsicID> get_asic_neighbors(AsicID asic_id) const;
     std::vector<EthConnection> get_eth_connections(AsicID src_asic_id, AsicID dst_asic_id) const;
     const AsicTopology& get_asic_topology(const std::string& hostname) const;
     TrayID get_tray_id(AsicID asic_id) const;
-    NID get_n_id(AsicID asic_id) const;
+    ASICLocation get_asic_location(AsicID asic_id) const;
     std::vector<AsicID> get_asics_connected_to_host(std::string hostname) const;
 
     // Host Topology Query APIs
@@ -115,6 +113,7 @@ public:
     std::string my_host_name() const;
     uint32_t get_rank_for_hostname(const std::string& host_name) const;
 
+    // Generic Getters
     const PhysicalConnectivityGraph& get_system_graph() const { return system_graph_; }
     const std::unordered_map<AsicID, ASICDescriptor>& get_asic_descriptors() const { return asic_descriptors_; }
     const std::unordered_map<std::string, std::string>& get_host_mobo_name_map() const { return host_to_mobo_name_; }
@@ -127,15 +126,20 @@ public:
     std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() { return host_to_rank_; }
     ExitNodeConnectionTable& get_exit_node_connection_table() { return exit_node_connection_table_; }
 
+    // Utility APIs to Print Physical System Descriptor
+    void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt);
+    void emit_to_text_proto(const std::optional<std::string>& path_to_text_proto = std::nullopt);
+
 private:
     void run_local_discovery();
     void run_global_discovery();
+    void clear();
     void merge(PhysicalSystemDescriptor&& other);
     void exchange_metadata(bool issue_gather);
     void generate_cross_host_connections();
     void remove_unresolved_nodes();
     void resolve_hostname_uniqueness();
-
+    void validate_graphs();
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;
     std::unordered_map<std::string, std::string> host_to_mobo_name_;

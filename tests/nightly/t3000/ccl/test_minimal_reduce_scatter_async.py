@@ -33,8 +33,7 @@ def run_reduce_scatter_impl(
     ones_tensor=False,
     mem_config_intermediate=None,
     cluster_axis=None,
-    use_barrier=False,
-    use_persistent_buffers=True,
+    do_sync=False,
     chunks_per_sync=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
@@ -154,12 +153,12 @@ def run_reduce_scatter_impl(
     def run_op(i):
         tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
             tt_input_tensor_mesh_list[i],
-            persistent_output_buffers=[persistent_intermediate_buffers[i], persistent_output_buffers[i]]
-            if use_persistent_buffers
-            else None,
+            persistent_output_buffers=None
+            if do_sync
+            else [persistent_intermediate_buffers[i], persistent_output_buffers[i]],
             dim=dim,
             multi_device_global_semaphore=ccl_semaphore_handles[i],
-            barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
+            barrier_semaphore=barrier_semaphore_handles[i] if do_sync else None,
             num_links=num_links,
             memory_config=mem_config_rs,
             intermediate_memory_config=mem_config_intermediate,
@@ -246,6 +245,7 @@ def run_reduce_scatter_impl(
         (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
         # Composite-RS tests
         (8, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        (8, [1, 1, 256, 128], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
         (8, [1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, True),
         (8, [1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True),
     ],
@@ -261,6 +261,7 @@ def run_reduce_scatter_impl(
         "composite_rs_test_one",
         "composite_rs_test_two",
         "composite_rs_test_three",
+        "composite_rs_test_four",
     ],
 )
 @pytest.mark.parametrize(
@@ -289,13 +290,9 @@ def run_reduce_scatter_impl(
     ids=["ones", "random"],
 )
 @pytest.mark.parametrize(
-    "use_barrier, use_persistent_buffers",
-    [
-        (True, True),
-        (True, False),
-        (False, True),
-    ],
-    ids=["barrier_with_persistent_buffers", "barrier_without_persistent_buffers", "no_barrier_with_persistent_buffers"],
+    "do_sync",
+    [True, False],
+    ids=["sync", "no_sync"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -320,8 +317,7 @@ def test_reduce_scatter_async(
     enable_trace,
     num_iters,
     ones_tensor,
-    use_barrier,
-    use_persistent_buffers,
+    do_sync,
     rs_topology,
 ):
     if is_training_shape and enable_trace:
@@ -341,8 +337,7 @@ def test_reduce_scatter_async(
         enable_trace=enable_trace,
         num_iters=num_iters,
         ones_tensor=ones_tensor,
-        use_barrier=use_barrier,
-        use_persistent_buffers=use_persistent_buffers,
+        do_sync=do_sync,
     )
 
 
@@ -449,8 +444,7 @@ def test_reduce_scatter_async_training_shapes(
         enable_trace=enable_trace,
         num_iters=num_iters,
         ones_tensor=ones_tensor,
-        use_barrier=True,
-        use_persistent_buffers=False,
+        do_sync=True,
     )
 
 
