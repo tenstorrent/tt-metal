@@ -103,7 +103,7 @@ public:
         const auto& routing_type = fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = fabric_setup.fabric_tensix_config.value();
 
-        FabricConfig new_fabric_config;
+        FabricConfig new_fabric_config = FabricConfig::DISABLED;
         if (topology == Topology::Torus) {
             const auto& torus_config = fabric_setup.torus_config.value();
             auto it = torus_topology_to_fabric_config_map.find({topology, torus_config, routing_type});
