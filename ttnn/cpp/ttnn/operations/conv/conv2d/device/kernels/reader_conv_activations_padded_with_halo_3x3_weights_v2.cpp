@@ -33,17 +33,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 
-#ifdef CONFIG_TENSOR_IN_DRAM
-    constexpr uint32_t config_dram_addr = get_compile_time_arg_val(27);
-    constexpr uint32_t config_page_size = get_compile_time_arg_val(28);
-    const auto config_tensor_args = TensorAccessorArgs<29>();
-    const auto config_accessor = TensorAccessor(config_tensor_args, config_dram_addr, config_page_size);
     uint32_t core_index = get_arg_val<uint32_t>(i++);
-    uint64_t src_noc_addr = get_noc_addr(core_index, config_accessor);
-
-    noc_async_read(src_noc_addr, get_write_ptr(cb_reader_indices), config_page_size);
-    noc_async_read_barrier();
-#endif
+    load_config_tensor_if_in_dram<27, 28, 29, cb_reader_indices>(core_index);
 
     if constexpr (needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act>();

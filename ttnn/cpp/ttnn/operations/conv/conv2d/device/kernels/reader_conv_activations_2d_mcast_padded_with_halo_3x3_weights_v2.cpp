@@ -113,18 +113,7 @@ void kernel_main() {
 
     tt_l1_ptr uint32_t* act_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
-#ifdef CONFIG_TENSOR_IN_DRAM
-    // TODO: Instead of all cores reading from dram, only the first column reads, and does an MCAST to all the other
-    // cores in the row.
-    constexpr uint32_t config_dram_addr = get_compile_time_arg_val(27);
-    constexpr uint32_t config_page_size = get_compile_time_arg_val(28);
-    const auto config_tensor_args = TensorAccessorArgs<29>();
-    const auto config_accessor = TensorAccessor(config_tensor_args, config_dram_addr, config_page_size);
-    uint64_t src_noc_addr = get_noc_addr(dram_config_reader_index, config_accessor);
-
-    noc_async_read(src_noc_addr, get_write_ptr(cb_reader_indices), config_page_size);
-    noc_async_read_barrier();
-#endif
+    load_config_tensor_if_in_dram<27, 28, 29, cb_reader_indices>(dram_config_reader_index);
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
