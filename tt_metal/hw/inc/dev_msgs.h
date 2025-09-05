@@ -79,23 +79,27 @@ using profiler_msg_t = profiler_msg_template_t<MAX_RISCV_PER_CORE>;
 #endif
 
 // Messages for host to tell brisc to go
-constexpr uint32_t RUN_MSG_INIT = 0x40;
-constexpr uint32_t RUN_MSG_GO = 0x80;
-constexpr uint32_t RUN_MSG_RESET_READ_PTR = 0xc0;
-constexpr uint32_t RUN_MSG_RESET_READ_PTR_FROM_HOST = 0xe0;
-constexpr uint32_t RUN_MSG_DONE = 0;
+enum run_msg_t : uint32_t {
+    RUN_MSG_INIT = 0x40,
+    RUN_MSG_GO = 0x80,
+    RUN_MSG_RESET_READ_PTR = 0xc0,
+    RUN_MSG_RESET_READ_PTR_FROM_HOST = 0xe0,
+    RUN_MSG_DONE = 0,
+};
 
-// 0x80808000 is a micro-optimization, calculated with 1 riscv insn
-constexpr uint32_t RUN_SYNC_MSG_INIT = 0x40;
-constexpr uint32_t RUN_SYNC_MSG_GO = 0x80;
-// Trigger loading CBs (and IRAM) before actually running the kernel.
-constexpr uint32_t RUN_SYNC_MSG_LOAD = 0x1;
-constexpr uint32_t RUN_SYNC_MSG_WAITING_FOR_RESET = 0x2;
-constexpr uint32_t RUN_SYNC_MSG_INIT_SYNC_REGISTERS = 0x3;
-constexpr uint32_t RUN_SYNC_MSG_DONE = 0;
-constexpr uint32_t RUN_SYNC_MSG_ALL_GO = 0x80808080;
-constexpr uint32_t RUN_SYNC_MSG_ALL_INIT = 0x40404040;
-constexpr uint32_t RUN_SYNC_MSG_ALL_SUBORDINATES_DONE = 0;
+enum run_sync_msg_t : uint32_t {
+    // 0x80808000 is a micro-optimization, calculated with 1 riscv insn
+    RUN_SYNC_MSG_INIT = 0x40,
+    RUN_SYNC_MSG_GO = 0x80,
+    // Trigger loading CBs (and IRAM) before actually running the kernel.
+    RUN_SYNC_MSG_LOAD = 0x1,
+    RUN_SYNC_MSG_WAITING_FOR_RESET = 0x2,
+    RUN_SYNC_MSG_INIT_SYNC_REGISTERS = 0x3,
+    RUN_SYNC_MSG_DONE = 0,
+    RUN_SYNC_MSG_ALL_GO = 0x80808080,
+    RUN_SYNC_MSG_ALL_INIT = 0x40404040,
+    RUN_SYNC_MSG_ALL_SUBORDINATES_DONE = 0,
+};
 
 struct ncrisc_halt_msg_t {
     volatile uint32_t resume_addr;
