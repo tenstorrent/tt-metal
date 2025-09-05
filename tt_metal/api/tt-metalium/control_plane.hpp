@@ -189,6 +189,7 @@ public:
     // Get the mesh graph from the routing table
     const MeshGraph& get_mesh_graph() const;
     tt_metal::distributed::multihost::Rank get_distributed_rank(MeshId mesh_id, MeshHostRankId host_rank) const;
+    std::vector<tt_metal::distributed::multihost::Rank> get_distributed_ranks_in_mesh(MeshId mesh_id) const;
 
 private:
     // Check if the provided mesh is local to this host

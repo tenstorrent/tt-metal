@@ -402,10 +402,13 @@ void forward_descriptor_to_peer(
     const auto& config = desc.config;
     bool is_sender = socket_endpoint_type == SocketEndpoint::SENDER;
     auto peer_mesh_id = is_sender ? config.receiver_mesh_id : config.sender_mesh_id;
+    auto local_mesh_id = is_sender ? config.sender_mesh_id : config.receiver_mesh_id;
     // Serialize the local endpoint descriptor
     std::vector<uint8_t> serialized_local_desc = serialize_to_bytes(desc);
     // Send size of serialized descriptor first, so that the peer knows the amount of data to expect
     int descriptor_size_bytes = serialized_local_desc.size();
+    const auto& control_plane = MetalContext::instance().get_control_plane();
+#ifdef DEBUG
     const auto& control_plane = MetalContext::instance().get_control_plane();
     for (const auto& host_rank : control_plane.get_mesh_graph().get_host_ranks(peer_mesh_id)) {
         const auto peer_rank = control_plane.get_distributed_rank(peer_mesh_id, host_rank.value());
@@ -425,6 +428,43 @@ void forward_descriptor_to_peer(
             desc.exchange_tag  // Forward this descriptor over the specified tag
         );
     }
+#else
+    auto peer_ranks = control_plane.get_distributed_ranks_in_mesh(peer_mesh_id);  // all ranks in other mesh
+    Rank root_rank = control_plane.get_distributed_rank(
+        local_mesh_id,
+        control_plane.get_mesh_graph().get_host_ranks(local_mesh_id).begin()->value());  // designated rank to handshake
+                                                                                         // data
+    peer_ranks.push_back(root_rank);
+    if (root_rank != context->rank()) {
+        return;
+    }
+    // Convert Rank vector to int vector for create_sub_context
+    std::vector<int> peer_rank_ints;
+    for (const auto& rank : peer_ranks) {
+        peer_rank_ints.push_back(*rank);
+    }
+    auto sub_context = context->create_sub_context(tt::stl::Span<int>(peer_rank_ints.data(), peer_rank_ints.size()));
+    std::vector<int> world_ranks_in_group(peer_ranks.size());
+    auto world_rank = context->rank();
+    std::vector<std::byte> recv_buffer(sizeof(uint32_t) * peer_ranks.size());
+    sub_context->all_gather(
+        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&world_rank), sizeof(world_rank)),
+        tt::stl::Span<std::byte>(recv_buffer));
+    int sub_context_root_rank = 0;
+    for (; sub_context_root_rank < world_ranks_in_group.size(); ++sub_context_root_rank) {
+        if (world_ranks_in_group[sub_context_root_rank] == *root_rank) {
+            break;
+        }
+    }
+    // MPI guarantees that that the first message will be received before the second
+    sub_context->broadcast(
+        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&descriptor_size_bytes), sizeof(descriptor_size_bytes)),
+        Rank{sub_context_root_rank});
+    // Send the serialized descriptor
+    sub_context->broadcast(
+        tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_local_desc.data(), serialized_local_desc.size())),
+        Rank{sub_context_root_rank});
+#endif
 }
 
 SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
@@ -435,9 +475,11 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     bool is_sender = socket_endpoint_type == SocketEndpoint::SENDER;
     const auto& control_plane = MetalContext::instance().get_control_plane();
     auto peer_mesh_id = is_sender ? config.receiver_mesh_id : config.sender_mesh_id;
+    auto local_mesh_id = is_sender ? config.sender_mesh_id : config.receiver_mesh_id;
     std::vector<SocketPeerDescriptor> remote_descriptors;
     remote_descriptors.reserve(control_plane.get_mesh_graph().get_host_ranks(peer_mesh_id).size());
     // Query the size of the serialized descriptor first (this is the only element in the header)
+#ifdef DEBUG
     std::vector<Rank> peer_ranks;
     for (const auto& host_rank : control_plane.get_mesh_graph().get_host_ranks(peer_mesh_id)) {
         peer_ranks.push_back(control_plane.get_distributed_rank(peer_mesh_id, host_rank.value()));
@@ -479,9 +521,7 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
         context->recv(
             tt::stl::as_writable_bytes(
                 tt::stl::Span<uint8_t>(serialized_remote_desc.data(), serialized_remote_desc.size())),
-            Rank{peer_rank},
-            desc.exchange_tag  // Read the descriptor over the specified tag
-        );
+            Rank{peer_rank});
         // Deserialize the received descriptor
         remote_descriptors.push_back(deserialize_from_bytes(serialized_remote_desc));
     }
@@ -490,6 +530,56 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
         validate_remote_desc(desc, remote_desc);
     }
     return remote_descriptors[0];
+#else
+    auto local_ranks = control_plane.get_distributed_ranks_in_mesh(local_mesh_id);  // all ranks in other mesh
+    Rank root_rank = control_plane.get_distributed_rank(
+        peer_mesh_id,
+        control_plane.get_mesh_graph().get_host_ranks(peer_mesh_id).begin()->value());  // designated rank to handshake
+                                                                                        // data
+    local_ranks.push_back(root_rank);
+
+    // Convert Rank vector to int vector for create_sub_context
+    std::vector<int> local_rank_ints;
+    for (const auto& rank : local_ranks) {
+        local_rank_ints.push_back(*rank);
+    }
+    auto sub_context = context->create_sub_context(tt::stl::Span<int>(local_rank_ints.data(), local_rank_ints.size()));
+
+    std::vector<int> world_ranks_in_group(local_ranks.size());
+    auto world_rank = context->rank();
+    std::vector<std::byte> recv_buffer(sizeof(uint32_t) * local_ranks.size());
+    sub_context->all_gather(
+        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&world_rank), sizeof(world_rank)),
+        tt::stl::Span<std::byte>(recv_buffer));
+    int sub_context_root_rank = 0;
+    for (; sub_context_root_rank < world_ranks_in_group.size(); ++sub_context_root_rank) {
+        if (world_ranks_in_group[sub_context_root_rank] == *root_rank) {
+            break;
+        }
+    }
+    int expected_descriptor_size_bytes = 0;
+    // MPI guarantees that that the first message will be received before the second
+    sub_context->broadcast(
+        tt::stl::Span<std::byte>(
+            reinterpret_cast<std::byte*>(&expected_descriptor_size_bytes), sizeof(expected_descriptor_size_bytes)),
+        Rank{sub_context_root_rank});
+
+    auto descriptor_size_bytes = context->snoop_incoming_msg_size(root_rank, desc.exchange_tag);
+    TT_FATAL(
+        descriptor_size_bytes == expected_descriptor_size_bytes,
+        "Expected {} bytes in the socket descriptor, but got {} bytes during multi-host handshake.",
+        expected_descriptor_size_bytes,
+        descriptor_size_bytes);
+    // Send the serialized descriptor
+    std::vector<uint8_t> serialized_remote_desc(descriptor_size_bytes);
+    sub_context->broadcast(
+        tt::stl::as_writable_bytes(
+            tt::stl::Span<uint8_t>(serialized_remote_desc.data(), serialized_remote_desc.size())),
+        Rank{sub_context_root_rank});
+    auto remote_desc = deserialize_from_bytes(serialized_remote_desc);
+    validate_remote_desc(desc, remote_desc);
+    return remote_desc;
+#endif
 }
 
 std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(

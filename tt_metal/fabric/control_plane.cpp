@@ -2158,6 +2158,14 @@ tt_metal::distributed::multihost::Rank ControlPlane::get_distributed_rank(
     return mpi_ranks_.at(mesh_id).at(host_rank);
 }
 
+std::vector<tt_metal::distributed::multihost::Rank> ControlPlane::get_distributed_ranks_in_mesh(MeshId mesh_id) const {
+    std::vector<tt_metal::distributed::multihost::Rank> ranks;
+    for (const auto& host_rank : mpi_ranks_.at(mesh_id)) {
+        ranks.push_back(host_rank.second);
+    }
+    return ranks;
+}
+
 uint64_t ControlPlane::get_asic_id(chip_id_t chip_id) const { return chip_id_to_asic_id_.at(chip_id); }
 
 std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
