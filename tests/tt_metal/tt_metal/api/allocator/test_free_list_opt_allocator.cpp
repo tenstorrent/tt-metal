@@ -346,19 +346,18 @@ TEST(FreeListOptTest, FirstFitAllocateAtAddressInteractions) {
     ASSERT_EQ(b.value(), 1_KiB);
 }
 
-TEST(FreeListOptTest, AllocatedAddressesEmpty) {
-    auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB);
-    auto allocs1 = allocator.allocated_addresses();
-    ASSERT_TRUE(allocs1.empty());
-
-    // Call again to exercise the cache-hit path
-    auto allocs2 = allocator.allocated_addresses();
-    ASSERT_TRUE(allocs2.empty());
-}
-
 TEST(FreeListOptTest, AllocatedAddresses) {
     auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB);
 
+    // Check that allocated addresses is empty
+    auto empty_allocated_addresses = allocator.allocated_addresses();
+    ASSERT_TRUE(empty_allocated_addresses.empty());
+
+    // Call again to exercise the cache-hit path
+    auto empty_allocated_addresses2 = allocator.allocated_addresses();
+    ASSERT_TRUE(empty_allocated_addresses2.empty());
+
+    // Allocate some blocks and validate allocated addresses
     auto a = allocator.allocate(1_KiB);
     ASSERT_TRUE(a.has_value());
     ASSERT_EQ(a.value(), 0);
@@ -367,61 +366,30 @@ TEST(FreeListOptTest, AllocatedAddresses) {
     ASSERT_TRUE(b.has_value());
     ASSERT_EQ(b.value(), 1_KiB);
 
+    // Unaligned size should be aligned to the next multiple of 1_KiB
     auto c = allocator.allocate(500);
     ASSERT_TRUE(c.has_value());
     ASSERT_EQ(c.value(), 3_KiB);
 
-    auto allocs = allocator.allocated_addresses();
-    ASSERT_EQ(allocs.size(), 3u);
+    auto allocated_addresses_1 = allocator.allocated_addresses();
+    ASSERT_EQ(allocated_addresses_1.size(), 3);
 
     // Expect sorted by start address with aligned sizes
-    ASSERT_EQ(allocs[0].first, 0);
-    ASSERT_EQ(allocs[0].second, static_cast<size_t>(1_KiB));
-    ASSERT_EQ(allocs[1].first, 1_KiB);
-    ASSERT_EQ(allocs[1].second, static_cast<size_t>(2_KiB));
-    ASSERT_EQ(allocs[2].first, 3_KiB);
-    ASSERT_EQ(allocs[2].second, static_cast<size_t>(1_KiB));
-}
+    ASSERT_EQ(allocated_addresses_1[0], (std::pair<tt::tt_metal::DeviceAddr, size_t>{0, 1_KiB}));
+    ASSERT_EQ(allocated_addresses_1[1], (std::pair<tt::tt_metal::DeviceAddr, size_t>{1_KiB, 2_KiB}));
+    ASSERT_EQ(allocated_addresses_1[2], (std::pair<tt::tt_metal::DeviceAddr, size_t>{3_KiB, 1_KiB}));
 
-TEST(FreeListOptTest, AllocatedAddressesCacheHitsAndInvalidations) {
-    auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB);
+    // Call again to exercise the cache-hit path
+    auto allocated_addresses2 = allocator.allocated_addresses();
+    ASSERT_EQ(allocated_addresses2, allocated_addresses_1);
 
-    // Initial: empty list; second call should hit cache and still be empty
-    auto empty1 = allocator.allocated_addresses();
-    ASSERT_TRUE(empty1.empty());
-    auto empty2 = allocator.allocated_addresses();
-    ASSERT_TRUE(empty2.empty());
-
-    // Allocate one block -> cache must be invalidated and reflect new allocation
-    auto a = allocator.allocate(1_KiB);
-    ASSERT_TRUE(a.has_value());
-    ASSERT_EQ(a.value(), 0);
-    auto after_a_1 = allocator.allocated_addresses();
-    ASSERT_EQ(after_a_1.size(), 1u);
-    ASSERT_EQ(after_a_1[0].first, 0);
-    ASSERT_EQ(after_a_1[0].second, static_cast<size_t>(1_KiB));
-    auto after_a_2 = allocator.allocated_addresses();
-    ASSERT_EQ(after_a_2, after_a_1);  // cache hit yields identical content
-
-    // Allocate another block -> invalidated again and updated
-    auto b = allocator.allocate(2_KiB);
-    ASSERT_TRUE(b.has_value());
-    ASSERT_EQ(b.value(), 1_KiB);
-    auto after_b_1 = allocator.allocated_addresses();
-    ASSERT_EQ(after_b_1.size(), 2u);
-    ASSERT_EQ(after_b_1[0].first, 0);
-    ASSERT_EQ(after_b_1[0].second, static_cast<size_t>(1_KiB));
-    ASSERT_EQ(after_b_1[1].first, 1_KiB);
-    ASSERT_EQ(after_b_1[1].second, static_cast<size_t>(2_KiB));
-    auto after_b_2 = allocator.allocated_addresses();
-    ASSERT_EQ(after_b_2, after_b_1);
-
+    // Check that other APIs properly invalidate the cache
     // Deallocate first block -> invalidated and updated
     allocator.deallocate(a.value());
     auto after_free_1 = allocator.allocated_addresses();
-    ASSERT_EQ(after_free_1.size(), 1u);
-    ASSERT_EQ(after_free_1[0].first, 1_KiB);
-    ASSERT_EQ(after_free_1[0].second, static_cast<size_t>(2_KiB));
+    ASSERT_EQ(after_free_1.size(), 2);
+    ASSERT_EQ(after_free_1[0], (std::pair<tt::tt_metal::DeviceAddr, size_t>{1_KiB, 2_KiB}));
+    ASSERT_EQ(after_free_1[1], (std::pair<tt::tt_metal::DeviceAddr, size_t>{3_KiB, 1_KiB}));
     auto after_free_2 = allocator.allocated_addresses();
     ASSERT_EQ(after_free_2, after_free_1);
 
@@ -434,12 +402,9 @@ TEST(FreeListOptTest, AllocatedAddressesCacheHitsAndInvalidations) {
 
     // Allocate from top to leave space at bottom, then shrink and reset; list remains consistent
     auto top = allocator.allocate(1_KiB, /*bottom_up=*/false);
-    ASSERT_TRUE(top.has_value());
-    ASSERT_EQ(top.value(), 1_GiB - 1_KiB);
     auto after_top_1 = allocator.allocated_addresses();
-    ASSERT_EQ(after_top_1.size(), 1u);
-    ASSERT_EQ(after_top_1[0].first, 1_GiB - 1_KiB);
-    ASSERT_EQ(after_top_1[0].second, static_cast<size_t>(1_KiB));
+    ASSERT_EQ(after_top_1.size(), 1);
+    ASSERT_EQ(after_top_1[0], (std::pair<tt::tt_metal::DeviceAddr, size_t>{1_GiB - 1_KiB, 1_KiB}));
     auto after_top_2 = allocator.allocated_addresses();
     ASSERT_EQ(after_top_2, after_top_1);
 
@@ -457,4 +422,3 @@ TEST(FreeListOptTest, AllocatedAddressesCacheHitsAndInvalidations) {
     auto after_reset_2 = allocator.allocated_addresses();
     ASSERT_EQ(after_reset_2, after_reset_1);
 }
-emp
