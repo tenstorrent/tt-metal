@@ -1,4 +1,4 @@
-  name: Regression Testing
+  name: "[internal] Build and regression test for release"
   on:
     workflow_call:
       inputs:

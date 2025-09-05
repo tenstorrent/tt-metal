@@ -1,0 +1,124 @@
+name: "[internal] Release, build, test, and publish"
+on:
+  workflow_call:
+    inputs:
+        dry-run:
+            description: "Dry-run: If true, do not upload tag or draft release."
+            required: false
+            default: false
+            type: boolean
+        version:
+            description: "Ubuntu version for building and testing"
+            required: false
+            default: 22.04
+            type: number
+        tag-version:
+            description: "Tag version to create, e.g. 'rc' for release candidate, 'dev' for dev development, or '' for normal release"
+            required: true
+            default: ""
+            type: string
+        is-release-candidate:
+            description: "If true, this is a release candidate, and some steps will be skipped"
+            required: false
+            default: false
+            type: boolean
+
+permissions:
+    actions: read
+    contents: write
+    pull-requests: write
+    pages: write
+    id-token: write
+    packages: write
+    checks: write
+
+jobs:
+  regression-testing:
+    name: Regression testing (${{ inputs.version }})
+    uses: ./.github/workflows/release-regression-testing.yaml
+    secrets: inherit
+    with:
+      version: ${{ inputs.version }}
+
+
+  create-docker-release-image:
+    needs: regression-testing
+    uses: ./.github/workflows/publish-release-image.yaml
+    secrets: inherit
+    if: github.ref == 'refs/heads/stable'
+    with:
+      version: ${{ inputs.tag-version }}
+      tag-latest:  ${{ inputs.is-release-candidate != 'true' }}
+      wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
+      dry_run: ${{ inputs.dry-run }}
+
+  release-docs:
+    needs: regression-testing
+    if: ${{ inputs.is-release-candidate !='true' }}
+    uses: ./.github/workflows/docs-latest-public.yaml
+    with:
+      version: ${{ inputs.tag-version }}
+      docker-image: ${{ needs.regression-testing.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.regression-testing.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
+      dry_run: ${{ inputs.dry-run }}
+    secrets: inherit
+
+  publish-wheels:
+    name: "Publish wheels to internal PyPI"
+    needs: regression-testing
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.PYPI_ROLE }}
+          aws-region: ${{ secrets.PYPI_REGION }}
+
+      - name: Install s3pypi
+        run: |
+          pip install s3pypi
+
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
+          path: ./wheels
+
+      - name: Publish wheels to internal PyPI
+        if: ${{ !inputs.dry-run }}
+        run: |
+          found_wheel_files=$(find ./wheels -type f -name "*.whl" -exec realpath {} \;)
+          for wheel in $found_wheel_files; do
+            echo "Publishing wheel: $wheel"
+            s3pypi upload "$wheel" --put-root-index --bucket ${{ secrets.PYPI_BUCKET }}
+          done
+
+  publish-to-pypi:
+    name: >-
+      Publish Python 🐍 distribution 📦 to PyPI
+    needs: regression-testing
+
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/stable'
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ttnn/
+    permissions:
+      id-token: write  # IMPORTANT: mandatory for trusted publishing
+    steps:
+    - name: Download all the dists
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
+        path: dist/
+    - name: Publish distribution 📦 to PyPI (skipped for dry run)
+      if: ${{ !inputs.dry-run }}
+      uses: pypa/gh-action-pypi-publish@release/v1

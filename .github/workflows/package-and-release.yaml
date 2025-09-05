@@ -2,7 +2,7 @@ name: Package and release
 on:
   workflow_dispatch:
     inputs:
-      dry_run:
+      dry-run:
         description: "Dry-run: If true, do not upload tag or draft release."
         required: false
         default: false
@@ -68,21 +68,25 @@ jobs:
       bump_each_commit: false
       # Set tag_type to 'rc' for release candidate, '' for release, and 'dev' for all other branches
       tag_type: ${{ (github.ref == 'refs/heads/stable') && (needs.release-precheck.outputs.is-release-candidate == 'true' && 'rc' || '') || 'dev' }}
-      dry_run: ${{ inputs.dry_run }}
+      dry-run: ${{ inputs.dry-run }}
 
 
-  regression-testing:
+  build-test-publish:
     needs: create-tag
-    uses: ./.github/workflows/regression-testing.yaml
+    uses: ./.github/workflows/release-build-test-publish.yaml
     secrets: inherit
     strategy:
       matrix:
         version: [22.04, 24.04]
     with:
       version: ${{ matrix.version }}
+      dry-run: ${{ inputs.dry-run }}
+      tag-version: ${{ needs.create-tag.outputs.version }}
+      is-release-candidate: ${{ needs.release-precheck.outputs.is-release-candidate }}
+
 
   create-changelog:
-    needs: [create-tag, regression-testing]
+    needs: [create-tag, build-test-publish]
     permissions: read-all
     runs-on: ubuntu-latest
     steps:
@@ -135,7 +139,7 @@ jobs:
 
   # Candidate for breaking up
   create-and-upload-draft-release:
-    needs: [create-tag, create-release-notes, regression-testing]
+    needs: [create-tag, create-release-notes, build-test-publish]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
@@ -160,7 +164,7 @@ jobs:
         with:
           name: changelog
       - name: Release (skipped for dry run)
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry-run }}
         uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
         with:
           tag_name: ${{ needs.create-tag.outputs.version }}
@@ -176,99 +180,3 @@ jobs:
             models/docs/MODEL_UPDATES.md
             tt-metalium.tar.gz
           fail_on_unmatched_files: true
-
-  create-docker-release-image:
-    needs: [
-      regression-testing,
-      create-tag,
-      create-and-upload-draft-release,
-      release-precheck
-    ]
-    uses: ./.github/workflows/publish-release-image.yaml
-    secrets: inherit
-    if: github.ref == 'refs/heads/stable'
-    with:
-      version: ${{ needs.create-tag.outputs.version }}
-      tag-latest:  ${{ needs.release-precheck.outputs.is-release-candidate != 'true' }}
-      wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
-      dry_run: ${{ inputs.dry_run }}
-
-  release-docs:
-    needs: [
-      regression-testing,
-      release-precheck,
-      create-tag,
-      create-and-upload-draft-release
-    ]
-    if: ${{ needs.release-precheck.outputs.is-release-candidate !='true' }}
-    uses: ./.github/workflows/docs-latest-public.yaml
-    with:
-      version: ${{ needs.create-tag.outputs.version }}
-      docker-image: ${{ needs.regression-testing.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.regression-testing.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
-      dry_run: ${{ inputs.dry_run }}
-    secrets: inherit
-
-  publish-wheels:
-    name: "Publish wheels to internal PyPI"
-    needs: [create-tag, regression-testing]
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write  # Required for AWS OIDC
-    steps:
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.PYPI_ROLE }}
-          aws-region: ${{ secrets.PYPI_REGION }}
-
-      - name: Install s3pypi
-        run: |
-          pip install s3pypi
-
-      - name: Download wheel artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
-          path: ./wheels
-
-      - name: Publish wheels to internal PyPI
-        if: ${{ !inputs.dry_run }}
-        run: |
-          found_wheel_files=$(find ./wheels -type f -name "*.whl" -exec realpath {} \;)
-          for wheel in $found_wheel_files; do
-            echo "Publishing wheel: $wheel"
-            s3pypi upload "$wheel" --put-root-index --bucket ${{ secrets.PYPI_BUCKET }}
-          done
-
-  publish-to-pypi:
-    name: >-
-      Publish Python 🐍 distribution 📦 to PyPI
-    needs: [
-      regression-testing,
-      release-precheck,
-      create-tag,
-      create-and-upload-draft-release
-    ]
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/stable'
-    environment:
-      name: pypi
-      url: https://pypi.org/project/ttnn/
-    permissions:
-      id-token: write  # IMPORTANT: mandatory for trusted publishing
-    steps:
-    - name: Download all the dists
-      uses: actions/download-artifact@v4
-      with:
-        name: ${{ needs.regression-testing.outputs.wheel-artifact-name }}
-        path: dist/
-    - name: Publish distribution 📦 to PyPI (skipped for dry run)
-      if: ${{ !inputs.dry_run }}
-      uses: pypa/gh-action-pypi-publish@release/v1
