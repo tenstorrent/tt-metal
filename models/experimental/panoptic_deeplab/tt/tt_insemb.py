@@ -4,6 +4,7 @@ import ttnn
 
 from .tt_aspp import get_ttnn_norm
 from .tt_conv2dWrapper import TtConv2d, TtConv2dParameters
+from .tt_upsample_wrapper import TtUpsample
 from .tt_semseg import TtDeepLabV3PlusHead
 from .tt_pytorch_semSeg import ShapeSpec
 
@@ -116,19 +117,20 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
         self.offset_predictor = TtConv2d.create(parameters, stride=(1, 1), padding=(0, 0))
 
+        # Initialize upsample operations for instance head
+        # Note: Using default mode (no mode specified) to match original implementation
+        self.center_upsample = TtUpsample.create(device=device, scale_factor=common_stride, mode="nearest")
+        self.offset_upsample = TtUpsample.create(device=device, scale_factor=common_stride, mode="nearest")
+
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, ttnn.Tensor, Dict, Dict]:
         center_logits, offset_logits = self.layers(features)
 
         # --- Final Upsample for Center ---
-        center_logits = ttnn.to_layout(center_logits, ttnn.ROW_MAJOR_LAYOUT)
-        center_logits = ttnn.upsample(center_logits, scale_factor=self.common_stride)
-        center_logits = ttnn.to_layout(center_logits, ttnn.TILE_LAYOUT)
+        center_logits = self.center_upsample(center_logits)
 
         # --- Final Upsample for Offset ---
-        offset_logits = ttnn.to_layout(offset_logits, ttnn.ROW_MAJOR_LAYOUT)
-        offset_logits = ttnn.upsample(offset_logits, scale_factor=self.common_stride)
+        offset_logits = self.offset_upsample(offset_logits)
         offset_logits = ttnn.mul(offset_logits, self.common_stride)
-        offset_logits = ttnn.to_layout(offset_logits, ttnn.TILE_LAYOUT)
 
         return center_logits, offset_logits, {}, {}
 
