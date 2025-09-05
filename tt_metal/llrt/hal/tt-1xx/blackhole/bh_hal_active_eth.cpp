@@ -26,6 +26,11 @@ namespace tt::tt_metal::blackhole {
 // Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
 #include "core_config.h"
 
+// This file is intended to be wrapped inside arch/core-specific namespace.
+namespace active_eth_dev_msgs {
+#include "hal/generated/dev_msgs_impl.hpp"
+}
+
 HalCoreInfoType create_active_eth_mem_map() {
     std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
@@ -55,7 +60,6 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] = MEM_ERISC_APP_ROUTING_INFO_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = MEM_RETRAIN_COUNT_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = MEM_RETRAIN_FORCE_ADDR;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_LINK_REMOTE_INFO)] = MEM_ETH_LINK_REMOTE_INFO_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         MEM_ERISC_FABRIC_ROUTER_CONFIG_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] = MEM_SYSENG_ETH_MAILBOX_ADDR;
@@ -123,7 +127,8 @@ HalCoreInfoType create_active_eth_mem_map() {
         mem_map_sizes,
         fw_mailbox_addr,
         false /*supports_cbs*/,
-        false /*supports_receiving_multicast_cmds*/};
+        false /*supports_receiving_multicast_cmds*/,
+        active_eth_dev_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::blackhole

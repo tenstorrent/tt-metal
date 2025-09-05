@@ -9,6 +9,7 @@
 // level APIs
 //
 
+#include <sys/types.h>
 #include <cstddef>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -18,10 +19,12 @@
 #include <memory>
 #include <ostream>
 #include <unordered_set>
+#include <utility>
 #include <variant>
 #include <vector>
 
 #include "tt_memory.h"
+#include "hal/generated/dev_msgs.hpp"
 
 #include <tt_stl/overloaded.hpp>
 
@@ -75,8 +78,22 @@ enum class FWMailboxMsg : uint8_t {
     // Execute function from the core
     // arg0: L1 addr of function, arg1: unused, arg2: unused
     ETH_MSG_RELEASE_CORE,
+    // Heartbeat counter
+    HEARTBEAT,
     // Number of mailbox message types
     COUNT,
+};
+
+// Query dispatch related features depending on the arch
+enum class DispatchFeature : uint8_t {
+    // Ethernet Firmware supports the usage of the mailbox API
+    ETH_MAILBOX_API,
+    // Dispatch to Active ethernet cores utilize a kernel config buffer
+    DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER,
+    // Dispatch to Idle ethernet cores utilize a kernel config buffer
+    DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER,
+    // Dispatch to Tensix cores utilize a kernel config buffer
+    DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER,
 };
 
 class Hal;
@@ -95,6 +112,7 @@ private:
     std::vector<uint32_t> eth_fw_mailbox_msgs_;
     bool supports_cbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
+    dev_msgs::Factory dev_msgs_factory_;
 
 public:
     HalCoreInfoType(
@@ -105,14 +123,18 @@ public:
         const std::vector<uint32_t>& mem_map_sizes,
         const std::vector<uint32_t>& eth_fw_mailbox_msgs,
         bool supports_cbs,
-        bool supports_receiving_multicast_cmds);
+        bool supports_receiving_multicast_cmds,
+        dev_msgs::Factory dev_msgs_factory);
 
     template <typename T = DeviceAddr>
     T get_dev_addr(HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
     uint32_t get_processor_classes_count() const;
     uint32_t get_processor_types_count(uint32_t processor_class_idx) const;
+    uint32_t get_processor_index(HalProcessorClassType processor_class, uint32_t processor_type_idx) const;
+    std::pair<HalProcessorClassType, uint32_t> get_processor_class_and_type_from_index(uint32_t processor_index) const;
     const HalJitBuildConfig& get_jit_build_config(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
+    const dev_msgs::Factory& get_dev_msgs_factory() const;
 };
 
 template <typename T>
@@ -143,6 +165,8 @@ inline const HalJitBuildConfig& HalCoreInfoType::get_jit_build_config(
     TT_ASSERT(processor_type_idx < this->processor_classes_[processor_class_idx].size());
     return this->processor_classes_[processor_class_idx][processor_type_idx];
 }
+
+inline const dev_msgs::Factory& HalCoreInfoType::get_dev_msgs_factory() const { return this->dev_msgs_factory_; }
 
 // HalJitBuildQueryInterface is an interface for querying arch-specific build options.
 // These are generated on demand instead of stored in HalJitBuildConfig,
@@ -179,14 +203,15 @@ public:
 
 class Hal {
 public:
-    using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t)>;
+    using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t, bool)>;
     using IramRelocateFunc = std::function<uint64_t(uint64_t)>;
     using ValidRegAddrFunc = std::function<bool(uint32_t)>;
     using NOCXYEncodingFunc = std::function<uint32_t(uint32_t, uint32_t)>;
     using NOCMulticastEncodingFunc = std::function<uint32_t(uint32_t, uint32_t, uint32_t, uint32_t)>;
     using NOCAddrFunc = std::function<uint64_t(uint64_t)>;
     using StackSizeFunc = std::function<uint32_t(uint32_t)>;
-    using EthFwArgAddrFunc = std::function<uint32_t(uint32_t)>;
+    using EthFwArgAddrFunc = std::function<uint32_t(int, uint32_t)>;
+    using DispatchFeatureQueryFunc = std::function<bool(DispatchFeature)>;
 
 private:
     tt::ARCH arch_;
@@ -240,6 +265,7 @@ private:
     NOCAddrFunc noc_ucast_addr_y_func_;
     NOCAddrFunc noc_local_addr_func_;
     EthFwArgAddrFunc eth_fw_arg_addr_func_;
+    DispatchFeatureQueryFunc device_features_func_;
     std::unique_ptr<HalJitBuildQueryInterface> jit_build_query_;
 
 public:
@@ -302,8 +328,9 @@ public:
 
     bool get_supports_eth_fw_mailbox() const;
     uint32_t get_eth_fw_mailbox_val(FWMailboxMsg msg) const;
-    uint32_t get_eth_fw_mailbox_arg_addr(uint32_t arg_index) const;
+    uint32_t get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const;
     uint32_t get_eth_fw_mailbox_arg_count() const;
+    uint32_t get_eth_fw_mailbox_address(int mailbox_index) const;
     HalTensixHarvestAxis get_tensix_harvest_axis() const { return tensix_harvest_axis_; }
     uint32_t get_programmable_core_type_count() const;
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
@@ -312,6 +339,12 @@ public:
     uint32_t get_processor_classes_count(std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type) const;
     uint32_t get_processor_types_count(
         std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type, uint32_t processor_class_idx) const;
+    // Query device features. Returns true if the feature is enabled.
+    bool get_dispatch_feature_enabled(DispatchFeature feature) const { return this->device_features_func_(feature); }
+    // Returns true if kernel binaries for a given core type are stored in the config buffer
+    // Note, binaries which are not stored in the config buffer are written directly to L1 at the text start address.
+    // This value can be found in the ELF file.
+    bool get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType programmable_core_type) const;
 
     template <typename T = DeviceAddr>
     T get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
@@ -336,14 +369,25 @@ public:
     bool get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const;
 
     uint32_t get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const;
+    // Returns the processor index within a core.  There is a 1-1 mapping between
+    // (processor_class, processor_type) and processor_index.  This is useful
+    // For indexing data structures on devices (only 1-d arrays are needed).
+    // Should only be used internally and not expose this index to the user.
+    uint32_t get_processor_index(
+        HalProgrammableCoreType programmable_core_type,
+        HalProcessorClassType processor_class,
+        uint32_t processor_type_idx) const;
+    // Inverse function of get_processor_index.
+    std::pair<HalProcessorClassType, uint32_t> get_processor_class_and_type_from_index(
+        HalProgrammableCoreType programmable_core_type, uint32_t processor_index) const;
 
     uint32_t get_total_num_risc_processors() const;
 
     const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 
-    uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) const {
-        return relocate_func_(addr, local_init_addr);
+    uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0, bool has_shared_local_mem = false) const {
+        return relocate_func_(addr, local_init_addr, has_shared_local_mem);
     }
 
     uint64_t erisc_iram_relocate_dev_addr(uint64_t addr) const { return erisc_iram_relocate_func_(addr); }
@@ -356,6 +400,12 @@ public:
     const HalJitBuildQueryInterface& get_jit_build_query() const {
         TT_ASSERT(jit_build_query_ != nullptr);
         return *jit_build_query_;
+    }
+
+    const dev_msgs::Factory& get_dev_msgs_factory(HalProgrammableCoreType programmable_core_type) const {
+        auto index = get_programmable_core_type_index(programmable_core_type);
+        TT_ASSERT(index < this->core_info_.size());
+        return this->core_info_[index].get_dev_msgs_factory();
     }
 };
 
@@ -484,6 +534,19 @@ inline uint32_t Hal::get_num_risc_processors(HalProgrammableCoreType programmabl
     }
     return num_riscs;
 }
+inline uint32_t Hal::get_processor_index(
+    HalProgrammableCoreType programmable_core_type,
+    HalProcessorClassType processor_class,
+    uint32_t processor_type_idx) const {
+    auto idx = get_programmable_core_type_index(programmable_core_type);
+    return this->core_info_[idx].get_processor_index(processor_class, processor_type_idx);
+}
+
+inline std::pair<HalProcessorClassType, uint32_t> Hal::get_processor_class_and_type_from_index(
+    HalProgrammableCoreType programmable_core_type, uint32_t processor_index) const {
+    auto idx = get_programmable_core_type_index(programmable_core_type);
+    return this->core_info_[idx].get_processor_class_and_type_from_index(processor_index);
+}
 
 inline const HalJitBuildConfig& Hal::get_jit_build_config(
     uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const {
@@ -503,8 +566,8 @@ inline uint32_t Hal::get_eth_fw_mailbox_val(FWMailboxMsg msg) const {
     return this->core_info_[index].eth_fw_mailbox_msgs_[utils::underlying_type<FWMailboxMsg>(msg)];
 }
 
-inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(uint32_t arg_index) const {
-    return this->eth_fw_arg_addr_func_(arg_index);
+inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const {
+    return this->eth_fw_arg_addr_func_(mailbox_index, arg_index);
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
@@ -512,6 +575,25 @@ inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
     TT_ASSERT(index < this->core_info_.size());
     // -1 for the message
     return (this->core_info_[index].get_dev_size(HalL1MemAddrType::ETH_FW_MAILBOX) / sizeof(uint32_t)) - 1;
+}
+
+inline uint32_t Hal::get_eth_fw_mailbox_address(int mailbox_index) const {
+    const auto index = utils::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    TT_ASSERT(index < this->core_info_.size());
+    // Index 0 is the offset of the mailbox message
+    return get_eth_fw_mailbox_arg_addr(mailbox_index, 0) - sizeof(uint32_t);
+}
+
+inline bool Hal::get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType programmable_core_type) const {
+    switch (programmable_core_type) {
+        case HalProgrammableCoreType::TENSIX:
+            return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER);
+        case HalProgrammableCoreType::ACTIVE_ETH:
+            return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER);
+        case HalProgrammableCoreType::IDLE_ETH:
+            return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER);
+        default: TT_THROW("Invalid HalProgrammableCoreType {}", static_cast<int>(programmable_core_type));
+    }
 }
 
 }  // namespace tt_metal

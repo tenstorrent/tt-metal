@@ -163,6 +163,23 @@ int main(int argc, char* argv[]) {
         WAYPOINT("D");
 
         signal_ncrisc_completion();
+#if defined(ARCH_WORMHOLE)
+        // Ensure branch predictor will only ever predict into L1. Otherwise, the branch predictor may predict an IRAM
+        // address, which can cause an instruction to be fetched from IRAM while the mover is writing to IRAM, which can
+        // cause corruption.  See
+        // https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/TensixTile/BabyRISCV/InstructionRAM.md
+        // for more details.
+        // This loop unrolls to 54 instructions, taking 110 cycles (assuming all branches are mispredicted).
+        asm volatile(
+            ".rept 13\n"
+            "bne x0, x0, .\n"
+            "bne x0, x0, .\n"
+            "nop\n"
+            "nop\n"
+            ".endr\n"
+            "bne x0, x0, .\n"
+            "bne x0, x0, .");
+#endif
     }
 
     return 0;

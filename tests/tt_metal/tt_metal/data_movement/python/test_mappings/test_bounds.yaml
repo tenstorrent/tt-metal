@@ -177,7 +177,37 @@
 "Loopback Directed Ideal":
   wormhole_b0:
     riscv_0:
-      bandwidth: 30
+      bandwidth: 28
   blackhole:
     riscv_0:
       bandwidth: 60
+
+"I2S - DRAM Sharded Row Major Writer":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 4
+
+"I2S - DRAM Sharded Tile Writer":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 16
+
+"I2S - DRAM Interleaved Tile Reader":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 10
+
+"I2S - L1 Interleaved Tile Reader":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 13
+
+"I2S - DRAM Interleaved Row Major Reader":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 10.5
+
+"I2S - L1 Interleaved Row Major Reader":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 10.5

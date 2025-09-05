@@ -37,13 +37,13 @@ std::vector<ttnn::Tensor> ExecuteAllGatherMatmulAsync::invoke(
         weight_tensor,
         persistent_output_buffer,
         dim,
-        multi_device_global_semaphore,
         all_gather_core_grid_offset,
+        multi_device_global_semaphore,
+        barrier_semaphore.has_value(),
         bias,
         num_links,
         memory_config_ag,
         topology,
-        barrier_semaphore,
         subdevice_id,
         memory_config_mm,
         transpose_a,
@@ -54,7 +54,8 @@ std::vector<ttnn::Tensor> ExecuteAllGatherMatmulAsync::invoke(
         compute_kernel_config,
         core_grid,
         chunks_per_sync,
-        num_workers_per_link,
+        num_workers_per_link.value_or(
+            1),  // Conservatively 1 right now since the all gather core grid is hardcoded from the outside
         num_buffers_per_channel);
 }
 

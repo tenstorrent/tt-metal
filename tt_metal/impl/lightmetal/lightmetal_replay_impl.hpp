@@ -77,7 +77,6 @@ public:
     void execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* command);
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* command);
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd);
-    void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsCommand* command);
     void execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* command);
     void execute(const tt::tt_metal::flatbuffer::LightMetalCompareCommand* command);
 

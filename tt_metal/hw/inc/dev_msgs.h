@@ -7,10 +7,23 @@
 // Contains the structures/values uses in mailboxes to send messages to/from
 // host and device and across brisc/ncrisc/trisc
 //
+// Note: this file is fed to a script for generating generic accessors for HAL,
+// If you modify this file, CMake will invoke the script
+//     tt_metal/llrt/hal/codegen/codegen.sh
+// to update the generated files.
+//
+// Only a subset of the C++ language can be used:
+// - Only enum and struct definitions are allowed.
+// - Structs can only have scalars, structs, and 1-d array fields.
+// - #includes are copied to the generated interface, so make sure
+//   those files are not arch- or core- specific.
+// - #if... always evaluates to the false branch, so you can use
+//   that to hide code from code generator.
 
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
@@ -18,11 +31,16 @@
 // TODO: w/ the hal, this can come from core specific defines
 constexpr static std::uint32_t MAX_RISCV_PER_CORE = 5;
 
+#ifndef CODEGEN
+// TODO: can't codegen for templates / 2d arrays
+// To be fixed by making RiscCount a per-core constant, and let
+// HAL handle the host side access.
 template <uint32_t RiscCount>
 struct profiler_msg_template_t {
     uint32_t control_vector[kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE];
     uint32_t buffer[RiscCount][kernel_profiler::PROFILER_L1_VECTOR_SIZE];
 };  // struct profiler_msg_template_t
+#endif
 
 // TODO: move these to processor specific files
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -56,7 +74,7 @@ static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(EthProcess
 static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif
 using profiler_msg_t = profiler_msg_template_t<PROFILER_RISC_COUNT>;
-#else
+#elif !defined(CODEGEN)
 using profiler_msg_t = profiler_msg_template_t<MAX_RISCV_PER_CORE>;
 #endif
 
@@ -137,7 +155,8 @@ enum dispatch_enable_flags : uint8_t {
 };
 
 struct kernel_config_msg_t {
-    volatile uint16_t watcher_kernel_ids[DISPATCH_CLASS_MAX];
+    volatile uint16_t watcher_kernel_ids[NUM_PROCESSORS_PER_CORE_TYPE];
+    volatile uint8_t pad0[4];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
     // Ring buffer of kernel configuration data
@@ -146,8 +165,9 @@ struct kernel_config_msg_t {
     volatile uint16_t local_cb_offset;
     volatile uint16_t remote_cb_offset;
     rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
+    volatile uint8_t pad1[8];  // CODEGEN:skip
     volatile uint8_t mode;  // dispatch mode host/dev
-    volatile uint8_t pad1[1];
+    volatile uint8_t pad2[1];  // CODEGEN:skip
     volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
     volatile uint32_t local_cb_mask;
 
@@ -221,7 +241,7 @@ struct debug_sanitize_noc_addr_msg_t {
     volatile uint8_t is_multicast;
     volatile uint8_t is_write;
     volatile uint8_t is_target;
-    volatile uint8_t pad;
+    volatile uint8_t pad;  // CODEGEN:skip
 };
 
 // Host -> device. Populated with the information on where we want to insert delays.
@@ -271,15 +291,18 @@ enum riscv_id_t {
     DebugTrisc1 = 3,
     DebugTrisc2 = 4,
     DebugErisc = 5,
-    DebugIErisc = 6,
-    DebugSubordinateIErisc = 7,
-    DebugNumUniqueRiscs
+    DebugSubordinateErisc = 6,
+    DebugIErisc = 7,
+    DebugSubordinateIErisc = 8,
+    DebugNumUniqueRiscs = 9,
+    DebugDebugMaxRiscvId = 15,  // For alignment requirements
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
 
 struct debug_pause_msg_t {
-    volatile uint8_t flags[DebugNumUniqueRiscs];
+    volatile uint8_t flags[NUM_PROCESSORS_PER_CORE_TYPE];
+    uint8_t pad[3];  // CODEGEN:skip
 };
 
 constexpr static int DEBUG_RING_BUFFER_ELEMENTS = 32;
@@ -290,16 +313,19 @@ struct debug_ring_buf_msg_t {
     uint32_t data[DEBUG_RING_BUFFER_ELEMENTS];
 };
 
+struct debug_stack_usage_per_cpu_t {
+    // min free stack, offset by +1 (0 == unset)
+    volatile uint16_t min_free;
+    volatile uint16_t watcher_kernel_id;
+};
+
 struct debug_stack_usage_t {
-    struct usage_t {
-        // min free stack, offset by +1 (0 == unset)
-        volatile uint16_t min_free;
-        volatile uint16_t watcher_kernel_id;
-    } cpu[DebugNumUniqueRiscs];
+    debug_stack_usage_per_cpu_t cpu[NUM_PROCESSORS_PER_CORE_TYPE];
+    uint8_t pad[12];  // CODEGEN:skip
 };
 
 struct debug_eth_link_t {
-    uint8_t link_down;
+    volatile uint8_t link_down;
 };
 
 enum watcher_enable_msg_t {
@@ -316,7 +342,7 @@ struct watcher_msg_t {
     struct debug_sanitize_noc_addr_msg_t sanitize_noc[MAX_NUM_NOCS_PER_CORE];
     std::atomic<bool> noc_linked_status[MAX_NUM_NOCS_PER_CORE];
     struct debug_eth_link_t eth_status;
-    uint8_t pad0;
+    uint8_t pad0;  // CODEGEN:skip
     struct debug_assert_msg_t assert_status;
     struct debug_pause_msg_t pause_status;
     struct debug_stack_usage_t stack_usage;
@@ -324,10 +350,14 @@ struct watcher_msg_t {
     struct debug_ring_buf_msg_t debug_ring_buf;
 };
 
+#ifndef CODEGEN
+// TODO: DebugPrintMemLayout not visible by codegen
+// To be fixed by HAL work on dprint buffers.
 struct dprint_buf_msg_t {
     DebugPrintMemLayout data[DPRINT_BUFFERS_COUNT];
     uint32_t pad;  // to 1024 bytes
 };
+#endif
 
 // NOC aligment max from BH
 static constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
@@ -345,7 +375,8 @@ enum class AddressableCoreType : uint8_t {
 };
 
 struct addressable_core_t {
-    volatile uint8_t x, y;
+    volatile uint8_t x;
+    volatile uint8_t y;
     volatile AddressableCoreType type;
 };
 
@@ -376,7 +407,7 @@ struct core_info_msg_t {
     volatile uint8_t absolute_logical_x;  // Logical X coordinate of this core
     volatile uint8_t absolute_logical_y;  // Logical Y coordinate of this core
     volatile uint32_t l1_unreserved_start;
-    uint8_t pad;
+    uint8_t pad;  // CODEGEN:skip
 };
 
 constexpr uint32_t launch_msg_buffer_num_entries = 8;
@@ -390,14 +421,14 @@ struct mailboxes_t {
                                           // dispatch init moves to one-shot.
     struct launch_msg_t launch[launch_msg_buffer_num_entries];
     volatile struct go_msg_t go_messages[go_message_num_entries];
-    uint32_t pads_1[3];
+    uint32_t pads_1[3];                  // CODEGEN:skip
     volatile uint32_t go_message_index;  // Index into go_messages to use. Always 0 on unicast cores.
     struct watcher_msg_t watcher;
-    struct dprint_buf_msg_t dprint_buf;
+    struct dprint_buf_msg_t dprint_buf;  // CODEGEN:skip
     struct core_info_msg_t core_info;
     // Keep profiler last since it's size is dynamic per core type
-    uint32_t pads_2[PROFILER_NOC_ALIGNMENT_PAD_COUNT];
-    profiler_msg_t profiler;
+    uint32_t pads_2[PROFILER_NOC_ALIGNMENT_PAD_COUNT];  // CODEGEN:skip
+    profiler_msg_t profiler;                            // CODEGEN:skip
 };
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_core().
