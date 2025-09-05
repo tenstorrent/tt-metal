@@ -25,6 +25,7 @@
 #include "ttnn-pybind/operations/trace.hpp"
 #include "ttnn-pybind/profiler.hpp"
 #include "ttnn-pybind/program_descriptors.hpp"
+#include "ttnn-pybind/pytensor.hpp"
 #include "ttnn-pybind/tensor_accessor_args.hpp"
 #include "ttnn-pybind/reports.hpp"
 #include "ttnn-pybind/tensor.hpp"

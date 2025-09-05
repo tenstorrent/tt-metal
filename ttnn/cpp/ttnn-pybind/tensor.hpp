@@ -10,8 +10,6 @@ namespace ttnn::tensor {
 
 namespace py = pybind11;
 
-void pytensor_module_types(py::module& m_tensor);
-void pytensor_module(py::module& m_tensor);
 void tensor_mem_config_module_types(py::module& module);
 void tensor_mem_config_module(py::module& module);
 
