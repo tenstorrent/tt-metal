@@ -251,7 +251,6 @@ void run_single_core_unary_broadcast(
     Program program = tt_metal::CreateProgram();
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     auto& program_ = workload.get_programs().at(device_range);
-    const auto device = mesh_device->get_devices()[0];
     CoreCoord core = {0, 0};
 
     constexpr uint32_t num_tiles = 32;

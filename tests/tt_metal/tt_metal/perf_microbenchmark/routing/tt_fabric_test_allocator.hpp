@@ -266,8 +266,6 @@ inline CoreCoord TestDeviceResources::reserve_receiver_core(const std::optional<
 
 inline CoreResources& TestDeviceResources::get_or_create_core_resources(const CoreCoord& core, CoreType core_type) {
     if (core_resources_.find(core) == core_resources_.end()) {
-        CoreAllocationConfig policy = core_pools_[static_cast<size_t>(core_type)].policy;
-
         core_resources_.emplace(
             core,
             CoreResources(

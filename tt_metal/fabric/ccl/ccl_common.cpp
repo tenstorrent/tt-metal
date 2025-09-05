@@ -29,7 +29,7 @@ static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
     const std::vector<uint32_t> eth_sender_ct_args = edm_builder.get_compile_time_args((uint32_t)risc_id);
     log_trace(tt::LogOp, "EDM core (x={},y={}):", eth_core.x, eth_core.y);
     log_trace(tt::LogOp, "CT ARGS:");
-    for (auto const& s : eth_sender_ct_args) {
+    for ([[maybe_unused]] const auto& s : eth_sender_ct_args) {
         log_trace(tt::LogOp, "\t{}", s);
     }
 

@@ -67,7 +67,7 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
     tt::tt_metal::CircularBufferConfig output_cb_out_config =
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
             .set_page_size(out_cb_index, output_page_size);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
+    tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
 
     detail::LaunchProgram(device, program);
 
@@ -116,7 +116,7 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
     tt::tt_metal::CircularBufferConfig output_cb_out_config =
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
             .set_page_size(out_cb_index, output_page_size);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
+    tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
 
     detail::LaunchProgram(device, program);
 
@@ -164,7 +164,7 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, input_cb_data_format}})
             .set_page_size(out_cb_index, output_page_size);
     auto all_cores = CoreRangeSet({CoreRange(test_config.master_core_coord)});
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
 
     detail::LaunchProgram(device, program);
 
@@ -213,7 +213,7 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, input_cb_data_format}})
             .set_page_size(out_cb_index, output_page_size);
     auto all_cores = CoreRangeSet({CoreRange(test_config.master_core_coord)});
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
 
     detail::LaunchProgram(device, program);
 
@@ -262,7 +262,7 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
     tt::tt_metal::CircularBufferConfig output_cb_out_config =
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
             .set_page_size(out_cb_index, output_page_size);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
+    tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
 
     detail::LaunchProgram(device, program);
 
@@ -311,7 +311,7 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
     tt::tt_metal::CircularBufferConfig output_cb_out_config =
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
             .set_page_size(out_cb_index, output_page_size);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
+    tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
 
     detail::LaunchProgram(device, program);
 

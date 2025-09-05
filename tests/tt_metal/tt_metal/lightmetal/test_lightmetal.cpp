@@ -162,7 +162,6 @@ Program create_simple_datamovement_program(
 // Copied from test_EnqueueTrace.cpp
 Program create_simple_unary_program(Buffer& input, Buffer& output, Buffer* cb_input_buffer = nullptr) {
     Program program = CreateProgram();
-    IDevice* device = input.device();
     CoreCoord worker = {0, 0};
     auto reader_kernel = CreateKernel(
         program,

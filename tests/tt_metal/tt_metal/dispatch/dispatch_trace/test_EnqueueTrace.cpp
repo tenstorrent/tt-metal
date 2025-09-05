@@ -45,7 +45,6 @@ using namespace tt;
 
 Program create_simple_unary_program(Buffer& input, Buffer& output) {
     Program program = CreateProgram();
-    IDevice* device = input.device();
     CoreCoord worker = {0, 0};
     auto reader_kernel = CreateKernel(
         program,
