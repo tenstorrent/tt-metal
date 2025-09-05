@@ -53,7 +53,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <chrono>
-#include "tests/tt_metal/tt_fabric/benchmark/collectives/perf_helpers.hpp"
+#include "tests/tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
 using tt::DevicePool;
 
 namespace tt::tt_fabric {
