@@ -41,7 +41,7 @@ jobs:
         test-group:
           - name: All C++
             cmd: |
-              { [ "$GTEST_FILTER" = "*-*NIGHTLY_*" ] || [ "$GTEST_FILTER" = "*" ]; } && ./tests/scripts/run_cpp_unit_tests.sh || echo "Skipping run_cpp_unit_tests.sh (filter=$GTEST_FILTER)" # 15 minutes
+              { [ "$GTEST_FILTER" != "NIGHTLY_*" ]; } && ./tests/scripts/run_cpp_unit_tests.sh || echo "Skipping run_cpp_unit_tests.sh (filter=$GTEST_FILTER)" # 15 minutes
           - name: CCL
             cmd: |
               ./build/test/ttnn/unit_tests_ttnn_ccl --gtest_filter=$GTEST_FILTER
@@ -55,7 +55,7 @@ jobs:
           - name: distributed
             cmd: |
               ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=$GTEST_FILTER
-              { [ "$GTEST_FILTER" = "*-*NIGHTLY_*" ] || [ "$GTEST_FILTER" = "*" ]; } && ./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh || echo "Skipping run_multiprocess_socket_tests.sh (filter=$GTEST_FILTER)"
+              { [ "$GTEST_FILTER" != "NIGHTLY_*" ]; } && ./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh || echo "Skipping run_multiprocess_socket_tests.sh (filter=$GTEST_FILTER)"
           - name: eth, misc, and user kernel path
             cmd: |
               ./build/test/tt_metal/unit_tests_eth --gtest_filter=$GTEST_FILTER
@@ -65,7 +65,7 @@ jobs:
               TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*:$GTEST_FILTER
           - name: tools
             cmd: |
-              { [ "$GTEST_FILTER" = "*-*NIGHTLY_*" ] || [ "$GTEST_FILTER" = "*" ]; } && ./tests/scripts/run_tools_tests.sh || echo "Skipping run_tools_tests.sh (filter=$GTEST_FILTER)"
+              { [ "$GTEST_FILTER" != "NIGHTLY_*" ]; } && ./tests/scripts/run_tools_tests.sh || echo "Skipping run_tools_tests.sh (filter=$GTEST_FILTER)"
               ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=$GTEST_FILTER
           - name: ttnn tensor accessor
             cmd: "./build/test/ttnn/unit_tests_ttnn_accessor --gtest_filter=$GTEST_FILTER"
