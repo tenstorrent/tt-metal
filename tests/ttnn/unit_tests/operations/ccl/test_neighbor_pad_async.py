@@ -20,6 +20,7 @@ def run_neighbor_pad_impl(
     dim,
     padding_left,
     padding_right,
+    padding_mode,
     cluster_axis,
     num_links,
     input_dtype,
@@ -71,7 +72,12 @@ def run_neighbor_pad_impl(
         chunks = torch.chunk(input_tensor, num_chunks, dim)
         np_output_tensor = []
         # pad left
-        first_slice_front = torch.narrow(chunks[0], dim, 0, 1)
+        if padding_mode == "zeros":
+            slice_shape = list(chunks[0].shape)
+            slice_shape[dim] = 1
+            first_slice_front = torch.zeros(slice_shape)
+        else:
+            first_slice_front = torch.narrow(chunks[0], dim, 0, 1)
         first_slice = torch.cat((first_slice_front, chunks[0]), dim=dim)
         np_output_tensor.append(first_slice)
         for p in range(padding_left - 1):
@@ -81,8 +87,13 @@ def run_neighbor_pad_impl(
             np_output_tensor.append(torch.cat((prev_halo, chunks[k]), dim=dim))
 
         # pad right
-        last_slice_size = np_output_tensor[num_chunks - 1].shape[dim]
-        last_slice_back = torch.narrow(np_output_tensor[num_chunks - 1], dim, last_slice_size - 1, 1)
+        if padding_mode == "zeros":
+            slice_shape = list(np_output_tensor[num_chunks - 1].shape)
+            slice_shape[dim] = 1
+            last_slice_back = torch.zeros(slice_shape)
+        else:
+            last_slice_size = np_output_tensor[num_chunks - 1].shape[dim]
+            last_slice_back = torch.narrow(np_output_tensor[num_chunks - 1], dim, last_slice_size - 1, 1)
         for p in range(padding_right):
             np_output_tensor[num_chunks - 1] = torch.cat((np_output_tensor[num_chunks - 1], last_slice_back), dim=dim)
         for k in range(0, num_chunks - 1):
@@ -112,7 +123,7 @@ def run_neighbor_pad_impl(
             dim=dim,
             padding_left=padding_left,
             padding_right=padding_right,
-            padding_mode="replicate",
+            padding_mode=padding_mode,
             cluster_axis=cluster_axis,
             final_semaphore=ccl_semaphore_handles[i],
             barrier_semaphore=barrier_semaphore_handles[i],
@@ -158,7 +169,6 @@ def run_neighbor_pad_impl(
         breakpoint()
         tt_np_out_tensor = tt_neighbor_pad_out_tensor_list[i]
         torch_np_out_tensor = np_output_tensor_goldens_list[i if not enable_trace else 0]
-        breakpoint()
         tt_np_out = ttnn.from_device(tt_np_out_tensor)
         dims[cluster_axis] = dim
         dims[1 - cluster_axis] = 1 - dim
@@ -187,15 +197,16 @@ def run_neighbor_pad_impl(
 )
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "input_shape, dim, layout, input_dtype, padding_left, padding_right, cluster_axis",
+    "input_shape, dim, layout, input_dtype, padding_left, padding_right, padding_mode, cluster_axis",
     [
-        ([32, 60, 106, 768], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, 1),
-        ([88, 120, 212, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, 1),
-        ([168, 240, 424, 256], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, 1),
-        ([168, 480, 848, 128], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, 1),
-        ([32, 60, 106, 768], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, 1),
-        ([32, 60, 106, 768], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, 0),
-        ([32, 60, 106, 768], 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, 0),
+        ([32, 60, 106, 768], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1),
+        ([88, 120, 212, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1),
+        ([168, 240, 424, 256], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1),
+        ([168, 480, 848, 128], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1),
+        ([32, 60, 106, 768], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "replicate", 1),
+        ([32, 60, 106, 768], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "replicate", 0),
+        ([32, 60, 106, 768], 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "replicate", 0),
+        ([1, 1, 106, 768], 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "zeros", 0),
     ],
     ids=[
         "mochi_vae_1",
@@ -204,7 +215,8 @@ def run_neighbor_pad_impl(
         "mochi_vae_4",
         "left_and_right",
         "cluster_axis",
-        "width_dim",
+        "replicate_width_dim",
+        "zeros_width_dim",
     ],
 )
 @pytest.mark.parametrize(
@@ -238,6 +250,7 @@ def test_neighbor_pad_async(
     dim,
     padding_left,
     padding_right,
+    padding_mode,
     cluster_axis,
     num_links,
     input_dtype,
@@ -254,6 +267,7 @@ def test_neighbor_pad_async(
         dim=dim,
         padding_left=padding_left,
         padding_right=padding_right,
+        padding_mode=padding_mode,
         cluster_axis=cluster_axis,
         num_links=num_links,
         input_dtype=input_dtype,

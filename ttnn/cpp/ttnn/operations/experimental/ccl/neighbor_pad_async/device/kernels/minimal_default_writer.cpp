@@ -24,6 +24,8 @@ constexpr bool is_last_chip = get_compile_time_arg_val(1);
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(2);
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(3);
 constexpr bool direction = get_compile_time_arg_val(4);
+constexpr bool is_padding_zeros = get_compile_time_arg_val(5);
+constexpr uint32_t stick_size = get_compile_time_arg_val(6);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -33,7 +35,6 @@ void kernel_main() {
     // Load the input tensor spec
     const address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
     const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const uint32_t stick_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t stick_start_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t input_halo_dim_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t output_halo_dim_size = get_arg_val<uint32_t>(arg_idx++);
@@ -49,7 +50,7 @@ void kernel_main() {
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
     uint32_t read_size = stick_size;
-    constexpr auto dst_args = TensorAccessorArgs<5>();
+    constexpr auto dst_args = TensorAccessorArgs<7>();
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
 
     // packet header cb
@@ -68,25 +69,49 @@ void kernel_main() {
     uint32_t outer_dim_offset = 0;
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
         if (is_first_chip) {
-            // Replicate a slice of 1 from input to output
-            uint32_t dst_stick_id = 0;
-            if (direction) {
-                dst_stick_id = (output_halo_dim_size - padding) * num_sticks_per_halo_dim + stick_start_id;
+            if (!is_padding_zeros) {
+                // Replicate a slice of 1 from input to output
+                uint32_t dst_stick_id = 0;
+                if (direction) {
+                    dst_stick_id = (output_halo_dim_size - padding) * num_sticks_per_halo_dim + stick_start_id;
+                } else {
+                    dst_stick_id = stick_start_id;
+                }
+                dst_stick_id += outer_dim_offset;
+                for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
+                    cb_wait_front(cb_output_id, 1);
+                    uint32_t l1_read_addr = get_read_ptr(cb_output_id);
+
+                    for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
+                        uint64_t dst_noc_addr =
+                            get_noc_addr(dst_stick_id + pad_id * num_sticks_per_halo_dim, dst_accessor);
+                        noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
+                    }
+                    dst_stick_id++;
+
+                    noc_async_write_barrier();
+                    cb_pop_front(cb_output_id, 1);
+                }
             } else {
-                dst_stick_id = stick_start_id;
-            }
-            dst_stick_id += outer_dim_offset;
-            for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
+                uint32_t dst_stick_id = 0;
+                if (direction) {
+                    dst_stick_id = (output_halo_dim_size - padding) * num_sticks_per_halo_dim + stick_start_id;
+                } else {
+                    dst_stick_id = stick_start_id;
+                }
+                dst_stick_id += outer_dim_offset;
                 cb_wait_front(cb_output_id, 1);
                 uint32_t l1_read_addr = get_read_ptr(cb_output_id);
+                for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
+                    for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
+                        uint64_t dst_noc_addr =
+                            get_noc_addr(dst_stick_id + pad_id * num_sticks_per_halo_dim, dst_accessor);
+                        noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
+                    }
+                    dst_stick_id++;
 
-                for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
-                    uint64_t dst_noc_addr = get_noc_addr(dst_stick_id + pad_id * num_sticks_per_halo_dim, dst_accessor);
-                    noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
+                    noc_async_write_barrier();
                 }
-                dst_stick_id++;
-
-                noc_async_write_barrier();
                 cb_pop_front(cb_output_id, 1);
             }
         }
