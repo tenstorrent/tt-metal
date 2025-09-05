@@ -51,7 +51,7 @@ constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
 
 constexpr uint32_t kNumScalerTiles = 1U;
 constexpr uint32_t kNumAttnMaskTiles = 1U;
-constexpr uint32_t kTempAccumTiles = 1U;  //[Debug] should be 2U
+constexpr uint32_t kQKResultTiles = 1U;  //[Debug] should be 2U
 constexpr uint32_t kMaxValueHolderTiles = 1U;
 constexpr uint32_t kExpMaxDiffTiles = 1U;
 constexpr uint32_t kExpSumTiles = 1U;
@@ -141,50 +141,46 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const auto& attn_mask = tensor_args.mask;
     /*
     Shape note:
-    Q: B x H_q x S x E
-    K: B x H_k x S x E
-    V: B x H_v x S x E
-    attn_mask: B x H x S x S
+    Q: B x 1U x S x E
+    K: B x 1U x S x E
+    V: B x 1U x S x E
+    attn_mask: B x 1U x S x S
     */
 
     auto* device = query.device();
 
     tt::tt_metal::Program program{};
-
-    // TODO[improve]: move to device_operations validate function
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(query.dtype());
-    TT_FATAL(input_data_format == tt::DataFormat::Float16_b, "Query data format must be Float16_b");
-
+    auto input_data_format = datatype_to_dataformat_converter(query.dtype());
     uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
     uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
-
-    auto padded_tensor_shape = query.padded_shape();
-    auto padded_tensor_volume = query.physical_volume();
-
-    // TODO[improve]: move to device_operations validate function
-    TT_FATAL(
-        padded_tensor_volume % tt::constants::TILE_HW == 0, "Padded input tensor volume must be divisible by TILE_HW");
-    TT_FATAL(padded_tensor_shape.rank() == 4U, "Input tensor must be 4D");
-    auto [Bt, Ht, St, Et] = padded_tensor_shape.to_array_4D();
-    uint32_t Wt = Et / tt::constants::TILE_WIDTH;    // num of tiles in inner dim
-    uint32_t Ht_ = St / tt::constants::TILE_HEIGHT;  // num of tiles in seq len dim
-    uint32_t NC = Bt * Ht;
-    uint32_t total_rows_to_process = NC * Ht_;
 
     /*
      * Split embedding dim into heads and groups
      * Two cases:
      * 1) H_q == H_k == H_v == G: each head has its own K and V:
-     *    For this case we read and process data by heads: Edim/H
+     *    For this case we read and process data by heads: Edim/H_q
      * 2) H_q == n * G, n > 1: each group of K and V is shared across n heads
-     *    For this case we read and process data by groups: Edim/G
+     *    For this case we read and process data by heads: Edim/H_q
      */
 
     // [Debug] could I assume that Wt%(heads*TILE_WIDTH) == 0 ?
     auto [qBt, qHt, qSt, qDt] = query.padded_shape().to_array_4D();
     auto [kBt, kHt, kSt, kDt] = key.padded_shape().to_array_4D();
     auto [vBt, vHt, vSt, vDt] = value.padded_shape().to_array_4D();
-    // we assume that V has the same shape as K
+    TT_FATAL(
+        query.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
+            key.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
+            value.physical_volume() % tt::constants::TILE_WIDTH == 0,
+        "Physical volume of input tensors must be multiple of TILE_WIDTH. Got query {}, key {}, value {}",
+        query.physical_volume(),
+        key.physical_volume(),
+        value.physical_volume());
+
+    uint32_t Wt = qDt / tt::constants::TILE_WIDTH;    // num of tiles in inner dim
+    uint32_t Ht_ = qSt / tt::constants::TILE_HEIGHT;  // num of tiles in seq len dim
+    uint32_t NC = qBt * qHt;
+    uint32_t total_rows_to_process = NC * Ht_;
+
     uint32_t q_heads = args.q_heads;    // will be passed by user into args
     uint32_t kv_heads = args.kv_heads;  // will be passed by user into args
     TT_FATAL(
@@ -196,22 +192,20 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     TT_FATAL(qBt == kBt, "Query and Key batch sizes must be the same");
     TT_FATAL(qSt == kSt, "Query and Key sequence lengths must be the same");
 
-    uint32_t heads_per_group = q_heads / kv_heads;  // we read heads_per_group heads from Q for one group of K and V
-    uint32_t qWt = qDt / tt::constants::TILE_WIDTH;
+    uint32_t heads_per_group = q_heads / kv_heads;   // we read heads_per_group heads from Q for one group of K and V
+    uint32_t qWt = qDt / tt::constants::TILE_WIDTH;  // num of tiles in inner dim
     uint32_t kWt = kDt / tt::constants::TILE_WIDTH;
+    uint32_t vWt = vDt / tt::constants::TILE_WIDTH;
     uint32_t q_tiles_per_head = qWt / q_heads;   // number of tiles per head in query
-    uint32_t k_tiles_per_head = kWt / kv_heads;  // number of tiles per group in key and value
-    assert(q_tiles_per_head == k_tiles_per_head);
-    assert(qWt == Wt);
+    uint32_t k_tiles_per_head = kWt / kv_heads;  // number of tiles per group in key
+    uint32_t v_tiles_per_head = vWt / kv_heads;  // number of tiles per group in value
 
-    // TODO[improve]: add memory usage estimation and compare it against available memory. Based on this check,
-    // determine the appropriate chunk size for Q, K, and V tensors
-    // for now we assume that we can fit at least one row of Q, K, V in memory
-    // maybe I should process chunks by subblokcs of rows instead of full rows
-    // since we read K and V row-wise in this SDPA kernel, the sequence length directly defines how many chunks we’ll
-    // process for each
+    TT_FATAL(
+        q_tiles_per_head == k_tiles_per_head && q_tiles_per_head == v_tiles_per_head,
+        "Number of tiles per head in Query, Key, and Value must be the same");
 
-    uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(Et)));  // calculate scale factor
+    float per_head_dim = static_cast<float>(qDt) / static_cast<float>(q_heads);
+    uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(per_head_dim));  // calculate scale factor
     uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);  // used to transform mask from 1/0 to 0/-1
     uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);  // used to transform mask from 0/-1 to 0/-1e9F
 
@@ -219,14 +213,15 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
+    /* TODO[improve]: think about how to split work around kernels more efficiently
+     * For example, if we have 8 cores and 4 rows with two heads each (total 8 heads),
+     * we can use 4 cores to process 4 rows in parallel (one head per core) and then use the other 4 cores to process
+     * the same 4 rows in parallel (the second head per core) This way we can utilize all 8 cores and reduce the overall
+     * processing time
+     */
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
 
-    // We assume that all input tensors inner dim is the same and divisible by TILE_W == 32
-    // TODO[check]: check max block size value based on how many registers we use in compute kernel
-    // TODO[improve]: maybe I need to change the naming from block_size to dts_reg_count
-    // because for now I use it to process data by blocks to use all available register, so I can reduce the number of
-    // syncs
     uint32_t block_size = get_block_size(Wt, 4U);
     uint32_t twice_block_size = 2 * block_size;
 
@@ -240,7 +235,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         NC,
         Ht_,
         Wt,
-        1.0F / std::sqrt(static_cast<float>(Et)),
+        scaler,
         block_size,
         q_heads,
         kv_heads,
@@ -282,7 +277,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
     auto cb_temp_accum = create_circular_buffer(
-        program, all_cores, kTempAccumCbIndex, data_format, bfloat16_single_tile_size_bytes, kTempAccumTiles);
+        program, all_cores, kTempAccumCbIndex, data_format, bfloat16_single_tile_size_bytes, kQKResultTiles);
 
     auto cb_prev_max_value = create_circular_buffer(
         program, all_cores, kPrevMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, kMaxValueHolderTiles);
@@ -311,9 +306,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     auto cb_mm_result_holder =
         create_circular_buffer(program, all_cores, tt::CBIndex::c_16, data_format, bfloat16_single_tile_size_bytes, Wt);
-
-    auto cb_test_temp_result = create_circular_buffer(
-        program, all_cores, tt::CBIndex::c_17, data_format, bfloat16_single_tile_size_bytes, kOnetile);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels

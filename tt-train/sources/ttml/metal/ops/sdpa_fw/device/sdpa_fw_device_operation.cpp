@@ -4,6 +4,8 @@
 
 #include "sdpa_fw_device_operation.hpp"
 
+#include <enchantum/enchantum.hpp>
+
 #include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp"
 #include "sdpa_fw_program_factory.hpp"
 
@@ -25,13 +27,97 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
     const auto& key = tensor_args.key;
     const auto& value = tensor_args.value;
     const auto& mask = tensor_args.mask;
+    const auto& preallocated_output = tensor_args.preallocated_output;
 
-    // as I understand I should use TT_FATAL here instead of throwing exceptions
-    // check rank(rank must be 4)
-    // check shapes(same for all)
-    // check heads/groups
-    // check tensor data type, layout, memory layout, storage type, device arch
-    // check mask???
+    const auto check_tensor = [](const ttnn::Tensor& tensor,
+                                 const std::string& name,
+                                 const tt::tt_metal::Layout required_layout,
+                                 const tt::tt_metal::DataType required_dtype) {
+        TT_FATAL(
+            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            "SDPAForward operation requires '{}' to be on DEVICE. Got storage type: '{}'",
+            name,
+            enchantum::to_string(tensor.storage_type()));
+
+        TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
+
+        TT_FATAL(
+            tensor.padded_shape().rank() == 4U,
+            "Tensor '{}' must have rank 4, but got rank {}",
+            name,
+            tensor.padded_shape().rank());
+
+        TT_FATAL(
+            tensor.layout() == required_layout,
+            "Tensor '{}' must have layout '{}', but got '{}'",
+            name,
+            enchantum::to_string(required_layout),
+            enchantum::to_string(tensor.layout()));
+
+        TT_FATAL(
+            tensor.dtype() == required_dtype,
+            "Tensor '{}' must have data type '{}', but got '{}'",
+            name,
+            enchantum::to_string(required_dtype),
+            enchantum::to_string(tensor.dtype()));
+
+        TT_FATAL(
+            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
+            name,
+            enchantum::to_string(tensor.memory_config().memory_layout()));
+    };
+    check_tensor(query, "Query", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+    check_tensor(key, "Key", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+    check_tensor(value, "Value", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+
+    // TODO[improve]: add check for mask tensor
+
+    auto query_shape = query.padded_shape();
+    auto key_shape = key.padded_shape();
+    auto value_shape = value.padded_shape();
+
+    const uint32_t q_heads = args.q_heads;    // will be passed by user into args
+    const uint32_t kv_heads = args.kv_heads;  // will be passed by user into args
+    TT_FATAL(
+        q_heads % kv_heads == 0,
+        "Number of heads must be divisible by number of groups, got heads={}, groups={}",
+        q_heads,
+        kv_heads);
+
+    auto [qBt, qHt, qSt, qEt] = query_shape.to_array_4D();
+    TT_FATAL(qEt % q_heads == 0, "Query embedding dim must be divisible by number of heads");
+
+    auto [kBt, kHt, kSt, kEt] = key_shape.to_array_4D();
+    TT_FATAL(kEt % kv_heads == 0, "Key embedding dim must be divisible by number of key/value groups");
+
+    auto [vBt, vHt, vSt, vEt] = value_shape.to_array_4D();
+    TT_FATAL(vEt % kv_heads == 0, "Value embedding dim must be divisible by number of key/value groups");
+
+    TT_FATAL(
+        qBt == kBt && qBt == vBt && qSt == kSt && qSt == vSt && qHt == 1U && kHt == 1U && vHt == 1U,
+        "Query and Key must have the same shape, except for the inner dim. Got shapes: Query={}, Key={}, Value={}",
+        query_shape,
+        key_shape,
+        value_shape);
+
+    if (preallocated_output.has_value()) {
+        check_tensor(
+            preallocated_output.value(),
+            "Preallocated Output",
+            tt::tt_metal::Layout::TILE,
+            tt::tt_metal::DataType::BFLOAT16);
+
+        auto output_shape = preallocated_output->padded_shape();
+        TT_FATAL(
+            output_shape == query_shape,
+            "Preallocated output shape must be the same as query shape. Got preallocated output shape={}, query "
+            "shape={}",
+            output_shape,
+            query_shape);
+    }
+
+    // TODO[improve]: add check for intermediate tensor when I'll know what exactly I want to return
 }
 
 spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(

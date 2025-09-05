@@ -20,19 +20,12 @@ void kernel_main() {
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_4;
     constexpr uint32_t cb_output = tt::CBIndex::c_15;
 
-    // [Debug]: all next cb used for debug here
-    constexpr uint32_t cb_prev_max = tt::CBIndex::c_8;  // used to store previous max value
-    constexpr uint32_t cb_cur_max = tt::CBIndex::c_9;   // used to store current max value
-
     constexpr uint32_t qWt = get_compile_time_arg_val(0);  // number of tiles in inner dimension
     constexpr uint32_t Ht = get_compile_time_arg_val(1);   // number of tiles in sequence dimension
     constexpr uint32_t block_size = get_compile_time_arg_val(2);
     constexpr uint32_t q_tiles_per_head = get_compile_time_arg_val(3);  // num of tiles per head in query
     constexpr uint32_t q_heads = get_compile_time_arg_val(4);           // num of heads in query
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(5);   // num of heads per group
-
-    //[Debug]
-    constexpr uint32_t Wt = get_compile_time_arg_val(6);  // get old Wt
 
     constexpr uint32_t onetile = 1U;
 
@@ -72,25 +65,4 @@ void kernel_main() {
             }
         }
     }
-
-    // uint32_t end_row = start_row + num_rows_to_process;
-    // for (uint32_t r = start_row; r < end_row; r++) {
-    //     uint32_t idx = r * Wt;
-    //     uint32_t intermediate_idx = r;
-
-    //     cb_wait_front(cb_output, Wt);
-    //     uint32_t l1_read_addr = get_read_ptr(cb_output);
-    //     for (uint32_t col = 0; col < Wt; ++col) {
-    //         noc_async_write_tile(idx + col, output_addr_generator, l1_read_addr);
-    //         l1_read_addr += tile_bytes;
-    //     }
-    //     noc_async_write_barrier();
-    //     cb_pop_front(cb_output, Wt);
-
-    //     cb_wait_front(cb_intermediates, onetile);
-    //     uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
-    //     noc_async_write_tile(intermediate_idx, intermediates_addr_generator, l1_intermediates_read_addr);
-    //     noc_async_write_barrier();
-    //     cb_pop_front(cb_intermediates, onetile);
-    // }
 }

@@ -54,13 +54,6 @@ void kernel_main() {
     constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_5;
     constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_6;
 
-    // [Debug]: all next cb used for debug here
-    constexpr uint32_t cb_temp_accum = tt::CBIndex::c_7;
-    constexpr uint32_t cb_prev_max = tt::CBIndex::c_8;  // used to store previous max value
-    constexpr uint32_t cb_cur_max = tt::CBIndex::c_9;   // used to store current max value
-
-    constexpr uint32_t cb_test_temp_res = tt::CBIndex::c_17;  // used for debugging only
-
     constexpr uint32_t qWt = get_compile_time_arg_val(0);  // (vDt / TILE_W)
     constexpr uint32_t kWt = get_compile_time_arg_val(1);  // (kDt / TILE_W)
     constexpr uint32_t Ht = get_compile_time_arg_val(2);   // (S / TILE_H)
@@ -72,9 +65,6 @@ void kernel_main() {
     constexpr uint32_t scaler_bits = get_compile_time_arg_val(8);       // sdpa scaler factor
     constexpr uint32_t minus_one_bits = get_compile_time_arg_val(9);    // used to transform mask from 1/0 to 0/-1
     constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(10);  // used to transform mask from 0/-1 to 0/-1e9F
-
-    //[Debug]
-    constexpr uint32_t Wt = get_compile_time_arg_val(11);  // get old Wt
 
     constexpr uint32_t onetile = 1U;
 
@@ -111,106 +101,38 @@ void kernel_main() {
            << ", Ht=" << Ht << ", scaler=" << scaler << ", minus_one=" << minus_one << ", custom_inf=" << custom_inf
            << ENDL();
 
-    // // while we process one q_chunk (row of Q), we stream all K and V chunks (rows of K and V)
+    // while we process one q_chunk (head of Q), we stream all K and V chunks (heads of K and V)
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
-        // uint32_t q_idx = (start_row + i) * qWt;
         uint32_t q_row_idx = (start_row + i) * qWt;
 
         // calculate offset to read relevant batch of K and V
         uint32_t key_batch_offset = ((start_row + i) / Ht) * kWt * Ht;
 
-        for (uint32_t q_tile_idx = 0; q_tile_idx < qWt; q_tile_idx += tiles_per_head) {
-            read_head(q_row_idx + q_tile_idx, tiles_per_head, cb_query, query_address_generator, tile_bytes);
+        for (uint32_t q_head_idx = 0; q_head_idx < q_heads; ++q_head_idx) {
+            uint32_t q_start_idx = q_row_idx + q_head_idx * tiles_per_head;
+            read_head(q_start_idx, tiles_per_head, cb_query, query_address_generator, tile_bytes);
 
-            DPRINT << "[noc] Q head idx: " << q_tile_idx / tiles_per_head << ENDL();
+            // calculate which group of K and V we need to read for this head of Q
+            uint32_t kv_group_idx = q_head_idx / heads_per_group;
 
-            uint32_t kv_group_idx = get_group_idx(q_tile_idx, tiles_per_head, heads_per_group);
-            DPRINT << "[noc] heads per group: " << heads_per_group << ENDL();
-            DPRINT << "[noc]KV group index: " << kv_group_idx << ENDL();
             // jump to start of relevant head of K and V
             uint32_t kv_offset = key_batch_offset + kv_group_idx * tiles_per_head;
-            DPRINT << "[noc]KV base offset: " << kv_offset << ENDL();
+
             uint32_t attn_mask_idx = (start_row + i) * Ht;
-            // DPRINT << "[noc] attn_mask_idx: " << attn_mask_idx << ENDL();
             for (uint32_t h = 0; h < Ht; ++h) {
                 uint32_t kv_start_idx = kv_offset + h * kWt;  // jump to the next row
-                DPRINT << "[noc] K/V row start idx: " << kv_start_idx << ENDL();
                 read_head(kv_start_idx, tiles_per_head, cb_key, key_address_generator, tile_bytes);
 
                 // read one tile of attn_mask for current row of K and V
                 // row of K define the column in (QK^T) matrix, so it define the column of attn_mask
                 cb_reserve_back(cb_attn_mask, onetile);
                 uint32_t attn_mask_l1_writer_addr = get_write_ptr(cb_attn_mask);
-                DPRINT << "[noc] attn_mask_idx: " << attn_mask_idx + h << ENDL();
                 noc_async_read_tile(attn_mask_idx + h, mask_address_generator, attn_mask_l1_writer_addr);
                 noc_async_read_barrier();
                 cb_push_back(cb_attn_mask, onetile);
-
-                // if (q_tile_idx == 0) {
-                // print_tile(cb_attn_mask, 0);  // print attn_mask only once
-                // }
-
-                cb_wait_front(cb_test_temp_res, onetile);
-                DPRINT << "[noc] Mask after processing: " << ENDL();
-                // print_tile(cb_test_temp_res, 0);
 
                 read_head(kv_start_idx, tiles_per_head, cb_value, value_address_generator, tile_bytes);
             }
         }
     }
-
-    // while we process one q_chunk (row of Q), we stream all K and V chunks (rows of K and V)
-    // for (uint32_t i = 0; i < num_rows_to_process; ++i) {
-    //     uint32_t idx = (start_row + i) * Wt;
-
-    //     // TODO[improve]: change offset calculation to support reading rows from different batches
-    //     uint32_t key_page_offset = ((start_row + i) / Ht) * Wt * Ht;
-
-    //     cb_reserve_back(cb_query, Wt);  // 12 head
-    //     uint32_t query_l1_write_addr = get_write_ptr(cb_query);
-    //     for (uint32_t col = 0; col < Wt; ++col) {
-    //         noc_async_read_tile(idx + col, query_address_generator, query_l1_write_addr);
-    //         query_l1_write_addr += tile_bytes;
-    //     }
-    //     noc_async_read_barrier();
-    //     cb_push_back(cb_query, Wt);
-
-    //     // I need one tile of attn_mask for one row of K and V.
-    //     // row index of Q define the row index of (QK^T) matrix, so I need to read the same row of attn_mask
-    //     uint32_t attn_mask_idx = (start_row + i) * Ht;
-
-    //     // stream K and V by rows while processing Q row
-    //     for (uint32_t h = 0; h < Ht; ++h) {             // read all
-    //         uint32_t k_idx = key_page_offset + h * Wt;  // add row offset in case I need to read second batch
-    //         // read key row block_size tiles
-
-    //         // we read key by rows to compute matmul Q by K^T
-    //         cb_reserve_back(cb_key, Wt);
-    //         uint32_t key_l1_writer_addr = get_write_ptr(cb_key);
-    //         for (uint32_t w = 0; w < Wt; ++w) {  // reading row of K and V
-    //             noc_async_read_tile(k_idx + w, key_address_generator, key_l1_writer_addr);
-    //             key_l1_writer_addr += tile_bytes;
-    //         }
-    //         noc_async_read_barrier();
-    //         cb_push_back(cb_key, Wt);
-
-    //         // read one tile of attn_mask for current row of K and V
-    //         // row of K define the column in (QK^T) matrix, so it define the column of attn_mask
-    //         cb_reserve_back(cb_attn_mask, onetile);
-    //         uint32_t attn_mask_l1_writer_addr = get_write_ptr(cb_attn_mask);
-    //         noc_async_read_tile(attn_mask_idx + h, mask_address_generator, attn_mask_l1_writer_addr);
-    //         noc_async_read_barrier();
-    //         cb_push_back(cb_attn_mask, onetile);
-
-    //         // we read value by rows to compute matmul (QK^T) by V
-    //         cb_reserve_back(cb_value, Wt);
-    //         uint32_t value_l1_writer_addr = get_write_ptr(cb_value);
-    //         for (uint32_t w = 0; w < Wt; ++w) {  // reading row of K and V
-    //             noc_async_read_tile(k_idx + w, value_address_generator, value_l1_writer_addr);
-    //             value_l1_writer_addr += tile_bytes;
-    //         }
-    //         noc_async_read_barrier();
-    //         cb_push_back(cb_value, Wt);
-    //     }
-    // }
 }
