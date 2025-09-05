@@ -5,35 +5,33 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
+from enum import Enum
 
 import ttnn
 
-from ....experimental.stable_diffusion_35_large.tt.utils import from_torch_fast
+from .common import from_torch_fast
 
-if TYPE_CHECKING:
-    import torch
 
-SLICE_COUNT_FACTOR = {
-    (16, 512, 128 * 128): 1024 // 2,
-    (20, 32, 128 * 256): 1024 // 16,
-    (32, 32, 64 * 64): 1024 // 128,
-    (128, 3, 256 * 256): 1024 * 4,  # hangs with lower slice_count
-    (128, 3, 512 * 512): 1024 * 16,  # hangs with lower slice_count
-    (128, 3, 1024 * 1024): 1024 * 64,  # hangs with lower slice_count
-    (128, 128, 512 * 512): 1024 * 4,
-    (128, 128, 1024 * 1024): 1024 * 16,
-    (256, 128, 256 * 256): 1024 * 2,
-    (256, 128, 512 * 512): 1024 * 8,
-    (256, 128, 1024 * 1024): 1024 * 32,
-    (256, 256, 512 * 512): 1024 * 8,
-    (256, 256, 1024 * 1024): 1024 * 32,
-    (512, 256, 256 * 256): 1024 * 4,
-    (512, 256, 512 * 512): 1024 * 16,
-    (512, 512, 128 * 128): 1024 // 2,
-    (512, 512, 256 * 256): 1024 * 2,
-    (512, 512, 512 * 512): 1024 * 8,
-}
+class SliceMode(Enum):
+    """Enumeration for different slicing modes"""
+
+    NONE = "none"
+    CHANNEL = "channel"
+    HEIGHT = "height"
+    WIDTH = "width"
+
+
+@dataclass
+class SliceConfig:
+    """Configuration for manual slicing control"""
+
+    mode: SliceMode = SliceMode.NONE
+    num_slices: int = 1
+
+    def __post_init__(self):
+        if self.mode != SliceMode.NONE and self.num_slices <= 1:
+            raise ValueError(f"{self.mode.value} slicing requires num_slices > 1")
 
 
 @dataclass
@@ -42,26 +40,38 @@ class TtConv2dParameters:
     bias: ttnn.Tensor | None
     device: ttnn.MeshDevice
     dilation: tuple[int, int] = (1, 1)
-    channel_slice_num: int = 1
+    slice_config: SliceConfig = None
+
+    def __post_init__(self):
+        if self.slice_config is None:
+            self.slice_config = SliceConfig()
 
     @classmethod
     def from_torch(
         cls,
-        state: dict[str, torch.Tensor],
+        state: dict[str, any],
         *,
         device: ttnn.MeshDevice,
         dtype: ttnn.DataType | None = None,
+        slice_config: SliceConfig | None = None,
     ) -> TtConv2dParameters:
         mesh_mapper = ttnn.ReplicateTensorToMesh(device) if isinstance(device, ttnn.MeshDevice) else None
 
+        if slice_config is None:
+            slice_config = SliceConfig()
+
+        # Convert torch tensors to ttnn tensors
+        weight = from_torch_fast(state["weight"], dtype=dtype, mesh_mapper=mesh_mapper)
+        bias = None
+        if "bias" in state and state["bias"] is not None:
+            bias = from_torch_fast(state["bias"].reshape((1, 1, 1, -1)), dtype=dtype, mesh_mapper=mesh_mapper)
+
         return cls(
-            weight=from_torch_fast(state["weight"], dtype=dtype, mesh_mapper=mesh_mapper),
-            bias=from_torch_fast(state["bias"].reshape((1, 1, 1, -1)), dtype=dtype, mesh_mapper=mesh_mapper)
-            if "bias" in state
-            else None,
+            weight=weight,
+            bias=bias,
             device=device,
-            dilation=state.get("dilation", (1, 1)),  # Extract dilation from state,
-            channel_slice_num=state.get("channel_slice_num", 1),  # Extract channel_slice_num from state
+            dilation=state.get("dilation", (1, 1)),
+            slice_config=slice_config,
         )
 
     @property
@@ -77,12 +87,39 @@ class TtConv2dParameters:
         return self.weight.shape[-2], self.weight.shape[-1]
 
 
-CHANNEL_SLICE_THRESHOLD = 2048  # For now temporary
-CHANNEL_SLICE_FACTOR = 4  # For now temporary
-
-
 class TtConv2d:
     """
+    TTNN Conv2d wrapper with explicit manual control over slicing strategies.
+
+    Supports the following slicing modes:
+    - Channel slicing: Splits input channels across multiple conv operations
+    - Height slicing: Uses ttnn spatial slicing along height dimension
+    - Width slicing: Uses ttnn spatial slicing along width dimension
+
+    Note: Height and width slicing cannot be used simultaneously.
+
+    Usage examples:
+
+    # Create parameters with channel slicing
+    slice_config = SliceConfig(mode=SliceMode.CHANNEL, num_slices=4)
+    params = TtConv2dParameters.from_torch(state_dict, device=device, slice_config=slice_config)
+    conv = TtConv2d(params, stride=(2, 2), padding=(1, 1))
+
+    # Or with spatial slicing
+    slice_config = SliceConfig(mode=SliceMode.WIDTH, num_slices=2)
+    params = TtConv2dParameters.from_torch(state_dict, device=device, slice_config=slice_config)
+
+    # Using convenience methods
+    conv = TtConv2d.create_with_channel_slicing(params, num_slices=4, stride=(2, 2))
+
+    # Spatial slicing (height OR width, not both)
+    conv = TtConv2d.create_with_width_slicing(params, num_slices=2)
+    # OR
+    conv = TtConv2d.create_with_height_slicing(params, num_slices=2)
+
+    # No slicing
+    conv = TtConv2d.create(params)
+
     Limitations of DRAM slicing (slice_count > 1), taken from https://github.com/tenstorrent/tt-metal/pull/19686:
     - Only works with activations of dtype BFloat16.
     - No logic to check if preprocessed weights can be safely reused. This is okay if all slices are
@@ -97,8 +134,6 @@ class TtConv2d:
         *,
         stride: tuple[int, int] = (1, 1),
         padding: tuple[int, int] = (0, 0),
-        slice_count: Optional[int] = None,
-        toSlice: bool = False,
     ) -> None:
         self._stride = stride
         self._padding = padding
@@ -108,181 +143,199 @@ class TtConv2d:
         self._kernel_size = parameters.kernel_size
 
         self._dilation = parameters.dilation
-        self._channel_slice_num = parameters.channel_slice_num
+        self._slice_config = parameters.slice_config
         self._weight = parameters.weight
         self._bias = parameters.bias
         self._device = parameters.device
-        self._weightSlices = []
-        self._biasSlices = []
 
-        self.toSlice = toSlice
+        # Caching for sliced weights and biases
+        self._weight_slices = []
+        self._bias_slices = []
 
-        self._slice_count = slice_count
+    def _get_conv_config(self) -> ttnn.Conv2dConfig:
+        """Create default conv2d configuration"""
+        return ttnn.Conv2dConfig(
+            weights_dtype=ttnn.bfloat16,
+            shard_layout=None,
+            deallocate_activation=False,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=False,
+            enable_split_reader=False,
+            output_layout=ttnn.TILE_LAYOUT,
+            activation="",
+            transpose_shards=False,
+            in_place=False,
+            enable_kernel_stride_folding=False,
+            full_inner_dim=False,
+            act_block_h_override=32,
+        )
 
-    def call_without_reshape(
+    def _create_spatial_slice_config(self) -> Optional[ttnn.Conv2dSliceConfig]:
+        """Create spatial slice configuration based on slice_config"""
+        if self._slice_config.mode == SliceMode.HEIGHT:
+            return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dSliceHeight, num_slices=self._slice_config.num_slices)
+        elif self._slice_config.mode == SliceMode.WIDTH:
+            return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dSliceWidth, num_slices=self._slice_config.num_slices)
+        return None
+
+    def _perform_channel_slicing(
+        self,
+        x: ttnn.Tensor,
+        batch_size: int,
+        height: int,
+        width: int,
+        conv_config: ttnn.Conv2dConfig,
+        memory_config: ttnn.MemoryConfig | None = None,
+    ) -> tuple[ttnn.Tensor, list[int]]:
+        """Perform channel slicing convolution"""
+        print(f"--- Running Conv2d with Channel Slicing (factor={self._slice_config.num_slices}) ---")
+
+        assert (
+            self._in_channels % self._slice_config.num_slices == 0
+        ), f"Input channels ({self._in_channels}) must be divisible by num_slices ({self._slice_config.num_slices})"
+
+        split_in_channels = self._in_channels // self._slice_config.num_slices
+
+        if not ttnn.is_tensor_storage_on_device(self._weight):
+            self._weight = ttnn.to_device(self._weight, self._device)
+
+        # Create input slices
+        input_slices = []
+        for i in range(self._slice_config.num_slices):
+            start_idx = i * split_in_channels
+            end_idx = (i + 1) * split_in_channels
+            slice_tensor = ttnn.slice(x, [0, 0, 0, start_idx], [batch_size, height, width, end_idx])
+            input_slices.append(slice_tensor)
+
+        # Create weight slices (cached)
+        if not self._weight_slices:
+            for i in range(self._slice_config.num_slices):
+                start_idx = i * split_in_channels
+                end_idx = (i + 1) * split_in_channels
+                weight_slice = ttnn.slice(
+                    self._weight,
+                    [0, start_idx, 0, 0],
+                    [self._out_channels, end_idx, self._kernel_size[0], self._kernel_size[1]],
+                )
+                self._weight_slices.append(weight_slice)
+
+        accumulated_output = None
+        output_height, output_width = 0, 0
+
+        # Process each channel slice
+        for i in range(self._slice_config.num_slices):
+            print(f"  Processing channel slice {i+1}/{self._slice_config.num_slices}...")
+            input_slice = input_slices[i]
+            output_slice, [output_height, output_width], [self._weight_slices[i], bias_tmp] = ttnn.conv2d(
+                input_tensor=input_slice,
+                weight_tensor=self._weight_slices[i],
+                bias_tensor=None,
+                in_channels=split_in_channels,
+                out_channels=self._out_channels,
+                device=self._device,
+                kernel_size=list(self._kernel_size),
+                stride=list(self._stride),
+                padding=list(self._padding),
+                batch_size=batch_size,
+                input_height=height,
+                input_width=width,
+                dilation=list(self._dilation),
+                return_output_dim=True,
+                return_weights_and_bias=True,
+                conv_config=conv_config,
+                memory_config=memory_config,
+                dtype=ttnn.bfloat16,
+            )
+            output_slice = ttnn.move(output_slice)
+            if i == 0:
+                accumulated_output = ttnn.to_memory_config(output_slice, ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                accumulated_output = ttnn.add(
+                    output_slice, accumulated_output, memory_config=memory_config, output_tensor=accumulated_output
+                )
+                output_slice.deallocate(True)
+
+        # Add bias if present
+        if self._bias is not None:
+            accumulated_output = ttnn.add(accumulated_output, self._bias, output_tensor=accumulated_output)
+
+        final_shape = [batch_size, output_height, output_width, self._out_channels]
+        return accumulated_output, final_shape
+
+    def _perform_standard_conv(
+        self,
+        x: ttnn.Tensor,
+        batch_size: int,
+        height: int,
+        width: int,
+        conv_config: ttnn.Conv2dConfig,
+        memory_config: ttnn.MemoryConfig | None = None,
+        spatial_slice_config: Optional[ttnn.Conv2dSliceConfig] = None,
+    ) -> tuple[ttnn.Tensor, list[int]]:
+        """Perform standard convolution with optional spatial slicing"""
+        output, [output_height, output_width], [prepared_weight, prepared_bias] = ttnn.conv2d(
+            input_tensor=x,
+            weight_tensor=self._weight,
+            bias_tensor=self._bias,
+            in_channels=self._in_channels,
+            out_channels=self._out_channels,
+            device=self._device,
+            kernel_size=list(self._kernel_size),
+            stride=list(self._stride),
+            padding=list(self._padding),
+            batch_size=batch_size,
+            input_height=height,
+            input_width=width,
+            dilation=list(self._dilation),
+            return_output_dim=True,
+            return_weights_and_bias=True,
+            conv_config=conv_config,
+            memory_config=memory_config,
+            slice_config=spatial_slice_config,
+            dtype=ttnn.bfloat16,
+        )
+
+        # Update prepared weights and bias
+        self._weight = prepared_weight
+        self._bias = prepared_bias
+
+        shape = [batch_size, output_height, output_width, self._out_channels]
+        return output, shape
+
+    def _call_without_reshape(
         self,
         x: ttnn.Tensor,
         *,
         conv_config: ttnn.Conv2dConfig | None = None,
         memory_config: ttnn.MemoryConfig | None = None,
-        slice_config: Optional[ttnn.Conv2dSliceConfig] = None,
-        toSlice: Optional[bool] = False,
     ) -> tuple[ttnn.Tensor, list[int]]:
         (batch_size, height, width, _) = x.shape
 
-        if (self._in_channels >= CHANNEL_SLICE_THRESHOLD and self._channel_slice_num > 1) or toSlice:
-            print(f"--- Running Conv2d with Channel Slicing (factor={self._channel_slice_num}) ---")
-            assert (
-                self._in_channels % self._channel_slice_num == 0
-            ), f"Input channels ({self._in_channels}) must be divisible by channel_slice_num ({self._channel_slice_num})"
+        # Use provided conv_config or create default
+        if conv_config is None:
+            conv_config = self._get_conv_config()
 
-            split_in_channels = self._in_channels // self._channel_slice_num
-
-            if not ttnn.is_tensor_storage_on_device(self._weight):
-                self._weight = ttnn.to_device(self._weight, self._device)
-
-            input_slices = []
-            for i in range(self._channel_slice_num):
-                start_idx = i * split_in_channels
-                end_idx = (i + 1) * split_in_channels
-                slice_tensor = ttnn.slice(x, [0, 0, 0, start_idx], [batch_size, height, width, end_idx])
-                input_slices.append(slice_tensor)
-
-            if self._weightSlices == []:
-                for i in range(self._channel_slice_num):
-                    start_idx = i * split_in_channels
-                    end_idx = (i + 1) * split_in_channels
-                    weight_slice = ttnn.slice(
-                        self._weight,
-                        [0, start_idx, 0, 0],
-                        [self._out_channels, end_idx, self._kernel_size[0], self._kernel_size[1]],
-                    )
-                    self._weightSlices.append(weight_slice)
-
-            accumulated_output = None
-            output_height, output_width = 0, 0
-
-            conv_config = ttnn.Conv2dConfig(
-                weights_dtype=ttnn.bfloat16,
-                shard_layout=None,
-                deallocate_activation=False,
-                enable_act_double_buffer=False,
-                enable_weights_double_buffer=False,
-                enable_split_reader=False,
-                output_layout=ttnn.TILE_LAYOUT,
-                activation="",
-                transpose_shards=False,
-                in_place=False,
-                enable_kernel_stride_folding=False,
-                full_inner_dim=False,
-            )
-
-            for i in range(self._channel_slice_num):
-                print(f"  Processing channel slice {i+1}/{self._channel_slice_num}...")
-                input_slice = input_slices[i]
-                output_slice, [output_height, output_width], [self._weightSlices[i], self.biasTmp] = ttnn.conv2d(
-                    input_tensor=input_slice,
-                    weight_tensor=self._weightSlices[i],
-                    bias_tensor=None,
-                    in_channels=split_in_channels,
-                    out_channels=self._out_channels,
-                    device=self._device,
-                    kernel_size=list(self._kernel_size),
-                    stride=list(self._stride),
-                    padding=list(self._padding),
-                    batch_size=batch_size,
-                    input_height=height,
-                    input_width=width,
-                    dilation=list(self._dilation),
-                    return_output_dim=True,
-                    return_weights_and_bias=True,
-                    conv_config=conv_config,
-                    memory_config=memory_config,
-                    dtype=ttnn.bfloat16,
-                )
-                output_slice = ttnn.move(output_slice)
-                if i == 0:
-                    accumulated_output = ttnn.to_memory_config(output_slice, ttnn.DRAM_MEMORY_CONFIG)
-                else:
-                    accumulated_output = ttnn.add(
-                        output_slice, accumulated_output, memory_config=memory_config, output_tensor=accumulated_output
-                    )
-                    output_slice.deallocate(True)
-            if self._bias is not None:
-                accumulated_output = ttnn.add(accumulated_output, self._bias, output_tensor=accumulated_output)
-            final_shape = [batch_size, output_height, output_width, self._out_channels]
-            return accumulated_output, final_shape
-        # No channel slicing needed, proceed with normal conv2d
+        # Determine slicing strategy based on slice_config
+        if self._slice_config.mode == SliceMode.CHANNEL:
+            return self._perform_channel_slicing(x, batch_size, height, width, conv_config, memory_config)
         else:
-            conv_config = ttnn.Conv2dConfig(
-                weights_dtype=ttnn.bfloat16,
-                shard_layout=None,
-                deallocate_activation=False,
-                enable_act_double_buffer=False,
-                enable_weights_double_buffer=False,
-                enable_split_reader=False,
-                output_layout=ttnn.TILE_LAYOUT,
-                activation="",
-                transpose_shards=False,
-                in_place=False,
-                enable_kernel_stride_folding=False,
-                full_inner_dim=False,
-                act_block_h_override=32,
+            # Handle spatial slicing (height, width, or both)
+            spatial_slice_config = self._create_spatial_slice_config()
+            return self._perform_standard_conv(
+                x, batch_size, height, width, conv_config, memory_config, spatial_slice_config
             )
-
-            def call_conv2d(t: ttnn.Tensor, w: ttnn.Tensor, b: ttnn.Tensor | None) -> _Conv2dRawResult:
-                output, [output_height, output_width], [prepared_weight, prepared_bias] = ttnn.conv2d(
-                    input_tensor=t,
-                    weight_tensor=w,
-                    bias_tensor=b,
-                    in_channels=self._in_channels,
-                    out_channels=self._out_channels,
-                    device=self._device,
-                    kernel_size=list(self._kernel_size),
-                    stride=list(self._stride),
-                    padding=list(self._padding),
-                    batch_size=batch_size,
-                    input_height=height,
-                    input_width=width,
-                    dilation=list(self._dilation),
-                    return_output_dim=True,
-                    return_weights_and_bias=True,
-                    conv_config=conv_config,
-                    memory_config=memory_config,
-                    slice_config=slice_config,
-                    dtype=ttnn.bfloat16,
-                )
-                return _Conv2dRawResult(
-                    output=output,
-                    output_height=output_height,
-                    output_width=output_width,
-                    prepared_weight=prepared_weight,
-                    prepared_bias=prepared_bias,
-                )
-
-            results = call_conv2d(x, self._weight, self._bias)
-            x = results.output
-            self._weight = results.prepared_weight
-            self._bias = results.prepared_bias
-            shape = [batch_size, results.output_height, results.output_width, self._out_channels]
-            return x, shape
 
     def __call__(
         self,
         x: ttnn.Tensor,
         memory_config: ttnn.MemoryConfig | None = None,
         conv_config: Optional[ttnn.Conv2dConfig] = None,
-        slice_config: Optional[ttnn.Conv2dSliceConfig] = None,
-        toChannelSlice: Optional[bool] = False,
     ) -> ttnn.Tensor:
-        x, shape = self.call_without_reshape(
-            x, memory_config=memory_config, conv_config=conv_config, slice_config=slice_config, toSlice=toChannelSlice
-        )
+        x, shape = self._call_without_reshape(x, memory_config=memory_config, conv_config=conv_config)
 
-        # workaround
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
-        # kernel designed for rank 3 tensors error when reshaping 4D tiled tensors????
+        # tiled tensors need to be rank 3 for reshape
         x = ttnn.squeeze(x, dim=0)
         shape = [shape[1], shape[2], shape[3]]
         x = ttnn.reshape(x, shape)
@@ -302,11 +355,53 @@ class TtConv2d:
     def kernel_size(self) -> tuple[int, int]:
         return self._kernel_size
 
+    @classmethod
+    def create_with_channel_slicing(
+        cls,
+        parameters: TtConv2dParameters,
+        num_slices: int,
+        *,
+        stride: tuple[int, int] = (1, 1),
+        padding: tuple[int, int] = (0, 0),
+    ) -> "TtConv2d":
+        """Create TtConv2d with channel slicing configuration."""
+        parameters.slice_config = SliceConfig(mode=SliceMode.CHANNEL, num_slices=num_slices)
+        return cls(parameters, stride=stride, padding=padding)
 
-@dataclass
-class _Conv2dRawResult:
-    output: ttnn.Tensor
-    output_height: int
-    output_width: int
-    prepared_weight: ttnn.Tensor
-    prepared_bias: ttnn.Tensor | None
+    @classmethod
+    def create_with_height_slicing(
+        cls,
+        parameters: TtConv2dParameters,
+        num_slices: int,
+        *,
+        stride: tuple[int, int] = (1, 1),
+        padding: tuple[int, int] = (0, 0),
+    ) -> "TtConv2d":
+        """Create TtConv2d with height slicing configuration."""
+        parameters.slice_config = SliceConfig(mode=SliceMode.HEIGHT, num_slices=num_slices)
+        return cls(parameters, stride=stride, padding=padding)
+
+    @classmethod
+    def create_with_width_slicing(
+        cls,
+        parameters: TtConv2dParameters,
+        num_slices: int,
+        *,
+        stride: tuple[int, int] = (1, 1),
+        padding: tuple[int, int] = (0, 0),
+    ) -> "TtConv2d":
+        """Create TtConv2d with width slicing configuration."""
+        parameters.slice_config = SliceConfig(mode=SliceMode.WIDTH, num_slices=num_slices)
+        return cls(parameters, stride=stride, padding=padding)
+
+    @classmethod
+    def create(
+        cls,
+        parameters: TtConv2dParameters,
+        *,
+        stride: tuple[int, int] = (1, 1),
+        padding: tuple[int, int] = (0, 0),
+    ) -> "TtConv2d":
+        """Create TtConv2d without any slicing."""
+        parameters.slice_config = SliceConfig(mode=SliceMode.NONE)
+        return cls(parameters, stride=stride, padding=padding)

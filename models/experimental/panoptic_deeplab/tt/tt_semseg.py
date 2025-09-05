@@ -47,25 +47,6 @@ class TtDeepLabV3PlusHead(nn.Module):
         self.device = device
         self.activation = get_ttnn_activation("relu")
 
-        def _create_tt_conv2d(
-            weight: torch.Tensor,
-            in_ch: int,
-            out_ch: int,
-            kernel_size: int,
-            stride: int,
-            padding: int,
-            use_bias: bool,
-            slice_num: int = 1,
-            toSlice: bool = False,
-        ):
-            param_dict = {"weight": weight}
-            param_dict["channel_slice_num"] = slice_num
-            if use_bias:
-                param_dict["bias"] = torch.zeros(1, 1, 1, out_ch)
-
-            parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
-            return TtConv2d(parameters, stride=(stride, stride), padding=(padding, padding), toSlice=toSlice)
-
         self.decoder = {}
         use_bias = norm == ""
 
@@ -99,44 +80,53 @@ class TtDeepLabV3PlusHead(nn.Module):
                 decoder_stage["fuse_conv_0"] = None
             else:
                 proj_out_ch = project_channels[idx]
-                project_conv = _create_tt_conv2d(
-                    weight=project_conv_weights[feature_name],
-                    in_ch=in_channel,
-                    out_ch=proj_out_ch,
-                    kernel_size=1,
-                    stride=1,
-                    padding=0,
-                    use_bias=use_bias,
-                )
+                param_dict = {"weight": project_conv_weights[feature_name]}
+                if use_bias:
+                    param_dict["bias"] = torch.zeros(1, 1, 1, proj_out_ch)
+                parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
+                project_conv = TtConv2d.create(parameters, stride=(1, 1), padding=(0, 0))
 
                 fuse_in_ch = proj_out_ch + decoder_channels[idx + 1]
                 fuse_out_ch = decoder_channels[idx]
-                fuse_conv_0 = _create_tt_conv2d(
-                    weight=fuse_conv_0_weights[feature_name],
-                    in_ch=fuse_in_ch,
-                    out_ch=fuse_out_ch,
-                    kernel_size=3,
-                    stride=1,
-                    padding=1,
-                    use_bias=use_bias,
-                    slice_num=3,
+                # Create fuse_conv_0 with no slicing (for i=0) and height slicing (for i>0)
+                param_dict = {"weight": fuse_conv_0_weights[feature_name]}
+                if use_bias:
+                    param_dict["bias"] = torch.zeros(1, 1, 1, fuse_out_ch)
+                parameters_no_slice = TtConv2dParameters.from_torch(param_dict, device=self.device)
+                fuse_conv_0_no_slice = TtConv2d.create(parameters_no_slice, stride=(1, 1), padding=(1, 1))
+
+                # Create height-sliced version for i>0
+                param_dict = {"weight": fuse_conv_0_weights[feature_name]}
+                if use_bias:
+                    param_dict["bias"] = torch.zeros(1, 1, 1, fuse_out_ch)
+                parameters_height_slice = TtConv2dParameters.from_torch(param_dict, device=self.device)
+                fuse_conv_0_height_slice = TtConv2d.create_with_height_slicing(
+                    parameters_height_slice, num_slices=4, stride=(1, 1), padding=(1, 1)
                 )
-                fuse_conv_1 = _create_tt_conv2d(
-                    weight=fuse_conv_1_weights[feature_name],
-                    in_ch=fuse_out_ch,
-                    out_ch=fuse_out_ch,
-                    kernel_size=3,
-                    stride=1,
-                    padding=1,
-                    use_bias=use_bias,
-                    slice_num=3,
+
+                # Create fuse_conv_1 with no slicing (for i=0) and height slicing (for i>0)
+                param_dict = {"weight": fuse_conv_1_weights[feature_name]}
+                if use_bias:
+                    param_dict["bias"] = torch.zeros(1, 1, 1, fuse_out_ch)
+                parameters_no_slice = TtConv2dParameters.from_torch(param_dict, device=self.device)
+                fuse_conv_1_no_slice = TtConv2d.create(parameters_no_slice, stride=(1, 1), padding=(1, 1))
+
+                # Create height-sliced version for i>0
+                param_dict = {"weight": fuse_conv_1_weights[feature_name]}
+                if use_bias:
+                    param_dict["bias"] = torch.zeros(1, 1, 1, fuse_out_ch)
+                parameters_height_slice = TtConv2dParameters.from_torch(param_dict, device=self.device)
+                fuse_conv_1_height_slice = TtConv2d.create_with_height_slicing(
+                    parameters_height_slice, num_slices=2, stride=(1, 1), padding=(1, 1)
                 )
 
                 decoder_stage["project_conv"] = project_conv
                 decoder_stage["project_norm"] = get_ttnn_norm(norm, proj_out_ch, device, norm_params=None)
-                decoder_stage["fuse_conv_0"] = fuse_conv_0
+                decoder_stage["fuse_conv_0_no_slice"] = fuse_conv_0_no_slice
+                decoder_stage["fuse_conv_0_height_slice"] = fuse_conv_0_height_slice
                 decoder_stage["fuse_norm_0"] = get_ttnn_norm(norm, fuse_out_ch, device, norm_params=None)
-                decoder_stage["fuse_conv_1"] = fuse_conv_1
+                decoder_stage["fuse_conv_1_no_slice"] = fuse_conv_1_no_slice
+                decoder_stage["fuse_conv_1_height_slice"] = fuse_conv_1_height_slice
                 decoder_stage["fuse_norm_1"] = get_ttnn_norm(norm, fuse_out_ch, device, norm_params=None)
 
             self.decoder[feature_name] = decoder_stage
@@ -208,16 +198,11 @@ class TtDeepLabV3PlusHead(nn.Module):
             ttnn.deallocate(proj_x)
             ttnn.deallocate(y_upsampled)
 
+            # Choose the appropriate conv based on iteration index
             if i == 0:
-                y_conv0 = stage["fuse_conv_0"](y)
+                y_conv0 = stage["fuse_conv_0_no_slice"](y)
             else:
-                y_conv0 = stage["fuse_conv_0"](
-                    y,
-                    slice_config=ttnn.Conv2dSliceConfig(
-                        slice_type=ttnn.Conv2dSliceHeight,
-                        num_slices=4,
-                    ),
-                )
+                y_conv0 = stage["fuse_conv_0_height_slice"](y)
             ttnn.deallocate(y)
             y_norm0 = stage["fuse_norm_0"](y_conv0)
             ttnn.deallocate(y_conv0)
@@ -226,17 +211,11 @@ class TtDeepLabV3PlusHead(nn.Module):
             ttnn.deallocate(y_norm0)
 
             ttnn.to_memory_config(y_act0, ttnn.DRAM_MEMORY_CONFIG)
+            # Choose the appropriate conv based on iteration index
             if i == 0:
-                y_conv1 = stage["fuse_conv_1"](y_act0)
+                y_conv1 = stage["fuse_conv_1_no_slice"](y_act0)
             else:
-                y_conv1 = stage["fuse_conv_1"](
-                    y_act0,
-                    slice_config=ttnn.Conv2dSliceConfig(
-                        slice_type=ttnn.Conv2dSliceHeight,
-                        num_slices=2,
-                    ),
-                )
-
+                y_conv1 = stage["fuse_conv_1_height_slice"](y_act0)
             y_norm1 = stage["fuse_norm_1"](y_conv1)
             ttnn.deallocate(y_conv1)
 
@@ -298,22 +277,26 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         use_bias = norm == ""
         decoder_out_ch = decoder_channels[0]
 
-        def _create_tt_conv2d(
-            weight: torch.Tensor, in_ch: int, out_ch: int, kernel_size: int, stride: int, padding: int, use_bias: bool
-        ):
-            param_dict = {"weight": weight}
-            if use_bias:
-                param_dict["bias"] = torch.zeros(1, 1, 1, out_ch)
-            parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
-            return TtConv2d(parameters, stride=(stride, stride), padding=(padding, padding))
-
-        self.head_0 = _create_tt_conv2d(panoptic_head_0_weight, decoder_out_ch, decoder_out_ch, 3, 1, 1, use_bias)
+        # Create head_0 with height slicing
+        param_dict = {"weight": panoptic_head_0_weight}
+        if use_bias:
+            param_dict["bias"] = torch.zeros(1, 1, 1, decoder_out_ch)
+        parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
+        self.head_0 = TtConv2d.create_with_height_slicing(parameters, num_slices=2, stride=(1, 1), padding=(1, 1))
         self.head_norm_0 = get_ttnn_norm(norm, decoder_out_ch, device, norm_params=None)
 
-        self.head_1 = _create_tt_conv2d(panoptic_head_1_weight, decoder_out_ch, head_channels, 3, 1, 1, use_bias)
+        # Create head_1 with height slicing
+        param_dict = {"weight": panoptic_head_1_weight}
+        if use_bias:
+            param_dict["bias"] = torch.zeros(1, 1, 1, head_channels)
+        parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
+        self.head_1 = TtConv2d.create_with_height_slicing(parameters, num_slices=2, stride=(1, 1), padding=(1, 1))
         self.head_norm_1 = get_ttnn_norm(norm, head_channels, device, norm_params=None)
 
-        self.predictor = _create_tt_conv2d(panoptic_predictor_weight, head_channels, num_classes, 1, 1, 0, True)
+        # Create predictor without slicing
+        param_dict = {"weight": panoptic_predictor_weight, "bias": torch.zeros(1, 1, 1, num_classes)}
+        parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
+        self.predictor = TtConv2d.create(parameters, stride=(1, 1), padding=(0, 0))
 
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, Dict]:
         """
@@ -329,23 +312,11 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
     def layers(self, features: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:
         y = super().layers(features)
 
-        y = self.head_0(
-            y,
-            slice_config=ttnn.Conv2dSliceConfig(
-                slice_type=ttnn.Conv2dSliceHeight,
-                num_slices=2,
-            ),
-        )
+        y = self.head_0(y)
         y = self.head_norm_0(y)
         y = self.activation(y)
 
-        y = self.head_1(
-            y,
-            slice_config=ttnn.Conv2dSliceConfig(
-                slice_type=ttnn.Conv2dSliceHeight,
-                num_slices=2,
-            ),
-        )
+        y = self.head_1(y)
         y = self.head_norm_1(y)
         y = self.activation(y)
 

@@ -5,7 +5,12 @@ import torch.nn as nn
 import torch
 import ttnn
 
-from models.experimental.panoptic_deeplab.tt.tt_conv2dWrapper import TtConv2d, TtConv2dParameters
+from models.experimental.panoptic_deeplab.tt.tt_conv2dWrapper import (
+    TtConv2d,
+    TtConv2dParameters,
+    SliceConfig,
+    SliceMode,
+)
 
 
 class TtBottleneck(nn.Module):
@@ -65,8 +70,16 @@ class TtBottleneck(nn.Module):
         if has_shortcut:
             shortcut_state = {k.replace("shortcut.", ""): v for k, v in state_dict.items() if k.startswith("shortcut.")}
             shortcut_stride_tuple = (shortcut_stride, shortcut_stride)
+
+            # Apply width slicing for res3 blocks
+            shortcut_slice_config = None
+            if block_id.startswith("res3"):
+                shortcut_slice_config = SliceConfig(mode=SliceMode.WIDTH, num_slices=2)
+
             self.shortcut = TtConv2d(
-                TtConv2dParameters.from_torch(shortcut_state, device=device, dtype=dtype),
+                TtConv2dParameters.from_torch(
+                    shortcut_state, device=device, dtype=dtype, slice_config=shortcut_slice_config
+                ),
                 stride=shortcut_stride_tuple,
                 padding=(0, 0),
             )
@@ -222,12 +235,7 @@ class TtBottleneck(nn.Module):
         # Process shortcut if needed
         if self.has_shortcut:
             print(f"[BOTTLENECK {self.block_id}] Processing shortcut convolution...")
-            identity = self.shortcut(
-                identity,
-                slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dSliceWidth, num_slices=2)
-                if self.block_id.startswith("res3")
-                else None,
-            )
+            identity = self.shortcut(identity)
             identity = ttnn.to_memory_config(identity, ttnn.DRAM_MEMORY_CONFIG)
             # Convert NHWC to NCHW for batch_norm
             identity = ttnn.permute(identity, (0, 3, 1, 2))
