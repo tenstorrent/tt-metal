@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -168,6 +168,7 @@ def whisper_attention(
     else:
         fused_qkv = hidden_states @ parameters.query_key_value.weight + parameters.query_key_value.bias  # 1, S, 3xHxd
         fused_qkv = ttnn.unsqueeze_to_4D(fused_qkv)
+
         (
             query_states,  # 1, H, S, d
             key_states,  # 1, H, d, S
@@ -179,7 +180,6 @@ def whisper_attention(
             transpose_k_heads=(not sdpa_with_kv_cache),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
         if sdpa_with_kv_cache:
             k_cache = kv_cache[0]  # 1, H, MaxS, d
             v_cache = kv_cache[1]  # 1, H, MaxS, d
@@ -470,11 +470,10 @@ def preprocess_encoder_inputs(
     config, input_features, *, parameters, device, inputs_mesh_mapper=None, weights_mesh_mapper=None
 ):
     input_length = input_features.shape[-1]
-    print("before ttnn", input_features.shape)
+
     input_features = ttnn.from_torch(
         input_features, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=inputs_mesh_mapper, device=device
     )
-    print("after ttnn ", input_features.shape)
     input_features = ttnn.transpose(input_features, 1, 2)
 
     conv1d_config, conv1d_compute_config = get_conv_configs(device)
@@ -538,11 +537,21 @@ def preprocess_encoder_inputs(
 
 
 def preprocess_decoder_inputs(
-    config, input_ids, attention_mask, *, parameters, device, decode_pos=None, create_attention_mask=True
+    config,
+    input_ids,
+    attention_mask,
+    *,
+    parameters,
+    device,
+    decode_pos=None,
+    create_attention_mask=True,
+    mesh_mapper=None,
 ):
     input_shape = input_ids.size()
     input_ids = torch.reshape(input_ids, (-1, input_shape[-1]))
-    tt_input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_input_ids = ttnn.from_torch(
+        input_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, mesh_mapper=mesh_mapper
+    )
     inputs_embeds = ttnn.embedding(
         tt_input_ids, parameters.embed_tokens.weight, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
@@ -551,7 +560,9 @@ def preprocess_decoder_inputs(
     if attention_mask is not None:
         # ttnn cannot broadcast when adding on the batch or channel dimensions so this is a workaround
         attention_mask = attention_mask.expand(-1, config.decoder_attention_heads, -1, -1)
-        attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        attention_mask = ttnn.from_torch(
+            attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mesh_mapper
+        )
 
     if decode_pos is None:
         positions = parameters.embed_positions.weight[0 : input_ids.shape[-1]]
@@ -560,7 +571,6 @@ def preprocess_decoder_inputs(
 
     positions = ttnn.to_layout(positions, ttnn.TILE_LAYOUT)
     decoder_hidden_states = inputs_embeds + positions
-
     return decoder_hidden_states, attention_mask
 
 
@@ -573,8 +583,17 @@ def preprocess_inputs(
     parameters,
     device,
     create_attention_mask=True,
+    inputs_mesh_mapper=None,
+    weights_mesh_mapper=None,
 ):
-    input_embeds = preprocess_encoder_inputs(config, input_features, parameters=parameters.encoder, device=device)
+    input_embeds = preprocess_encoder_inputs(
+        config,
+        input_features,
+        parameters=parameters.encoder,
+        device=device,
+        inputs_mesh_mapper=inputs_mesh_mapper,
+        weights_mesh_mapper=weights_mesh_mapper,
+    )
     (decoder_hidden_states, attention_mask) = preprocess_decoder_inputs(
         config,
         input_ids,
@@ -582,6 +601,7 @@ def preprocess_inputs(
         parameters=parameters.decoder,
         device=device,
         create_attention_mask=create_attention_mask,
+        mesh_mapper=inputs_mesh_mapper,
     )
     return input_embeds, decoder_hidden_states, attention_mask
 
@@ -663,3 +683,15 @@ def custom_preprocessor(torch_model, name, weights_mapper=None):
         embeddings = ttnn.to_layout(embeddings, ttnn.TILE_LAYOUT)
         parameters["weight"] = embeddings
     return parameters
+
+
+def preprocess_linear_weight(weight, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
+    weight = weight.T.contiguous()
+    weight = ttnn.from_torch(weight, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+    return weight
+
+
+def preprocess_linear_bias(bias, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
+    bias = bias.reshape((1, -1))
+    bias = ttnn.from_torch(bias, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+    return bias

@@ -566,13 +566,3 @@ def load_imagenet_dataset(model_location_generator=None, model_version="ImageNet
     else:
         dataset_path = model_version
     return str(dataset_path)
-def preprocess_linear_weight(weight, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
-    weight = weight.T.contiguous()
-    weight = ttnn.from_torch(weight, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
-    return weight
-
-
-def preprocess_linear_bias(bias, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
-    bias = bias.reshape((1, -1))
-    bias = ttnn.from_torch(bias, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
-    return bias
