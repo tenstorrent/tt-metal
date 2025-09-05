@@ -15,7 +15,7 @@ CONFIGS = [
     # (2, 1, [1, 1, 11264, 3072], 3),
     # (2, 4, [1, 1, 5632, 3072], 3),
     # (8, 4, [1, 1, 71680, 3072], 3),
-    (8, 4, [1, 1, 63488, 3072], 3),
+    # (8, 4, [1, 1, 63488, 3072], 3),
     (8, 4, [1, 1, 63488, 1536], 3),
     # (8,4,[1, 1, 55296, 3072],3),
     # (8,4,[1, 1, 47104, 3072],3),
@@ -77,7 +77,7 @@ CONFIGS = [
 
 CONFIGS_IDS = [f"rs_input_shape{i}_" for i in range(len(CONFIGS))]
 
-WORKERS_PER_LINK = [None, "OPTIMIZED"]
+WORKERS_PER_LINK = ["OPTIMIZED"]
 WORKERS_PER_LINK_IDS = [f"{worker}-workers" for worker in WORKERS_PER_LINK]
 
 CHUNKS_PER_SYNC = [None]
@@ -170,8 +170,6 @@ def test_reduce_scatter_chunks_per_sync(
         else:
             if data_moved_MB > 4:
                 num_workers_per_link = 8
-            elif data_moved_MB < 1:
-                num_workers_per_link = 2
             else:
                 num_workers_per_link = 4
 
