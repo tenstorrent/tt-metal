@@ -31,7 +31,19 @@ class TtClassifierHead:
             signpost(header="classifier_head")
 
         x = ttnn.permute(x, (0, 2, 3, 1))
-        x = ttnn.global_avg_pool2d(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Global average pooling: use avg_pool2d with kernel_size = input spatial dimensions
+        N, H, W, C = x.shape
+        x = ttnn.avg_pool2d(
+            x,
+            batch_size=N,
+            input_h=H,
+            input_w=W,
+            channels=C,
+            kernel_size=(H, W),
+            stride=(H, W),
+            padding=(0, 0),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         x = ttnn.permute(x, (0, 3, 1, 2))
         x = ttnn.reshape(x, [x.shape[0], 1, 1, x.shape[1] * x.shape[2] * x.shape[3]])
         x = ttnn.linear(

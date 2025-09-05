@@ -440,7 +440,6 @@
     "l1_loss": "losses",
     "mse_loss": "losses",
     "max_pool2d": "pooling",
-    "global_avg_pool2d": "pooling",
     "matmul_default_height_sharded": "matmul/full",
     "matmul_default_width_sharded": "matmul/full",
     "matmul_default_interleaved": "matmul/full",
