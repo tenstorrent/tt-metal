@@ -52,6 +52,7 @@ class RMSNorm(LightweightModule):
         output_mem_config=None,
         ccl_topology=ttnn.Topology.Ring,
         tt_ccl=None,
+        simplified_rms=False,
     ):
         super().__init__()
         self.device = device
@@ -116,13 +117,21 @@ class RMSNorm(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self.simplified_rms = simplified_rms
 
     def forward(self, x: ttnn.Tensor, mode, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
         # If input is sharded do sharded RMSNorm and optionally return sharded output
         program_config = self.sharded_program_config if in_sharded else None
         memory_config = self.sharded_output_config if out_sharded else None
         distributed = self.is_distributed and self.is_distributed(mode)
-        norm = self._distributed_rmsnorm if distributed else ttnn.rms_norm
+        norm = (
+            self._simplified_rmsnorm
+            if self.simplified_rms
+            else self._distributed_rmsnorm
+            if distributed
+            else ttnn.rms_norm
+        )
+
         weight = self.weight_distributed if distributed else self.weight
 
         if in_sharded:
@@ -143,6 +152,25 @@ class RMSNorm(LightweightModule):
             return ttnn.sharded_to_interleaved(x)
         else:
             return x
+
+    def _simplified_rmsnorm(
+        self, inp, epsilon=None, weight=None, program_config=None, memory_config=None, compute_kernel_config=None
+    ):
+        inp = ttnn.sharded_to_interleaved(inp, ttnn.DRAM_MEMORY_CONFIG)
+        xnorm = ttnn.pow(inp, 2)
+        xnorm = ttnn.mean(xnorm, dim=-1, keepdim=True)
+        xnorm = ttnn.rsqrt(xnorm + epsilon)
+        xnorm = ttnn.multiply(inp, xnorm)
+        weight = ttnn.reshape(weight, [1, 1, -1])
+        output = ttnn.multiply(xnorm, (weight), use_legacy=False)
+
+        if memory_config is not None:
+            output = ttnn.to_memory_config(output, memory_config)
+
+        ttnn.deallocate(xnorm)
+        ttnn.deallocate(weight)
+
+        return output
 
     def _distributed_rmsnorm(
         self, inp, epsilon=None, weight=None, program_config=None, memory_config=None, compute_kernel_config=None
