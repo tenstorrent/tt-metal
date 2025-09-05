@@ -57,7 +57,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tenstorrent/ttsim
-          ref: 2140d3f3c1f990fc973166f3516b46e9a8f87ac4
+          ref: 7193bee260c6c7fc91d731c3e2e5a52d2eeea6fd
           path: docker-job/ttsim
           token: ${{ secrets.WILDER_PAT }}
 
