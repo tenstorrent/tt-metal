@@ -54,7 +54,7 @@ def test_panoptic_deeplab_forward_pass(device):
         project_channels=[32, 64],
         decoder_channels=[256, 256, 256],
         sem_seg_head_channels=256,
-        ins_embed_head_channels=128,
+        ins_embed_head_channels=32,
         norm="SyncBN",
     )
 
@@ -117,7 +117,7 @@ def test_panoptic_deeplab_inference_pipeline(device):
         project_channels=[32, 64],
         decoder_channels=[256, 256, 256],
         sem_seg_head_channels=256,
-        ins_embed_head_channels=128,
+        ins_embed_head_channels=32,
         norm="SyncBN",
     )
 
@@ -196,7 +196,7 @@ def test_panoptic_deeplab_pcc_comparison(device):
     project_channels = [32, 64]
     decoder_channels = [256, 256, 256]
     sem_seg_head_channels = 256
-    ins_embed_head_channels = 128
+    ins_embed_head_channels = 32
     common_stride = 4
     train_size = (512, 1024)
 

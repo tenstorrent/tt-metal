@@ -23,7 +23,7 @@ def test_ttnn_wholeInsEmbed(device):
 
     target_project_channels = [32, 64]
     target_decoder_channels = [256, 256, 256]
-    target_head_channels = 128
+    target_head_channels = 32
 
     w_aspp_k1 = torch.randn(256, 2048, 1, 1, dtype=torch.bfloat16)
     w_aspp_k3 = torch.randn(256, 2048, 3, 3, dtype=torch.bfloat16)
