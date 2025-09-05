@@ -26,7 +26,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "umd/device/types/arch.h"
-#include "tt_stl/tt_stl/small_vector.hpp"
+#include "tt_stl/tt_stl/span.hpp"
 
 #include "ttnn/decorators.hpp"
 
@@ -133,7 +133,7 @@ TEST_P(TestExpOpRuntimeFromModel, ExpOpFromModel) {
     std::cout << tensor_json.dump(4) << std::endl;
 
     // Use the proper interface function
-    auto runtime_ns = op_perf::get_runtime_from_model("ttnn::exp", tensor_json, output_layout_json);
+    auto runtime_ns = op_perf::get_runtime_from_model("exp", tensor_json, output_layout_json);
 
     EXPECT_GT(runtime_ns, 0);
     log_info(tt::LogTest, "Model runtime for ttnn::exp: {} ns", runtime_ns);
@@ -205,8 +205,8 @@ class TestExpOpQueryOpRuntime : public TTNNFixtureWithOfflineModel,
 TEST_P(TestExpOpQueryOpRuntime, ExpOpQueryOpRuntime) {
     const auto& input_spec = GetParam();
 
-    // output_layout object is not used in ttnn-op-runtime-predictor
-    // for eltwise unary but is sent into query_op_runtime by mlir / metal
+    // output_layout object is not used for eltwise unary
+    // but is sent into query_op_runtime by mlir / metal
     nlohmann::json output_layout = nlohmann::json::object();
 
     // call the query_op_runtime interface for ttnn::exp
@@ -227,38 +227,5 @@ INSTANTIATE_TEST_SUITE_P(
         TestExpOpQueryOpRuntime::m_interleaved_2048_2048_0_0_tiled));
 
 #endif //BUILD_TTNN_OP_RUNTIME_PREDICTOR
-
-TEST(TypeNameUtils, GetTypeNameForOps) {
-    // Test get_type_name for several ttnn op types
-    std::string exp_type = std::string(ttsl::get_type_name<decltype(ttnn::exp)>());
-    std::string add_type = std::string(ttsl::get_type_name<decltype(ttnn::add)>());
-    std::string mul_type = std::string(ttsl::get_type_name<decltype(ttnn::multiply)>());
-    std::string relu_type = std::string(ttsl::get_type_name<decltype(ttnn::relu)>());
-    std::string matmul_type = std::string(ttsl::get_type_name<decltype(ttnn::matmul)>());
-    std::string transpose_type = std::string(ttsl::get_type_name<decltype(ttnn::transpose)>());
-
-    auto op = ttnn::exp;
-    std::cout << "using decorators" << std::endl;
-    std::string name = op.base_name();                       // "exp"
-    std::string py_name = op.python_fully_qualified_name();  // "ttnn.exp"
-    std::string class_name = op.class_name();                // "ttnn::exp"
-    std::cout << "Base name: " << name << std::endl;
-    std::cout << "Python fully qualified name: " << py_name << std::endl;
-    std::cout << "Class name: " << class_name << std::endl;
-
-    std::cout << "Type name for ttnn::exp: " << exp_type << std::endl;
-    std::cout << "Type name for ttnn::add: " << add_type << std::endl;
-    std::cout << "Type name for ttnn::multiply: " << mul_type << std::endl;
-    std::cout << "Type name for ttnn::relu: " << relu_type << std::endl;
-    std::cout << "Type name for ttnn::matmul: " << matmul_type << std::endl;
-    std::cout << "Type name for ttnn::transpose: " << transpose_type << std::endl;
-
-    EXPECT_NE(exp_type.find("exp"), std::string::npos);
-    EXPECT_NE(add_type.find("add"), std::string::npos);
-    EXPECT_NE(mul_type.find("multiply"), std::string::npos);
-    EXPECT_NE(relu_type.find("relu"), std::string::npos);
-    EXPECT_NE(matmul_type.find("matmul"), std::string::npos);
-    EXPECT_NE(transpose_type.find("transpose"), std::string::npos);
-}
 
 }  // namespace ttnn::operations::binary::test

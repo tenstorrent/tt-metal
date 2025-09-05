@@ -17,11 +17,45 @@
 #include "interface.hpp"
 #include "tt_stl/tt_stl/span.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
+
+#include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
+#include "ttnn/operations/conv/conv_transpose2d/conv_transpose2d.hpp"
+#include "ttnn/operations/conv/conv_transpose2d/prepare_conv_transpose2d_weights.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/sort/sort.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/eltwise/quantization/quantization.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/embedding/embedding.hpp"
+#include "ttnn/operations/embedding_backward/embedding_backward.hpp"
+#include "ttnn/operations/kv_cache/kv_cache.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/moreh/moreh_cumsum/moreh_cumsum.hpp"
+#include "ttnn/operations/normalization/batch_norm/batch_norm.hpp"
+#include "ttnn/operations/normalization/rmsnorm/rmsnorm.hpp"
+#include "ttnn/operations/normalization/softmax/softmax.hpp"
+#include "ttnn/operations/pool/generic/generic_pools.hpp"
+#include "ttnn/operations/pool/upsample/upsample.hpp"
+#include "ttnn/operations/rand/rand.hpp"
+#include "ttnn/operations/reduction/argmax/argmax.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/reduction/prod/prod.hpp"
+#include "ttnn/operations/transformer/concatenate_heads/concatenate_heads.hpp"
+
 #endif
 
 namespace ttnn::graph {
@@ -34,23 +68,6 @@ struct RuntimeQueryResponse {
 
 static constexpr size_t NUM_TRACE_EXECUTIONS = 20;
 static constexpr size_t WARMUP_TRACE_EXECUTIONS = 5;
-
-#ifdef BUILD_TTNN_OP_RUNTIME_PREDICTOR
-
-// helper function checking for base_name()
-// if it does, this implies Op op in query_op_runtime() is a registered operation
-template <typename T>
-concept HasBaseName = requires(const T& t) {
-    { t.base_name() } -> std::convertible_to<std::string>;
-};
-
-template <typename T>
-auto get_op_name(const T& op) -> decltype(op.base_name()) {
-    return op.base_name();
-}
-
-inline std::string get_op_name(const std::string& op) { return op; }
-#endif
 
 /**
  * @brief Extracts a trace of the operation(s) and returns the trace ID.
@@ -123,6 +140,56 @@ uint64_t execute_time_and_release_trace(TraceID trace_id, MeshDevice* device) {
     }
 }
 
+#ifdef BUILD_TTNN_OP_RUNTIME_PREDICTOR
+
+// helper function checking for base_name()
+// if it does, this implies Op op in query_op_runtime() is a registered operation
+template <typename T>
+concept HasBaseName = requires(const T& t) {
+    { t.base_name() } -> std::convertible_to<std::string>;
+};
+
+template <typename T>
+auto get_op_name(const T& op) -> decltype(op.base_name()) {
+    return op.base_name();
+}
+
+inline std::string get_op_name(const std::string& op) { return op; }
+
+// helper function for ttnn-op-runtime-predictor
+template <typename Op, typename... Args>
+std::optional<RuntimeQueryResponse> query_ttnn_op_runtime_predictor(
+    const Op& op, const std::tuple<Args...>& transformed_args) {
+    if constexpr (HasBaseName<Op>) {
+        // helper lambda to make nlohmann::json objects from args
+        auto transform_to_json = [](auto&& arg) {
+            using ArgType = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<ArgType, nlohmann::json>) {
+                return arg;
+            } else {
+                auto json_arg = ttsl::json::to_json(arg);
+                return json_arg;
+            }
+        };
+
+        auto json_args_tuple = std::apply(
+            [&](auto&&... unpacked_args) { return std::make_tuple(transform_to_json(unpacked_args)...); },
+            transformed_args);
+
+        const auto& op_name = get_op_name(op);
+
+        uint64_t runtime = std::apply(
+            [&](auto&&... json_args) { return op_perf::get_runtime_from_model(op_name, json_args...); },
+            json_args_tuple);
+        if (runtime != 0) {
+            return RuntimeQueryResponse{ExecutionStatus::Success, runtime};
+        }
+    }
+    return std::nullopt;
+}
+
+#endif
+
 /**
  * @brief Extracts a trace of the graph operations and returns the trace execution runtime.
  *
@@ -160,32 +227,13 @@ auto query_op_runtime(Op op, MeshDevice* device, Args&&... args) {
     auto transformed_args = std::make_tuple(transform_arg(std::forward<Args>(args))...);
 
 #ifdef BUILD_TTNN_OP_RUNTIME_PREDICTOR
-    if constexpr (HasBaseName<Op>) {
-        // helper lambda to make nlohmann::json objects from args
-        auto transform_to_json = [](auto&& arg) {
-            using ArgType = std::decay_t<decltype(arg)>;
-            if constexpr (std::is_same_v<ArgType, nlohmann::json>) {
-                return arg;
-            } else {
-                auto json_arg = ttsl::json::to_json(arg);
-                return json_arg;
-            }
-        };
-
-        auto json_args_tuple = std::apply(
-            [&](auto&&... unpacked_args) { return std::make_tuple(transform_to_json(unpacked_args)...); },
-            transformed_args);
-
-        const auto& op_name = get_op_name(op);
-
-        uint64_t runtime = std::apply(
-            [&](auto&&... json_args) { return op_perf::get_runtime_from_model(op_name, json_args...); },
-            json_args_tuple);
-        if (runtime != 0) {
-            return RuntimeQueryResponse{ExecutionStatus::Success, runtime};
-        }
+    // query_response is an std::optional<RuntimeQueryResponse>
+    // if it has a value, return it
+    if (auto query_response = query_ttnn_op_runtime_predictor(op, transformed_args)) {
+        return *query_response;
     }
 #endif
+
     try {
         auto trace_id = std::apply(
             [&](auto&&... unpacked_args) {
