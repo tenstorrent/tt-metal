@@ -21,7 +21,7 @@
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
 
