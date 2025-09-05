@@ -1,4 +1,4 @@
-name: "[internal] TG demo tests impl"
+name: "[internal] Galaxy demo tests impl"
 
 on:
   workflow_call:
@@ -19,7 +19,7 @@ on:
       topology:
         required: false
         type: string
-        default: "config-tg"
+        default: "topology-6u"
 
 jobs:
   tg-demo-tests:
@@ -36,6 +36,7 @@ jobs:
           { name: "Galaxy SentenceBert demo tests", arch: wormhole_b0, model: sentence_bert, timeout: 30, owner_id: U088413NP0Q}, # Ashai Reddy
           { name: "Galaxy Stable Diffusion 3.5 Large demo tests", arch: wormhole_b0, model: sd35, timeout: 30, owner_id: U03FJB5TM5Y}, # Colman Glagovich
         ]
+    name: ${{ matrix.test-group.name }}
     runs-on:
       - arch-wormhole_b0
       - ${{ inputs.topology }}
