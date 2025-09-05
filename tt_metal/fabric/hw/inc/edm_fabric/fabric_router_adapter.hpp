@@ -286,6 +286,7 @@ public:
     }
 
 private:
+    mutable uint64_t noc_sem_addr_;
     std::array<uint32_t, EDM_NUM_BUFFER_SLOTS> edm_buffer_slot_addrs;
 
     uint32_t worker_credits_stream_id;
@@ -309,7 +310,6 @@ private:
     // noc location of the edm we are connected to (where packets are sent to)
     uint8_t edm_noc_x;
     uint8_t edm_noc_y;
-    mutable uint64_t noc_sem_addr_;
 
     // the cmd buffer is used for edm-edm path
     uint8_t data_noc_cmd_buf;
