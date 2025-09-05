@@ -80,6 +80,7 @@ sliding_window::ParallelConfig determine_output_parallel_config(
     const sliding_window::ParallelConfig& input_parallel_config,
     const CoreCoord& compute_grid_size,
     uint32_t out_channels,
+    tt::tt_metal::ShardOrientation block_shard_orientation,
     bool is_mm_conv);
 
 std::tuple<uint32_t, uint32_t> calculate_output_image_size(
@@ -97,7 +98,10 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     const ttnn::Shape& tensor_shape, const sliding_window::ParallelConfig& parallel_config, uint32_t tile_size);
 
 OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
-    const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw, uint32_t num_cores_c);
+    const MemoryConfig& conv_output_mem_config,
+    uint32_t num_cores_nhw,
+    uint32_t num_cores_c_in,
+    uint32_t num_cores_c_out);
 
 ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
     OptimizedConvParallelizationConfig conv_parallelization_config,
@@ -144,14 +148,16 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
     bool is_mm_conv);
 
 std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
-    const Conv2dConfig& conv_config,
+    TensorMemoryLayout shard_layout,
+    ShardOrientation block_shard_orientation,
     uint32_t batch_size,
     ttnn::Shape input_tensor_shape,
     ttnn::Shape output_tensor_shape,
     bool is_mm_conv,
     CoreCoord compute_grid_size,
     Layout input_tensor_layout,
-    const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt);
+    const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt,
+    std::optional<uint32_t> act_block_h_override = std::nullopt);
 
 DeviceComputeKernelConfig get_conv_default_compute_kernel_config(MeshDevice* device);
 

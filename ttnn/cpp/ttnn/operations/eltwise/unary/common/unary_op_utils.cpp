@@ -518,6 +518,9 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             } else if (input_dtype == DataType::UINT32) {
                 op_init_and_name = {
                     "logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_uint32({});", idst)};
+            } else if (input_dtype == DataType::UINT16) {
+                op_init_and_name = {
+                    "logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_uint16({});", idst)};
             } else {
                 op_init_and_name = {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile({});", idst)};
             }
@@ -566,6 +569,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 op_init_and_name = {"eqz_tile_init();", fmt::format("eqz_tile_int32({});", idst)};
             } else if (input_dtype.value() == DataType::UINT16) {
                 op_init_and_name = {"eqz_tile_init();", fmt::format("eqz_tile_uint16({});", idst)};
+            } else if (input_dtype.value() == DataType::UINT32) {
+                op_init_and_name = {"eqz_tile_init();", fmt::format("eqz_tile_uint32({});", idst)};
             } else {
                 op_init_and_name = {"eqz_tile_init();", fmt::format("eqz_tile({});", idst)};
             }
@@ -577,6 +582,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 op_init_and_name = {"nez_tile_init();", fmt::format("nez_tile_int32({});", idst)};
             } else if (input_dtype == DataType::UINT16) {
                 op_init_and_name = {"nez_tile_init();", fmt::format("nez_tile_uint16({});", idst)};
+            } else if (input_dtype.value() == DataType::UINT32) {
+                op_init_and_name = {"nez_tile_init();", fmt::format("nez_tile_uint32({});", idst)};
             } else {
                 op_init_and_name = {"nez_tile_init();", fmt::format("nez_tile({});", idst)};
             }

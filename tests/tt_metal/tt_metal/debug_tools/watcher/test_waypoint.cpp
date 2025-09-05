@@ -13,6 +13,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -36,9 +37,15 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-void RunTest(WatcherFixture* fixture, IDevice* device) {
+void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
     // Set up program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     // Test runs on a 5x5 grid
     CoreCoord xy_start = {0, 0};
@@ -47,17 +54,17 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
     // Run a kernel that posts waypoints and waits on certain gating values to be written before
     // posting the next waypoint.
     auto brisc_kid = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
         CoreRange(xy_start, xy_end),
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     auto ncrisc_kid = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
         CoreRange(xy_start, xy_end),
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     auto trisc_kid = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
         CoreRange(xy_start, xy_end),
         ComputeConfig{});
@@ -78,24 +85,9 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
     const std::vector<uint32_t> args = { delay_cycles, l1_buffer->address() };
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            SetRuntimeArgs(
-                program,
-                brisc_kid,
-                CoreCoord{x, y},
-                args
-            );
-            SetRuntimeArgs(
-                program,
-                ncrisc_kid,
-                CoreCoord{x, y},
-                args
-            );
-            SetRuntimeArgs(
-                program,
-                trisc_kid,
-                CoreCoord{x, y},
-                args
-            );
+            SetRuntimeArgs(program_, brisc_kid, CoreCoord{x, y}, args);
+            SetRuntimeArgs(program_, ncrisc_kid, CoreCoord{x, y}, args);
+            SetRuntimeArgs(program_, trisc_kid, CoreCoord{x, y}, args);
         }
     }
     // Also run on ethernet cores if they're present
@@ -113,13 +105,13 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
             eth_core_ranges.insert(CoreRange(core, core));
         }
         erisc_kid = CreateKernel(
-            program,
+            program_,
             "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
             eth_core_ranges,
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
 
         for (const auto& core : device->get_active_ethernet_cores(true)) {
-            SetRuntimeArgs(program, erisc_kid, core, args);
+            SetRuntimeArgs(program_, erisc_kid, core, args);
         }
     }
     if (has_idle_eth_cores) {
@@ -129,7 +121,7 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
             eth_core_ranges.insert(CoreRange(core, core));
         }
         ierisc_kid0 = CreateKernel(
-            program,
+            program_,
             "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
             eth_core_ranges,
             tt_metal::EthernetConfig{
@@ -137,7 +129,7 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
 
         if (device->arch() == ARCH::BLACKHOLE) {
             ierisc_kid1 = CreateKernel(
-                program,
+                program_,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
                 eth_core_ranges,
                 tt_metal::EthernetConfig{
@@ -145,16 +137,16 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
         }
 
         for (const auto& core : device->get_inactive_ethernet_cores()) {
-            SetRuntimeArgs(program, ierisc_kid0, core, args);
+            SetRuntimeArgs(program_, ierisc_kid0, core, args);
             if (device->arch() == ARCH::BLACKHOLE) {
-                SetRuntimeArgs(program, ierisc_kid1, core, args);
+                SetRuntimeArgs(program_, ierisc_kid1, core, args);
             }
         }
     }
 
 
     // Run the program in a new thread, we'll have to update gate values in this thread.
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(mesh_device, workload);
 
     // Check that the expected waypoints are in the watcher log, a set for each core.
     auto check_core = [&](const CoreCoord& logical_core,
@@ -191,9 +183,9 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
                     // Active eth core only has one available erisc to test on.
                     (device->arch() == ARCH::BLACKHOLE and not is_active) ? waypoint : "   X");
                 if (device->arch() == ARCH::BLACKHOLE) {
-                    expected += fmt::format("rmsg:???|?? h_id:  0 smsg:? k_id:{}", k_id_s);
+                    expected += fmt::format("rmsg:???|?? h_id:  0 smsg:? k_ids:{}", k_id_s);
                 } else {
-                    expected += fmt::format("rmsg:???|? h_id:  0 k_id:{}", k_id_s);
+                    expected += fmt::format("rmsg:???|? h_id:  0 k_ids:{}", k_id_s);
                 }
             } else {
                 // Each different config has a different calculation for k_id, let's just do one. Fast Dispatch, one device.
@@ -253,8 +245,8 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
 }
 }
 
-TEST_F(WatcherFixture, TestWatcherWaypoints) {
-    for (IDevice* device : this->devices_) {
-        this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
+TEST_F(MeshWatcherFixture, TestWatcherWaypoints) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, mesh_device);
     }
 }
