@@ -3,7 +3,7 @@ import torch
 from typing import Dict
 
 from models.experimental.panoptic_deeplab.reference.pytorch_insemb import PanopticDeepLabInsEmbedHead
-from models.experimental.panoptic_deeplab.reference.pytorch_semSeg import ShapeSpec
+from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 
 from models.experimental.panoptic_deeplab.tt.tt_insemb import TtPanopticDeepLabInsEmbedHead
 

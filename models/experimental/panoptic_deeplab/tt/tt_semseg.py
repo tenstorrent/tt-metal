@@ -5,9 +5,9 @@ import ttnn
 
 from .tt_aspp import TtASPP, get_ttnn_norm, get_ttnn_activation
 
-from .tt_conv2dWrapper import TtConv2d, TtConv2dParameters
+from .tt_conv2d_wrapper import TtConv2d, TtConv2dParameters
 from .tt_upsample_wrapper import TtUpsample
-from ..reference.pytorch_semSeg import ShapeSpec
+from ..reference.pytorch_semseg import ShapeSpec
 
 
 class TtDeepLabV3PlusHead(nn.Module):

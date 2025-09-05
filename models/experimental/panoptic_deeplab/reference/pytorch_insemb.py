@@ -5,8 +5,8 @@ from torch.nn import functional as F
 
 # Assuming these are in the same directory or accessible via your python path
 from .pytorch_aspp import get_norm
-from .pytorch_conv2dWrapper import Conv2d
-from .pytorch_semSeg import DeepLabV3PlusHead, ShapeSpec
+from .pytorch_conv2d_wrapper import Conv2d
+from .pytorch_semseg import DeepLabV3PlusHead, ShapeSpec
 
 
 class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
