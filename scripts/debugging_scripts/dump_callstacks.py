@@ -34,7 +34,7 @@ import re
 import subprocess
 
 script_config = ScriptConfig(
-    depends=["check_per_device", "dispatcher_data", "block_locations_to_check"],
+    depends=["check_per_block_location", "dispatcher_data"],
 )
 
 
@@ -298,7 +298,7 @@ def run(args, context: Context):
     gdb_callstack = args["--gdb_callstack"]
     active_cores = args["--active_cores"]
     port = int(args["--port"]) if gdb_callstack else None
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
     check_per_block_location = get_check_per_block_location(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     callstacks_data = check_per_block_location.run_check(

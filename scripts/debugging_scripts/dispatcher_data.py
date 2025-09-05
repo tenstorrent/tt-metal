@@ -54,6 +54,7 @@ class DispatcherData:
         self._a_kernel_path = next(iter(inspector_data.kernels.values())).path
         brisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "brisc")
         idle_erisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "idle_erisc")
+        active_erisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "erisc")
 
         # Check if firmware elf paths exist
         if not os.path.exists(brisc_elf_path):
@@ -62,9 +63,12 @@ class DispatcherData:
         if not os.path.exists(idle_erisc_elf_path):
             raise TTTriageError(f"IDLE ERISC ELF file {idle_erisc_elf_path} does not exist.")
 
+        if not os.path.exists(active_erisc_elf_path):
+            raise TTTriageError(f"ACTIVE ERISC ELF file {active_erisc_elf_path} does not exist.")
+
         self._brisc_elf = parse_elf(brisc_elf_path, context)
         self._idle_erisc_elf = parse_elf(idle_erisc_elf_path, context)
-
+        self._active_erisc_elf = parse_elf(active_erisc_elf_path, context)
         # Check if debug info is obtained correctly
         if not self._brisc_elf:
             raise TTTriageError(
@@ -75,10 +79,15 @@ class DispatcherData:
                 f"Failed to extract DWARF info from ELF file {idle_erisc_elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
             )
 
+        if not self._active_erisc_elf:
+            raise TTTriageError(
+                f"Failed to extract DWARF info from ELF file {active_erisc_elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
+            )
+
         # Access the value of enumerator for supported blocks
         self._ProgrammableCoreTypes_TENSIX = self._brisc_elf.enumerators["ProgrammableCoreType::TENSIX"].value
         self._ProgrammableCoreTypes_IDLE_ETH = self._brisc_elf.enumerators["ProgrammableCoreType::IDLE_ETH"].value
-
+        self._ProgrammableCoreTypes_ACTIVE_ETH = self._brisc_elf.enumerators["ProgrammableCoreType::ACTIVE_ETH"].value
         # Enumerators for tensix block
         self._enum_values_tenisx = {
             "ProcessorTypes": {
@@ -141,10 +150,15 @@ class DispatcherData:
             fw_elf = self._brisc_elf
             programmable_core_type = self._ProgrammableCoreTypes_TENSIX
             enum_values = self._enum_values_tenisx
-        else:
+        elif location in location._device.idle_eth_block_locations:
             # For eth, use the idle erisc elf
             fw_elf = self._idle_erisc_elf
             programmable_core_type = self._ProgrammableCoreTypes_IDLE_ETH
+            enum_values = self._enum_values_eth
+        elif location in location._device.active_eth_block_locations:
+            # For active eth, use the active erisc elf
+            fw_elf = self._active_erisc_elf
+            programmable_core_type = self._ProgrammableCoreTypes_ACTIVE_ETH
             enum_values = self._enum_values_eth
 
         proc_name = risc_name.upper()
@@ -210,21 +224,39 @@ class DispatcherData:
             go_data = -1
             preload = False
 
-        if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-            firmware_path = self._a_kernel_path + "../../../firmware/idle_erisc/idle_erisc.elf"
-        elif proc_name.lower() == "erisc1":
-            firmware_path = self._a_kernel_path + "../../../firmware/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+        if location in location._device.active_eth_block_locations:
+            if proc_name.lower() == "erisc":
+                firmware_path = self._a_kernel_path + "../../../firmware/erisc/erisc.elf"
+            elif proc_name.lower() == "erisc0":
+                firmware_path = self._a_kernel_path + "../../../firmware/active_erisc/active_erisc.elf"
+            elif proc_name.lower() == "erisc1":
+                firmware_path = self._a_kernel_path + "../../../firmware/idle_erisc/idle_erisc.elf"
         else:
-            firmware_path = self._a_kernel_path + f"../../../firmware/{proc_name.lower()}/{proc_name.lower()}.elf"
+            if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
+                firmware_path = self._a_kernel_path + "../../../firmware/idle_erisc/idle_erisc.elf"
+            elif proc_name.lower() == "erisc1":
+                firmware_path = (
+                    self._a_kernel_path + "../../../firmware/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+                )
+            else:
+                firmware_path = self._a_kernel_path + f"../../../firmware/{proc_name.lower()}/{proc_name.lower()}.elf"
         firmware_path = os.path.realpath(firmware_path)
 
         if kernel:
-            if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-                kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
-            elif proc_name.lower() == "erisc1":
-                kernel_path = kernel.path + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+            if location in location._device.active_eth_block_locations:
+                if proc_name.lower() == "erisc":
+                    kernel_path = kernel.path + "/erisc/erisc.elf"
+                elif proc_name.lower() == "erisc0":
+                    kernel_path = kernel.path + "/active_erisc/active_erisc.elf"
+                elif proc_name.lower() == "erisc1":
+                    kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
             else:
-                kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
+                if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
+                    kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
+                elif proc_name.lower() == "erisc1":
+                    kernel_path = kernel.path + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+                else:
+                    kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
             kernel_path = os.path.realpath(kernel_path)
             if proc_name == "NCRISC" and location._device._arch == "wormhole_b0":
                 kernel_offset = 0xFFC00000
