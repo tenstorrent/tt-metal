@@ -72,7 +72,7 @@ def test_oft_forward_new(
         channels,
         cell_size,
         grid_height,
-        features,
+        features.shape[2:],
         calib,
         grid,
         scale=scale,

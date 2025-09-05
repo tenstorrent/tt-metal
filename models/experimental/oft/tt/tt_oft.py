@@ -38,7 +38,7 @@ class OFT:
         channels,
         cell_size,
         grid_height,
-        features,
+        features_shape_hw,
         calib,
         grid,
         scale,
@@ -52,7 +52,7 @@ class OFT:
         self.use_precomputed_grid = use_precomputed_grid
 
         self.bbox_corners, self.visible, self.area, self.shape = self.calculate_initialization_parameters(
-            device, channels, cell_size, grid_height, features, calib, grid, self.scale, use_precomputed_grid
+            device, channels, cell_size, grid_height, features_shape_hw, calib, grid, self.scale, use_precomputed_grid
         )
         # self.area = calculate_initialization_parameters(
         #     device, channels, cell_size, grid_height, features, calib, grid, self.scale
@@ -188,7 +188,7 @@ class OFT:
         return ortho_feats
 
     def calculate_initialization_parameters(
-        self, device, channels, cell_size, grid_height, features, calib, grid, scale, use_precomputed_grid
+        self, device, channels, cell_size, grid_height, feature_shape_hw, calib, grid, scale, use_precomputed_grid
     ):
         y_corners = torch.arange(0, grid_height, cell_size) - grid_height / 2.0
         y_corners = F.pad(y_corners.view(-1, 1, 1, 1), [1, 1])
@@ -198,10 +198,10 @@ class OFT:
         # Project grid corners to image plane and normalize to [-1, 1]
         img_corners = perspective_torch(calib.view(-1, 1, 1, 1, 3, 4), corners)
 
-        img_height, img_width = features.size()[2:]
+        feature_height, feature_width = feature_shape_hw
         # print(f"img_height: {img_height}, img_width: {img_width}")
         # Normalize to [-1, 1]
-        img_size = corners.new([img_width, img_height]) / scale
+        img_size = corners.new([feature_width, feature_height]) / scale
         # print(f"img_size shape: {img_size.shape}, dtype: {img_size.dtype}")
         # print(f"scale: {scale}")
         # print(f"img_size: {img_size}")
@@ -218,7 +218,8 @@ class OFT:
         batch, _, depth, width, _ = bbox_corners.size()
         bbox_corners = bbox_corners.flatten(2, 3)
         area = (
-            (bbox_corners[..., 2:] - bbox_corners[..., :2]).prod(dim=-1) * img_height * img_width * 0.25 + EPSILON
+            (bbox_corners[..., 2:] - bbox_corners[..., :2]).prod(dim=-1) * feature_height * feature_width * 0.25
+            + EPSILON
         ).unsqueeze(1)
         visible = area > EPSILON
 
@@ -231,8 +232,7 @@ class OFT:
         btm_left_bc = bbox_corners[..., [0, 3]]
 
         batch_size, grid_h, grid_w, _ = top_left_bc.shape
-        batch_size, channels, height, width = features.shape
-        input_shape_nhwc = [batch_size, height, width, channels]
+        input_shape_nhwc = [batch_size, feature_height, feature_width, channels]
 
         # bbox_corners_tt = ttnn.from_torch(bbox_corners, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
         if use_precomputed_grid:

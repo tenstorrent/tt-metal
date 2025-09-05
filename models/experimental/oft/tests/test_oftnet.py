@@ -98,7 +98,7 @@ def test_oftnet(device, grid_height, cell_size):
         [2, 2, 2, 2],
         ttnn_mean,
         ttnn_std,
-        features=input_tensor,
+        input_shape_hw=input_tensor.shape[2:],
         calib=calib,
         grid=grid,
         topdown_layers=topdown_layers,
