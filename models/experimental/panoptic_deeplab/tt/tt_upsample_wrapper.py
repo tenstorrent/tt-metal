@@ -8,6 +8,7 @@ from typing import Union
 from enum import Enum
 
 import ttnn
+from loguru import logger
 
 
 class SliceMode(Enum):
@@ -107,9 +108,8 @@ class TtUpsample:
         """Perform channel slicing upsample"""
         orig_batch, orig_height, orig_width, orig_channels = x.shape
 
-        print(f"--- Running Upsample with Channel Slicing (factor={self._slice_config.num_slices}) ---")
-        print(
-            f"Using channel slicing for upsample: {orig_channels} channels split into {self._slice_config.num_slices} slices"
+        logger.trace(
+            f"TtUpsample channel slicing - input shape: {x.shape}, slices: {self._slice_config.num_slices}, scale_factor: {self._scale_factor}, mode: {self._mode}"
         )
 
         assert (
@@ -120,7 +120,9 @@ class TtUpsample:
         sliced_results = []
 
         for slice_idx in range(self._slice_config.num_slices):
-            print(f"  Processing channel slice {slice_idx+1}/{self._slice_config.num_slices}...")
+            logger.trace(
+                f"TtUpsample processing channel slice {slice_idx+1}/{self._slice_config.num_slices}, channels_per_slice: {channels_per_slice}"
+            )
             start_ch = slice_idx * channels_per_slice
             end_ch = (slice_idx + 1) * channels_per_slice
 
@@ -136,6 +138,9 @@ class TtUpsample:
 
         # Concatenate slices along channel dimension
         x_upsampled = ttnn.concat(sliced_results, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        logger.trace(
+            f"TtUpsample channel slicing complete - output shape: {x_upsampled.shape}, memory_config: {x_upsampled.memory_config()}"
+        )
 
         # Deallocate slice tensors
         for slice_result in sliced_results:
@@ -145,7 +150,13 @@ class TtUpsample:
 
     def _perform_standard_upsample(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Perform standard upsample without slicing"""
+        logger.trace(
+            f"TtUpsample standard upsampling - input shape: {x.shape}, scale_factor: {self._scale_factor}, mode: {self._mode}"
+        )
         x_upsampled = ttnn.upsample(x, scale_factor=self._scale_factor, mode=self._mode)
+        logger.trace(
+            f"TtUpsample standard upsampling complete - output shape: {x_upsampled.shape}, memory_config: {x_upsampled.memory_config()}"
+        )
         return x_upsampled
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:

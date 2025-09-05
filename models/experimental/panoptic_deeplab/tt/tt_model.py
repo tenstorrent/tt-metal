@@ -17,11 +17,12 @@ https://github.com/facebookresearch/detectron2/blob/main/projects/Panoptic-DeepL
 import torch
 from typing import Dict, List, Optional, Tuple, Any
 import ttnn
+from loguru import logger
 
 from .tt_resnet import TtResNet
 from .tt_semseg import TtPanopticDeepLabSemSegHead
 from .tt_insemb import TtPanopticDeepLabInsEmbedHead
-from .common import create_real_resnet_state_dict, create_full_resnet_state_dict
+from .common import create_resnet_state_dict
 from ..reference.pytorch_postprocessing import get_panoptic_segmentation
 from ..reference.pytorch_semseg import ShapeSpec
 
@@ -58,7 +59,6 @@ class TtPanopticDeepLab:
         # Training configuration
         train_size: Optional[Tuple[int, int]] = None,
         # Weight initialization
-        use_real_weights: bool = True,
         weights_path: Optional[str] = None,
         # Shared weight tensors for heads
         shared_weight_tensor_kernel1: Optional[torch.Tensor] = None,
@@ -98,8 +98,7 @@ class TtPanopticDeepLab:
             decoder_channels: Channels for decoder layers
             norm: Normalization type
             train_size: Training image size for ASPP pooling
-            use_real_weights: Whether to use real pre-trained weights
-            weights_path: Path to weight file
+            weights_path: Path to weight file (uses weights from R-52.pkl)
             **_weight arguments: Pre-computed weight tensors for all components
         """
         self.device = device
@@ -108,12 +107,10 @@ class TtPanopticDeepLab:
         self.train_size = train_size
 
         # Initialize backbone
-        if use_real_weights:
-            backbone_state_dict = create_real_resnet_state_dict(weights_path)
-        else:
-            backbone_state_dict = create_full_resnet_state_dict()
-
+        logger.debug("Initializing ResNet backbone with loaded weights")
+        backbone_state_dict = create_resnet_state_dict(weights_path)
         self.backbone = TtResNet(device=device, state_dict=backbone_state_dict, dtype=ttnn.bfloat16)
+        logger.debug("ResNet backbone initialization complete")
 
         # Define feature map specifications based on ResNet output
         self.input_shape = self._create_input_shape_spec()
@@ -156,6 +153,7 @@ class TtPanopticDeepLab:
         )
 
         # Initialize semantic segmentation head
+        logger.debug("Initializing semantic segmentation head")
         self.semantic_head = TtPanopticDeepLabSemSegHead(
             input_shape=self.input_shape,
             device=device,
@@ -174,7 +172,10 @@ class TtPanopticDeepLab:
             **sem_weights,
         )
 
+        logger.debug("Semantic segmentation head initialization complete")
+
         # Initialize instance embedding head
+        logger.debug("Initializing instance embedding head")
         self.instance_head = TtPanopticDeepLabInsEmbedHead(
             input_shape=self.input_shape,
             device=device,
@@ -191,6 +192,8 @@ class TtPanopticDeepLab:
             shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
             **ins_weights,
         )
+        logger.debug("Instance embedding head initialization complete")
+        logger.debug("TtPanopticDeepLab model initialization complete")
 
     def _create_input_shape_spec(self) -> Dict[str, ShapeSpec]:
         """Create input shape specifications for ResNet feature maps."""
@@ -358,14 +361,21 @@ class TtPanopticDeepLab:
             - offset_map: Instance offset predictions [B, H, W, 2]
             - features: Optional backbone features if return_features=True
         """
+        logger.debug(f"Starting TtPanopticDeepLab forward pass with input shape: {x.shape}")
+
         # Extract multi-scale features from backbone
         features = self.backbone(x)
+        logger.debug(
+            f"Backbone features extracted - res2: {features['res2'].shape}, res3: {features['res3'].shape}, res4: {features['res4'].shape}, res5: {features['res5'].shape}"
+        )
 
         # Get semantic segmentation predictions
         semantic_logits, _ = self.semantic_head(features)
+        logger.debug(f"Semantic segmentation output shape: {semantic_logits.shape}")
 
         # Get instance embedding predictions
         center_heatmap, offset_map, _, _ = self.instance_head(features)
+        logger.debug(f"Instance embedding outputs - center: {center_heatmap.shape}, offset: {offset_map.shape}")
 
         # Return predictions and optionally features
         if return_features:
@@ -463,19 +473,16 @@ class TtPanopticDeepLab:
         }
 
 
-def create_panoptic_deeplab_model(
-    device: ttnn.MeshDevice, num_classes: int = 19, use_real_weights: bool = True, **kwargs
-) -> TtPanopticDeepLab:
+def create_panoptic_deeplab_model(device: ttnn.MeshDevice, num_classes: int = 19, **kwargs) -> TtPanopticDeepLab:
     """
     Factory function to create a Panoptic-DeepLab model with default configuration.
 
     Args:
         device: TTNN device
         num_classes: Number of semantic classes
-        use_real_weights: Whether to use pre-trained weights
         **kwargs: Additional model configuration parameters
 
     Returns:
-        Configured TtPanopticDeepLab model
+        Configured TtPanopticDeepLab model (uses weights from R-52.pkl)
     """
-    return TtPanopticDeepLab(device=device, num_classes=num_classes, use_real_weights=use_real_weights, **kwargs)
+    return TtPanopticDeepLab(device=device, num_classes=num_classes, **kwargs)

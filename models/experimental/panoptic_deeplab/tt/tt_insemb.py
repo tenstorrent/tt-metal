@@ -1,6 +1,7 @@
 import torch
 from typing import Dict, List, Optional, Tuple
 import ttnn
+from loguru import logger
 
 from .tt_aspp import get_ttnn_norm
 from .tt_conv2d_wrapper import TtConv2d, TtConv2dParameters
@@ -64,6 +65,7 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         assert self.decoder_only
         use_bias = norm == ""
         decoder_out_ch = decoder_channels[0]
+        logger.debug(f"Initializing TtPanopticDeepLabInsEmbedHead with head_channels: {head_channels}")
 
         # --- Center Prediction ---
         # center_head_0 with height slicing
@@ -121,17 +123,22 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         # Note: Using default mode (no mode specified) to match original implementation
         self.center_upsample = TtUpsample.create(device=device, scale_factor=common_stride, mode="nearest")
         self.offset_upsample = TtUpsample.create(device=device, scale_factor=common_stride, mode="nearest")
+        logger.debug("TtPanopticDeepLabInsEmbedHead initialization complete")
 
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, ttnn.Tensor, Dict, Dict]:
+        logger.debug("TtPanopticDeepLabInsEmbedHead forward pass starting")
         center_logits, offset_logits = self.layers(features)
 
         # --- Final Upsample for Center ---
         center_logits = self.center_upsample(center_logits)
+        logger.debug(f"TtPanopticDeepLabInsEmbedHead center upsample complete - shape: {center_logits.shape}")
 
         # --- Final Upsample for Offset ---
         offset_logits = self.offset_upsample(offset_logits)
         offset_logits = ttnn.mul(offset_logits, self.common_stride)
+        logger.debug(f"TtPanopticDeepLabInsEmbedHead offset upsample complete - shape: {offset_logits.shape}")
 
+        logger.debug("TtPanopticDeepLabInsEmbedHead forward pass complete")
         return center_logits, offset_logits, {}, {}
 
     def layers(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, ttnn.Tensor]:

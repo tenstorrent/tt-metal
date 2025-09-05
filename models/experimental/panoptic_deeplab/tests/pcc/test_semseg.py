@@ -1,7 +1,11 @@
-import torch
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
-from typing import Dict
+import torch
 import ttnn
+from typing import Dict
+from loguru import logger
 
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import PanopticDeepLabSemSegHead, ShapeSpec
 from models.experimental.panoptic_deeplab.tt.tt_semseg import TtPanopticDeepLabSemSegHead
@@ -9,11 +13,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
-# Add this to your test file and run it
-def test_ttnn_wholeSemSeg(device):
+def test_ttnn_semseg(device):
     compute_grid = device.compute_with_storage_grid_size()
-
-    print(f"compute_grid: {compute_grid.x}x{compute_grid.y}")
     if compute_grid.x != 5 or compute_grid.y != 4:
         pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
 
@@ -29,11 +30,8 @@ def test_ttnn_wholeSemSeg(device):
     target_decoder_channels = [256, 256, 256]
     target_head_channels = 256
 
-    # 2. Create ALL shared torch.Tensor weights for both models
-    # --- Weights for the base decoder part (ASPP, fuse, project) ---
     w_aspp_k1 = torch.randn(256, 2048, 1, 1, dtype=torch.bfloat16)
     w_aspp_k3 = torch.randn(256, 2048, 3, 3, dtype=torch.bfloat16)
-    # ASPP concat before final proj is 4*256(atrous) + 256(pool) = 1280 channels -> 256 out
     w_aspp_k1_out5 = torch.randn(256, 1280, 1, 1, dtype=torch.bfloat16)
 
     w_res3_proj = torch.randn(64, 512, 1, 1, dtype=torch.bfloat16)
@@ -53,8 +51,6 @@ def test_ttnn_wholeSemSeg(device):
 
     w_panoptic_predictor = torch.randn(num_classes, target_head_channels, 1, 1, dtype=torch.bfloat16)
 
-    # 3. Prepare PyTorch Model and Inputs
-    # --- Create PyTorch inputs and ShapeSpec ---
     torch_features: Dict[str, torch.Tensor] = {
         "res2": torch.randn(1, 256, 128, 256, dtype=torch.bfloat16),
         "res3": torch.randn(1, 512, 64, 128, dtype=torch.bfloat16),
@@ -75,7 +71,7 @@ def test_ttnn_wholeSemSeg(device):
         "res3": res3_shape,
         "res5": res5_shape,
     }
-    # --- Instantiate and run PyTorch model ---
+
     torch_model = PanopticDeepLabSemSegHead(
         input_shape=input_shape_pytorch,
         project_channels=target_project_channels,
@@ -106,12 +102,10 @@ def test_ttnn_wholeSemSeg(device):
     torch_model = torch_model.to(dtype=torch.bfloat16)
     torch_model.eval()
 
-    # 4. Prepare TTNN Model and Inputs
-    # --- Create TTNN inputs and ShapeSpec ---
     ttnn_features: Dict[str, ttnn.Tensor] = {}
     for name, tensor in torch_features.items():
         ttnn_features[name] = ttnn.from_torch(
-            tensor.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16  # NCHW -> NHWC
+            tensor.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
         )
     input_shape_ttnn: Dict[str, ShapeSpec] = {
         "res2": res2_shape,
@@ -145,10 +139,8 @@ def test_ttnn_wholeSemSeg(device):
 
     ttnn_out_tt, _ = ttnn_model(ttnn_features)
 
-    ttnn_out_torch = ttnn.to_torch(ttnn_out_tt).permute(0, 3, 1, 2)  # NHWC -> NCHW
+    ttnn_out_torch = ttnn.to_torch(ttnn_out_tt).permute(0, 3, 1, 2)
 
     passed, msg = assert_with_pcc(torch_out, ttnn_out_torch, pcc=0.98)
-    print(f"PCC Result: {msg}")
-
-    assert passed, f"Comparison FAILED : {msg}"
-    print(f"✅ TEST PASSED")
+    logger.info(f"PCC: {msg}")
+    assert passed, f"Semantic segmentation PCC test failed: {msg}"

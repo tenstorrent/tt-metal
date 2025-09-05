@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 import ttnn
+from loguru import logger
 
 
 class SliceMode(Enum):
@@ -112,7 +113,9 @@ class TtMaxPool2d:
         """Perform channel slicing maxpool"""
         batch_size, input_h, input_w, channels = x.shape
 
-        print(f"--- Running MaxPool2d with Channel Slicing (factor={self._slice_config.num_slices}) ---")
+        logger.trace(
+            f"TtMaxPool2d channel slicing - input shape: {x.shape}, slices: {self._slice_config.num_slices}, kernel: {self._kernel_size}, stride: {self._stride}, padding: {self._padding}"
+        )
 
         assert (
             channels % self._slice_config.num_slices == 0
@@ -127,7 +130,9 @@ class TtMaxPool2d:
         output_slices = []
 
         for i in range(self._slice_config.num_slices):
-            print(f"  Processing channel slice {i+1}/{self._slice_config.num_slices}...")
+            logger.trace(
+                f"TtMaxPool2d processing channel slice {i+1}/{self._slice_config.num_slices}, slice channels: {slice_channels}"
+            )
             start_idx = i * slice_channels
             end_idx = (i + 1) * slice_channels
 
@@ -161,6 +166,9 @@ class TtMaxPool2d:
 
         # Concatenate slices along channel dimension
         x_pooled = ttnn.concat(output_slices, dim=3)
+        logger.trace(
+            f"TtMaxPool2d channel slicing complete - output shape: {x_pooled.shape}, memory_config: {x_pooled.memory_config()}"
+        )
 
         # Deallocate slice tensors
         for slice_tensor in output_slices:
@@ -171,6 +179,10 @@ class TtMaxPool2d:
     def _perform_standard_maxpool(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Perform standard maxpool without slicing"""
         batch_size, input_h, input_w, channels = x.shape
+
+        logger.trace(
+            f"TtMaxPool2d standard pooling - input shape: {x.shape}, kernel: {self._kernel_size}, stride: {self._stride}, padding: {self._padding}"
+        )
 
         # Reshape for max_pool2d
         x_reshaped = ttnn.reshape(x, (1, 1, batch_size * input_h * input_w, channels))
@@ -192,6 +204,9 @@ class TtMaxPool2d:
         output_h = (input_h + 2 * self._padding[0] - self._kernel_size[0]) // self._stride[0] + 1
         output_w = (input_w + 2 * self._padding[1] - self._kernel_size[1]) // self._stride[1] + 1
         x_pooled = ttnn.reshape(x_pooled, (batch_size, output_h, output_w, channels))
+        logger.trace(
+            f"TtMaxPool2d standard pooling complete - output shape: {x_pooled.shape}, memory_config: {x_pooled.memory_config()}"
+        )
         return x_pooled
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
