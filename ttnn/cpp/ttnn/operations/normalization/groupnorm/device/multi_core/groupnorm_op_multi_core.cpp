@@ -565,6 +565,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)datum_size_bytes,
         (std::uint32_t)per_core_Mt,
         (std::uint32_t)TILE_HEIGHT};
+    if (use_welford) {
+        reader_mcast_sender_compile_time_args.push_back(block_ht * block_wt);
+    }
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
@@ -574,6 +577,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
         (std::uint32_t)per_core_Mt,
         (std::uint32_t)TILE_HEIGHT};
+    if (use_welford) {
+        reader_mcast_receiver_compile_time_args.push_back(block_ht * block_wt);
+    }
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     // reader kernel
@@ -704,9 +710,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
-        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH
-
-    };
+        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH};
+    if (use_welford) {
+        mcast_sender_compute_compile_time_args.push_back(num_datum_row_per_group);  // num_cols_per_group
+    }
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args = {
         (std::uint32_t)0,
         (std::uint32_t)gamma.has_value(),
@@ -737,6 +744,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH};
+    if (use_welford) {
+        mcast_receiver_compute_compile_time_args.push_back(num_datum_row_per_group);  // num_cols_per_group
+    }
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);

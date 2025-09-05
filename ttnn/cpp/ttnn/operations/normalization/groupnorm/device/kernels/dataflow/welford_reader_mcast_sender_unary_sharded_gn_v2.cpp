@@ -21,9 +21,8 @@ void kernel_main() {
     constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
     constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(9);
 
-    // These are numbers in absolute terms, on a per group, per batch without tiling
-    constexpr uint32_t num_cols_per_group = get_compile_time_arg_val(10);
-    constexpr uint32_t num_rows_per_group = get_compile_time_arg_val(11);
+    // These are numbers in absolute terms, on a per group, per batch, per core with tiling
+    constexpr uint32_t block_hw = get_compile_time_arg_val(10);
 
     constexpr uint32_t TILE_WIDTH = 32;
 
@@ -178,16 +177,17 @@ void kernel_main() {
 
     for (uint32_t m = 0; m < num_batch_group; ++m) {
         // wait for local data ready
-        cb_wait_front(cb_ex_partial, 2);
         cb_reserve_back(cb_ex_global, 2);
+        DPRINT << "waiting for local data ready" << ENDL();
+        cb_wait_front(cb_ex_partial, 2);
+        DPRINT << "local data ready" << ENDL();
 
         // Read mean and variance arrays from cb_ex_partial, then combine using Welford
         auto local_read_ptr = get_read_ptr(cb_ex_partial);
         auto p_local_means = reinterpret_cast<volatile uint16_t*>(local_read_ptr);
         auto p_local_vars = p_local_means + TILE_WIDTH * TILE_HEIGHT;
 
-        auto local_result =
-            combine_welford_stats<32, num_cols_per_group * num_rows_per_group / 32, 2>(p_local_means, p_local_vars);
+        auto local_result = combine_welford_stats<TILE_WIDTH, block_hw * TILE_WIDTH, 2>(p_local_means, p_local_vars);
         DPRINT << "local combined mean: " << BF16(local_result.mean)
                << " local combined var: " << BF16(local_result.variance) << " local count: " << local_result.count
                << ENDL();
@@ -215,8 +215,8 @@ void kernel_main() {
         }
 
         // Read mean and variance arrays from cb_ex_global, then combine using Welford
-        auto global_result = combine_welford_stats<num_mcast_cores, num_cols_per_group * num_rows_per_group, 16>(
-            p_global_means, p_global_vars);
+        auto global_result =
+            combine_welford_stats<num_mcast_cores, block_hw * 32 * 32, 16>(p_global_means, p_global_vars);
         DPRINT << "global combined mean: " << BF16(global_result.mean)
                << " global combined var: " << BF16(global_result.variance) << ENDL();
 
