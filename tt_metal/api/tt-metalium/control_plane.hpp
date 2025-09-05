@@ -232,7 +232,6 @@ private:
     // Mapping from MeshId, MeshHostRankId to MPI rank
     std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, tt_metal::distributed::multihost::Rank>> mpi_ranks_;
     std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>> logical_node_ids_;
-    std::string mesh_graph_desc_file_;
     // TODO: remove once UMD can provide all intermesh links
     std::unordered_map<chip_id_t, uint64_t> chip_id_to_asic_id_;
 

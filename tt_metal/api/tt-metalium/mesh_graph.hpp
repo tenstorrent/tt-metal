@@ -47,15 +47,6 @@ enum class FabricType {
     TORUS_XY = (TORUS_X | TORUS_Y),
 };
 
-// TODO: first pass at switching over MeshId/chip_id_t to proper struct
-// Need to update the usage in routing table generator
-class FabricNodeId {
-public:
-    explicit FabricNodeId(MeshId mesh_id, std::uint32_t chip_id);
-    MeshId mesh_id{0};
-    std::uint32_t chip_id = 0;
-};
-
 FabricType operator|(FabricType lhs, FabricType rhs);
 FabricType operator&(FabricType lhs, FabricType rhs);
 bool has_flag(FabricType flags, FabricType test_flag);
@@ -96,11 +87,7 @@ using InterMeshConnectivity = std::vector<std::vector<std::unordered_map<MeshId,
 using IntraMeshConnectivity = std::vector<std::vector<std::unordered_map<chip_id_t, RouterEdge>>>;
 class MeshGraph {
 public:
-    explicit MeshGraph(
-        const std::string& mesh_graph_desc_file_path,
-        std::optional<std::map<FabricNodeId, chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping =
-            std::nullopt,
-        std::shared_ptr<tt_metal::PhysicalSystemDescriptor> physical_system_descriptor = nullptr);
+    explicit MeshGraph(const std::string& mesh_graph_desc_file_path);
     MeshGraph() = delete;
     ~MeshGraph() = default;
 
@@ -155,10 +142,7 @@ private:
     void validate_mesh_id(MeshId mesh_id) const;
     std::unordered_map<chip_id_t, RouterEdge> get_valid_connections(
         const MeshCoordinate& src_mesh_coord, const MeshCoordinateRange& mesh_coord_range, FabricType fabric_type) const;
-    void initialize_from_yaml(
-        const std::string& mesh_graph_desc_file_path,
-        std::optional<std::map<FabricNodeId, chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping,
-        std::shared_ptr<tt_metal::PhysicalSystemDescriptor> physical_system_descriptor);
+    void initialize_from_yaml(const std::string& mesh_graph_desc_file_path);
 
     void add_to_connectivity(
         MeshId src_mesh_id,

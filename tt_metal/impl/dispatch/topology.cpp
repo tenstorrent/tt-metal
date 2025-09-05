@@ -1022,12 +1022,7 @@ void build_tt_fabric_program(
             num_intra_chip_neighbors++;
         }
         // assume same neighbor per direction
-        TT_FATAL(
-            neighbors.size() == 1,
-            "Multiple neighbor meshes per direction is unsupported {} {} {}",
-            fabric_node_id,
-            direction,
-            neighbors.size());
+        TT_FATAL(neighbors.size() == 1, "Multiple neighbor meshes per direction is unsupported");
         TT_FATAL(
             std::set<chip_id_t>(neighbors.begin()->second.begin(), neighbors.begin()->second.end()).size() == 1,
             "Multiple neighbors per direction is currently unsupported");

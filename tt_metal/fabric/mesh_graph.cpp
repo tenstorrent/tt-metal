@@ -18,11 +18,6 @@
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <tt_stl/indestructible.hpp>
 #include <tt_stl/caseless_comparison.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
-#include "tt_metal/impl/context/metal_context.hpp"
-#include "tt_metal/fabric/serialization/connections_table.hpp"
-#include "tt-metalium/control_plane.hpp"
-#include "tt_metal/fabric/serialization/port_id_table.hpp"
 
 namespace tt {
 enum class ARCH;
@@ -65,14 +60,8 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
 
 bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test; }
 
-MeshGraph::MeshGraph(
-    const std::string& mesh_graph_desc_file_path,
-    std::optional<std::map<FabricNodeId, chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping,
-    std::shared_ptr<tt_metal::PhysicalSystemDescriptor> physical_system_descriptor) {
-    std::cout << "Mesh Graph: Creating Mesh Graph" << std::endl;
-    this->initialize_from_yaml(
-        mesh_graph_desc_file_path, logical_mesh_chip_id_to_physical_chip_id_mapping, physical_system_descriptor);
-    std::cout << "Mesh Graph: Mesh Graph Created" << std::endl;
+MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path) {
+    this->initialize_from_yaml(mesh_graph_desc_file_path);
 }
 
 void MeshGraph::add_to_connectivity(
@@ -210,11 +199,7 @@ const std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>>& MeshGrap
     return mesh_edge_ports_to_chip_id_;
 }
 
-void MeshGraph::initialize_from_yaml(
-    const std::string& mesh_graph_desc_file_path,
-    std::optional<std::map<FabricNodeId, chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping,
-    std::shared_ptr<tt_metal::PhysicalSystemDescriptor> physical_system_descriptor) {
-    using namespace tt::tt_metal::distributed::multihost;
+void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_path) {
     std::ifstream fdesc(mesh_graph_desc_file_path);
     TT_FATAL(not fdesc.fail(), "Failed to open file: {}", mesh_graph_desc_file_path);
 

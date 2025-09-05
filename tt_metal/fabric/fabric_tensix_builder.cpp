@@ -53,12 +53,7 @@ static size_t find_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_a
             auto neighbors = control_plane.get_chip_neighbors(fabric_node_id, direction);
 
             // assume same neighbor per direction
-            TT_FATAL(
-                neighbors.size() == 1,
-                "Multiple neighbor meshes per direction is unsupported {} {} {}",
-                fabric_node_id,
-                direction,
-                neighbors.size());
+            TT_FATAL(neighbors.size() == 1, "Multiple neighbor meshes per direction is unsupported");
             TT_FATAL(
                 std::set<chip_id_t>(neighbors.begin()->second.begin(), neighbors.begin()->second.end()).size() == 1,
                 "Multiple neighbors per direction is currently unsupported");

@@ -839,7 +839,6 @@ void ControlPlane::init_control_plane(
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>();
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
-    mesh_graph_desc_file_ = mesh_graph_desc_file;
     this->initialize_distributed_contexts();
 
     // Printing, only enabled with log_debug
