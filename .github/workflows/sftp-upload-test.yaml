@@ -1,0 +1,78 @@
+name: "SFTP Upload Test"
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_run_id:
+        description: "Download files from this previous run_id (leave empty to generate)"
+        required: false
+        default: ""
+      artifact_name:
+        description: "Artifact name to download from previous run"
+        required: false
+        default: "sweeps-run-result"
+      num_files:
+        description: "Number of sample oprun_*.json files to generate"
+        required: false
+        default: "5"
+      file_bytes:
+        description: "Approx bytes per file (keep small for speed)"
+        required: false
+        default: "1024"
+
+jobs:
+  sftp-upload-test:
+    name: Test SFTP upload
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout repository (actions only)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/actions
+          sparse-checkout-cone-mode: false
+
+      - name: Download artifact from previous run
+        if: ${{ github.event.inputs.artifact_run_id != '' }}
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          run_id: ${{ github.event.inputs.artifact_run_id }}
+          name: ${{ github.event.inputs.artifact_name }}
+          path: tests/sweep_framework/results_export
+
+      - name: Generate sample oprun files
+        if: ${{ github.event.inputs.artifact_run_id == '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tests/sweep_framework/results_export
+          NUM_FILES="${{ github.event.inputs.num_files }}"
+          FILE_BYTES="${{ github.event.inputs.file_bytes }}"
+          for i in $(seq 1 "$NUM_FILES"); do
+            f="tests/sweep_framework/results_export/oprun_${{ github.run_id }}_${{ github.run_attempt }}_${i}.json"
+            echo "Creating $f ($FILE_BYTES bytes)"
+            echo "{\"run\":\"${{ github.run_id }}\",\"attempt\":\"${{ github.run_attempt }}\",\"index\":$i,\"ts\":\"$(date -u +%FT%TZ)\"}" > "$f"
+            cur=$(wc -c < "$f")
+            if [ "$cur" -lt "$FILE_BYTES" ]; then
+              pad=$((FILE_BYTES - cur))
+              head -c "$pad" </dev/zero | tr '\0' ' ' >> "$f"
+            fi
+          done
+
+      - name: List local files
+        shell: bash
+        run: |
+          ls -hal tests/sweep_framework/results_export
+          echo "Local file count:" && ls tests/sweep_framework/results_export/oprun_*.json | wc -l
+
+      - name: Upload via SFTP (test)
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/optest_batchfile.txt
+          username: ml-kernel-op-test-writer
+          hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
+          path: ${{ github.workspace }}
