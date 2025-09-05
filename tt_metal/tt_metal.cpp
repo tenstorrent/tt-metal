@@ -22,7 +22,6 @@
 #include <functional>
 #include <iostream>
 #include <optional>
-#include <type_traits>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -50,7 +49,6 @@
 #include "tt-metalium/program.hpp"
 #include "program/program_impl.hpp"
 #include "semaphore.hpp"
-#include "trace/trace.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>
@@ -166,9 +164,10 @@ void ConfigureKernelGroup(
     for (auto& optional_id : kernel_group->kernel_ids) {
         if (optional_id) {
             // Need the individual offsets of each bin
+            // TODO: make configure take a std::span
             program.impl()
                 .get_kernel(optional_id.value())
-                ->configure(device, logical_core, kernel_config_base, kernel_group->kernel_text_offsets);
+                ->configure(device, logical_core, kernel_config_base, kernel_group->kernel_text_offsets.data());
         }
     }
 }

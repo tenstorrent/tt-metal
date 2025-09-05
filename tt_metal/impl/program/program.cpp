@@ -486,8 +486,6 @@ KernelGroup::KernelGroup(
     TT_FATAL(noc_modes.size() <= 1, "KernelGroup must have the same noc mode for all kernels");
 
     for (uint32_t index = 0; index < NUM_PROCESSORS_PER_CORE_TYPE; index++) {
-        this->kernel_bin_sizes[index] = 0;
-        this->kernel_text_offsets[index] = 0;
         this->launch_msg.kernel_config.kernel_text_offset[index] = 0;
     }
     this->launch_msg.kernel_config.ncrisc_kernel_size16 = 0;
@@ -1189,7 +1187,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                         int proc_sub_class = 0;
                         for (uint32_t& dst_addr : kernel_transfer_info.at(device_local_kernel_id).dst_base_addrs) {
                             // TODO: ditch this w/ linear writes based on program config kernel_text_offset and size
-                            dst_addr = kernel_group->kernel_text_offsets[dispatch_class + proc_sub_class];
+                            dst_addr = kernel_group->kernel_text_offsets.at(dispatch_class + proc_sub_class);
                             proc_sub_class++;
                         }
                     }
@@ -1221,7 +1219,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                         if (hal.get_core_kernel_stored_in_config_buffer(hal.get_programmable_core_type(index))) {
                             int proc_sub_class = 0;
                             for (uint32_t& dst_addr : kernel_transfer_info.at(device_local_kernel_id).dst_base_addrs) {
-                                dst_addr = kernel_group->kernel_text_offsets[dispatch_class + proc_sub_class];
+                                dst_addr = kernel_group->kernel_text_offsets.at(dispatch_class + proc_sub_class);
                                 proc_sub_class++;
                             }
                         }
