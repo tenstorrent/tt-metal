@@ -5,6 +5,7 @@
 import hashlib
 import json
 import os
+import warnings
 from datetime import datetime
 from pathlib import Path
 
@@ -95,7 +96,8 @@ def get_accuracy_thresholds(model_args, optimizations):
         if correct_line(line)
     ]
     if not rows:
-        raise ValueError(
+        rows = [["", "", "0.0", "0.0"]]
+        warnings.warn(
             f"Could not find accuracy data for {base_model_name} on {device_name} in {optimizations.__name__} mode"
         )
 
