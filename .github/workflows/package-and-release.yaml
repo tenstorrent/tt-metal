@@ -75,6 +75,11 @@ jobs:
     needs: create-tag
     uses: ./.github/workflows/regression-testing.yaml
     secrets: inherit
+    strategy:
+      matrix:
+        version: [22.04, 24.04]
+    with:
+      version: ${{ matrix.version }}
 
   create-changelog:
     needs: [create-tag, regression-testing]

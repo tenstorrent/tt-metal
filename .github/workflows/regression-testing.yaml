@@ -1,6 +1,11 @@
   name: Regression Testing
   on:
     workflow_call:
+      inputs:
+        version:
+          required: false
+          default: 22.04
+          type: number
       outputs:
         dev-docker-image:
           description: "The Docker image for the development environment"
@@ -29,7 +34,7 @@
         packages: write
       secrets: inherit
       with:
-        version: 22.04
+        version: ${{ inputs.version || 22.04 }}
         build-wheel: true
         fetch-depth: 0
         skip-tt-train: false
@@ -39,7 +44,7 @@
         packages: write
       secrets: inherit
       with:
-        version: 22.04
+        version: ${{ inputs.version || 22.04 }}
         tracy: true
         build-wheel: true
         fetch-depth: 0
