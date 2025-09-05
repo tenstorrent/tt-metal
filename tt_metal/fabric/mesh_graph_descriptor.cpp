@@ -7,10 +7,12 @@
 #include <sstream>
 #include <filesystem>
 #include <algorithm>
+#include <set>
+#include <unordered_set>
 #include "assert.hpp"
 
-#include "tt-metalium/mesh_graph_descriptor.hpp"
 #include "protobuf/mesh_graph_descriptor.pb.h"
+#include "tt-metalium/mesh_graph_descriptor.hpp"
 
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
@@ -29,6 +31,30 @@ std::string read_file_to_string(const std::filesystem::path& file_path) {
     return buffer.str();
 }
 
+uint32_t get_max_dimensions_for_architecture(proto::Architecture arch) {
+    switch (arch) {
+        case proto::Architecture::WORMHOLE_B0: return 2;
+        case proto::Architecture::BLACKHOLE: return 3;
+        case proto::Architecture::INVALID_ARCHITECTURE: return 0;
+        default: return 0;
+    }
+}
+
+std::string get_validation_report(const std::vector<std::string>& error_messages) {
+    if (error_messages.empty()) {
+        return "No validation errors found.\n";
+    }
+
+    std::ostringstream report;
+    report << "=== MeshGraphDescriptor Validation Report ===\n\n";
+    report << "Errors:\n";
+    for (const auto& error : error_messages) {
+        report << "  - " << error << "\n";
+    }
+    report << "\n";
+
+    return report.str();
+}
 }  // namespace
 
 MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto) {
@@ -41,7 +67,12 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto) {
 
     TT_FATAL(parser.ParseFromString(text_proto, &temp_proto), "Failed to parse MeshGraphDescriptor textproto");
 
-    // TODO: Add validation here
+    // Set defaults for missing fields
+    set_defaults(temp_proto);
+
+    // Validate the proto
+    auto errors = static_validate(temp_proto);
+    TT_FATAL(errors.empty(), "Failed to validate MeshGraphDescriptor textproto: \n{}", get_validation_report(errors));
 
     proto_ = std::make_unique<proto::MeshGraphDescriptor>(temp_proto);
 }

@@ -3,12 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
+#include <filesystem>
+#include <vector>
+#include <string>
+#include <cstdio>
 
 #include <tt-metalium/mesh_graph_descriptor.hpp>
 
-namespace tt::tt_fabric {
-
-namespace fabric_router_tests {
+namespace tt::tt_fabric::fabric_router_tests {
 
 TEST(MeshGraphDescriptorTests, ParsesFromTextProtoString) {
     const std::string text_proto = R"proto(
@@ -16,30 +19,39 @@ TEST(MeshGraphDescriptorTests, ParsesFromTextProtoString) {
           name: "M0"
           dfsdadf: 3  # Allowing unknown fields for backwards compatibility
           arch: WORMHOLE_B0
-          device_topology: { dims: [ 1, 4 ] }
+          device_topology: {
+            dims: [ 1, 4 ]
+            dim_types: [ LINE, RING ]
+          }
           channels: { count: 1 }
-          host_topology: { dims: [ 1, 5 ] }
+          host_topology: { dims: [ 1, 4 ] }
+          express_connections: { src: 0 dst: 1 }
+          express_connections: { src: 1 dst: 2 }
         }
 
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 
-    tt::tt_fabric::MeshGraphDescriptor desc(text_proto);
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
 }
 
 TEST(MeshGraphDescriptorTests, ParsesFromTextProtoFile) {
     const std::filesystem::path text_proto_file_path =
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto";
-    tt::tt_fabric::MeshGraphDescriptor desc(text_proto_file_path);
+    // Sample file should parse successfully; unknown fields are allowed.
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto_file_path));
 }
 
-}  // namespace fabric_router_tests
+TEST(MeshGraphDescriptorTests, InvalidProtoNoMeshDescriptors) {
+    std::string text_proto = R"proto(
+        top_level_instance: { mesh: { mesh_descriptor: "M0" id: 0 } }
+    )proto";
 
-EXPECT_THAT(
-    ([&]() { MeshGraphDescriptor desc(text_proto); }),
-    ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-        ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-        ::testing::HasSubstr("There must be at least one mesh descriptor"))));
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("There must be at least one mesh descriptor"))));
 }
 
 TEST(MeshGraphDescriptorTests, InvalidProtoDimensionValidationFailures) {
