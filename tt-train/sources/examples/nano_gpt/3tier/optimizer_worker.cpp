@@ -71,10 +71,6 @@ int main(int argc, char **argv) {
     three_tier_arch::TrainingConfig config = three_tier_arch::parse_config(yaml_config);
     three_tier_arch::DeviceConfig device_config = three_tier_arch::parse_device_config(yaml_config);
 
-    if (device_config.enable_tp) {
-        throw std::runtime_error("Tensor parallel is not supported in the optimizer worker.");
-    }
-
     if (config.socket_type == ttnn::distributed::SocketType::FABRIC) {
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
         if (device_config.mesh_shape != tt::tt_metal::distributed::MeshShape(1, 8)) {

@@ -1,0 +1,42 @@
+training_config:
+  project_name: "tt_train_nano_gpt"
+  model_type: "llama"
+  seed: 5489
+  model_save_interval: 500
+  batch_size: 8
+  gradient_accumulation_steps: 8
+  num_epochs: 1
+  max_steps: 5000
+  learning_rate: 0.0003
+  weight_decay: 0.01
+  use_moreh_adamw: true
+  use_kahan_summation: false
+  use_clip_grad_norm: false
+  clip_grad_norm_max_norm: 1.0
+  tokenizer_path: "data/tinyllama-tokenizer.json"
+  tokenizer_type: "bpe"
+  transformer_config:
+    num_heads: 32
+    num_groups: 8  # must be divisible by number of devices, original value was 4
+    embedding_dim: 2048
+    dropout_prob: 0.0
+    num_blocks: 22
+    vocab_size: 32000
+    max_sequence_length: 2048
+    runner_type: memory_efficient
+    theta: 10000.0
+
+multihost_config:
+  enabled: true
+  num_workers: 3
+  socket_type: fabric
+
+eval_config:
+  repetition_penalty: 1.0
+  temperature: 0.7
+  top_k: 50
+  top_p: 1.0
+
+device_config:
+  enable_tp: true
+  mesh_shape: [1, 8]
