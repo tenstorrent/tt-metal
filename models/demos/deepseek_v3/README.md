@@ -86,3 +86,34 @@ output = MLP1D.forward_prefill(input_tensor, run_config) # or forward_decode(inp
 - [reference](./reference): Reference model code from HuggingFace, cleaned up and extracted submodule code etc.
 - [tests](./tests): pytests for submodules
 - [tt](./tt): ttnn submodule code
+
+## Test Results CSV (opt-in)
+
+You can opt-in to collecting a CSV with one row per test invocation for later analysis.
+
+- Enable by providing a path:
+  - CLI: `pytest models/demos/deepseek_v3/tests --results-csv /path/to/results.csv`
+  - Env: `TT_TEST_RESULTS_CSV=/path/to/results.csv`
+- Behavior: appends to the file; writes a header only if the file is new/empty.
+- Implementation: pytest plugin at `models/demos/deepseek_v3/utils/results_csv_plugin.py` loaded via `conftest.py`.
+
+Columns captured per test invocation:
+
+- `test_nodeid`: Fully-qualified pytest node id.
+- `module`: High-level module name (e.g., `MoEGate`, `MLA1D`, `MoE`, `Model1D`, `LMHead`, `Embedding1D`, `DecoderBlock`, `RMSNorm`).
+- `mode`, `seq_len`, `batch_size`: Test parameters when available.
+- `hf_max_seq_len`: From the `hf_config` fixture when present.
+- `mesh_shape`, `mesh_num_devices`: From the `mesh_device` fixture when present.
+- `weights_type`, `module_path`: Recorded if used in the test.
+- `metrics_json`: JSON array of measured metrics (each entry includes a `type` like `pcc`/`allclose`/`ulp`, and values/messages).
+- `outcome`: `passed`/`failed`/`skipped`.
+- `duration_sec`: Wallclock runtime for the test body.
+- `error`: Full traceback text when failed (including timeouts), safely quoted in CSV.
+- Run metadata: `run_id`, `session_timestamp`, `hostname`, `git_commit`, `ttnn_version`.
+- Timestamps: `start_timestamp`, `end_timestamp` per test.
+
+Notes
+
+- This is disabled by default. If neither `--results-csv` nor `TT_TEST_RESULTS_CSV` is set, no CSV is produced and the plugin does nothing.
+- Metrics are captured by intercepting calls to `comp_pcc`, `comp_allclose`, and `comp_ulp` in `models.common.utility_functions` (and the `models.utility_functions` alias). If a test computes multiple metrics, all are recorded in order in `metrics_json`.
+- The `module` column is inferred from parameterized class fixtures (when used) or otherwise from the test filename.

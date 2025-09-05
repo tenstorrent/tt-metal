@@ -21,6 +21,8 @@ _current_nodeid: contextvars.ContextVar[str | None] = contextvars.ContextVar("cu
 _TEST_INFO: dict[str, dict] = {}
 _SESSION_ROWS: list[dict] = []
 _SESSION_META: dict[str, str] = {}
+_ENABLED: bool = False
+_OUT_PATH: str | None = None
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -29,8 +31,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store",
         default=None,
         help=(
-            "Path to results CSV (default: models/demos/deepseek_v3/results.csv). "
-            "Also reads TT_TEST_RESULTS_CSV."
+            "Path to results CSV (opt-in). If not set, reads TT_TEST_RESULTS_CSV. "
+            "If neither is set, results collection is disabled."
         ),
     )
 
@@ -50,6 +52,17 @@ def _get_ttnn_version() -> str:
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
+    global _ENABLED, _OUT_PATH
+    # Determine if enabled
+    cli_path = session.config.getoption("results_csv")
+    env_path = os.getenv("TT_TEST_RESULTS_CSV")
+    _OUT_PATH = cli_path or env_path
+    if not _OUT_PATH:
+        _ENABLED = False
+        return
+
+    _ENABLED = True
+
     # Session metadata
     run_id = datetime.utcnow().isoformat(timespec="seconds") + "Z"
     _SESSION_META.update(
@@ -124,6 +137,9 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
 @pytest.fixture(autouse=True)
 def _results_csv_test_context(request: pytest.FixtureRequest):
+    if not _ENABLED:
+        yield
+        return
     nodeid = request.node.nodeid
     token = _current_nodeid.set(nodeid)
 
@@ -204,6 +220,8 @@ def _infer_module_name(request: pytest.FixtureRequest) -> str | None:
 def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
     outcome = yield
     rep: pytest.TestReport = outcome.get_result()
+    if not _ENABLED:
+        return
 
     info = _TEST_INFO.setdefault(item.nodeid, {})
     reports = info.setdefault("reports", {})
@@ -265,9 +283,10 @@ def _safe_longrepr(rep: pytest.TestReport) -> str:
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    cli_path = session.config.getoption("results_csv")
-    env_path = os.getenv("TT_TEST_RESULTS_CSV")
-    out_path = cli_path or env_path or str(Path("models/demos/deepseek_v3/results.csv"))
+    if not _ENABLED or not _SESSION_ROWS:
+        return
+    out_path = _OUT_PATH
+    assert out_path is not None
 
     out_dir = os.path.dirname(out_path)
     if out_dir and not os.path.exists(out_dir):
@@ -314,4 +333,3 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         logger.info(f"Module test results appended to CSV: {out_path}")
     except Exception as e:
         logger.error(f"Failed to write module test results CSV to {out_path}: {e}")
-
