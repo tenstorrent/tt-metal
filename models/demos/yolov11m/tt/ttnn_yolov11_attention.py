@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.yolov11.tt.common import TtnnConv, deallocate_tensors
+from models.demos.yolov11m.tt.common import TtnnConv, deallocate_tensors
 
 
 class TtnnAttention:
@@ -11,9 +11,9 @@ class TtnnAttention:
         self.qkv = TtnnConv(device, parameter.qkv, conv_pt.qkv, enable_act=False)
         self.proj = TtnnConv(device, parameter.proj, conv_pt.proj, enable_act=False)
         self.pe = TtnnConv(device, parameter.pe, conv_pt.pe, enable_act=False)
-        self.num_heads = 2
-        self.key_dim = 32
-        self.head_dim = 64
+        self.num_heads = 8
+        self.key_dim = 16
+        self.head_dim = 32
         self.scale = self.key_dim**-0.5
 
     def __call__(self, device, x, batch_size=1):

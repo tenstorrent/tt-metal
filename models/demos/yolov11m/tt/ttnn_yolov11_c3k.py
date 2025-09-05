@@ -4,8 +4,8 @@
 
 
 import ttnn
-from models.demos.yolov11.tt.common import TtnnConv, deallocate_tensors, sharded_concat
-from models.demos.yolov11.tt.ttnn_yolov11_bottleneck import TtnnBottleneck
+from models.demos.yolov11m.tt.common import TtnnConv, deallocate_tensors, sharded_concat
+from models.demos.yolov11m.tt.ttnn_yolov11_bottleneck import TtnnBottleneck
 
 
 class TtnnC3K:
