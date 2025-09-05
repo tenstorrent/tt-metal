@@ -501,13 +501,6 @@ void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
             "Chip {} not connected to chip {}",
             physical_chip_id,
             physical_chip_id_other);
-        TT_FATAL(
-            eth_links_to_other->second.size() >= num_ports_per_side,
-            "Chip {} to chip {} has {} links but expecting {}",
-            physical_chip_id,
-            physical_chip_id_other,
-            eth_links.at(physical_chip_id_other).size(),
-            num_ports_per_side);
     };
     const auto& mesh_coord_range = this->get_coord_range(mesh_id, MeshScope::LOCAL);
     for (const auto& mesh_coord : mesh_coord_range) {
