@@ -320,7 +320,6 @@ struct WorkerToFabricEdmSenderImpl {
     FORCE_INLINE void send_payload_non_blocking_from_address_with_trid(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         send_payload_from_address_with_trid_impl<
-            EDM_IO_BLOCKING_MODE::NON_BLOCKING,
             enable_deadlock_avoidance,
             vc1_has_different_downstream_dest,
             EDM_TO_DOWNSTREAM_NOC,
@@ -642,7 +641,6 @@ private:
         post_send_payload_increment_pointers();
     }
     template <
-        EDM_IO_BLOCKING_MODE blocking_mode,
         bool enable_deadlock_avoidance,
         bool vc1_has_different_downstream_dest,
         uint8_t EDM_TO_DOWNSTREAM_NOC,
@@ -654,7 +652,7 @@ private:
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
-            send_chunk_from_address_with_trid<blocking_mode, stateful_api, vc1_has_different_downstream_dest>(
+            send_chunk_from_address_with_trid<stateful_api, vc1_has_different_downstream_dest>(
                 source_address,
                 1,
                 size_bytes,
@@ -664,7 +662,7 @@ private:
                 EDM_TO_DOWNSTREAM_NOC,
                 this->data_noc_cmd_buf);
         } else {
-            send_chunk_from_address_with_trid<blocking_mode, stateful_api, vc1_has_different_downstream_dest>(
+            send_chunk_from_address_with_trid<stateful_api, vc1_has_different_downstream_dest>(
                 source_address,
                 1,
                 size_bytes,

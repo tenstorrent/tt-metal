@@ -65,7 +65,7 @@ struct RouterElasticChannelWriterAdapter {
         uint8_t edm_worker_x,
         uint8_t edm_worker_y,
         std::size_t edm_buffer_base_addr,
-        uint8_t num_buffers_per_channel,
+        uint8_t /*num_buffers_per_channel*/,  // unused
         std::size_t edm_connection_handshake_l1_id,
         std::size_t edm_worker_location_info_addr,  // The EDM's location for `EDMChannelWorkerLocationInfo`
         uint16_t buffer_size_bytes,
@@ -82,7 +82,6 @@ struct RouterElasticChannelWriterAdapter {
                                        // decrements locally. Downstream EDM increments over noc when a slot is freed.
         uint8_t data_noc_cmd_buf = write_reg_cmd_buf,
         uint8_t sync_noc_cmd_buf = write_at_cmd_buf) {
-        this->edm_buffer_addr = edm_buffer_base_addr;
         this->worker_credits_stream_id = worker_credits_stream_id.get();
 
         this->edm_buffer_local_free_slots_read_ptr =
@@ -97,9 +96,7 @@ struct RouterElasticChannelWriterAdapter {
         this->edm_copy_of_wr_counter_addr =
             connected_to_persistent_fabric ? edm_buffer_index_id : get_semaphore<my_core_type>(edm_buffer_index_id);
         this->worker_teardown_addr = worker_teardown_addr;
-        this->edm_buffer_base_addr = edm_buffer_base_addr;
         this->buffer_size_bytes = buffer_size_bytes;
-        this->num_buffers_per_channel = num_buffers_per_channel;
         this->edm_noc_x = edm_worker_x;
         this->edm_noc_y = edm_worker_y;
         this->data_noc_cmd_buf = data_noc_cmd_buf;
@@ -109,7 +106,7 @@ struct RouterElasticChannelWriterAdapter {
         // becausen all EDMs are brought up/initialized at the same time
         init_ptr_val(this->worker_credits_stream_id, EDM_NUM_BUFFER_SLOTS);
         for (size_t i = 0; i < EDM_NUM_BUFFER_SLOTS; ++i) {
-            this->edm_buffer_slot_addrs[i] = this->edm_buffer_base_addr + (i * this->buffer_size_bytes);
+            this->edm_buffer_slot_addrs[i] = edm_buffer_base_addr + (i * this->buffer_size_bytes);
         }
     }
 
@@ -150,51 +147,8 @@ struct RouterElasticChannelWriterAdapter {
             sync_noc_cmd_buf);
     }
 
-    // FORCE_INLINE void send_payload_blocking(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
-    //     send_payload_impl<EDM_IO_BLOCKING_MODE::BLOCKING>(cb_id, num_pages, page_size);
-    // }
-
-    // // Does not wait for CB. Assumes caller handles CB data availability
-    // FORCE_INLINE void send_payload_non_blocking(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
-    //     send_payload_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(cb_id, num_pages, page_size);
-    // }
-
-    /*
-     * No CB
-     */
-    // FORCE_INLINE void send_packet_header_and_notify_fabric_flush_blocking(uint32_t source_address) {
-    //     send_packet_header_and_notify_fabric<EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING>(source_address);
-    // }
-    // FORCE_INLINE void send_payload_without_header_non_blocking_from_address(
-    //     uint32_t source_address, size_t size_bytes) {
-    //     send_payload_without_header_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address,
-    //     size_bytes);
-    // }
-    // FORCE_INLINE void send_payload_flush_blocking_from_address(uint32_t source_address, size_t size_bytes) {
-    //     send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING>(source_address, size_bytes);
-    // }
-    // FORCE_INLINE void send_payload_flush_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
-    //     send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
-    // }
-    // FORCE_INLINE void send_payload_blocking_from_address(uint32_t source_address, size_t size_bytes) {
-    //     send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::BLOCKING>(source_address, size_bytes);
-    // }
-
-    /*
-     * No CB
-     */
-    // Does not wait for CB. Assumes caller handles CB data availability
-    // FORCE_INLINE void send_payload_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
-    //     send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
-    // }
-
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
 
-    // Advanced usage API:
-    // Starts the connection opening process but doesn't wait for the process complete. This avoids waiting
-    // for the read barrier to complete before returning, saving some cycles for advanced users.
-    // !!! IMPORTANT !!!
-    // Must be called alongside (before) open_finish().
     template <bool SEND_CREDIT_ADDR = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
     void open_start() {
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
@@ -230,10 +184,6 @@ struct RouterElasticChannelWriterAdapter {
             connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32(), 0xf, WORKER_HANDSHAKE_NOC);
     }
 
-    // Advanced usage API:
-    // Completes the connection opening process. Induces a read barrier
-    // !!! IMPORTANT !!!
-    // Must be called alongside (after) open_start().
     template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
     void open_finish() {
         const uint64_t edm_connection_handshake_noc_addr =
@@ -249,11 +199,6 @@ struct RouterElasticChannelWriterAdapter {
         *this->worker_teardown_addr = 0;
     }
 
-    // Advanced usage API:
-    // Starts the connection closing process but doesn't wait for the process to complete. This avoids waiting
-    // for the ack from the fabric before returning, saving some cycles for advanced users.
-    // !!! IMPORTANT !!!
-    // Must be called alongside (before) close_finish().
     void close_start() {
         const auto dest_noc_addr_coord_only =
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) & ~(uint64_t)NOC_COORDINATE_MASK;
@@ -266,10 +211,6 @@ struct RouterElasticChannelWriterAdapter {
         noc_inline_dw_write(dest_edm_connection_state_addr, close_connection_request_value);
     }
 
-    // Advanced usage API:
-    // Completes the connection closing process. Induces a write barrier
-    // !!! IMPORTANT !!!
-    // Must be called alongside (after) close_start().
     void close_finish() {
         WAYPOINT("FCFW");
         // Need to wait for the ack to teardown notice, from edm
@@ -282,7 +223,6 @@ struct RouterElasticChannelWriterAdapter {
     }
 
 public:
-    // KEPT - EXTERNAL
     template <uint8_t EDM_TO_DOWNSTREAM_NOC = noc_index, uint8_t EDM_TO_DOWNSTREAM_NOC_VC = NOC_UNICAST_WRITE_VC>
     FORCE_INLINE void setup_edm_noc_cmd_buf() const {
         uint64_t edm_noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, EDM_TO_DOWNSTREAM_NOC);
@@ -300,13 +240,11 @@ public:
             EDM_TO_DOWNSTREAM_NOC_VC);
     }
 
-    // KEPT
     FORCE_INLINE bool edm_has_space_for_packet() const {
         invalidate_l1_cache();
         return *this->edm_buffer_local_free_slots_read_ptr != 0;
     }
 
-    // KEPT - EXTERNAL
     template <
         bool enable_deadlock_avoidance,
         bool vc1_has_different_downstream_dest,
@@ -316,7 +254,6 @@ public:
     FORCE_INLINE void send_payload_non_blocking_from_address_with_trid(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         send_payload_from_address_with_trid_impl<
-            EDM_IO_BLOCKING_MODE::NON_BLOCKING,
             enable_deadlock_avoidance,
             vc1_has_different_downstream_dest,
             EDM_TO_DOWNSTREAM_NOC,
@@ -324,7 +261,6 @@ public:
             increment_pointers>(source_address, size_bytes, trid);
     }
 
-    // KEPT - EXTERNAL
     template <bool inc_pointers = true>
     FORCE_INLINE void update_edm_buffer_slot_word(uint32_t offset, uint32_t data, uint8_t noc = noc_index) {
         uint64_t noc_addr;
@@ -350,8 +286,6 @@ public:
     }
 
 private:
-    uint32_t edm_buffer_addr;
-
     std::array<uint32_t, EDM_NUM_BUFFER_SLOTS> edm_buffer_slot_addrs;
 
     uint32_t worker_credits_stream_id;
@@ -367,15 +301,10 @@ private:
     size_t edm_copy_of_wr_counter_addr;
 
     volatile tt_l1_ptr uint32_t* worker_teardown_addr;
-    size_t edm_buffer_base_addr;
 
     BufferIndex buffer_slot_index;
 
-    // WORKER ONLY
-    ChannelCounter<EDM_NUM_BUFFER_SLOTS> buffer_slot_write_counter;
-
     uint16_t buffer_size_bytes;
-    uint8_t num_buffers_per_channel;
 
     // noc location of the edm we are connected to (where packets are sent to)
     uint8_t edm_noc_x;
@@ -386,7 +315,6 @@ private:
     uint8_t data_noc_cmd_buf;
     uint8_t sync_noc_cmd_buf;
 
-private:
     template <
         bool stateful_api = false,
         bool enable_deadlock_avoidance = false,
@@ -426,12 +354,6 @@ private:
         this->buffer_slot_index = BufferIndex{wrap_increment<EDM_NUM_BUFFER_SLOTS>(this->buffer_slot_index.get())};
     }
 
-    FORCE_INLINE uint64_t compute_dest_buffer_slot_noc_addr() const {
-        // TODO: Worth it to precompute the full noc addr?
-        return get_noc_addr(
-            this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_addrs[this->get_buffer_slot_index()]);
-    }
-
     template <
         bool stateful_api = false,
         bool enable_deadlock_avoidance = false,
@@ -441,33 +363,8 @@ private:
         this->update_edm_buffer_free_slots<stateful_api, enable_deadlock_avoidance, vc1_has_different_downstream_dest>(
             noc);
     }
-    // template <EDM_IO_BLOCKING_MODE blocking_mode>
-    // FORCE_INLINE void send_packet_header_and_notify_fabric(uint32_t source_address) {
-    //     uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
 
-    //     send_chunk_from_address<blocking_mode>(source_address, 1, sizeof(PACKET_HEADER_TYPE), buffer_address);
-    //     post_send_payload_increment_pointers();
-    // }
-
-    template <EDM_IO_BLOCKING_MODE blocking_mode>
-    FORCE_INLINE void send_payload_without_header_from_address_impl(uint32_t source_address, size_t size_bytes) {
-        uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
-
-        // skip past the first part of the buffer which will be occupied by the packet header
-        send_chunk_from_address<blocking_mode>(
-            source_address, 1, size_bytes, buffer_address + sizeof(PACKET_HEADER_TYPE));
-    }
-    template <EDM_IO_BLOCKING_MODE blocking_mode>
-    FORCE_INLINE void send_payload_from_address_impl(uint32_t source_address, size_t size_bytes) {
-        uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
-        ASSERT(size_bytes <= this->buffer_size_bytes);
-        ASSERT(tt::tt_fabric::is_valid(
-            *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
-        send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
-        post_send_payload_increment_pointers();
-    }
     template <
-        EDM_IO_BLOCKING_MODE blocking_mode,
         bool enable_deadlock_avoidance,
         bool vc1_has_different_downstream_dest,
         uint8_t EDM_TO_DOWNSTREAM_NOC,
@@ -479,7 +376,7 @@ private:
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
 
-        send_chunk_from_address_with_trid<blocking_mode, stateful_api, vc1_has_different_downstream_dest>(
+        send_chunk_from_address_with_trid<stateful_api, vc1_has_different_downstream_dest>(
             source_address,
             1,
             size_bytes,
@@ -495,14 +392,6 @@ private:
                 enable_deadlock_avoidance,
                 vc1_has_different_downstream_dest>(EDM_TO_DOWNSTREAM_NOC);
         }
-    }
-
-    template <EDM_IO_BLOCKING_MODE blocking_mode>
-    FORCE_INLINE void send_payload_impl(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
-        uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
-        ASSERT(num_pages * page_size <= this->buffer_size_bytes);
-        send_chunk<blocking_mode>(cb_id, num_pages, page_size, buffer_address);
-        post_send_payload_increment_pointers();
     }
 };
 
