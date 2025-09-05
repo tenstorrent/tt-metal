@@ -20,6 +20,7 @@
 #include "llk_math_unary_datacopy_api.h"
 #include "llk_math_binary_api.h"
 #include "llk_math_unary_sfpu_api.h"
+#include "llk_math_binary_sfpu_api.h"
 #include "llk_math_reduce_api.h"
 #define MATH(x) x
 #define MAIN math_main()
@@ -581,6 +582,34 @@ ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, in
  * Please refer to documentation for any_init.
  */
 ALWI void topk_tile_init() { MATH((llk_math_eltwise_unary_sfpu_topk_init<true>())); }
+
+// clang-format off
+/**
+ * Performs MaxPool with indices algorithm on the data tile and index tile
+ * that are pre-loaded in DST register. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Only a reduction of 9 rows is supported at this time.
+ *
+ * | Argument        | Description                                                              | Type     | Valid Range                                           | Required |
+ * |-----------------|--------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register containing the data to be reduced  | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst_idx        | The index of the tile in DST register containing the indices of the data | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | num_rows        | The number of rows to use for the MaxPool operation                      | uint32_t | {9}                                                   | True     |
+ */
+// clang-format on
+template <int num_rows = 9>
+ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx) {
+    // support for num_rows != 9 is tracked here: https://github.com/tenstorrent/tt-metal/issues/17202
+    static_assert(num_rows == 9, "num_rows must be one of: {9}");
+    MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices<true, DST_ACCUM_MODE, num_rows>(idst, idst_idx)));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void max_reduce_with_indices_init() { MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices_init<true>())); }
 
 /**
  * Pauses the cores so that the debug interface can be used to inspect the value of the registers.
