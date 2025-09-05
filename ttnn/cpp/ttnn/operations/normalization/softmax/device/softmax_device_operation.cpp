@@ -647,7 +647,7 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
         /*inplace=*/true,
         /*output_mem_config=*/input_tensor.memory_config(),
         /*program_config=*/program_config,
-        /*is_causal_mask=*/false,
+        /*is_causal_mask=*/true,
         /*compute_kernel_config=*/compute_kernel_config_val,
         /*is_scale_causal_mask_hw_dims_softmax=*/true,
         /*numeric_stable=*/numeric_stable);
