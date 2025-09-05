@@ -95,7 +95,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           mkdir -p generated/test_reports
-          GTEST_FILTER=${{inputs.gtest_filter}}
+          GTEST_FILTER="--gtest_filter=${{inputs.gtest_filter}}"
           ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
