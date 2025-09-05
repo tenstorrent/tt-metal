@@ -15,6 +15,8 @@ from torch import nn
 from .tt_pytorch_semSeg import PanopticDeepLabSemSegHead, ShapeSpec
 from .tt_pytorch_insemb import PanopticDeepLabInsEmbedHead
 from ..reference.pytorch_postprocessing import get_panoptic_segmentation
+from ..reference.pytorch_resnet import ResNet
+from .common import create_real_resnet_state_dict
 
 
 class PytorchPanopticDeepLab(nn.Module):
@@ -80,9 +82,13 @@ class PytorchPanopticDeepLab(nn.Module):
         self.common_stride = common_stride
         self.train_size = train_size
 
-        # Note: For simplicity, we don't implement the full ResNet backbone here
-        # Instead, we'll expect features to be passed directly to the forward method
-        # This is sufficient for PCC comparison testing
+        # Initialize ResNet backbone
+        self.backbone = ResNet()
+
+        # Load ResNet weights if requested
+        if use_real_weights:
+            self._load_resnet_weights(weights_path)
+        # If not using real weights, keep the randomly initialized weights
 
         # Define feature map specifications based on ResNet output
         self.input_shape = self._create_input_shape_spec()
@@ -316,14 +322,33 @@ class PytorchPanopticDeepLab(nn.Module):
 
         return weights
 
+    def _load_resnet_weights(self, weights_path: Optional[str] = None):
+        """Load real ResNet weights into the backbone."""
+        # Create state dict using real weights from R-52.pkl
+        state_dict = create_real_resnet_state_dict(weights_path)
+
+        # Convert TTNN-style state dict to PyTorch format
+        pytorch_state_dict = {}
+        for key, value in state_dict.items():
+            # Skip bias parameters since PyTorch ResNet model has bias=False for conv layers
+            if ".bias" in key and not ".norm.bias" in key:
+                continue  # Skip conv bias parameters
+
+            # Keys should be compatible between TTNN and PyTorch models
+            pytorch_state_dict[key] = value
+
+        # Load the weights into the backbone
+        self.backbone.load_state_dict(pytorch_state_dict)
+        print("Loaded real ResNet weights into PyTorch backbone")
+
     def forward(
-        self, features: Dict[str, torch.Tensor], return_features: bool = False
+        self, x, return_features: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[Dict[str, torch.Tensor]]]:
         """
         Forward pass through the complete PyTorch Panoptic-DeepLab model.
 
         Args:
-            features: Dictionary of backbone features (res2, res3, res5)
+            x: Input tensor [B, C, H, W] or dictionary of backbone features
             return_features: Whether to return intermediate backbone features
 
         Returns:
@@ -333,6 +358,14 @@ class PytorchPanopticDeepLab(nn.Module):
             - offset_map: Instance offset predictions [B, 2, H, W]
             - features: Optional backbone features if return_features=True
         """
+        # Handle both input tensor and pre-computed features
+        if isinstance(x, dict):
+            # Pre-computed features passed directly
+            features = x
+        else:
+            # Raw input tensor - run through backbone
+            features = self.backbone(x)
+
         # Get semantic segmentation predictions
         semantic_logits, _ = self.semantic_head(features)
 
@@ -347,7 +380,7 @@ class PytorchPanopticDeepLab(nn.Module):
 
     def inference(
         self,
-        features: Dict[str, torch.Tensor],
+        x,
         thing_ids: Set[int],
         label_divisor: int = 1000,
         stuff_area: int = 2048,
@@ -360,7 +393,7 @@ class PytorchPanopticDeepLab(nn.Module):
         Complete inference pipeline including post-processing.
 
         Args:
-            features: Dictionary of backbone features
+            x: Input tensor [B, C, H, W] or dictionary of backbone features
             thing_ids: Set of class IDs that are "things" (instances)
             label_divisor: Divisor for panoptic ID encoding
             stuff_area: Minimum area for stuff segments
@@ -375,7 +408,7 @@ class PytorchPanopticDeepLab(nn.Module):
             - center_points: Detected center points [B, K, 2]
         """
         # Forward pass
-        semantic_logits, center_heatmap, offset_map, _ = self.forward(features)
+        semantic_logits, center_heatmap, offset_map, _ = self.forward(x)
 
         # Get semantic predictions
         sem_seg = torch.argmax(semantic_logits, dim=1, keepdim=True)
