@@ -12,6 +12,8 @@
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/kernel.hpp>
 
 namespace tt::tt_metal {
 class TraceDescriptor;
