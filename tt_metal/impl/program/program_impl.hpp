@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "jit_build/build.hpp"
 #include "program_command_sequence.hpp"
 
 #include "tt-metalium/buffer.hpp"
@@ -31,7 +30,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <future>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -72,17 +70,13 @@ struct KernelGroup {
     launch_msg_t launch_msg{};
     go_msg_t go_msg{};
 
-    KernelGroup();
     KernelGroup(
         const detail::ProgramImpl& program,
         uint32_t programmable_core_type_index,
         std::vector<KernelHandle> kernel_ids,
-        bool erisc_is_idle,
         uint32_t local_cb_mask,
         uint32_t min_remote_cb_start_index,
         const CoreRangeSet& new_ranges);
-
-    uint32_t get_programmable_core_type_index() const;
 
     CoreType get_core_type() const;
 };
