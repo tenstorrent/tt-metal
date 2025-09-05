@@ -13,7 +13,7 @@ from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.decoder import TransformerBlock
-from models.tt_transformers.tt.model_config import CheckpointType, ModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs, CheckpointType
 from models.tt_transformers.tt.rope import RotarySetup
 
 
@@ -49,35 +49,37 @@ from models.tt_transformers.tt.rope import RotarySetup
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (256, 1024, 2048),  # For decode-only unit test, there's no need to run with large sequence lengths
+)
+@pytest.mark.parametrize(
+    "num_decode_iterations",
+    (2000,),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_decoder_inference(
-    max_seq_len,
-    batch_size,
-    paged_attention,
-    page_params,
-    mesh_device,
-    reset_seeds,
-    ensure_gc,
+    max_seq_len, batch_size, paged_attention, page_params, mesh_device, reset_seeds, ensure_gc, num_decode_iterations
 ):
+    # from models.demos.gemma3.tt.model_config import ModelArgs
+
     dtype = ttnn.bfloat8_b
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
-    model_args.n_layers = 1
+    layer_num = 0
+    model_args.n_layers = layer_num + 1
 
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = model_args.get_state_dict_prefix("TransformerBlock", 0)
+    first_layer_prefix = model_args.get_state_dict_prefix("TransformerBlock", layer_num)
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
+    # reference_model = model_args.reference_decoder(layer_num)
     reference_model = model_args.reference_decoder()
     reference_model.load_state_dict(partial_state_dict)
 
     generation_start_pos = 0
-    generation_length = 10
+    generation_length = num_decode_iterations
     all_tests_pass = True
 
     # Setup RoPE transformation matrices
@@ -140,12 +142,11 @@ def test_decoder_inference(
         tt_ccl=tt_ccl,
         dtype=dtype,
         state_dict=state_dict,
-        layer_num=0,
+        layer_num=layer_num,
         weight_cache_path=model_args.weight_cache_path(dtype),
         transformation_mats=transformation_mats,
         paged_attention_config=paged_attention_config,
     )
-
     seqlen = 1
 
     if model_args.checkpoint_type == CheckpointType.Meta:
@@ -172,6 +173,12 @@ def test_decoder_inference(
             mesh_shape=model_args.cluster_shape,
         ),
     )
+    pccs = []
+    atol = []
+    rtol = []
+    abs_max_inputs = []
+    abs_max_vals_ref = []
+    abs_max_vals_tt = []
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
 
@@ -212,11 +219,19 @@ def test_decoder_inference(
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0) if freqs_cis is not None else None
 
         # Reference model
+        # ref_output = reference_model(pt_decode_input.to(torch.bfloat16), current_pos[0], freqs_cis_i, mask=None)
         ref_output = reference_model(pt_decode_input, current_pos[0], freqs_cis_i, mask=None)
 
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
-
-        logger.info(comp_allclose(ref_output, tt_output_torch))
+        pccs.append(pcc_message)
+        abs_max_inputs.append(torch.max(torch.abs(pt_decode_input.to(torch.float32))))
+        abs_max_vals_ref.append(torch.max(torch.abs(ref_output.to(torch.float32))))
+        abs_max_vals_tt.append(torch.max(torch.abs(tt_output_torch.to(torch.float32))))
+        passing_allclose, atol_delta, rtol_delta = comp_allclose(ref_output, tt_output_torch)
+        atol.append(atol_delta)
+        rtol.append(rtol_delta)
+        # logger.info(comp_allclose(ref_output, tt_output_torch))
+        logger.info(f"Max ATOL Delta: {atol_delta}, Max RTOL Delta: {rtol_delta}")
         logger.info(f"PCC: {pcc_message}")
 
         if passing:
@@ -237,7 +252,34 @@ def test_decoder_inference(
                 mesh_shape=model_args.cluster_shape,
             ),
         )
+    import json
 
+    import matplotlib.pyplot as plt
+
+    json.dump(pccs, open(f"decoder_pccs_startpos{generation_start_pos}_{model_args.model_name}.json", "w"))
+    fig, ax = plt.subplots(3)
+    ax[0].plot(pccs)
+    ax[0].set_title("PCCs")
+    ax[0].set_ylim(0, 1.05)
+    ax[1].plot(atol)
+    ax[1].set_title("ATOL Deltas")
+    ax[2].plot(rtol)
+    ax[2].set_title("RTOL Deltas")
+    plt.tight_layout()
+    plt.savefig(f"decoder_pccs_startpos{generation_start_pos}_{model_args.model_name}.png")
+    # plt.title("PCCs")
+    # plt.ylim(0, 1.05)
+    plt.savefig(f"decoder_pccs_startpos{generation_start_pos}_{model_args.model_name}.png")
+
+    fig, ax = plt.subplots(2)
+    ax[0].plot(abs_max_inputs, label="Inputs")
+    ax[1].plot(abs_max_vals_ref, label="Reference")
+    ax[1].plot(abs_max_vals_tt, label="TT")
+    ax[0].set_title("Absolute Max Values")
+    ax[0].legend()
+    ax[1].legend()
+    plt.tight_layout()
+    plt.savefig(f"decoder_abs_max_vals_startpos{generation_start_pos}_{model_args.model_name}.png")
     if all_tests_pass:
         logger.info(f"All {generation_length} decode iterations Passed!")
     else:

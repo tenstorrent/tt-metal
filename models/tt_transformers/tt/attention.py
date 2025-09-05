@@ -13,6 +13,40 @@ from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
+def rotate_half(x):
+    """Rotates half the hidden dims of the input."""
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
+    """Applies Rotary Position Embedding to the query and key tensors.
+
+    Args:
+        q (`torch.Tensor`): The query tensor.
+        k (`torch.Tensor`): The key tensor.
+        cos (`torch.Tensor`): The cosine part of the rotary embedding.
+        sin (`torch.Tensor`): The sine part of the rotary embedding.
+        position_ids (`torch.Tensor`, *optional*):
+            Deprecated and unused.
+        unsqueeze_dim (`int`, *optional*, defaults to 1):
+            The 'unsqueeze_dim' argument specifies the dimension along which to unsqueeze cos[position_ids] and
+            sin[position_ids] so that they can be properly broadcasted to the dimensions of q and k. For example, note
+            that cos[position_ids] and sin[position_ids] have the shape [batch_size, seq_len, head_dim]. Then, if q and
+            k have the shape [batch_size, heads, seq_len, head_dim], then setting unsqueeze_dim=1 makes
+            cos[position_ids] and sin[position_ids] broadcastable to the shapes of q and k. Similarly, if q and k have
+            the shape [batch_size, seq_len, heads, head_dim], then set unsqueeze_dim=2.
+    Returns:
+        `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
+    """
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
+    return q_embed, k_embed
+
+
 class Attention(LightweightModule):
     def __init__(
         self,
@@ -478,6 +512,27 @@ class Attention(LightweightModule):
             k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
         )
 
+        # import pdb; pdb.set_trace()
+        # q_heads_pre_rot_1BQD_torch = ttnn.to_torch(q_heads_pre_rot_1BQD, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=[1, 0], mesh_shape=(1, 8)))
+        # k_heads_pre_rot_1BKD_torch = ttnn.to_torch(k_heads_pre_rot_1BKD, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=[1, 0], mesh_shape=(1, 8)))
+        # q_heads_1BQD_torch, k_heads_1BKD_torch = apply_rotary_pos_emb(q_heads_pre_rot_1BQD_torch, k_heads_pre_rot_1BKD_torch, rot_mats[2], rot_mats[3])
+        # q_heads_1BQD_b = ttnn.from_torch(
+        #     q_heads_1BQD_torch,
+        #     device=self.mesh_device,
+        #     dtype=q_heads_pre_rot_1BQD.dtype,
+        #     layout=ttnn.TILE_LAYOUT,
+        #     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[1, 0], mesh_shape=(1, 8)),
+        # )
+        # q_heads_1BQD = ttnn.to_memory_config(q_heads_1BQD_b, q_heads_1BQD.memory_config())
+        # k_heads_1BKD_b = ttnn.from_torch(
+        #     k_heads_1BKD_torch,
+        #     device=self.mesh_device,
+        #     dtype=k_heads_1BKD.dtype,
+        #     layout=k_heads_1BKD.layout,
+        #     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[1, 0], mesh_shape=(1, 8)),
+        # )
+        # k_heads_1BKD = ttnn.to_memory_config(k_heads_1BKD_b, k_heads_1BKD.memory_config())
+
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
 
@@ -745,7 +800,6 @@ class Attention(LightweightModule):
             self.transformation_mats["prefill"],
             is_decode_mode=False,
         )
-        ttnn.deallocate(q_heads_1QSD_pre_rot)
 
         if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
@@ -757,8 +811,29 @@ class Attention(LightweightModule):
             self.transformation_mats["prefill"],
             is_decode_mode=False,
         )
-        ttnn.deallocate(k_heads_1KSD_pre_rot)
 
+        # q_heads_1QSD_pre_rot_torch = ttnn.to_torch(q_heads_1QSD_pre_rot, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=[1, 0], mesh_shape=(1, 8)))
+        # k_heads_1KSD_pre_rot_torch = ttnn.to_torch(k_heads_1KSD_pre_rot, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=[1, 0], mesh_shape=(1, 8)))
+        # q_heads_1QSD_torch, k_heads_1KSD_torch = apply_rotary_pos_emb(q_heads_1QSD_pre_rot_torch, k_heads_1KSD_pre_rot_torch, rot_mats[2], rot_mats[3])
+        # q_heads_1QSD_b = ttnn.from_torch(
+        #     q_heads_1QSD_torch,
+        #     device=self.mesh_device,
+        #     dtype=q_heads_pre_rot_1BQD.dtype,
+        #     layout=ttnn.TILE_LAYOUT,
+        #     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[1, 0], mesh_shape=(1, 8)),
+        # )
+        # q_heads_1QSD_b = ttnn.to_memory_config(q_heads_1QSD_b, q_heads_1QSD.memory_config())
+        # k_heads_1KSD_b = ttnn.from_torch(
+        #     k_heads_1KSD_torch,
+        #     device=self.mesh_device,
+        #     dtype=k_heads_1BKD.dtype,
+        #     layout=k_heads_1BKD.layout,
+        #     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[1, 0], mesh_shape=(1, 8)),
+        # )
+        # k_heads_1KSD = ttnn.to_memory_config(k_heads_1KSD_b, k_heads_1KSD.memory_config())
+
+        ttnn.deallocate(q_heads_1QSD_pre_rot)
+        ttnn.deallocate(k_heads_1KSD_pre_rot)
         # Fill KV-Cache
         if kv_cache:
             keys_BKSD, values_BKSD = kv_cache[0], kv_cache[1]
