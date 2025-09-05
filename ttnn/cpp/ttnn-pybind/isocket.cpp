@@ -43,7 +43,10 @@ void py_isocket_module_types(py::module& module) {
 
     py::class_<ttnn::distributed::BidirectionalFabricSocket, ttnn::distributed::ISocket /*, py::smart_holder*/>(
         module, "BidirectionalFabricSocket")
-        .def(py::init<tt::tt_metal::distributed::MeshSocket&, tt::tt_metal::distributed::MeshSocket&>())
+        .def(py::init<
+             const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&,
+             const tt::tt_metal::distributed::SocketConfig&,
+             const tt::tt_metal::distributed::SocketConfig&>())
         .def("send", &BidirectionalFabricSocket::send)
         .def("recv", &BidirectionalFabricSocket::recv)
         .def("get_rank", &BidirectionalFabricSocket::get_rank)
@@ -52,7 +55,9 @@ void py_isocket_module_types(py::module& module) {
 
     py::class_<ttnn::distributed::FabricSocket, ttnn::distributed::ISocket /*, py::smart_holder*/>(
         module, "FabricSocket")
-        .def(py::init<tt::tt_metal::distributed::MeshSocket&>())
+        .def(py::init<
+             const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&,
+             const tt::tt_metal::distributed::SocketConfig&>())
         .def("send", &FabricSocket::send)
         .def("recv", &FabricSocket::recv)
         .def("get_rank", &FabricSocket::get_rank)
@@ -60,7 +65,9 @@ void py_isocket_module_types(py::module& module) {
         .def_static("create", &FabricSocket::create);
 
     py::class_<ttnn::distributed::MPISocket, ttnn::distributed::ISocket /*, py::smart_holder*/>(module, "MPISocket")
-        .def(py::init<tt::tt_metal::distributed::MeshSocket&>())
+        .def(py::init<
+             const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&,
+             const tt::tt_metal::distributed::SocketConfig&>())
         .def("send", &MPISocket::send)
         .def("recv", &MPISocket::recv)
         .def("get_rank", &MPISocket::get_rank)
