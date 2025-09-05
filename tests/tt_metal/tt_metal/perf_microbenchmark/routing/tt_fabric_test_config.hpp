@@ -113,6 +113,7 @@ static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mappe
 static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_pattern_mapper({
     {"all_to_all", HighLevelTrafficPattern::AllToAll},
     {"one_to_all", HighLevelTrafficPattern::OneToAll},
+    {"all_to_one", HighLevelTrafficPattern::AllToOne},
     {"full_device_random_pairing", HighLevelTrafficPattern::FullDeviceRandomPairing},
     {"unidirectional_linear", HighLevelTrafficPattern::UnidirectionalLinear},
     {"full_ring", HighLevelTrafficPattern::FullRing},
@@ -1624,6 +1625,8 @@ private:
                 } else {
                     expand_one_or_all_to_all_multicast(test, defaults, HighLevelTrafficPattern::OneToAll);
                 }
+            } else if (pattern.type == "all_to_one") {
+                expand_all_to_one_unicast(test, defaults, HighLevelTrafficPattern::AllToOne);
             } else if (pattern.type == "full_device_random_pairing") {
                 expand_full_device_random_pairing(test, defaults);
             } else if (pattern.type == "unidirectional_linear") {
@@ -1664,6 +1667,27 @@ private:
         } else {
             add_senders_from_pairs(test, all_pairs, base_pattern);
         }
+    }
+
+    void expand_all_to_one_unicast(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
+        log_info(LogTest, "Expanding all_to_one_unicast pattern for test: {}", test.name);
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> all_pairs =
+            this->route_manager_.get_all_to_all_unicast_pairs();
+
+        TT_FATAL(!all_pairs.empty(), "Cannot expand all_to_one_unicast because no device pairs were found.");
+
+        // Get the first device as the single receiver (destination)
+        FabricNodeId first_device = all_pairs[0].first;
+
+        // Filter pairs to only include those with the first device as receiver
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> filtered_pairs;
+        for (const auto& pair : all_pairs) {
+            if (pair.second == first_device) {
+                filtered_pairs.push_back(pair);
+            }
+        }
+        add_senders_from_pairs(test, filtered_pairs, base_pattern);
     }
 
     void expand_full_device_random_pairing(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {

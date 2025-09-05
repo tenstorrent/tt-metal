@@ -92,6 +92,7 @@ enum class RoutingType {
 enum class HighLevelTrafficPattern {
     AllToAll,
     OneToAll,
+    AllToOne,
     FullDeviceRandomPairing,
     UnidirectionalLinear,
     FullRing,
