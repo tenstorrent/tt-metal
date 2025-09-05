@@ -5,13 +5,13 @@ import torch.nn as nn
 import torch
 import ttnn
 
-from models.experimental.panoptic_deeplab.tt.tt_conv2dWrapper import (
+from .tt_conv2dWrapper import (
     TtConv2d,
     TtConv2dParameters,
     SliceConfig,
     SliceMode,
 )
-from models.experimental.panoptic_deeplab.tt.tt_maxpool2d_wrapper import TtMaxPool2d
+from .tt_maxpool2d_wrapper import TtMaxPool2d
 
 
 class TtStem(nn.Module):

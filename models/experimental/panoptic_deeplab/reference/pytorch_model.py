@@ -12,11 +12,11 @@ import torch
 from typing import Dict, List, Optional, Tuple, Any, Set
 from torch import nn
 
-from .tt_pytorch_semSeg import PanopticDeepLabSemSegHead, ShapeSpec
-from .tt_pytorch_insemb import PanopticDeepLabInsEmbedHead
-from ..reference.pytorch_postprocessing import get_panoptic_segmentation
-from ..reference.pytorch_resnet import ResNet
-from .common import create_real_resnet_state_dict
+from .pytorch_semSeg import PanopticDeepLabSemSegHead, ShapeSpec
+from .pytorch_insemb import PanopticDeepLabInsEmbedHead
+from .pytorch_postprocessing import get_panoptic_segmentation
+from .pytorch_resnet import ResNet
+from ..tt.common import create_real_resnet_state_dict
 
 
 class PytorchPanopticDeepLab(nn.Module):

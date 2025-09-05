@@ -3,7 +3,7 @@ from typing import Callable, Dict, List, Union, Optional, Tuple
 from torch import nn
 from torch.nn import functional as F
 
-from .tt_pytorch_aspp import ASPP, get_norm
+from .pytorch_aspp import ASPP, get_norm
 from .pytorch_conv2dWrapper import Conv2d
 
 
