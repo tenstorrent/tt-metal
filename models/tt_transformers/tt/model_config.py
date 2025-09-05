@@ -1462,10 +1462,6 @@ class ModelArgs:
         self.n_kv_heads = text_config.get("n_kv_heads", text_config.get("num_key_value_heads"))
         self.n_layers = text_config.get("n_layers", text_config.get("num_hidden_layers"))
 
-        self.sliding_window_pattern = (
-            [lt == "sliding_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
-        )
-
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
@@ -1787,7 +1783,7 @@ class ModelArgs:
                 model = AutoModelForCausalLM.from_pretrained(
                     self.CKPT_DIR,
                     torch_dtype="auto",
-                    trust_remote_code=self.trust_remote_code_hf
+                    trust_remote_code=self.trust_remote_code_hf,
                     # Note that the default setting is torch.dtype.float32, but model weights are
                     # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                     # unnecessary cast.
@@ -2304,7 +2300,6 @@ class ModelArgs:
                     from transformers import Gemma3ForConditionalGeneration
 
                     model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR, device_map="auto")
-                    model = model
                 else:
                     if self.cache_hf_flag and self.cached_hf_model is None:
                         model = AutoModelForCausalLM.from_pretrained(
@@ -2497,7 +2492,6 @@ class ModelArgs:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
             use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer"
-            model_name_env = os.getenv("HF_MODEL")
             if hasattr(model.model, "rotary_emb_local"):
                 rotary_emb_local = model.model.rotary_emb_local
             else:
@@ -2507,22 +2501,20 @@ class ModelArgs:
             )
             return wrapper
 
-    def reference_attention(self):
+    def reference_attention(self, layer_idx=0):
         if self.checkpoint_type == CheckpointType.Meta:
             from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
 
             return Attention(self)
         else:
             model = self.reference_transformer(wrap=False)
-            layer = model.model.layers[0].self_attn
-            use_position_embeddings = layer.__class__.__name__ in (
-                "Qwen3Attention",
-                "MistralAttention",
-                "Gemma3Attention",
-            )
-            wrapper = HfAttentionWrapper(
-                layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
-            )
+            layer = model.model.layers[layer_idx].self_attn
+
+            rotary_emb = getattr(model.model, "rotary_emb", None)
+            rotary_emb_local = getattr(model.model, "rotary_emb_local", None)
+
+            logger.info(f"LAYER ({layer_idx}): {layer} ROT_EMBD {rotary_emb} ROT_EMBD_LOCAL {rotary_emb_local}")
+            wrapper = HfAttentionWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
             return wrapper
 
     def set_tg_attention_config(self):
@@ -2607,7 +2599,9 @@ class ModelArgs:
 
 
 class HfAttentionWrapper:
-    def __init__(self, attention, head_dim, rotary_emb):
+    runs = 0
+
+    def __init__(self, attention, head_dim, rotary_emb, rotary_emb_local):
         from transformers import DynamicCache
 
         super().__init__()
@@ -2615,6 +2609,7 @@ class HfAttentionWrapper:
         self.past_key_value = DynamicCache()
         self.head_dim = head_dim
         self.rotary_emb = rotary_emb
+        self.rotary_emb_local = rotary_emb_local
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
@@ -2624,14 +2619,25 @@ class HfAttentionWrapper:
                 mask = mask.unsqueeze(0)
 
         if self.rotary_emb is not None:
-            position_embeddings = self.rotary_emb(x, position_ids)
-            output, _ = self.attention(
-                x,
-                position_embeddings=position_embeddings,
-                past_key_value=self.past_key_value,
-                use_cache=True,
-                attention_mask=mask,
-            )
+            if getattr(self.attention, "is_sliding", False):
+                position_embeddings = self.rotary_emb_local(x, position_ids)
+            else:
+                position_embeddings = self.rotary_emb(x, position_ids)
+            from transformers.model_debugging_utils import model_addition_debugger_context
+
+            with model_addition_debugger_context(
+                self.attention,
+                debug_path=f"/home/user1/debug/{HfAttentionWrapper.runs}",
+                do_prune_layers=False,  # This will output ALL the layers of a model.
+            ):
+                output, _ = self.attention(
+                    x,
+                    position_embeddings=position_embeddings,
+                    past_key_value=self.past_key_value,
+                    use_cache=True,
+                    attention_mask=mask,
+                )
+                HfAttentionWrapper.runs += 1
         else:
             output, _, self.past_key_value = self.attention(
                 x,
@@ -2733,25 +2739,43 @@ class HfDecoderWrapper:
 
 
 class HfModelWrapper:
-    def __init__(self, model, head_dim):
+    def __init__(self, model, head_dim, debug=False):
         from transformers import DynamicCache
 
         self.model = model
         self.head_dim = head_dim
         self.past_key_values = DynamicCache()
+        self.debug = debug
 
     def forward(self, inputs_embeds, start_pos, mode="decode"):
         position_ids = torch.tensor(
             [list(range(start_pos, start_pos + inputs_embeds.shape[1]))] * inputs_embeds.shape[0]
         )
-        logits, new_cache, hidden_states = self.model.forward(
-            inputs_embeds=inputs_embeds,
-            position_ids=position_ids,
-            use_cache=True,
-            past_key_values=self.past_key_values,
-            return_dict=False,
-            output_hidden_states=True,
-        )
+        if self.debug:
+            from transformers import model_addition_debugger_context
+
+            with model_addition_debugger_context(
+                self.model,
+                debug_path="optional_path_to_your_directory",
+                do_prune_layers=False,  # This will output ALL the layers of a model.
+            ):
+                logits, new_cache, hidden_states = self.model.forward(
+                    inputs_embeds=inputs_embeds,
+                    position_ids=position_ids,
+                    use_cache=True,
+                    past_key_values=self.past_key_values,
+                    return_dict=False,
+                    output_hidden_states=True,
+                )
+        else:
+            logits, new_cache, hidden_states = self.model.forward(
+                inputs_embeds=inputs_embeds,
+                position_ids=position_ids,
+                use_cache=True,
+                past_key_values=self.past_key_values,
+                return_dict=False,
+                output_hidden_states=True,
+            )
         self.past_key_values = new_cache
         return logits if mode == "decode" else hidden_states[-2]  # last hidden state is final norm
 

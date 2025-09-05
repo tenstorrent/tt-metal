@@ -185,9 +185,7 @@ class TransformerBlock(LightweightModule):
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
 
         # Choose the correct rotation matrices based on the mode
-        rot_mats = (
-            rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
-        )
+        rot_mats = rot_mats_local if getattr(self.attention, "is_sliding", False) else rot_mats_global
 
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)

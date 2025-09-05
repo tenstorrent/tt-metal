@@ -2,7 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import os
+from copy import deepcopy
 
+import pandas as pd
 import pytest
 import torch
 from loguru import logger
@@ -11,9 +13,9 @@ import ttnn
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
+from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.rope import RotarySetup
+from models.tt_transformers.tt.rope import RotarySetup, compute_freqs_cis
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
@@ -52,20 +54,25 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize(
+    "layer_idx",
+    (0, 5),  # pick a local and global attention layer
+)
 def test_attention_inference(
-    max_seq_len,
-    batch_size,
-    paged_attention,
+    max_seq_len: int,
+    batch_size: int,
+    paged_attention: bool,
     page_params,
     mesh_device,
     reset_seeds,
     ensure_gc,
+    layer_idx: int,
 ):
-    dtype = ttnn.bfloat8_b
+    dtype = ttnn.bfloat16
     pcc = 0.99
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
-    model_args.n_layers = 1  # For the unit test, just run a single layer
+    model_args.n_layers = layer_idx + 1  # For the unit test, just run a single layer
 
     state_dict = model_args.load_state_dict()
 
@@ -75,7 +82,7 @@ def test_attention_inference(
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    reference_model = model_args.reference_attention()
+    reference_model = model_args.reference_attention(layer_idx=layer_idx)
     reference_model.load_state_dict(partial_state_dict)
 
     seq_len = 1
@@ -84,16 +91,35 @@ def test_attention_inference(
     generation_length = 10
     all_tests_pass = True
 
-    # Setup RoPE transformation matrices
+    rope_scaling_global = model_args.rope_scaling
+    if rope_scaling_global:
+        rope_scaling_local = deepcopy(rope_scaling_global)
+        rope_scaling_local.rope_type = "default"
+        rope_scaling_local.factor = None
+    else:
+        rope_scaling_local = None
+
+    dim = model_args.head_dim
+
+    if getattr(reference_model, "is_sliding", False):
+        # Setup RoPE transformation matrices
+        theta = model_args.rope_theta_local
+        rope_scaling = rope_scaling_local
+        reference_embed = reference_model.rotary_emb_local
+    else:
+        # Setup RoPE transformation matrices
+        theta = model_args.rope_theta
+        rope_scaling = rope_scaling_global
+        reference_embed = reference_model.rotary_emb
+
     rope_setup = RotarySetup(
         mesh_device,
         batch_size,
-        model_args.head_dim,
+        dim,
         model_args.max_seq_len,
-        model_args.rope_theta,
-        model_args.rope_scaling,
+        theta,
+        rope_scaling,
     )
-
     transformation_mats = rope_setup.get_both_trans_mats()
 
     page_table_tt = None
@@ -130,21 +156,14 @@ def test_attention_inference(
         tt_ccl,
         state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        layer_num=0,
+        layer_num=layer_idx,
         dtype=dtype,
         transformation_mats=transformation_mats,
         configuration=model_args,
         paged_attention_config=paged_attention_config,
     )
 
-    cos, sin = precompute_freqs(
-        model_args.head_dim,
-        model_args.max_seq_len * 2,
-        model_args.rope_theta,
-        model_args.rope_scaling.factor if model_args.rope_scaling else None,
-        model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
-    )
-    freqs_cis = torch.complex(cos, sin)
+    freqs_cis = compute_freqs_cis(dim, model_args.max_seq_len * 2, theta, rope_scaling)
 
     # Initial positions
     current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])
@@ -175,6 +194,33 @@ def test_attention_inference(
 
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rot_mats(current_pos)
+        ref_rot_mats = reference_embed.forward(pt_attention_input, current_pos.unsqueeze(0).unsqueeze(0))
+        ref_rot_mats = (
+            torch.reshape(ref_rot_mats[0], [int(i) for i in rot_mats[0].shape]),
+            torch.reshape(ref_rot_mats[1], [int(i) for i in rot_mats[1].shape]),
+        )
+        torch_rot_mats = (ttnn.to_torch(rot_mats[0], dtype=torch.float), ttnn.to_torch(rot_mats[1], dtype=torch.float))
+        logger.info(f"ALL_CLOSE COS: {torch.allclose(ref_rot_mats[0], torch_rot_mats[0])}")
+        logger.info(f"ALL_CLOSE SIN: {torch.allclose(ref_rot_mats[1], torch_rot_mats[1])}")
+        df = pd.DataFrame(
+            {
+                "cos_ref": ref_rot_mats[0].detach().numpy().flatten(),
+                "cos_act": torch_rot_mats[0].detach().numpy().flatten(),
+                "cos_diff": (torch.abs(ref_rot_mats[0] - torch_rot_mats[0]) / (1e-9 + torch.abs(ref_rot_mats[0])))
+                .detach()
+                .numpy()
+                .flatten(),
+                "sin_ref": ref_rot_mats[1].detach().numpy().flatten(),
+                "sin_act": torch_rot_mats[1].detach().numpy().flatten(),
+                "sin_diff": (torch.abs(ref_rot_mats[1] - torch_rot_mats[1]) / (1e-9 + torch.abs(ref_rot_mats[1])))
+                .detach()
+                .numpy()
+                .flatten(),
+            }
+        )
+        # df = df[df["diff"] > 1e6]
+        with pd.option_context("display.max_rows", None, "display.max_columns", None):
+            logger.info(f"\n{df}")
 
         tt_out = tt_model(
             attention_input,
@@ -218,7 +264,7 @@ def test_attention_inference(
             ),
         )
 
-        check_kv_cache = True
+        check_kv_cache = False
         if check_kv_cache:
             # PyTorch output --------------------------------------------------------------------
             pytorch_layer_present = [

@@ -5,6 +5,7 @@
 import math
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -97,6 +98,7 @@ class Attention(LightweightModule):
         self.is_sliding = (
             configuration.layer_types[layer_num] == "sliding_attention" if configuration.layer_types else False
         )
+        logger.info(f"sliding attention for layer {layer_num}: {self.is_sliding}, {configuration.layer_types}")
 
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()
