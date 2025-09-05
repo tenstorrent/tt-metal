@@ -205,7 +205,8 @@ std::vector<CBInfo> get_cb_info(
                 input_datatype,
                 per_core_out_matrix_width_ntiles * block_config.act_block_w_ntiles,
                 weights_tile_size,
-                dilation[1])) {
+                dilation[1],
+                num_blocks_act_h)) {
             uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles;
             uint32_t act_block_h_nsubblocks_split_last = act_block_h_nsubblocks / 2;
             uint32_t act_block_h_nsubblocks_split = act_block_h_nsubblocks - act_block_h_nsubblocks_split_last;
@@ -396,7 +397,7 @@ static float get_local_l1_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
     NocPerformanceParams params = {0, 0.0f, 0.0f};
     switch (arch) {
         case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{4096, 1.124f, 80.48f}; break;
-        case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{1024, 0.868f, 27.7f}; break;
+        case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{1024, 0.868f, 27.84f}; break;
         default: TT_THROW("Unsupported architecture when calculating NOC transfer rate");
     }
 
@@ -522,18 +523,21 @@ bool is_split_reader_viable(
     DataType input_datatype,
     uint32_t weights_block_ntiles,
     uint32_t weights_tile_size,
-    uint32_t dilation_w) {
+    uint32_t dilation_w,
+    uint32_t act_block_h_ntiles_per_core) {
     // Calculate activation transfer cost
     const uint32_t input_bytes_per_element = (input_datatype == DataType::FLOAT32) ? 4 : 2;
     // For dilated convs the kernel_width number of channels isn't sequential in the L1, so we transfer 1 channel at a
     // time
+    const uint32_t coallesced_read_channels = (dilation_w == 1 ? kernel_width : 1);
     const uint32_t noc_local_l1_transfer_unit_bytes =
-        input_bytes_per_element * input_channels_padded * (dilation_w == 1 ? kernel_width : 1);
+        input_bytes_per_element * input_channels_padded * coallesced_read_channels;
     const float noc_local_l1_transfer_rate_gbps =
         get_local_l1_noc_transfer_rate(noc_local_l1_transfer_unit_bytes, arch);
-    const float activation_cost =
-        static_cast<float>(act_block_h_ntiles * tt::constants::TILE_HEIGHT * noc_local_l1_transfer_unit_bytes) /
-        noc_local_l1_transfer_rate_gbps;
+    const float activation_cost = static_cast<float>(
+                                      input_bytes_per_element * act_block_h_ntiles * tt::constants::TILE_HEIGHT *
+                                      input_channels_padded * kernel_width) /
+                                  noc_local_l1_transfer_rate_gbps;
 
     const float noc_mcast_many_l1_linked_transfer_rate_gbps =
         get_mcast_many_l1_linked_noc_transfer_rate(weights_block_ntiles * weights_tile_size, arch);
@@ -542,17 +546,23 @@ bool is_split_reader_viable(
         static_cast<float>(weights_tile_size * weights_block_ntiles) *
         (1.0f / noc_all_dram_transfer_rate_gbps + 1.0f / noc_mcast_many_l1_linked_transfer_rate_gbps);
 
-    // Split reader is viable when activation cost significantly exceeds weight cost
-    const bool is_viable = activation_cost > 2.0f * weight_cost;
+    const float comparisson_factor = act_block_h_ntiles_per_core > 1 ? 2.0f : 0.85f;
 
-    log_info(
+    // Split reader is viable when activation cost significantly exceeds weight cost
+    const bool is_viable = activation_cost > comparisson_factor * weight_cost;
+
+    log_debug(
         tt::LogOp,
-        "Split reader viability: activation_cost={:.3f}, weight_cost={:.3f}, threshold_factor=2.0, "
-        "weight_tile_size={}, weight_block_ntiles={}, viable={}",
+        "Split reader viability: activation_cost={:.3f}, weight_cost={:.3f}, comparisson_factor={}, "
+        "weight_tile_size={}, weight_block_ntiles={},local_l1_transfer_unit_bytes={},coallesced_read_channels={}, "
+        "viable={}",
         activation_cost,
         weight_cost,
+        comparisson_factor,
         weights_tile_size,
         weights_block_ntiles,
+        noc_local_l1_transfer_unit_bytes,
+        coallesced_read_channels,
         is_viable);
 
     return is_viable;
