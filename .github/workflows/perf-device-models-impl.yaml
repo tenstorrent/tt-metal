@@ -44,7 +44,6 @@ jobs:
         ARCH_NAME: ${{ matrix.test-info.arch }}
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
-        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -63,6 +62,8 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: non-civ2 tests
         uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
+        env:
+          HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         with:
           model_name: "non-civ2_tests"
           commands: |
