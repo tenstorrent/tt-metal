@@ -148,7 +148,6 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
-            -e WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
           run_args: ${{ matrix.test-config.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
