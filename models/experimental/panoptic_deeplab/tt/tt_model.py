@@ -18,12 +18,12 @@ import torch
 from typing import Dict, List, Optional, Tuple, Any
 import ttnn
 
-from .resnet.tt_resnet import TtResNet
+from .tt_resnet import TtResNet
 from .tt_semseg import TtPanopticDeepLabSemSegHead
 from .tt_insemb import TtPanopticDeepLabInsEmbedHead
 from .common import create_real_resnet_state_dict, create_full_resnet_state_dict
 from ..reference.pytorch_postprocessing import get_panoptic_segmentation
-from .tt_pytorch_semSeg import ShapeSpec
+from ..reference.pytorch_semSeg import ShapeSpec
 
 
 class TtPanopticDeepLab:

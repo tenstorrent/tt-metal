@@ -10,8 +10,8 @@ import torch
 import ttnn
 from typing import Set
 
-from .tt_model import TtPanopticDeepLab, create_panoptic_deeplab_model
-from .tt_pytorch_model import PytorchPanopticDeepLab
+from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab, create_panoptic_deeplab_model
+from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
