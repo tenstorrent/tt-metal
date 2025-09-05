@@ -202,7 +202,7 @@ DataFormat get_single_pack_src_format(
         TT_FATAL(arch == tt::ARCH::BLACKHOLE, "Fp8 E4M3 mode only available in Blackhole");
     }
 
-    DataFormat pack_src_format;
+    DataFormat pack_src_format = DataFormat::Invalid;
     const ExpPrecision input_exp_width = get_exp_precision(data_format);
     const ExpPrecision output_exp_width = get_exp_precision(data_format);
     const ExpPrecision fp32_condition_exp_width = get_exp_precision(unpack_conditional_dst_format);

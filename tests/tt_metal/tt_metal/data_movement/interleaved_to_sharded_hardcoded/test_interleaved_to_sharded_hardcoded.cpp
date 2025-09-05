@@ -57,7 +57,7 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     tt::DataFormat input_cb_data_format = test_config.input_data_format;
-    uint32_t output_page_size, num_input_units;
+    uint32_t output_page_size = 0, num_input_units = 0;
     uint32_t input_cb_index = tt::CBIndex::c_0;
     uint32_t out_cb_index = input_cb_index;
     output_page_size = 256;
@@ -106,7 +106,7 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     tt::DataFormat input_cb_data_format = test_config.input_data_format;
-    uint32_t output_page_size, num_input_units;
+    uint32_t output_page_size = 0, num_input_units = 0;
     uint32_t input_cb_index = tt::CBIndex::c_0;
     uint32_t out_cb_index = input_cb_index;
     output_page_size = 4096;
@@ -252,7 +252,7 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
 
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
     tt::DataFormat input_cb_data_format = test_config.input_data_format;
-    uint32_t output_page_size, num_input_units;
+    uint32_t output_page_size = 0, num_input_units = 0;
     uint32_t input_cb_index = tt::CBIndex::c_0;
     uint32_t out_cb_index = input_cb_index;
     output_page_size = 512;
@@ -301,7 +301,7 @@ bool run_dm(IDevice* device, const TestConfig& test_config) {
 
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
     tt::DataFormat input_cb_data_format = test_config.input_data_format;
-    uint32_t output_page_size, num_input_units;
+    uint32_t output_page_size = 0, num_input_units = 0;
     uint32_t input_cb_index = tt::CBIndex::c_0;
     uint32_t out_cb_index = input_cb_index;
     output_page_size = 512;

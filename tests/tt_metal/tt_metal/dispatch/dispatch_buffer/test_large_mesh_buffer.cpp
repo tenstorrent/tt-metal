@@ -237,7 +237,7 @@ TEST_P(ShardedMeshBufferTestSuite, DRAMReadback) {
         // Start with last factor vs product of rest
         int split_idx = factors.size() - 1;
         height = 1, width = area;
-        int32_t temp_height, temp_width;
+        int32_t temp_height = 0, temp_width = 0;
         int32_t min_diff = std::abs(width - height);
         while (split_idx > 0) {
             temp_height = std::accumulate(factors.begin(), factors.begin() + split_idx, 1, std::multiplies<uint32_t>());
@@ -255,8 +255,8 @@ TEST_P(ShardedMeshBufferTestSuite, DRAMReadback) {
 
     // Determine page shape in elements
     uint32_t page_area = page_size / ElementSize;
-    int32_t page_height;
-    int32_t page_width;
+    int32_t page_height = 0;
+    int32_t page_width = 0;
     if (page_area >= tile_area) {
         // Calculate page dims in terms of number of tiles in a page
         if ((page_area / tile_area) * tile_area != page_area) {
@@ -270,7 +270,7 @@ TEST_P(ShardedMeshBufferTestSuite, DRAMReadback) {
         if ((tile_area / page_area) * page_area != tile_area) {
             TT_THROW("page size elements {} is incompatible with tile size {}", page_area, tile_area);
         }
-        int32_t tile_height_pages, tile_width_pages;
+        int32_t tile_height_pages = 0, tile_width_pages = 0;
         test_helper_factor_area(tile_area / page_area, tile_height_pages, tile_width_pages);
         page_height = tile_height / tile_height_pages;
         page_width = tile_width / tile_width_pages;
