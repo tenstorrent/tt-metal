@@ -180,6 +180,17 @@ def run_sdpa_noncausal(
     logger.debug(f"python vs pytorch: {out_pcc}")
     rmse = torch.sqrt(((gt - tt_back) ** 2).mean()).item()
     logger.debug(f"rmse: {rmse}")
+
+    # torch.set_printoptions(linewidth=500,sci_mode=False)
+
+    # print("TEST FINISHED RUNNING PCC: ",out_pcc)
+
+    # print("GOLDEN: ", gt.flatten()[0:10])
+    # print("        " ,gt.flatten()[-10:])
+    # print()
+    # print("RESULT: ", tt_back.flatten()[0:10])
+    # print("        " ,tt_back.flatten()[-10:])
+
     if rmse_threshold is not None:
         assert rmse < rmse_threshold
 

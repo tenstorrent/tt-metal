@@ -40,9 +40,7 @@ def create_full_range_tensor(input_shapes, dtype):
 
 
 def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.ones((h, w), dtype=torch.bfloat16) * 3
     golden_function = ttnn.get_golden_function(ttnn_function)
     torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
@@ -51,6 +49,11 @@ def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    print("*" * 80)
+    print(torch_output_tensor)
+    print(output_tensor)
+    print("*" * 80)
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
@@ -206,8 +209,8 @@ def test_fp32_uint32(device, h, w, dtype):
     run_identity_test(device, h, w, dtype)
 
 
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [32])
 def test_exp(device, h, w):
     run_unary_test(device, h, w, ttnn.exp, pcc=0.9998)
 

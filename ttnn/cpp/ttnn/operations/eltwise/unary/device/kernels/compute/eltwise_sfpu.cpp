@@ -6,9 +6,8 @@
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/eltwise_unary/exp.h"
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/eltwise_unary/trigonometry.h"
-#include "compute_kernel_api/mul_int32_sfpu.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -21,14 +20,14 @@ void MAIN {
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             tile_regs_acquire();
 
+            exp_tile_init<true, true>();
+
             // Pop tile after tile, copy to DST and pack
             cb_wait_front(tt::CBIndex::c_0, 1);
 
             copy_tile(tt::CBIndex::c_0, 0, 0);
 
-#ifdef SFPU_OP_CHAIN_0
-            SFPU_OP_CHAIN_0
-#endif
+            exp_tile<true, true>(0, (int)VectorMode::RC_custom);
 
             tile_regs_commit();
 
