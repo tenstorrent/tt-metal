@@ -246,7 +246,10 @@ class TtEulerDiscreteScheduler(LightweightModule):
         # timestep is not used in this implementation, step_index is already initialized at set_timesteps()
         # Note: Don't use inplace op here since UNet deallocates its input
         #       Permanent input is required for tracing
-        sample = ttnn.div(sample, self.tt_norm_factor)
+        # sample = ttnn.div(sample, self.tt_norm_factor)
+        # print(self.tt_norm_factor)
+        tt_rec = ttnn.reciprocal(self.tt_norm_factor)
+        sample = ttnn.mul(sample, tt_rec)
 
         self.is_scale_input_called = True
         return sample

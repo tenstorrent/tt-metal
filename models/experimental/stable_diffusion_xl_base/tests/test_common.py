@@ -550,7 +550,8 @@ def run_tt_image_gen(
         profiler.start("vae_decode")
         if tid_vae is None or capture_trace:
             tid_vae = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
-            tt_latents = ttnn.div(tt_latents, scaling_factor)
+            # tt_latents = ttnn.div(tt_latents, scaling_factor)
+            tt_latents = ttnn.mul(tt_latents, ttnn.reciprocal(scaling_factor))
 
             logger.info("Running TT VAE")
             output_tensor, [C, H, W] = vae.forward(tt_latents, input_shape)
