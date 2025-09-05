@@ -11,10 +11,6 @@ on:
         required: false
         default: "22.04"
         type: string
-      enable-watcher:
-        required: false
-        default: false
-        type: boolean
   workflow_dispatch:
     inputs:
       build-type:
@@ -62,7 +58,6 @@ jobs:
       build-wheel: true
       version: ${{ inputs.version || '22.04' }}
       skip-tt-train: false
-      enable-watcher: ${{ inputs.enable-watcher || false }}
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -73,7 +68,6 @@ jobs:
       build-wheel: true
       tracy: true
       version: ${{ inputs.version || '22.04' }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   # Slow Dispatch Unit Tests
   sd-unit-tests:
@@ -93,7 +87,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
     needs: build-artifact
@@ -111,7 +104,6 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher }}
   # Fabric Unit Tests
   fabric-unit-tests:
     needs: build-artifact
@@ -129,7 +121,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher }}
   # TTNN FD Unit tests
   ttnn-unit-tests:
     needs: build-artifact
@@ -148,7 +139,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher }}
 
   # FD Model Tests
   models-unit-tests:
@@ -167,7 +157,6 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher }}
   # FD C++ Unit Tests
   cpp-unit-tests:
     needs: build-artifact
@@ -186,7 +175,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher }}
   tt-train-cpp-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -203,7 +191,6 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher }}
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
     needs: build-artifact
@@ -222,7 +209,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher }}
 
   run-profiler-regression:
     needs: [build-artifact-profiler]
@@ -241,7 +227,6 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.tt-metal-watcher || false }}
   t3000-fast-tests:
     if: ${{ github.event.pull_request.head.repo.fork == false }}
     needs: build-artifact
@@ -251,7 +236,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
   # tg-demo-apc-tests:
   #   if: ${{ github.event.pull_request.head.repo.fork == false }}
   #   needs: build-artifact
@@ -293,4 +277,3 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}

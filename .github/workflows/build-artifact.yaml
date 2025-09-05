@@ -75,11 +75,6 @@ on:
         type: string
         default: ""
         description: 'Commit SHA to test (default: HEAD)'
-      enable-watcher:
-        required: false
-        type: boolean
-        default: false
-        description: "Enable tt-metal-watcher in tests that support it"
     outputs:
       ci-build-docker-image:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -218,8 +213,7 @@ jobs:
         run: |
           TOOLCHAIN="${{ inputs.toolchain }}"
           TOOLCHAIN_CLEANED=$(echo "$TOOLCHAIN" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
-          ENABLE_WATCHER_SUFFIX="${{ inputs.enable-watcher == true && '-watcher' || '' }}"
-          ARTIFACT_NAME="packages-${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}${ENABLE_WATCHER_SUFFIX}"
+          ARTIFACT_NAME="packages-${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}"
 
           echo "name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
@@ -315,8 +309,7 @@ jobs:
         id: set_build_artifact_name
         run: |
           TOOLCHAIN_CLEANED=$(echo "${{ inputs.toolchain }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
-            ENABLE_WATCHER_SUFFIX="${{ inputs.enable-watcher == true && '_watcher' || '' }}"
-            BUILD_ARTIFACT_NAME="TTMetal_build_any_${{ inputs.version }}_${{ inputs.architecture }}_${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}${{ (inputs.distributed == false && '_no_distributed') || '' }}${ENABLE_WATCHER_SUFFIX}"
+          BUILD_ARTIFACT_NAME="TTMetal_build_any_${{ inputs.version }}_${{ inputs.architecture }}_${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}${{ (inputs.distributed == false && '_no_distributed') || '' }}"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_ENV"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
@@ -412,8 +405,7 @@ jobs:
         id: set_wheel_artifact_name
         run: |
           PYTHON_VERSION_NODOT=$(echo "${{ steps.set_python_version.outputs.python_version }}" | tr -d '.')
-          ENABLE_WATCHER_SUFFIX="${{ inputs.enable-watcher == true && '-watcher' || '' }}"
-          WHEEL_ARTIFACT_NAME="eager-dist-cp${PYTHON_VERSION_NODOT}-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}${ENABLE_WATCHER_SUFFIX}"
+          WHEEL_ARTIFACT_NAME="eager-dist-cp${PYTHON_VERSION_NODOT}-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}"
           echo "wheel_artifact_name=${WHEEL_ARTIFACT_NAME}" >> $GITHUB_OUTPUT
           echo "wheel_artifact_name=${WHEEL_ARTIFACT_NAME}" >> "$GITHUB_ENV"
 
