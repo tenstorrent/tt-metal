@@ -393,27 +393,6 @@ void CaptureSetRuntimeArgsUint32VecPerCore(
 
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::SetRuntimeArgsUint32VecPerCoreCommand, cmd.Union());
 }
-void CaptureSetRuntimeArgs(
-    IDevice* /*device*/,
-    const std::shared_ptr<Kernel>& kernel,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::shared_ptr<RuntimeArgs>& runtime_args) {
-    auto& ctx = LightMetalCaptureContext::get();
-    auto& fbb = ctx.get_builder();
-    uint32_t kernel_global_id = ctx.get_global_id(kernel.get());
-    auto [core_spec_type, core_spec_offset] = to_flatbuffer(fbb, core_spec);
-    auto rt_args_offset = to_flatbuffer(fbb, runtime_args);
-    log_debug(
-        tt::LogMetalTrace,
-        "{}: kernel_global_id: {} rt_args_size: {}",
-        __FUNCTION__,
-        kernel_global_id,
-        runtime_args->size());
-
-    auto cmd = tt::tt_metal::flatbuffer::CreateSetRuntimeArgsCommand(
-        fbb, kernel_global_id, core_spec_type, core_spec_offset, rt_args_offset);
-    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::SetRuntimeArgsCommand, cmd.Union());
-}
 
 void CaptureCreateCircularBuffer(
     CBHandle& cb_handle,
