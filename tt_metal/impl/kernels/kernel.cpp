@@ -91,7 +91,8 @@ Kernel::Kernel(
     const KernelSource& kernel_src,
     const CoreRangeSet& core_range_set,
     const std::vector<uint32_t>& compile_args,
-    const std::map<std::string, std::string>& defines) :
+    const std::map<std::string, std::string>& defines,
+    const std::unordered_map<std::string, uint32_t>& named_compile_args) :
     programmable_core_type_(programmable_core_type),
     processor_class_(processor_class),
     kernel_src_(kernel_src),
@@ -100,7 +101,8 @@ Kernel::Kernel(
     max_runtime_args_per_core_(0),
     core_with_max_runtime_args_({0, 0}),
     compile_time_args_(compile_args),
-    defines_(defines) {
+    defines_(defines),
+    named_compile_time_args_(named_compile_args) {
     this->register_kernel_with_watcher();
 
     size_t max_x = 0, max_y = 0;
@@ -223,6 +225,11 @@ std::string_view EthernetKernel::get_linker_opt_level() const { return this->get
 void KernelImpl::process_compile_time_args(
     const std::function<void(const std::vector<uint32_t>& values)> callback) const {
     callback(this->compile_time_args());
+}
+
+void KernelImpl::process_named_compile_time_args(
+    const std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)> callback) const {
+    callback(this->named_compile_time_args());
 }
 
 uint8_t DataMovementKernel::expected_num_binaries() const { return 1; }

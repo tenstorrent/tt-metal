@@ -21,6 +21,7 @@
 #include <tt-metalium/kernel.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/program/program_impl.hpp"
 #include <umd/device/types/xy_pair.h>
 
 #include "fabric_host_utils.hpp"
@@ -62,7 +63,7 @@ bool is_TG_gateway_connection(
 namespace tt::tt_fabric {
 
 size_t get_tt_fabric_channel_buffer_size_bytes() {
-    const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     return control_plane.get_fabric_context().get_fabric_channel_buffer_size_bytes();
 }
 
@@ -278,7 +279,7 @@ void append_routing_plane_connection_manager_rt_args(
 
     // 2) Append additional info for 2D Mesh
     if (fabric_context.is_2D_routing_enabled()) {
-        auto kernel = tt::tt_metal::detail::GetKernel(worker_program, kernel_id);
+        auto kernel = worker_program.impl().get_kernel(kernel_id);
         kernel->add_defines({{"FABRIC_2D", "1"}});
         if (fabric_context.is_dynamic_routing_enabled()) {
             kernel->add_defines({{"FABRIC_2D_DYNAMIC", "1"}});
