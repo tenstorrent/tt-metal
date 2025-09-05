@@ -301,7 +301,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             filter_w,
             tt::tt_metal::hal::get_arch(),
             a.dtype(),
-            p_config.per_core_out_matrix_width_ntile * block_config.act_block_w_ntiles,
+            parallelization_config.per_core_out_matrix_width_ntile * block_config.act_block_w_ntiles,
             tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(b.dtype())),
             dilation_w,
             per_core_out_matrix_height_ntiles / block_config.act_block_h_ntiles);

@@ -3573,7 +3573,6 @@ def test_conv2d_vae_sdxl(
         slice_config=slice_config,
         input_layout=ttnn.TILE_LAYOUT,
         enable_act_double_buffer=False, # TODO: this is set to true in SDXL, need to adapt tests
-        enable_split_reader=True if shard_layout == HS else False,
         throttle_level=throttle
     )
 
