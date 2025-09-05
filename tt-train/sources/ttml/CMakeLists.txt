@@ -443,3 +443,19 @@ if(NOT EXISTS "${TINYLLAMA_TOKENIZER_FILE}")
 else()
     message(STATUS "Tokenizer text file already exists at ${TINYLLAMA_TOKENIZER_FILE}, skipping download.")
 endif()
+
+set(QWEN_TOKENIZER_URL "https://huggingface.co/Qwen/Qwen2.5-0.5B/resolve/main/tokenizer.json")
+set(QWEN_TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/qwen-tokenizer.json")
+
+# Check if the file already exists before downloading
+if(NOT EXISTS "${QWEN_TOKENIZER_FILE}")
+    message(STATUS "Downloading Tokenizer text file to ${QWEN_TOKENIZER_FILE}")
+    file(
+        DOWNLOAD
+            ${QWEN_TOKENIZER_URL}
+            ${QWEN_TOKENIZER_FILE}
+        SHOW_PROGRESS
+    )
+else()
+    message(STATUS "Tokenizer text file already exists at ${QWEN_TOKENIZER_FILE}, skipping download.")
+endif()
