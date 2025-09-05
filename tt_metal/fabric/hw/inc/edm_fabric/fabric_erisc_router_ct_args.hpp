@@ -16,8 +16,6 @@
 // CHANNEL CONSTANTS
 // ETH TXQ SELECTION
 
-constexpr uint32_t DEFAULT_ETH_TXQ = 0;
-
 constexpr size_t NUM_ROUTER_CARDINAL_DIRECTIONS = 4;
 
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;
