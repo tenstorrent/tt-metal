@@ -444,7 +444,7 @@ class UNet:
             parameters.p3,
             device,
             mesh_mapper=mesh_mapper,
-            first_conv_reuse=True,
+            first_conv_reuse=is_wormhole_b0(self.device),
         )
         self.downblock4 = UNetDownblock(
             parameters.c4,
@@ -454,8 +454,8 @@ class UNet:
             parameters.p4,
             device,
             mesh_mapper=mesh_mapper,
-            first_conv_reuse=True,
-            second_conv_reuse=True,
+            first_conv_reuse=is_wormhole_b0(self.device),
+            second_conv_reuse=is_wormhole_b0(self.device),
         )
 
         self.bnc = UNetConv2D(

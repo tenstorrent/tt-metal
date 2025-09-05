@@ -4573,7 +4573,7 @@ def test_conv_bs_grid(
         ( 1,  3,    45, 512,    60, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (5, 5), (1, 1), [2, 2, 2, 2], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
         ( 1,  7,    32, 1024,   140, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (4, 4), (1, 1), [2, 2, 2, 2], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
         ( 4,  32,   32,  256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
-        (16,  48,   56,  256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 32*4, True, ttnn.MathFidelity.LoFi, False, False),
+        (16,  48,   56,  256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
     ),
 )
  #fmt: on
@@ -4605,6 +4605,10 @@ def test_conv2d_activation_reuse(
     enable_split_reader,
     enable_activation_reuse,
 ):
+    if batch == 16 and is_wormhole():
+        # not enough memory on WH for this case
+        act_block_h_override = 32*4
+
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
 

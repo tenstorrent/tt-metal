@@ -91,6 +91,15 @@ FORCE_INLINE void push_full_tile_height() {
     cb_push_back(cb_id_act, act_cb_w_tiles);
 }
 
+template <uint32_t cb_id_act, uint32_t act_cb_w_tiles, uint32_t image_width_tiles>
+FORCE_INLINE void push_remaining_tiles(uint32_t remaining_tiles_to_push, uint32_t cb_start_addr) {
+    constexpr uint32_t tiles_to_push = image_width_tiles * act_cb_w_tiles;
+    for (uint32_t i = 0; i < remaining_tiles_to_push; i += image_width_tiles) {
+        get_local_cb_interface(cb_id_act).fifo_wr_ptr = cb_start_addr;
+        cb_push_back(cb_id_act, tiles_to_push);
+    }
+}
+
 // Function to read the windows in the first output image row where we don't reuse anything
 template <
     uint32_t coalesced_read_bytes,
@@ -159,6 +168,16 @@ FORCE_INLINE void read_sticks_activation_reuse(
     uint32_t pixel_row = 0, pixel_column = 0;
 
     cb_reserve_back(cb_id_act, act_cb_tiles);
+
+    if (num_elems == 0) {
+        // If split reader is enabled, last core's BRISC might have no work to do,
+        // but we still need to push the same number of tiles to avoid blocking compute kernels
+        if constexpr (need_to_push_remaining_tiles) {
+            push_remaining_tiles<cb_id_act, act_cb_w_tiles, image_width_tiles>(remaining_tiles_to_push, cb_start_addr);
+        }
+
+        return;
+    }
 
     reader_idx++;
     uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
@@ -293,11 +312,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
     // Last core sometimes has less work to do, but we still need to push the same number of tiles
     // to avoid blocking compute kernels
     if constexpr (need_to_push_remaining_tiles) {
-        constexpr uint32_t tiles_to_push = image_width_tiles * act_cb_w_tiles;
-        for (uint32_t i = 0; i < remaining_tiles_to_push; i += image_width_tiles) {
-            get_local_cb_interface(cb_id_act).fifo_wr_ptr = cb_start_addr;
-            cb_push_back(cb_id_act, tiles_to_push);
-        }
+        push_remaining_tiles<cb_id_act, act_cb_w_tiles, image_width_tiles>(remaining_tiles_to_push, cb_start_addr);
     }
 }
 #endif

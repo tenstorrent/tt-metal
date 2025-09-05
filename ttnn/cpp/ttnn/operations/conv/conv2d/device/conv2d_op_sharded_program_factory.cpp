@@ -565,9 +565,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
     // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
     const bool packer_l1_acc_en = determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
+    const uint32_t batch = sliding_window_config.get_output_shape()[0];
     const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     const uint32_t output_image_height = sliding_window_config.get_output_shape()[1];
-    const uint32_t output_matrix_height_tiles = (output_image_height * output_image_width) / tt::constants::TILE_HEIGHT;
+    const uint32_t output_matrix_height_tiles =
+        (batch * output_image_height * output_image_width) / tt::constants::TILE_HEIGHT;
 
     Conv2dConfig conv_config = Conv2dConfig{
         .weights_dtype = b.dtype(),
