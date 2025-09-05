@@ -1,21 +1,21 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 import torch
+import ttnn
 from typing import Dict
+from loguru import logger
 
 from models.experimental.panoptic_deeplab.reference.pytorch_insemb import PanopticDeepLabInsEmbedHead
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
-
 from models.experimental.panoptic_deeplab.tt.tt_insemb import TtPanopticDeepLabInsEmbedHead
-
 from tests.ttnn.utils_for_testing import assert_with_pcc
-import ttnn
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
-def test_ttnn_wholeInsEmbed(device):
+def test_ttnn_insemb(device):
     compute_grid = device.compute_with_storage_grid_size()
-
-    print(f"compute_grid: {compute_grid.x}x{compute_grid.y}")
     if compute_grid.x != 5 or compute_grid.y != 4:
         pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
 
@@ -40,15 +40,13 @@ def test_ttnn_wholeInsEmbed(device):
 
     decoder_output_channels = target_decoder_channels[0]
 
-    # Center Head branch
     w_center_head_0 = torch.randn(decoder_output_channels, decoder_output_channels, 3, 3, dtype=torch.bfloat16)
     w_center_head_1 = torch.randn(target_head_channels, decoder_output_channels, 3, 3, dtype=torch.bfloat16)
-    w_center_predictor = torch.randn(1, target_head_channels, 1, 1, dtype=torch.bfloat16)  # Izlaz je 1 kanal
+    w_center_predictor = torch.randn(1, target_head_channels, 1, 1, dtype=torch.bfloat16)
 
-    # Offset Head branch
     w_offset_head_0 = torch.randn(decoder_output_channels, decoder_output_channels, 3, 3, dtype=torch.bfloat16)
     w_offset_head_1 = torch.randn(target_head_channels, decoder_output_channels, 3, 3, dtype=torch.bfloat16)
-    w_offset_predictor = torch.randn(2, target_head_channels, 1, 1, dtype=torch.bfloat16)  # Izlaz su 2 kanala
+    w_offset_predictor = torch.randn(2, target_head_channels, 1, 1, dtype=torch.bfloat16)
 
     torch_features: Dict[str, torch.Tensor] = {
         "res2": torch.randn(1, 256, 128, 256, dtype=torch.bfloat16),
@@ -134,18 +132,12 @@ def test_ttnn_wholeInsEmbed(device):
 
     ttnn_center_out_tt, ttnn_offset_out_tt, _, _ = ttnn_model(ttnn_features)
 
-    print("\n--- Comparing Center Prediction ---")
     ttnn_center_out_torch = ttnn.to_torch(ttnn_center_out_tt).permute(0, 3, 1, 2)
     passed_center, msg_center = assert_with_pcc(torch_center_out, ttnn_center_out_torch, pcc=0.96)
-    print(f"PCC Result (Center): {msg_center}")
-    assert passed_center, f"Center comparison FAILED: {msg_center}"
-    print("✅ Center Prediction PASSED")
+    logger.info(f"Center PCC: {msg_center}")
+    assert passed_center, f"Center PCC test failed: {msg_center}"
 
-    print("\n--- Comparing Offset Prediction ---")
     ttnn_offset_out_torch = ttnn.to_torch(ttnn_offset_out_tt).permute(0, 3, 1, 2)
     passed_offset, msg_offset = assert_with_pcc(torch_offset_out, ttnn_offset_out_torch, pcc=0.97)
-    print(f"PCC Result (Offset): {msg_offset}")
-    assert passed_offset, f"Offset comparison FAILED: {msg_offset}"
-    print("✅ Offset Prediction PASSED")
-
-    print("\n✅✅✅ TEST PASSED ✅✅✅")
+    logger.info(f"Offset PCC: {msg_offset}")
+    assert passed_offset, f"Offset PCC test failed: {msg_offset}"

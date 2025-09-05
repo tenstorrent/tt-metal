@@ -2,6 +2,7 @@ import torch
 from typing import Dict, List, Union, Optional, Tuple
 from torch import nn
 import ttnn
+from loguru import logger
 
 from .tt_aspp import TtASPP, get_ttnn_norm, get_ttnn_activation
 
@@ -42,6 +43,10 @@ class TtDeepLabV3PlusHead(nn.Module):
         in_channels = [v.channels for k, v in sorted_input_shape]
         in_strides = [v.stride for k, v in sorted_input_shape]
         aspp_channels = decoder_channels[-1]
+
+        logger.debug(
+            f"Initializing TtDeepLabV3PlusHead with features: {self.in_features}, decoder_only: {num_classes is None}"
+        )
 
         self.common_stride = common_stride
         self.decoder_only = num_classes is None
@@ -137,6 +142,7 @@ class TtDeepLabV3PlusHead(nn.Module):
         self.upsample_with_slicing = TtUpsample.create_with_channel_slicing(
             device=device, scale_factor=(1, 1), mode="bilinear", num_slices=2
         )
+        logger.debug("TtDeepLabV3PlusHead initialization complete")
 
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Union[ttnn.Tensor, Tuple[ttnn.Tensor, Dict]]:
         y = self.layers(features)
@@ -146,6 +152,7 @@ class TtDeepLabV3PlusHead(nn.Module):
         """
         Executes the decoder pipeline, mirroring the PyTorch version's logic.
         """
+        logger.debug(f"TtDeepLabV3PlusHead layers - processing features: {list(features.keys())}")
         y = None
         feature_keys = self.in_features[::-1]
 
@@ -153,11 +160,16 @@ class TtDeepLabV3PlusHead(nn.Module):
         aspp_feature_key = feature_keys[0]
         x = features[aspp_feature_key]
         stage = self.decoder[aspp_feature_key]
+        logger.debug(
+            f"TtDeepLabV3PlusHead processing ASPP stage with feature: {aspp_feature_key}, input shape: {x.shape}"
+        )
         y = stage["project_conv"](x)
         y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
+        logger.debug(f"TtDeepLabV3PlusHead ASPP stage complete, output shape: {y.shape}")
 
         # --- Subsequent Fusion Stages (e.g., 'res3', then 'res2') ---
         for i, f_key in enumerate(feature_keys[1:]):
+            logger.debug(f"TtDeepLabV3PlusHead processing fusion stage {i+1} with feature: {f_key}")
             previous_y = y
             x = features[f_key]
             stage = self.decoder[f_key]
@@ -165,6 +177,7 @@ class TtDeepLabV3PlusHead(nn.Module):
             proj_x = stage["project_norm"](proj_x)
             proj_x = self.activation(proj_x)
             proj_x = ttnn.to_memory_config(proj_x, ttnn.DRAM_MEMORY_CONFIG)
+            logger.debug(f"TtDeepLabV3PlusHead fusion stage {i+1} projection complete, shape: {proj_x.shape}")
 
             scale_h = proj_x.shape[1] // y.shape[1]
             scale_w = proj_x.shape[2] // y.shape[2]
@@ -212,6 +225,7 @@ class TtDeepLabV3PlusHead(nn.Module):
             y = self.activation(y_norm1)
             ttnn.deallocate(y_norm1)
 
+        logger.debug(f"TtDeepLabV3PlusHead layers complete - final output shape: {y.shape}")
         return y
 
 
@@ -266,6 +280,7 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         assert self.decoder_only
         use_bias = norm == ""
         decoder_out_ch = decoder_channels[0]
+        logger.debug(f"Initializing TtPanopticDeepLabSemSegHead with {num_classes} classes")
 
         # Create head_0 with height slicing
         param_dict = {"weight": panoptic_head_0_weight}
@@ -291,14 +306,17 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         # Initialize final upsample for semantic head
         # Use default mode if bilinear causes memory issues, otherwise bilinear for PCC
         self.final_upsample = TtUpsample.create(device=device, scale_factor=common_stride, mode="nearest")
+        logger.debug("TtPanopticDeepLabSemSegHead initialization complete")
 
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, Dict]:
         """
         The forward pass for the Panoptic head in inference mode.
         """
+        logger.debug("TtPanopticDeepLabSemSegHead forward pass starting")
         y = self.layers(features)
 
         y = self.final_upsample(y)
+        logger.debug(f"TtPanopticDeepLabSemSegHead forward pass complete - final output shape: {y.shape}")
         return y, {}
 
     def layers(self, features: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:

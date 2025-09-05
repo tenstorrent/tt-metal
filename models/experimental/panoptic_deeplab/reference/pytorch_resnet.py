@@ -150,38 +150,25 @@ class ResNet(nn.Module):
             - "res4": Output from res4 layer (1024 channels)
             - "res5": Output from res5 layer (2048 channels)
         """
-        print(f"\n[RESNET] Starting ResNet forward pass with input shape: {x.shape}")
-
         # Stem processing
-        print("[RESNET] ========== STEM BLOCK ==========")
         x = self.stem(x)
-        print(f"[RESNET] Stem complete, output shape: {x.shape}\n")
 
         # res2
-        print("[RESNET] ========== RES2 BLOCK (3 bottlenecks) ==========")
         x = self.res2(x)
         res2_out = x
-        print(f"[RESNET] Res2 complete, output shape: {x.shape}\n")
 
         # res3
-        print("[RESNET] ========== RES3 BLOCK (4 bottlenecks) ==========")
         x = self.res3(x)
         res3_out = x
-        print(f"[RESNET] Res3 complete, output shape: {x.shape}\n")
 
         # res4
-        print("[RESNET] ========== RES4 BLOCK (6 bottlenecks) ==========")
         x = self.res4(x)
         res4_out = x
-        print(f"[RESNET] Res4 complete, output shape: {x.shape}\n")
 
         # res5
-        print("[RESNET] ========== RES5 BLOCK (3 bottlenecks with dilation) ==========")
         x = self.res5(x)
         res5_out = x
-        print(f"[RESNET] Res5 complete, output shape: {x.shape}\n")
 
-        print("[RESNET] ========== RESNET FORWARD PASS COMPLETE ==========")
         return {
             "res2": res2_out,
             "res3": res3_out,
@@ -199,32 +186,19 @@ class ResNet(nn.Module):
         Returns:
             Final feature map from res5 layer (2048 channels)
         """
-        print(f"\n[RESNET] Starting ResNet single-output forward pass with input shape: {x.shape}")
-
         # Stem processing
-        print("[RESNET] ========== STEM BLOCK ==========")
         x = self.stem(x)
-        print(f"[RESNET] Stem complete, output shape: {x.shape}\n")
 
         # res2
-        print("[RESNET] ========== RES2 BLOCK (3 bottlenecks) ==========")
         x = self.res2(x)
-        print(f"[RESNET] Res2 complete, output shape: {x.shape}\n")
 
         # res3
-        print("[RESNET] ========== RES3 BLOCK (4 bottlenecks) ==========")
         x = self.res3(x)
-        print(f"[RESNET] Res3 complete, output shape: {x.shape}\n")
 
         # res4
-        print("[RESNET] ========== RES4 BLOCK (6 bottlenecks) ==========")
         x = self.res4(x)
-        print(f"[RESNET] Res4 complete, output shape: {x.shape}\n")
 
         # res5
-        print("[RESNET] ========== RES5 BLOCK (3 bottlenecks with dilation) ==========")
         x = self.res5(x)
-        print(f"[RESNET] Res5 complete, output shape: {x.shape}\n")
 
-        print("[RESNET] ========== RESNET SINGLE-OUTPUT FORWARD PASS COMPLETE ==========")
         return x

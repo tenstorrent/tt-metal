@@ -4,6 +4,7 @@
 import torch.nn as nn
 import torch
 import ttnn
+from loguru import logger
 
 from .tt_conv2d_wrapper import (
     TtConv2d,
@@ -223,7 +224,7 @@ class TtBottleneck(nn.Module):
             )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        print(f"[BOTTLENECK {self.block_id}] Starting forward pass, input shape: {x.shape}")
+        logger.debug(f"TtBottleneck {self.block_id} forward pass starting, input shape: {x.shape}")
 
         # Store input for residual connection
         identity = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
@@ -234,12 +235,12 @@ class TtBottleneck(nn.Module):
 
         # Process shortcut if needed
         if self.has_shortcut:
-            print(f"[BOTTLENECK {self.block_id}] Processing shortcut convolution...")
+            logger.debug(f"TtBottleneck {self.block_id} processing shortcut convolution")
             identity = self.shortcut(identity)
             identity = ttnn.to_memory_config(identity, ttnn.DRAM_MEMORY_CONFIG)
             # Convert NHWC to NCHW for batch_norm
             identity = ttnn.permute(identity, (0, 3, 1, 2))
-            print(f"[BOTTLENECK {self.block_id}] Applying shortcut batch norm...")
+            logger.debug(f"TtBottleneck {self.block_id} applying shortcut batch norm")
             identity = ttnn.batch_norm(
                 identity,
                 running_mean=self.shortcut_norm_running_mean,
@@ -251,15 +252,15 @@ class TtBottleneck(nn.Module):
             )
             # Convert back to NHWC
             identity = ttnn.permute(identity, (0, 2, 3, 1))
-            print(f"[BOTTLENECK {self.block_id}] Shortcut processing complete")
+            logger.debug(f"TtBottleneck {self.block_id} shortcut processing complete, shape: {identity.shape}")
 
         # Main path: Conv1 + BatchNorm + ReLU
-        print(f"[BOTTLENECK {self.block_id}] Processing conv1 (1x1 reduction)...")
+        logger.debug(f"TtBottleneck {self.block_id} processing conv1 (1x1 reduction)")
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         out = self.conv1(x)
         # Convert NHWC to NCHW for batch_norm
         out = ttnn.permute(out, (0, 3, 1, 2))
-        print(f"[BOTTLENECK {self.block_id}] Applying conv1 batch norm...")
+        logger.debug(f"TtBottleneck {self.block_id} applying conv1 batch norm")
         out = ttnn.batch_norm(
             out,
             running_mean=self.conv1_norm_running_mean,
@@ -273,15 +274,15 @@ class TtBottleneck(nn.Module):
         out = ttnn.permute(out, (0, 2, 3, 1))
         out = ttnn.relu(out)
         out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
-        print(f"[BOTTLENECK {self.block_id}] Conv1 processing complete, output shape: {out.shape}")
+        logger.debug(f"TtBottleneck {self.block_id} conv1 complete, output shape: {out.shape}")
 
         # Conv2 + BatchNorm + ReLU
-        print(f"[BOTTLENECK {self.block_id}] Processing conv2 (3x3 spatial)...")
+        logger.debug(f"TtBottleneck {self.block_id} processing conv2 (3x3 spatial)")
         out = self.conv2(out)
         # Convert NHWC to NCHW for batch_norm
         # out = ttnn.to_memory_config(out, ttnn.L1_MEMORY_CONFIG)
         out = ttnn.permute(out, (0, 3, 1, 2))
-        print(f"[BOTTLENECK {self.block_id}] Applying conv2 batch norm...")
+        logger.debug(f"TtBottleneck {self.block_id} applying conv2 batch norm")
         out = ttnn.batch_norm(
             out,
             running_mean=self.conv2_norm_running_mean,
@@ -295,16 +296,16 @@ class TtBottleneck(nn.Module):
         out = ttnn.permute(out, (0, 2, 3, 1))
         out = ttnn.relu(out)
         out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
-        print(f"[BOTTLENECK {self.block_id}] Conv2 processing complete, output shape: {out.shape}")
+        logger.debug(f"TtBottleneck {self.block_id} conv2 complete, output shape: {out.shape}")
 
         # Conv3 + BatchNorm (no ReLU yet)
-        print(f"[BOTTLENECK {self.block_id}] Processing conv3 (1x1 expansion) - THIS IS WHERE PCC MIGHT FAIL...")
+        logger.debug(f"TtBottleneck {self.block_id} processing conv3 (1x1 expansion)")
         out = self.conv3(out)
-        print(f"[BOTTLENECK {self.block_id}] Conv3 convolution complete, output shape: {out.shape}")
+        logger.debug(f"TtBottleneck {self.block_id} conv3 convolution complete, output shape: {out.shape}")
         # Convert NHWC to NCHW for batch_norm
         out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
         out = ttnn.permute(out, (0, 3, 1, 2))
-        print(f"[BOTTLENECK {self.block_id}] Applying conv3 batch norm...")
+        logger.debug(f"TtBottleneck {self.block_id} applying conv3 batch norm")
         out = ttnn.batch_norm(
             out,
             running_mean=self.conv3_norm_running_mean,
@@ -316,14 +317,14 @@ class TtBottleneck(nn.Module):
         )
         # Convert back to NHWC
         out = ttnn.permute(out, (0, 2, 3, 1))
-        print(f"[BOTTLENECK {self.block_id}] Conv3 processing complete, output shape: {out.shape}")
+        logger.debug(f"TtBottleneck {self.block_id} conv3 complete, output shape: {out.shape}")
 
         # Residual connection + ReLU
-        print(f"[BOTTLENECK {self.block_id}] Adding residual connection and applying final ReLU...")
+        logger.debug(f"TtBottleneck {self.block_id} adding residual connection and applying final ReLU")
         if self.has_shortcut or identity.shape == out.shape:
             out = ttnn.add(out, identity)
         out = ttnn.relu(out)
         out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
 
-        print(f"[BOTTLENECK {self.block_id}] Forward pass complete, final output shape: {out.shape}")
+        logger.debug(f"TtBottleneck {self.block_id} forward pass complete, final output shape: {out.shape}")
         return out

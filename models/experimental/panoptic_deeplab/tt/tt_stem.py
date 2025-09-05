@@ -4,6 +4,7 @@
 import torch.nn as nn
 import torch
 import ttnn
+from loguru import logger
 
 from .tt_conv2d_wrapper import (
     TtConv2d,
@@ -35,6 +36,8 @@ class TtStem(nn.Module):
         super().__init__()
         self.device = device
         self.channel_slice_factor = channel_slice_factor
+
+        logger.debug(f"Initializing TtStem with channel_slice_factor: {channel_slice_factor}")
 
         # Extract weights for conv1, conv2, conv3
         conv1_state = {k.replace("conv1.", ""): v for k, v in state_dict.items() if k.startswith("conv1.")}
@@ -170,8 +173,11 @@ class TtStem(nn.Module):
         self.maxpool = TtMaxPool2d.create_with_channel_slicing(
             device=device, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), num_slices=self.channel_slice_factor
         )
+        logger.debug("TtStem initialization complete")
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        logger.debug(f"TtStem forward pass starting - input shape: {x.shape}")
+
         # Conv1 + BatchNorm + ReLU
         x = self.conv1(x)
         # Convert NHWC to NCHW for batch_norm
@@ -244,4 +250,5 @@ class TtStem(nn.Module):
         x_pooled = self.maxpool(x_relued)
         ttnn.deallocate(x_relued)
 
+        logger.debug(f"TtStem forward pass complete - output shape: {x_pooled.shape}")
         return x_pooled
