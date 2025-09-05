@@ -51,7 +51,6 @@
 #include "program/program_impl.hpp"
 #include "semaphore.hpp"
 #include "tracy/Tracy.hpp"
-#include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
 #include "fabric/hw/inc/fabric_routing_mode.h"

@@ -17,7 +17,6 @@
 #include <umd/device/blackhole_implementation.h>
 #include <umd/device/cluster.h>
 #include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/arch.h>
 #include <umd/device/types/xy_pair.h>
 #include <umd/device/wormhole_implementation.h>

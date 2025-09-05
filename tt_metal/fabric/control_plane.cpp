@@ -41,7 +41,6 @@
 #include "metal_soc_descriptor.h"
 #include "routing_table_generator.hpp"
 #include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/xy_pair.h>
 #include "tt_metal/fabric/fabric_context.hpp"
