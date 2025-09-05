@@ -4,9 +4,9 @@
 
 
 import ttnn
-from models.demos.yolov11.tt.common import TtnnConv, deallocate_tensors, sharded_concat
-from models.demos.yolov11.tt.ttnn_yolov11_bottleneck import TtnnBottleneck
-from models.demos.yolov11.tt.ttnn_yolov11_c3k import TtnnC3K
+from models.demos.yolov11m.tt.common import TtnnConv, deallocate_tensors, sharded_concat
+from models.demos.yolov11m.tt.ttnn_yolov11_bottleneck import TtnnBottleneck
+from models.demos.yolov11m.tt.ttnn_yolov11_c3k import TtnnC3K
 
 
 class TtnnC3k2:
@@ -15,11 +15,11 @@ class TtnnC3k2:
         self.parameter = parameter
 
         if is_bk_enabled:
-            self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1, reshard=reshard)
+            self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1, reshard=reshard, deallocate_activation=True)
             self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)
             self.k = TtnnBottleneck(device, parameter[0], conv_pt.m[0])
         else:
-            self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1, reshard=reshard)
+            self.cv1 = TtnnConv(device, parameter.cv1, conv_pt.cv1, reshard=reshard, deallocate_activation=True)
             self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)
             self.c3k = TtnnC3K(device, parameter[0], conv_pt.m[0])
 

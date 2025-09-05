@@ -5,10 +5,10 @@
 import pytest
 
 import ttnn
-from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE
-from models.demos.yolov11.reference.yolov11 import C3k2 as torch_c3k2
-from models.demos.yolov11.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
-from models.demos.yolov11.tt.ttnn_yolov11_c3k2 import TtnnC3k2 as ttnn_c3k2
+from models.demos.yolov11m.common import YOLOV11_L1_SMALL_SIZE
+from models.demos.yolov11m.reference.yolov11 import C3k2 as torch_c3k2
+from models.demos.yolov11m.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
+from models.demos.yolov11m.tt.ttnn_yolov11_c3k2 import TtnnC3k2 as ttnn_c3k2
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
