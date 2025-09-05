@@ -248,8 +248,6 @@ protected:
 
 using UnitMeshCQSingleCardBufferFixture = UnitMeshCQSingleCardFixture;
 
-class CommandQueueSingleCardProgramFixture : virtual public CommandQueueSingleCardFixture {};  // NTMigrate!!!
-
 class UnitMeshCQMultiDeviceFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
