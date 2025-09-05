@@ -442,7 +442,6 @@ void RunTestUnicastRaw(
 
     auto sender_device = fixture->get_device(src_physical_device_id);
     auto receiver_device = fixture->get_device(dst_physical_device_id);
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     // test parameters
@@ -576,7 +575,6 @@ void run_unicast_test_bw_chips(
 
     auto sender_device = fixture->get_device(src_physical_device_id);
     auto receiver_device = fixture->get_device(dst_physical_device_id);
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();

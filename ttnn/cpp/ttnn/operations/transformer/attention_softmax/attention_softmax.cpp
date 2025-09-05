@@ -22,8 +22,6 @@ ttnn::Tensor ExecuteAttentionSoftmax<in_place>::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config) {
     const float head_size = head_size_arg.has_value() ? 1.0f / std::sqrt(head_size_arg.value()) : 1.0f;
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
 
     if constexpr (in_place) {
         TT_FATAL(

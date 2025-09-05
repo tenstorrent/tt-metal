@@ -337,7 +337,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                 num_cores_x,
                 num_weight_slices_width);
             uint32_t num_cores_x_per_weight_slice_width = num_cores_x / num_weight_slices_width;
-            uint32_t num_act_slices_height = act_matrix_height_ntiles / per_core_out_matrix_height_ntiles;
             total_num_cores_per_weight_slice = num_cores_x_per_weight_slice_width * num_cores_y;
         }
         TT_FATAL(

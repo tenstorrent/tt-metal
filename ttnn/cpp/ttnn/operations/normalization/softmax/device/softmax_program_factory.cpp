@@ -728,7 +728,6 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     const auto& shape = tensor_args.input_tensor.padded_shape();
     const uint32_t W = shape[-1], H = (tensor_args.input_tensor.physical_volume() / (shape[0] * shape[-1])),
                    NC = shape[0];
-    const uint32_t HW = H * W;
     const uint32_t tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const uint32_t tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
     const uint32_t tile_hw = tensor_args.input_tensor.tensor_spec().tile().get_tile_hw();
@@ -774,8 +773,6 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
 
     const tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_cb_data_format);
-
-    const uint32_t num_tiles = tensor_args.input_tensor.physical_volume() / tile_hw;
 
     uint32_t block_size =
         fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
@@ -1090,7 +1087,6 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
     const auto shape = tensor_args.input_tensor.padded_shape();
     const uint32_t W = shape[-1], H = (tensor_args.input_tensor.physical_volume() / (shape[0] * shape[-1])),
                    NC = shape[0];
-    const uint32_t HW = H * W;
     const uint32_t tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const uint32_t tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
     const uint32_t tile_hw = tensor_args.input_tensor.tensor_spec().tile().get_tile_hw();
@@ -1106,7 +1102,6 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
         num_datum_padded = W - W_unpadded;
     }
 
-    int32_t num_tiles = tensor_args.input_tensor.physical_volume() / tile_hw;
     uint32_t block_size = cached_program.shared_variables.fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4)
                                                                            : tt::tt_metal::find_max_divisor(Wt, 8);
 
@@ -1133,7 +1128,6 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
     TT_FATAL(Wt % block_size == 0, "Wt {} must be divisible by block size {}", Wt, block_size);
     TT_FATAL((block_size != -1), "Wt {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
 
-    uint32_t NCHt = NC * Ht;
     uint32_t num_tile_rows = NC * Ht;
     auto all_device_cores = CoreRange(
         {0, 0}, {cached_program.shared_variables.grid_size.x - 1, cached_program.shared_variables.grid_size.y - 1});
@@ -1312,8 +1306,6 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     const uint32_t tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
     const uint32_t tile_hw = tensor_args.input_tensor.tensor_spec().tile().get_tile_hw();
     uint32_t M = shape[2] * shape[0];
-    uint32_t K = shape[3] * shape[1];
-    uint32_t Mt = M / tile_width;
     uint32_t num_cores_per_batch =
         (shape[1] * shape[2] * shape[3]) / (tensor_args.input_tensor.shard_spec().value().shape[0] *
                                             tensor_args.input_tensor.shard_spec().value().shape[1]);
