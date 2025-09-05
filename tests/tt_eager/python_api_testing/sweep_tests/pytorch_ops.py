@@ -2162,13 +2162,6 @@ def complex_add_bw(x, y, z, *args, **kwargs):
     return [in_data.grad, other_data.grad]
 
 
-def global_avg_pool2d(x, *args, **kwargs):
-    output_size = (1, 1)
-    x = x.to(torch.float32)
-    output = torch.nn.functional.adaptive_avg_pool2d(x, output_size)
-    return output
-
-
 def upsample(x, *args, scale_factor, **kwargs):
     # return torch.nn.functional.upsample(x, scale_factor=2)
 

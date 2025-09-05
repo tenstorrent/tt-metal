@@ -2334,27 +2334,6 @@ def concat(
     return ttnn_tensor_to_torch(t2)
 
 
-def global_avg_pool2d(
-    x,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    input_tensor = torch.permute(x, (0, 2, 3, 1))
-    input_tensor = ttnn.from_torch(
-        input_tensor, dtype=dtype[0], layout=layout[0], device=device, memory_config=input_mem_config[0]
-    )
-    output_tensor = ttnn.global_avg_pool2d(input_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-
-    return output_tensor.to(torch.float32)
-
-
 def upsample(
     x,
     *args,

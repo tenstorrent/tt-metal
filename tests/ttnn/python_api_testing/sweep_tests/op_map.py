@@ -570,10 +570,6 @@ op_map = {
         "tt_op": ttnn_ops.groupnorm_noweights,
         "pytorch_op": pytorch_ops.groupnorm_noweights,
     },
-    "ttnn-global-avg-pool2d": {
-        "tt_op": ttnn_ops.global_avg_pool2d,
-        "pytorch_op": pytorch_ops.global_avg_pool2d,
-    },
     "ttnn-max-pool2d": {
         "tt_op": ttnn_ops.max_pool2d_tt,
         "pytorch_op": pytorch_ops.max_pool2d,

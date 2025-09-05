@@ -224,7 +224,10 @@ class MBConvBlock:
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
         if x.shape[-1] != 32 and x.shape[-1] != 96:
             x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.global_avg_pool2d(x)
+        N, H, W, C = x.shape
+        x = ttnn.avg_pool2d(
+            x, batch_size=N, input_h=H, input_w=W, channels=C, kernel_size=(H, W), stride=(H, W), padding=(0, 0)
+        )
 
         x = self._se_reduce(x)
 
@@ -478,7 +481,11 @@ class Efficientnetb0:
         x = x * ttnn.sigmoid_accurate(x, True)
 
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.global_avg_pool2d(x)
+        # Global average pooling: use avg_pool2d with kernel_size = input spatial dimensions
+        N, H, W, C = x.shape
+        x = ttnn.avg_pool2d(
+            x, batch_size=N, input_h=H, input_w=W, channels=C, kernel_size=(H, W), stride=(H, W), padding=(0, 0)
+        )
 
         x = ttnn.reshape(x, (1, -1))
 

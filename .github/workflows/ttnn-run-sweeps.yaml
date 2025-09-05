@@ -522,7 +522,6 @@ on:
           - normalization.generality.softmax_fused
           - normalization.softmax.softmax
           - normalization.softmax.softmax_sharded
-          - pooling.global_avg_pool2d
           - pooling.max_pool2d
           - reduction.argmax.argmax
           - reduction.argmax.argmax_output
