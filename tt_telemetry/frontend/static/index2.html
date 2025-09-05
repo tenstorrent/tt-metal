@@ -1,0 +1,958 @@
+<!--
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Galaxy Computer Visualization</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+            color: #333;
+            min-height: 100vh;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            font-weight: 300;
+        }
+
+        .galaxy-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 80vh;
+        }
+
+        .galaxy-visualization {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            padding: 40px;
+        }
+
+        .cpu-node {
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .cpu-node:hover {
+            stroke-width: 3;
+            stroke: #333;
+        }
+
+        .connection-line {
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .connection-line:hover {
+            stroke-width: 4;
+        }
+
+        .port-diamond {
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .port-diamond:hover {
+            stroke-width: 2;
+            stroke: #333;
+        }
+
+        .tooltip {
+            position: absolute;
+            background: rgba(0,0,0,0.9);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 1000;
+            max-width: 200px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        }
+
+        .tooltip.hidden {
+            display: none;
+        }
+
+        .board-label {
+            font-size: 14px;
+            font-weight: bold;
+            fill: #666;
+        }
+
+        .chassis-label {
+            font-size: 16px;
+            font-weight: bold;
+            fill: #333;
+        }
+
+        .port-label {
+            font-size: 10px;
+            fill: #666;
+        }
+
+        .legend {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            font-size: 12px;
+        }
+
+        .legend h3 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 5px 0;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 12px;
+            margin-right: 8px;
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Galaxy Computer Visualization</h1>
+
+    <div class="legend">
+        <h3>Heat Map Legend</h3>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #000000;"></div>
+            <span>No Traffic/Usage</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #8B0000;"></div>
+            <span>Low</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #FF4500;"></div>
+            <span>Medium</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #FFA500;"></div>
+            <span>High</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #FFFF00;"></div>
+            <span>Very High</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #FF0000;"></div>
+            <span>Maximum</span>
+        </div>
+    </div>
+
+    <div class="galaxy-container">
+        <div class="galaxy-visualization">
+            <svg width="1200" height="800" viewBox="0 0 1200 800">
+                <!-- Background -->
+                <rect width="1200" height="800" fill="white" stroke="none"/>
+
+                <!-- Chassis outline -->
+                <rect x="50" y="50" width="1100" height="700" fill="none" stroke="#9932CC" stroke-width="3" rx="10"/>
+
+                <!-- Chassis labels -->
+                <text x="600" y="40" text-anchor="middle" class="chassis-label">Galaxy Chassis</text>
+                <text x="300" y="380" text-anchor="middle" class="chassis-label">Chassis top</text>
+                <text x="900" y="380" text-anchor="middle" class="chassis-label">Chassis bottom</text>
+
+                <!-- UBB Tray dividers -->
+                <line x1="50" y1="375" x2="1150" y2="375" stroke="#9932CC" stroke-width="2"/>
+                <line x1="600" y1="50" x2="600" y2="750" stroke="#9932CC" stroke-width="2"/>
+
+                <!-- UBB Tray labels -->
+                <text x="275" y="320" text-anchor="middle" class="board-label">UBB Tray 1</text>
+                <text x="275" y="430" text-anchor="middle" class="board-label">UBB Tray 2</text>
+                <text x="925" y="320" text-anchor="middle" class="board-label">UBB Tray 3</text>
+                <text x="925" y="430" text-anchor="middle" class="board-label">UBB Tray 4</text>
+
+                <!-- Board outlines -->
+                <rect x="75" y="75" width="500" height="275" fill="none" stroke="#9932CC" stroke-width="2" rx="5"/>
+                <rect x="75" y="400" width="500" height="275" fill="none" stroke="#9932CC" stroke-width="2" rx="5"/>
+                <rect x="625" y="75" width="500" height="275" fill="none" stroke="#9932CC" stroke-width="2" rx="5"/>
+                <rect x="625" y="400" width="500" height="275" fill="none" stroke="#9932CC" stroke-width="2" rx="5"/>
+
+                <!-- CPU nodes and connections will be generated by JavaScript -->
+            </svg>
+        </div>
+    </div>
+
+    <div class="tooltip hidden" id="tooltip"></div>
+
+    <script>
+        // Galaxy computer data structure
+        const galaxyData = {
+            trays: [
+                {
+                    id: 'tray1',
+                    name: 'UBB Tray 1',
+                    position: { x: 75, y: 75, width: 500, height: 275 },
+                    cpus: [
+                        { id: 1, pos: { x: 150, y: 120 }, usage: 0.8, connections: [2, 5] },
+                        { id: 2, pos: { x: 150, y: 180 }, usage: 0.6, connections: [1, 3, 6] },
+                        { id: 3, pos: { x: 150, y: 240 }, usage: 0.4, connections: [2, 4, 7] },
+                        { id: 4, pos: { x: 150, y: 300 }, usage: 0.9, connections: [3, 8] },
+                        { id: 5, pos: { x: 250, y: 120 }, usage: 0.3, connections: [1, 6] },
+                        { id: 6, pos: { x: 250, y: 180 }, usage: 0.7, connections: [2, 5, 7] },
+                        { id: 7, pos: { x: 250, y: 240 }, usage: 0.5, connections: [3, 6, 8] },
+                        { id: 8, pos: { x: 250, y: 300 }, usage: 0.2, connections: [4, 7] }
+                    ]
+                },
+                {
+                    id: 'tray2',
+                    name: 'UBB Tray 2',
+                    position: { x: 75, y: 400, width: 500, height: 275 },
+                    cpus: [
+                        { id: 9, pos: { x: 150, y: 630 }, usage: 0.6, connections: [10, 13] },
+                        { id: 10, pos: { x: 150, y: 570 }, usage: 0.8, connections: [9, 11, 14] },
+                        { id: 11, pos: { x: 150, y: 510 }, usage: 0.4, connections: [10, 12, 15] },
+                        { id: 12, pos: { x: 150, y: 450 }, usage: 0.7, connections: [11, 16] },
+                        { id: 13, pos: { x: 250, y: 630 }, usage: 0.9, connections: [9, 14] },
+                        { id: 14, pos: { x: 250, y: 570 }, usage: 0.3, connections: [10, 13, 15] },
+                        { id: 15, pos: { x: 250, y: 510 }, usage: 0.6, connections: [11, 14, 16] },
+                        { id: 16, pos: { x: 250, y: 450 }, usage: 0.8, connections: [12, 15] }
+                    ]
+                },
+                {
+                    id: 'tray3',
+                    name: 'UBB Tray 3',
+                    position: { x: 625, y: 75, width: 500, height: 275 },
+                    cpus: [
+                        { id: 21, pos: { x: 950, y: 120 }, usage: 0.5, connections: [22, 17] },
+                        { id: 22, pos: { x: 950, y: 180 }, usage: 0.7, connections: [21, 23, 18] },
+                        { id: 23, pos: { x: 950, y: 240 }, usage: 0.3, connections: [22, 24, 19] },
+                        { id: 24, pos: { x: 950, y: 300 }, usage: 0.9, connections: [23, 20] },
+                        { id: 17, pos: { x: 1050, y: 120 }, usage: 0.6, connections: [21, 18] },
+                        { id: 18, pos: { x: 1050, y: 180 }, usage: 0.4, connections: [22, 17, 19] },
+                        { id: 19, pos: { x: 1050, y: 240 }, usage: 0.8, connections: [23, 18, 20] },
+                        { id: 20, pos: { x: 1050, y: 300 }, usage: 0.2, connections: [24, 19] }
+                    ]
+                },
+                {
+                    id: 'tray4',
+                    name: 'UBB Tray 4',
+                    position: { x: 625, y: 400, width: 500, height: 275 },
+                    cpus: [
+                        { id: 29, pos: { x: 950, y: 630 }, usage: 0.7, connections: [30, 25] },
+                        { id: 30, pos: { x: 950, y: 570 }, usage: 0.5, connections: [29, 31, 26] },
+                        { id: 31, pos: { x: 950, y: 510 }, usage: 0.9, connections: [30, 32, 27] },
+                        { id: 32, pos: { x: 950, y: 450 }, usage: 0.3, connections: [31, 28] },
+                        { id: 25, pos: { x: 1050, y: 630 }, usage: 0.6, connections: [29, 26] },
+                        { id: 26, pos: { x: 1050, y: 570 }, usage: 0.8, connections: [30, 25, 27] },
+                        { id: 27, pos: { x: 1050, y: 510 }, usage: 0.4, connections: [31, 26, 28] },
+                        { id: 28, pos: { x: 1050, y: 450 }, usage: 0.7, connections: [32, 27] }
+                    ]
+                }
+            ],
+            interTrayConnections: [
+                // Tray 1 to Tray 3 connections
+                { from: 5, to: 21, traffic: 0.6 },
+                { from: 6, to: 22, traffic: 0.4 },
+                { from: 7, to: 23, traffic: 0.8 },
+                { from: 8, to: 24, traffic: 0.3 },
+
+                // Tray 2 to Tray 4 connections
+                { from: 16, to: 32, traffic: 0.7 },
+                { from: 15, to: 31, traffic: 0.5 },
+                { from: 14, to: 30, traffic: 0.9 },
+                { from: 13, to: 29, traffic: 0.2 },
+
+                // Additional cross-connections
+                { from: 4, to: 12, traffic: 0.6 },
+                { from: 8, to: 16, traffic: 0.4 },
+                { from: 24, to: 32, traffic: 0.8 },
+                { from: 20, to: 28, traffic: 0.5 }
+            ]
+        };
+
+        // Heat map color function
+        function getHeatMapColor(value) {
+            if (value === 0) return '#000000';
+            if (value <= 0.2) return '#8B0000';
+            if (value <= 0.4) return '#FF4500';
+            if (value <= 0.6) return '#FFA500';
+            if (value <= 0.8) return '#FFFF00';
+            return '#FF0000';
+        }
+
+        // Get connection traffic value
+        function getConnectionTraffic(cpu1Id, cpu2Id) {
+            // For intra-tray connections, use average of CPU usages
+            const cpu1 = findCPU(cpu1Id);
+            const cpu2 = findCPU(cpu2Id);
+            if (cpu1 && cpu2) {
+                return (cpu1.usage + cpu2.usage) / 2;
+            }
+            return Math.random() * 0.8; // Fallback random value
+        }
+
+        // Find CPU by ID
+        function findCPU(cpuId) {
+            for (const tray of galaxyData.trays) {
+                const cpu = tray.cpus.find(c => c.id === cpuId);
+                if (cpu) return cpu;
+            }
+            return null;
+        }
+
+        // Create SVG elements
+        function createVisualization() {
+            const svg = document.querySelector('svg');
+
+            // Draw all connections first (so they appear behind CPUs)
+            galaxyData.trays.forEach(tray => {
+                tray.cpus.forEach(cpu => {
+                    cpu.connections.forEach(connectedId => {
+                        if (connectedId > cpu.id) { // Avoid duplicate lines
+                            const connectedCpu = findCPU(connectedId);
+                            if (connectedCpu) {
+                                const traffic = getConnectionTraffic(cpu.id, connectedId);
+                                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                                line.setAttribute('x1', cpu.pos.x);
+                                line.setAttribute('y1', cpu.pos.y);
+                                line.setAttribute('x2', connectedCpu.pos.x);
+                                line.setAttribute('y2', connectedCpu.pos.y);
+                                line.setAttribute('stroke', getHeatMapColor(traffic));
+                                line.setAttribute('stroke-width', '2');
+                                line.setAttribute('class', 'connection-line');
+                                line.setAttribute('data-traffic', traffic.toFixed(2));
+                                line.setAttribute('data-from', cpu.id);
+                                line.setAttribute('data-to', connectedId);
+                                svg.appendChild(line);
+                            }
+                        }
+                    });
+                });
+            });
+
+            // Draw external port connection lines first (so they appear under CPUs)
+            addExternalPortConnections(svg);
+
+            // Draw inter-tray connections
+            addInterTrayConnections(svg);
+
+            // Draw CPU nodes
+            galaxyData.trays.forEach(tray => {
+                tray.cpus.forEach(cpu => {
+                    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                    circle.setAttribute('cx', cpu.pos.x);
+                    circle.setAttribute('cy', cpu.pos.y);
+                    circle.setAttribute('r', '15');
+                    circle.setAttribute('fill', getHeatMapColor(cpu.usage));
+                    circle.setAttribute('stroke', '#333');
+                    circle.setAttribute('stroke-width', '1');
+                    circle.setAttribute('class', 'cpu-node');
+                    circle.setAttribute('data-cpu-id', cpu.id);
+                    circle.setAttribute('data-usage', cpu.usage.toFixed(2));
+                    circle.setAttribute('data-tray', tray.name);
+                    svg.appendChild(circle);
+
+                    // CPU label
+                    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    text.setAttribute('x', cpu.pos.x);
+                    text.setAttribute('y', cpu.pos.y + 5);
+                    text.setAttribute('text-anchor', 'middle');
+                    text.setAttribute('font-size', '12');
+                    text.setAttribute('font-weight', 'bold');
+                    text.setAttribute('fill', 'white');
+                    text.setAttribute('pointer-events', 'none');
+                    text.textContent = cpu.id;
+                    svg.appendChild(text);
+                });
+            });
+
+            // Add external port diamonds (after CPUs so they appear on top)
+            addExternalPortDiamonds(svg);
+        }
+
+        function getPortsData() {
+            return [
+                // Connected ports - single connections
+                { id: 2, x: 150, y: 40, label: 'Port 2', connected: true, targetCpu: 1 },
+                { id: 1, x: 250, y: 40, label: 'Port 1', connected: true, targetCpu: 5 },
+                { id: 3, x: 40, y: 120, label: 'Port 3', connected: true, targetCpu: 1 },
+                { id: 4, x: 40, y: 180, label: 'Port 4', connected: true, targetCpu: 2 },
+                { id: 5, x: 40, y: 240, label: 'Port 5', connected: true, targetCpu: 3 },
+                { id: 6, x: 40, y: 300, label: 'Port 6', connected: true, targetCpu: 4 },
+
+                // Multi-connected ports above UBB Tray 1
+                { id: 8, x: 300, y: 40, label: 'Port 8', connected: true, targetCpus: [5, 6], routingType: 'downThenSplit' },
+                { id: 12, x: 350, y: 40, label: 'Port 12', connected: true, targetCpus: [5, 6], routingType: 'downThenSplit' },
+                { id: 10, x: 400, y: 40, label: 'Port 10', connected: true, targetCpus: [7, 8], routingType: 'downThenSplit' },
+                { id: 14, x: 450, y: 40, label: 'Port 14', connected: true, targetCpus: [7, 8], routingType: 'downThenSplit' },
+
+                // Multi-connected ports to the left of UBB Tray 1 (between ports 3 and 4)
+                { id: 7, x: 40, y: 140, label: 'Port 7', connected: true, targetCpus: [1, 2], routingType: 'rightThenSplit' },
+                { id: 11, x: 40, y: 160, label: 'Port 11', connected: true, targetCpus: [1, 2], routingType: 'rightThenSplit' },
+
+                // Multi-connected ports between Ports 5 and 6
+                { id: 9, x: 40, y: 260, label: 'Port 9', connected: true, targetCpus: [3, 4], routingType: 'rightThenSplit' },
+                { id: 13, x: 40, y: 280, label: 'Port 13', connected: true, targetCpus: [3, 4], routingType: 'rightThenSplit' },
+
+                // Tray 3 Ports - Above UBB Tray 3 (multi-connected)
+                { id: 'T3-14', x: 700, y: 40, label: 'Port 14', connected: true, targetCpus: [23, 24], routingType: 'downThenSplit', tray: 'tray3' },
+                { id: 'T3-12', x: 750, y: 40, label: 'Port 12', connected: true, targetCpus: [21, 22], routingType: 'downThenSplit', tray: 'tray3' },
+                { id: 'T3-10', x: 800, y: 40, label: 'Port 10', connected: true, targetCpus: [23, 24], routingType: 'downThenSplit', tray: 'tray3' },
+                { id: 'T3-8', x: 850, y: 40, label: 'Port 8', connected: true, targetCpus: [21, 22], routingType: 'downThenSplit', tray: 'tray3' },
+
+                // Tray 3 Connected Ports
+                { id: 'T3-1', x: 950, y: 40, label: 'Port 1', connected: true, targetCpu: 21, tray: 'tray3' },
+                { id: 'T3-2', x: 1050, y: 40, label: 'Port 2', connected: true, targetCpu: 17, tray: 'tray3' },
+                { id: 'T3-3', x: 1160, y: 120, label: 'Port 3', connected: true, targetCpu: 17, tray: 'tray3' },
+                { id: 'T3-4', x: 1160, y: 180, label: 'Port 4', connected: true, targetCpu: 18, tray: 'tray3' },
+                { id: 'T3-5', x: 1160, y: 240, label: 'Port 5', connected: true, targetCpu: 19, tray: 'tray3' },
+                { id: 'T3-6', x: 1160, y: 300, label: 'Port 6', connected: true, targetCpu: 20, tray: 'tray3' },
+
+                // Tray 3 Multi-connected Ports on the right side
+                { id: 'T3-7', x: 1160, y: 140, label: 'Port 7', connected: true, targetCpus: [17, 18], routingType: 'leftThenSplit', tray: 'tray3' },
+                { id: 'T3-11', x: 1160, y: 160, label: 'Port 11', connected: true, targetCpus: [17, 18], routingType: 'leftThenSplit', tray: 'tray3' },
+                { id: 'T3-9', x: 1160, y: 260, label: 'Port 9', connected: true, targetCpus: [19, 20], routingType: 'leftThenSplit', tray: 'tray3' },
+                { id: 'T3-13', x: 1160, y: 280, label: 'Port 13', connected: true, targetCpus: [19, 20], routingType: 'leftThenSplit', tray: 'tray3' },
+
+                // Tray 2 Ports - Direct connections
+                { id: 'T2-6', x: 40, y: 450, label: 'Port 6', connected: true, targetCpu: 12, tray: 'tray2' },
+                { id: 'T2-5', x: 40, y: 510, label: 'Port 5', connected: true, targetCpu: 11, tray: 'tray2' },
+                { id: 'T2-4', x: 40, y: 570, label: 'Port 4', connected: true, targetCpu: 10, tray: 'tray2' },
+                { id: 'T2-3', x: 40, y: 630, label: 'Port 3', connected: true, targetCpu: 9, tray: 'tray2' },
+                { id: 'T2-2', x: 150, y: 760, label: 'Port 2', connected: true, targetCpu: 9, tray: 'tray2' },
+                { id: 'T2-1', x: 250, y: 760, label: 'Port 1', connected: true, targetCpu: 13, tray: 'tray2' },
+
+                // Tray 2 Multi-connected Ports on the left side
+                { id: 'T2-13', x: 40, y: 470, label: 'Port 13', connected: true, targetCpus: [12, 11], routingType: 'rightThenSplit', tray: 'tray2' },
+                { id: 'T2-9', x: 40, y: 490, label: 'Port 9', connected: true, targetCpus: [12, 11], routingType: 'rightThenSplit', tray: 'tray2' },
+                { id: 'T2-11', x: 40, y: 590, label: 'Port 11', connected: true, targetCpus: [10, 9], routingType: 'rightThenSplit', tray: 'tray2' },
+                { id: 'T2-7', x: 40, y: 610, label: 'Port 7', connected: true, targetCpus: [10, 9], routingType: 'rightThenSplit', tray: 'tray2' },
+
+                // Tray 2 Bottom Ports - Multi-connected (to the right of Port 1)
+                { id: 'T2-8', x: 300, y: 760, label: 'Port 8', connected: true, targetCpus: [14, 13], routingType: 'upThenSplit', tray: 'tray2' },
+                { id: 'T2-12', x: 350, y: 760, label: 'Port 12', connected: true, targetCpus: [14, 13], routingType: 'upThenSplit', tray: 'tray2' },
+                { id: 'T2-10', x: 400, y: 760, label: 'Port 10', connected: true, targetCpus: [16, 15], routingType: 'upThenSplit', tray: 'tray2' },
+                { id: 'T2-14', x: 450, y: 760, label: 'Port 14', connected: true, targetCpus: [16, 15], routingType: 'upThenSplit', tray: 'tray2' },
+
+                // Tray 4 Ports - Bottom and Right side connections
+                { id: 'T4-1', x: 950, y: 760, label: 'Port 1', connected: true, targetCpu: 29, tray: 'tray4' },
+                { id: 'T4-2', x: 1050, y: 760, label: 'Port 2', connected: true, targetCpu: 25, tray: 'tray4' },
+                { id: 'T4-6', x: 1160, y: 450, label: 'Port 6', connected: true, targetCpu: 28, tray: 'tray4' },
+                { id: 'T4-5', x: 1160, y: 510, label: 'Port 5', connected: true, targetCpu: 27, tray: 'tray4' },
+                { id: 'T4-4', x: 1160, y: 570, label: 'Port 4', connected: true, targetCpu: 26, tray: 'tray4' },
+                { id: 'T4-3', x: 1160, y: 630, label: 'Port 3', connected: true, targetCpu: 25, tray: 'tray4' },
+
+                // Tray 4 Multi-connected Ports on the right side
+                { id: 'T4-13', x: 1160, y: 470, label: 'Port 13', connected: true, targetCpus: [28, 27], routingType: 'leftThenSplit', tray: 'tray4' },
+                { id: 'T4-9', x: 1160, y: 490, label: 'Port 9', connected: true, targetCpus: [28, 27], routingType: 'leftThenSplit', tray: 'tray4' },
+                { id: 'T4-11', x: 1160, y: 590, label: 'Port 11', connected: true, targetCpus: [26, 25], routingType: 'leftThenSplit', tray: 'tray4' },
+                { id: 'T4-7', x: 1160, y: 610, label: 'Port 7', connected: true, targetCpus: [26, 25], routingType: 'leftThenSplit', tray: 'tray4' },
+
+                // Tray 4 Bottom Ports - Multi-connected (to the right of existing bottom ports)
+                { id: 'T4-14', x: 700, y: 760, label: 'Port 14', connected: true, targetCpus: [32, 31], routingType: 'upThenSplit', tray: 'tray4' },
+                { id: 'T4-10', x: 750, y: 760, label: 'Port 10', connected: true, targetCpus: [32, 31], routingType: 'upThenSplit', tray: 'tray4' },
+                { id: 'T4-12', x: 800, y: 760, label: 'Port 12', connected: true, targetCpus: [30, 29], routingType: 'upThenSplit', tray: 'tray4' },
+                { id: 'T4-8', x: 850, y: 760, label: 'Port 8', connected: true, targetCpus: [30, 29], routingType: 'upThenSplit', tray: 'tray4' }
+            ];
+        }
+
+        function addExternalPortConnections(svg) {
+            const ports = getPortsData();
+
+            ports.forEach(port => {
+                if (port.connected) {
+                    if (port.targetCpu) {
+                        // Single connection - simple line
+                        drawSimpleConnection(svg, port, port.targetCpu);
+                    } else if (port.targetCpus && port.targetCpus.length > 0) {
+                        // Multiple connections - use routing
+                        drawMultiConnection(svg, port);
+                    }
+                }
+            });
+        }
+
+        function drawSimpleConnection(svg, port, targetCpuId) {
+            const targetCpu = findCPU(targetCpuId);
+            if (targetCpu) {
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', port.x);
+                line.setAttribute('y1', port.y);
+                line.setAttribute('x2', targetCpu.pos.x);
+                line.setAttribute('y2', targetCpu.pos.y);
+                line.setAttribute('stroke', '#666');
+                line.setAttribute('stroke-width', '2');
+                line.setAttribute('class', 'port-connection-line');
+                line.setAttribute('data-port', port.label);
+                line.setAttribute('data-cpu', targetCpuId);
+                svg.appendChild(line);
+            }
+        }
+
+        function drawMultiConnection(svg, port) {
+            if (port.routingType === 'downThenSplit') {
+                drawDownThenSplitConnection(svg, port);
+            } else if (port.routingType === 'rightThenSplit') {
+                drawRightThenSplitConnection(svg, port);
+            } else if (port.routingType === 'leftThenSplit') {
+                drawLeftThenSplitConnection(svg, port);
+            } else if (port.routingType === 'upThenSplit') {
+                drawUpThenSplitConnection(svg, port);
+            }
+        }
+
+        function addInterTrayConnections(svg) {
+            if (!galaxyData.interTrayConnections) return;
+
+            galaxyData.interTrayConnections.forEach(conn => {
+                const fromCpu = findCPU(conn.from);
+                const toCpu = findCPU(conn.to);
+
+                if (fromCpu && toCpu) {
+                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    line.setAttribute('x1', fromCpu.pos.x);
+                    line.setAttribute('y1', fromCpu.pos.y);
+                    line.setAttribute('x2', toCpu.pos.x);
+                    line.setAttribute('y2', toCpu.pos.y);
+                    line.setAttribute('stroke', getHeatMapColor(conn.traffic));
+                    line.setAttribute('stroke-width', '3');
+                    line.setAttribute('class', 'inter-tray-connection');
+                    line.setAttribute('data-from', conn.from);
+                    line.setAttribute('data-to', conn.to);
+                    line.setAttribute('data-traffic', conn.traffic.toFixed(2));
+                    svg.appendChild(line);
+                }
+            });
+        }
+
+        function drawDownThenSplitConnection(svg, port) {
+            const targetCpus = port.targetCpus.map(id => findCPU(id)).filter(cpu => cpu);
+            if (targetCpus.length === 0) return;
+
+            // Calculate routing points
+            const dropDistance = 60; // How far down to go before turning
+            const turnPoint = { x: port.x, y: port.y + dropDistance };
+
+            // Calculate the midpoint between the target CPUs for the horizontal routing
+            const avgX = targetCpus.reduce((sum, cpu) => sum + cpu.pos.x, 0) / targetCpus.length;
+            const avgY = targetCpus.reduce((sum, cpu) => sum + cpu.pos.y, 0) / targetCpus.length;
+
+            // Create a horizontal point that's positioned optimally for splitting
+            const horizontalPoint = { x: avgX, y: turnPoint.y };
+
+            // Draw the main vertical line (down)
+            const verticalLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            verticalLine.setAttribute('x1', port.x);
+            verticalLine.setAttribute('y1', port.y);
+            verticalLine.setAttribute('x2', turnPoint.x);
+            verticalLine.setAttribute('y2', turnPoint.y);
+            verticalLine.setAttribute('stroke', '#666');
+            verticalLine.setAttribute('stroke-width', '2');
+            verticalLine.setAttribute('class', 'port-connection-line');
+            verticalLine.setAttribute('data-port', port.label);
+            verticalLine.setAttribute('data-cpu', port.targetCpus.join(','));
+            svg.appendChild(verticalLine);
+
+            // Draw diagonal lines to each target CPU
+            targetCpus.forEach(targetCpu => {
+                const diagonalLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                diagonalLine.setAttribute('x1', turnPoint.x);
+                diagonalLine.setAttribute('y1', turnPoint.y);
+                diagonalLine.setAttribute('x2', targetCpu.pos.x);
+                diagonalLine.setAttribute('y2', targetCpu.pos.y);
+                diagonalLine.setAttribute('stroke', '#666');
+                diagonalLine.setAttribute('stroke-width', '2');
+                diagonalLine.setAttribute('class', 'port-connection-line');
+                diagonalLine.setAttribute('data-port', port.label);
+                diagonalLine.setAttribute('data-cpu', targetCpu.id);
+                svg.appendChild(diagonalLine);
+            });
+        }
+
+        function drawRightThenSplitConnection(svg, port) {
+            const targetCpus = port.targetCpus.map(id => findCPU(id)).filter(cpu => cpu);
+            if (targetCpus.length === 0) return;
+
+            // Calculate routing points for left-side ports
+            const rightDistance = 60; // How far right to go before turning
+            const turnPoint = { x: port.x + rightDistance, y: port.y };
+
+            // Draw the main horizontal line (right)
+            const horizontalLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            horizontalLine.setAttribute('x1', port.x);
+            horizontalLine.setAttribute('y1', port.y);
+            horizontalLine.setAttribute('x2', turnPoint.x);
+            horizontalLine.setAttribute('y2', turnPoint.y);
+            horizontalLine.setAttribute('stroke', '#666');
+            horizontalLine.setAttribute('stroke-width', '2');
+            horizontalLine.setAttribute('class', 'port-connection-line');
+            horizontalLine.setAttribute('data-port', port.label);
+            horizontalLine.setAttribute('data-cpu', port.targetCpus.join(','));
+            svg.appendChild(horizontalLine);
+
+            // Draw diagonal lines to each target CPU
+            targetCpus.forEach(targetCpu => {
+                const diagonalLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                diagonalLine.setAttribute('x1', turnPoint.x);
+                diagonalLine.setAttribute('y1', turnPoint.y);
+                diagonalLine.setAttribute('x2', targetCpu.pos.x);
+                diagonalLine.setAttribute('y2', targetCpu.pos.y);
+                diagonalLine.setAttribute('stroke', '#666');
+                diagonalLine.setAttribute('stroke-width', '2');
+                diagonalLine.setAttribute('class', 'port-connection-line');
+                diagonalLine.setAttribute('data-port', port.label);
+                diagonalLine.setAttribute('data-cpu', targetCpu.id);
+                svg.appendChild(diagonalLine);
+            });
+        }
+
+        function drawLeftThenSplitConnection(svg, port) {
+            const targetCpus = port.targetCpus.map(id => findCPU(id)).filter(cpu => cpu);
+            if (targetCpus.length === 0) return;
+
+            // Calculate routing points for right-side ports
+            const leftDistance = 60; // How far left to go before turning
+            const turnPoint = { x: port.x - leftDistance, y: port.y };
+
+            // Draw the main horizontal line (left)
+            const horizontalLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            horizontalLine.setAttribute('x1', port.x);
+            horizontalLine.setAttribute('y1', port.y);
+            horizontalLine.setAttribute('x2', turnPoint.x);
+            horizontalLine.setAttribute('y2', turnPoint.y);
+            horizontalLine.setAttribute('stroke', '#666');
+            horizontalLine.setAttribute('stroke-width', '2');
+            horizontalLine.setAttribute('class', 'port-connection-line');
+            horizontalLine.setAttribute('data-port', port.label);
+            horizontalLine.setAttribute('data-cpu', port.targetCpus.join(','));
+            svg.appendChild(horizontalLine);
+
+            // Draw diagonal lines to each target CPU
+            targetCpus.forEach(targetCpu => {
+                const diagonalLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                diagonalLine.setAttribute('x1', turnPoint.x);
+                diagonalLine.setAttribute('y1', turnPoint.y);
+                diagonalLine.setAttribute('x2', targetCpu.pos.x);
+                diagonalLine.setAttribute('y2', targetCpu.pos.y);
+                diagonalLine.setAttribute('stroke', '#666');
+                diagonalLine.setAttribute('stroke-width', '2');
+                diagonalLine.setAttribute('class', 'port-connection-line');
+                diagonalLine.setAttribute('data-port', port.label);
+                diagonalLine.setAttribute('data-cpu', targetCpu.id);
+                svg.appendChild(diagonalLine);
+            });
+        }
+
+        function drawUpThenSplitConnection(svg, port) {
+            const targetCpus = port.targetCpus.map(id => findCPU(id)).filter(cpu => cpu);
+            if (targetCpus.length === 0) return;
+
+            // Calculate routing points for bottom ports
+            const upDistance = 60; // How far up to go before turning
+            const turnPoint = { x: port.x, y: port.y - upDistance };
+
+            // Draw the main vertical line (up)
+            const verticalLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            verticalLine.setAttribute('x1', port.x);
+            verticalLine.setAttribute('y1', port.y);
+            verticalLine.setAttribute('x2', turnPoint.x);
+            verticalLine.setAttribute('y2', turnPoint.y);
+            verticalLine.setAttribute('stroke', '#666');
+            verticalLine.setAttribute('stroke-width', '2');
+            verticalLine.setAttribute('class', 'port-connection-line');
+            verticalLine.setAttribute('data-port', port.label);
+            verticalLine.setAttribute('data-cpu', port.targetCpus.join(','));
+            svg.appendChild(verticalLine);
+
+            // Draw diagonal lines to each target CPU
+            targetCpus.forEach(targetCpu => {
+                const diagonalLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                diagonalLine.setAttribute('x1', turnPoint.x);
+                diagonalLine.setAttribute('y1', turnPoint.y);
+                diagonalLine.setAttribute('x2', targetCpu.pos.x);
+                diagonalLine.setAttribute('y2', targetCpu.pos.y);
+                diagonalLine.setAttribute('stroke', '#666');
+                diagonalLine.setAttribute('stroke-width', '2');
+                diagonalLine.setAttribute('class', 'port-connection-line');
+                diagonalLine.setAttribute('data-port', port.label);
+                diagonalLine.setAttribute('data-cpu', targetCpu.id);
+                svg.appendChild(diagonalLine);
+            });
+        }
+
+        function addExternalPortDiamonds(svg) {
+            const ports = getPortsData();
+
+            ports.forEach(port => {
+                // Diamond shape
+                const diamond = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+                diamond.setAttribute('points', `${port.x},${port.y-8} ${port.x+8},${port.y} ${port.x},${port.y+8} ${port.x-8},${port.y}`);
+                diamond.setAttribute('fill', port.connected ? '#FF0000' : '#FFA500');
+                diamond.setAttribute('stroke', '#333');
+                diamond.setAttribute('stroke-width', '1');
+                diamond.setAttribute('class', 'port-diamond');
+                diamond.setAttribute('data-port', port.label);
+                diamond.setAttribute('data-connected', port.connected);
+                diamond.setAttribute('data-cpu', port.targetCpu || '');
+                diamond.setAttribute('data-cpus', port.targetCpus ? port.targetCpus.join(', ') : '');
+                svg.appendChild(diamond);
+
+                // Port label - position based on location
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+
+                // For left-side ports, position labels to the left
+                if (port.x <= 50) {
+                    text.setAttribute('x', port.x - 25);
+                    text.setAttribute('y', port.y + 5);
+                    text.setAttribute('text-anchor', 'middle');
+                } else if (port.x >= 1150) {
+                    // For right-side ports, position labels to the right
+                    text.setAttribute('x', port.x + 25);
+                    text.setAttribute('y', port.y + 5);
+                    text.setAttribute('text-anchor', 'middle');
+                } else {
+                    // For top ports, position labels above
+                    text.setAttribute('x', port.x);
+                    text.setAttribute('y', port.y - 15);
+                    text.setAttribute('text-anchor', 'middle');
+                }
+
+                text.setAttribute('class', 'port-label');
+                text.textContent = port.label;
+                svg.appendChild(text);
+            });
+        }
+
+        // Tooltip functionality
+        function setupTooltips() {
+            const tooltip = document.getElementById('tooltip');
+
+            // CPU node tooltips
+            document.querySelectorAll('.cpu-node').forEach(node => {
+                node.addEventListener('mouseenter', (e) => {
+                    const cpuId = e.target.getAttribute('data-cpu-id');
+                    const usage = e.target.getAttribute('data-usage');
+                    const tray = e.target.getAttribute('data-tray');
+
+                    tooltip.innerHTML = `
+                        <strong>CPU ${cpuId}</strong><br>
+                        Tray: ${tray}<br>
+                        Usage: ${(parseFloat(usage) * 100).toFixed(1)}%<br>
+                        Status: ${parseFloat(usage) > 0.7 ? 'High Load' : parseFloat(usage) > 0.4 ? 'Medium Load' : 'Low Load'}
+                    `;
+                    tooltip.classList.remove('hidden');
+                });
+
+                node.addEventListener('mousemove', (e) => {
+                    tooltip.style.left = (e.pageX + 10) + 'px';
+                    tooltip.style.top = (e.pageY - 10) + 'px';
+                });
+
+                node.addEventListener('mouseleave', () => {
+                    tooltip.classList.add('hidden');
+                });
+            });
+
+            // Connection line tooltips
+            document.querySelectorAll('.connection-line').forEach(line => {
+                line.addEventListener('mouseenter', (e) => {
+                    const traffic = e.target.getAttribute('data-traffic');
+                    const from = e.target.getAttribute('data-from');
+                    const to = e.target.getAttribute('data-to');
+
+                    tooltip.innerHTML = `
+                        <strong>Connection</strong><br>
+                        From: CPU ${from}<br>
+                        To: CPU ${to}<br>
+                        Traffic: ${(parseFloat(traffic) * 100).toFixed(1)}%<br>
+                        Status: ${parseFloat(traffic) > 0.7 ? 'Heavy Traffic' : parseFloat(traffic) > 0.4 ? 'Moderate Traffic' : 'Light Traffic'}
+                    `;
+                    tooltip.classList.remove('hidden');
+                });
+
+                line.addEventListener('mousemove', (e) => {
+                    tooltip.style.left = (e.pageX + 10) + 'px';
+                    tooltip.style.top = (e.pageY - 10) + 'px';
+                });
+
+                line.addEventListener('mouseleave', () => {
+                    tooltip.classList.add('hidden');
+                });
+            });
+
+            // Port diamond tooltips
+            document.querySelectorAll('.port-diamond').forEach(port => {
+                port.addEventListener('mouseenter', (e) => {
+                    const portName = e.target.getAttribute('data-port');
+                    const isConnected = e.target.getAttribute('data-connected') === 'true';
+                    const connectedCpu = e.target.getAttribute('data-cpu');
+                    const connectedCpus = e.target.getAttribute('data-cpus');
+
+                    let connectionInfo = '';
+                    if (isConnected) {
+                        if (connectedCpus) {
+                            connectionInfo = `Connected to: CPUs ${connectedCpus}<br>`;
+                        } else if (connectedCpu) {
+                            connectionInfo = `Connected to: CPU ${connectedCpu}<br>`;
+                        }
+                    }
+
+                    tooltip.innerHTML = `
+                        <strong>${portName}</strong><br>
+                        Type: External Port<br>
+                        Status: ${isConnected ? 'Connected' : 'Unconnected'}<br>
+                        ${connectionInfo}
+                        Bandwidth: ${(Math.random() * 100).toFixed(1)} Gbps
+                    `;
+                    tooltip.classList.remove('hidden');
+                });
+
+                port.addEventListener('mousemove', (e) => {
+                    tooltip.style.left = (e.pageX + 10) + 'px';
+                    tooltip.style.top = (e.pageY - 10) + 'px';
+                });
+
+                port.addEventListener('mouseleave', () => {
+                    tooltip.classList.add('hidden');
+                });
+            });
+
+            // Port connection line tooltips
+            document.querySelectorAll('.port-connection-line').forEach(line => {
+                line.addEventListener('mouseenter', (e) => {
+                    const portName = e.target.getAttribute('data-port');
+                    const cpuId = e.target.getAttribute('data-cpu');
+
+                    tooltip.innerHTML = `
+                        <strong>Port Connection</strong><br>
+                        From: ${portName}<br>
+                        To: CPU ${cpuId}<br>
+                        Type: External Connection<br>
+                        Status: Active
+                    `;
+                    tooltip.classList.remove('hidden');
+                });
+
+                line.addEventListener('mousemove', (e) => {
+                    tooltip.style.left = (e.pageX + 10) + 'px';
+                    tooltip.style.top = (e.pageY - 10) + 'px';
+                });
+
+                line.addEventListener('mouseleave', () => {
+                    tooltip.classList.add('hidden');
+                });
+            });
+
+            // Inter-tray connection tooltips
+            document.querySelectorAll('.inter-tray-connection').forEach(line => {
+                line.addEventListener('mouseenter', (e) => {
+                    const from = e.target.getAttribute('data-from');
+                    const to = e.target.getAttribute('data-to');
+                    const traffic = e.target.getAttribute('data-traffic');
+
+                    tooltip.innerHTML = `
+                        <strong>Inter-Tray Connection</strong><br>
+                        From: CPU ${from}<br>
+                        To: CPU ${to}<br>
+                        Traffic: ${(parseFloat(traffic) * 100).toFixed(1)}%<br>
+                        Type: Backbone Connection<br>
+                        Status: ${parseFloat(traffic) > 0.7 ? 'Heavy Load' : parseFloat(traffic) > 0.4 ? 'Medium Load' : 'Light Load'}
+                    `;
+                    tooltip.classList.remove('hidden');
+                });
+
+                line.addEventListener('mousemove', (e) => {
+                    tooltip.style.left = (e.pageX + 10) + 'px';
+                    tooltip.style.top = (e.pageY - 10) + 'px';
+                });
+
+                line.addEventListener('mouseleave', () => {
+                    tooltip.classList.add('hidden');
+                });
+            });
+
+        }
+
+        // Initialize visualization
+        document.addEventListener('DOMContentLoaded', () => {
+            createVisualization();
+            setupTooltips();
+        });
+
+        // Update data periodically (simulate real-time updates)
+        setInterval(() => {
+            // Update CPU usage values
+            galaxyData.trays.forEach(tray => {
+                tray.cpus.forEach(cpu => {
+                    // Small random changes to simulate real-time data
+                    cpu.usage = Math.max(0, Math.min(1, cpu.usage + (Math.random() - 0.5) * 0.1));
+                });
+            });
+
+
+            // Update visualization
+            document.querySelectorAll('.cpu-node').forEach(node => {
+                const cpuId = parseInt(node.getAttribute('data-cpu-id'));
+                const cpu = findCPU(cpuId);
+                if (cpu) {
+                    node.setAttribute('fill', getHeatMapColor(cpu.usage));
+                    node.setAttribute('data-usage', cpu.usage.toFixed(2));
+                }
+            });
+
+            document.querySelectorAll('.connection-line').forEach(line => {
+                const from = parseInt(line.getAttribute('data-from'));
+                const to = parseInt(line.getAttribute('data-to'));
+                const traffic = getConnectionTraffic(from, to);
+                line.setAttribute('stroke', getHeatMapColor(traffic));
+                line.setAttribute('data-traffic', traffic.toFixed(2));
+            });
+
+            document.querySelectorAll('.port-connection-line').forEach(line => {
+                const from = parseInt(line.getAttribute('data-from'));
+                const to = parseInt(line.getAttribute('data-to'));
+                const traffic = getConnectionTraffic(from, to);
+                line.setAttribute('stroke', getHeatMapColor(traffic));
+                line.setAttribute('data-traffic', traffic.toFixed(2));
+            });
+
+            // Update inter-tray connections
+            if (galaxyData.interTrayConnections) {
+                galaxyData.interTrayConnections.forEach(conn => {
+                    conn.traffic = Math.max(0, Math.min(1, conn.traffic + (Math.random() - 0.5) * 0.1));
+                });
+
+                document.querySelectorAll('.inter-tray-connection').forEach(line => {
+                    const from = parseInt(line.getAttribute('data-from'));
+                    const to = parseInt(line.getAttribute('data-to'));
+                    const connection = galaxyData.interTrayConnections.find(
+                        c => (c.from === from && c.to === to) || (c.from === to && c.to === from)
+                    );
+                    if (connection) {
+                        line.setAttribute('stroke', getHeatMapColor(connection.traffic));
+                        line.setAttribute('data-traffic', connection.traffic.toFixed(2));
+                    }
+                });
+            }
+        }, 2000); // Update every 2 seconds
+    </script>
+</body>
+</html>
