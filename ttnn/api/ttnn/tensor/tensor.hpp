@@ -241,6 +241,8 @@ public:
     const HostStorage& host_storage() const&;
     const HostStorage& host_storage() const&& = delete;  // prevents dangling reference to temporaries.
 
+    HostStorage& host_storage() &;
+
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
