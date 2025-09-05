@@ -22,7 +22,7 @@ class IDevice;
 }  // namespace tt::tt_metal
 
 namespace ttnn::ccl {
-class WorkerEdmInterfaceArgs;
+struct WorkerEdmInterfaceArgs;
 
 namespace worker_detail {
 

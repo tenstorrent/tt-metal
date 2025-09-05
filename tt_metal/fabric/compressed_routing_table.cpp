@@ -52,9 +52,9 @@ void compressed_routing_table_t<ArraySize>::set_original_direction(
 }
 
 // Explicit instantiations for tensix_routing_l1_info_t
-template class compressed_routing_table_t<MAX_MESH_SIZE>;
+template struct compressed_routing_table_t<MAX_MESH_SIZE>;
 #if MAX_MESH_SIZE != MAX_NUM_MESHES
-template class compressed_routing_table_t<MAX_NUM_MESHES>;
+template struct compressed_routing_table_t<MAX_NUM_MESHES>;
 #endif
 
 }  // namespace tt::tt_fabric

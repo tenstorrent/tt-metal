@@ -30,7 +30,7 @@ class ControlPlane;
 }  // namespace tt::tt_fabric
 
 namespace tt::tt_metal {
-class ProfilerStateManager;
+struct ProfilerStateManager;
 
 namespace inspector {
 class Data;
