@@ -412,7 +412,8 @@ jobs:
         id: set_wheel_artifact_name
         run: |
           PYTHON_VERSION_NODOT=$(echo "${{ steps.set_python_version.outputs.python_version }}" | tr -d '.')
-          WHEEL_ARTIFACT_NAME="eager-dist-cp${PYTHON_VERSION_NODOT}-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}"
+          ENABLE_WATCHER_SUFFIX="${{ inputs.enable-watcher == true && '-watcher' || '' }}"
+          WHEEL_ARTIFACT_NAME="eager-dist-cp${PYTHON_VERSION_NODOT}-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}${ENABLE_WATCHER_SUFFIX}"
           echo "wheel_artifact_name=${WHEEL_ARTIFACT_NAME}" >> $GITHUB_OUTPUT
           echo "wheel_artifact_name=${WHEEL_ARTIFACT_NAME}" >> "$GITHUB_ENV"
 
