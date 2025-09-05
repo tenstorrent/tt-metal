@@ -303,9 +303,9 @@ private:
 
     volatile tt_l1_ptr uint32_t* worker_teardown_addr;
 
-    BufferIndex buffer_slot_index;
-
     uint16_t buffer_size_bytes;
+
+    BufferIndex buffer_slot_index;
 
     // noc location of the edm we are connected to (where packets are sent to)
     uint8_t edm_noc_x;
