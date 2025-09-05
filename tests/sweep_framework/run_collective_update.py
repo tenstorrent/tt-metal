@@ -227,7 +227,7 @@ def update_large_json_file(filepath: pathlib.Path, updates: Dict[str, Any], dry_
                 # Clean up temp file on error
                 try:
                     os.close(temp_fd)
-                except:
+                except OSError:
                     pass
                 if temp_file.exists():
                     temp_file.unlink()
