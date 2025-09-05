@@ -132,7 +132,10 @@ Tensor WhereOperation::invoke(
             if (typecast_predicate) {
                 condition = ttnn::typecast(queue_id, predicate, t_true.dtype());
             }
-            if (ternary_utils::have_same_shape(t_true, predicate)) {
+            auto broadcast_type =
+                ttnn::operations::ternary::get_broadcast_type(predicate.logical_shape(), t_true.logical_shape());
+
+            if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
                 log_debug(tt::LogOp, "Where LLK - TTS");
                 float scalar_false = std::get<float>(value_false);
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
@@ -153,7 +156,10 @@ Tensor WhereOperation::invoke(
             if (typecast_predicate) {
                 condition = ttnn::typecast(queue_id, predicate, t_false.dtype());
             }
-            if (ternary_utils::have_same_shape(predicate, t_false)) {
+            auto broadcast_type =
+                ttnn::operations::ternary::get_broadcast_type(predicate.logical_shape(), t_false.logical_shape());
+
+            if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
                 log_debug(tt::LogOp, "Where LLK - TST");
                 float scalar_true = std::get<float>(value_true);
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())

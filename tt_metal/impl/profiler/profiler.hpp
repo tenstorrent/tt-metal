@@ -177,9 +177,6 @@ private:
     // Get tracy context for the core
     void updateTracyContext(std::pair<uint32_t, CoreCoord> device_core);
 
-    // Dump device results to files
-    void dumpDeviceResults() const;
-
     // Iterate over all markers and update their data if needed
     void processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers);
 
@@ -237,6 +234,9 @@ public:
     void dumpRoutingInfo() const;
 
     void dumpClusterCoordinates() const;
+
+    // Dump device results to files
+    void dumpDeviceResults() const;
 
     // Push device results to tracy
     void pushTracyDeviceResults(std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec);
