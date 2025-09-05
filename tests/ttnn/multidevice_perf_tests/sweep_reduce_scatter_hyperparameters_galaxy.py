@@ -12,15 +12,16 @@ import math
 # (num_devices, num_links, rs_input_shape, dim)
 CONFIGS = [
     (4, 1, [1, 1, 22528, 3072], 3),
-    (2, 1, [1, 1, 11264, 3072], 3),
-    (2, 4, [1, 1, 5632, 3072], 3),
+    # (2, 1, [1, 1, 11264, 3072], 3),
+    # (2, 4, [1, 1, 5632, 3072], 3),
     # (8, 4, [1, 1, 71680, 3072], 3),
-    # (8,4,[1, 1, 63488, 3072],3),
+    (8, 4, [1, 1, 63488, 3072], 3),
+    (8, 4, [1, 1, 63488, 1536], 3),
     # (8,4,[1, 1, 55296, 3072],3),
     # (8,4,[1, 1, 47104, 3072],3),
     # (8,4,[1, 1, 38912, 3072],3),
     # (8,4,[1, 1, 34816, 3072],3),
-    # (8,4,[1, 1, 30720, 3072],3),
+    (8, 4, [1, 1, 30720, 3072], 3),
     # (8,4,[1, 1, 18432, 3072],3),
     # (8,4,[1, 1, 17408, 3072],3),
     # (8,4,[1, 1, 16384, 3072],3),
@@ -47,7 +48,7 @@ CONFIGS = [
     # (8,4,[1, 1, 6016, 3072],3),
     # (8,4,[1, 1, 5888, 3072],3),
     # (8,4,[1, 1, 5760, 3072],3),
-    # (8,4,[1, 1, 5632, 3072],3),
+    (8, 4, [1, 1, 5632, 3072], 3),
     # (8,4,[1, 1, 5504, 3072],3),
     # (8,4,[1, 1, 5376, 3072],3),
     # (8,4,[1, 1, 5248, 3072],3),
@@ -62,14 +63,14 @@ CONFIGS = [
     # (8,4,[1, 1, 4096, 3072],3),
     # (8,4,[1, 1, 3968, 3072],3),
     # (8,4,[1, 1, 3840, 3072],3),
-    # (8,4,[1, 1, 3712, 3072],3),
+    (8, 4, [1, 1, 3712, 3072], 3),
     # (8, 4, [1, 1, 3072, 3072], 3),
     # (8, 4, [1, 1, 2048, 3072], 3),
     # (8, 4, [1, 1, 1024, 3072], 3),
     (4, 4, [1, 1, 5632, 3072], 3),
-    (2, 1, [1, 1, 128, 1536], 3),
-    (4, 1, [1, 1, 128, 1536], 3),
-    (2, 4, [1, 1, 128, 1536], 3),
+    # (2, 1, [1, 1, 128, 1536], 3),
+    # (4, 1, [1, 1, 128, 1536], 3),
+    # (2, 4, [1, 1, 128, 1536], 3),
     (4, 4, [1, 1, 128, 1536], 3),
     # (8,4,[1, 1, 128, 1536],3),
 ]
@@ -102,15 +103,15 @@ TOPOLOGY = ["ring", "linear"]
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
+        (True, 20),
     ],
     ids=["perf"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 700000}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 700000}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 800000}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 800000}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
     ids=TOPOLOGY,
@@ -151,7 +152,7 @@ def test_reduce_scatter_chunks_per_sync(
     else:
         pytest.skip("Unsupported number of devices")
 
-    if num_workers_per_link is "OPTIMIZED":
+    if num_workers_per_link == "OPTIMIZED":
         elements = math.prod(rs_input_shape)
         total_bytes = elements * 2
 
@@ -167,10 +168,12 @@ def test_reduce_scatter_chunks_per_sync(
             else:
                 num_workers_per_link = 4
         else:
-            if data_moved_MB < 4:
-                num_workers_per_link = 4
-            else:
+            if data_moved_MB > 4:
                 num_workers_per_link = 8
+            elif data_moved_MB < 1:
+                num_workers_per_link = 2
+            else:
+                num_workers_per_link = 4
 
     run_reduce_scatter_impl(
         submesh_device,
