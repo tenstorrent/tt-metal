@@ -78,7 +78,6 @@
 #include <umd/device/coordinate_manager.h>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_silicon_driver_common.hpp>
-#include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>
 
 namespace tt {
