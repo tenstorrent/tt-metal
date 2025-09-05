@@ -38,6 +38,7 @@ def test_ci_dispatch(model_weights):
             "models/demos/qwen25_vl/tests/test_vision_block.py",
             "models/demos/qwen25_vl/tests/test_model.py",
             "models/demos/qwen25_vl/tests/test_wrapped_model.py",
+            "models/demos/qwen25_vl/tests/test_windowed_sdpa.py",
         ]
         + ["-x"]  # Fail if one of the tests fails
     )
