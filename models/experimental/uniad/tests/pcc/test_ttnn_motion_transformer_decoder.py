@@ -22,7 +22,6 @@ from models.experimental.uniad.tt.ttnn_motion_transformer_decoder import (
     TtMotionTransformerDecoder,
 )
 
-
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
     preprocess_linear_weight,
@@ -325,7 +324,6 @@ def test_uniad_MotionDeformableAttention(device, reset_seeds, model_location_gen
                     }
                 ],
                 "feedforward_channels": 512,
-                "ffn_dropout": 0.1,
                 "operation_order": ("cross_attn", "norm", "ffn", "norm"),
             },
         },
@@ -409,7 +407,6 @@ def test_uniad_MotionDeformableAttention(device, reset_seeds, model_location_gen
         num_steps=12,
         sample_index=-1,
         im2col_step=64,
-        dropout=0.1,
         bev_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
         voxel_size=[0.2, 0.2, 8],
         batch_first=True,
@@ -485,7 +482,6 @@ def test_uniad_MotionTransformerAttentionLayer(device, reset_seeds, model_locati
                     }
                 ],
                 "feedforward_channels": 512,
-                "ffn_dropout": 0.1,
                 "operation_order": ("cross_attn", "norm", "ffn", "norm"),
             },
         },
@@ -591,7 +587,6 @@ def test_uniad_MotionTransformerAttentionLayer(device, reset_seeds, model_locati
         operation_order=("cross_attn", "norm", "ffn", "norm"),
         init_cfg=None,
         feedforward_channels=512,
-        ffn_dropout=0.1,
     )
 
     ttnn_query = ttnn.from_torch(query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -666,7 +661,6 @@ def test_uniad_MotionTransformerDecoder(device, reset_seeds, model_location_gene
                     }
                 ],
                 "feedforward_channels": 512,
-                "ffn_dropout": 0.1,
                 "operation_order": ("cross_attn", "norm", "ffn", "norm"),
             },
         },
@@ -801,7 +795,6 @@ def test_uniad_MotionTransformerDecoder(device, reset_seeds, model_location_gene
                 }
             ],
             "feedforward_channels": 512,
-            "ffn_dropout": 0.1,
             "operation_order": ("cross_attn", "norm", "ffn", "norm"),
         },
         num_layers=3,

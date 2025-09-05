@@ -30,7 +30,6 @@ class TtMotionDeformableAttention:
         num_steps=1,
         sample_index=-1,
         im2col_step=64,
-        dropout=0.1,
         bev_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
         voxel_size=[0.2, 0.2, 8],
         batch_first=True,
@@ -39,7 +38,6 @@ class TtMotionDeformableAttention:
     ):
         self.device = device
         self.parameters = parameters
-        # super().__init__()
         if embed_dims % num_heads != 0:
             raise ValueError(f"embed_dims must be divisible by num_heads, " f"but got {embed_dims} and {num_heads}")
         dim_per_head = embed_dims // num_heads
@@ -55,14 +53,12 @@ class TtMotionDeformableAttention:
         self.num_points = num_points
         self.num_steps = num_steps
         self.sample_index = sample_index
-        self.sampling_offsets = (
-            ttnn.linear
-        )  # nn.Linear(embed_dims, num_heads * num_steps * num_levels * num_points * 2)
-        self.attention_weights = ttnn.linear  # nn.Linear(embed_dims, num_heads * num_steps * num_levels * num_points)
-        self.value_proj = ttnn.linear  # nn.Linear(embed_dims, embed_dims)
+        self.sampling_offsets = ttnn.linear
+        self.attention_weights = ttnn.linear
+        self.value_proj = ttnn.linear
         self.output_proj = [
             ttnn.linear,
-            ttnn.layer_norm,  # nn.Linear(num_steps * embed_dims, embed_dims), nn.LayerNorm(embed_dims), nn.ReLU(inplace=True)
+            ttnn.layer_norm,
         ]
 
     def __call__(
@@ -88,9 +84,7 @@ class TtMotionDeformableAttention:
             identity = query
         if query_pos is not None:
             query = query + query_pos
-        query = ttnn.reshape(
-            query, (query.shape[0], query.shape[1] * query.shape[2], query.shape[3])
-        )  # torch.flatten(query, start_dim=1, end_dim=2)
+        query = ttnn.reshape(query, (query.shape[0], query.shape[1] * query.shape[2], query.shape[3]))
 
         value = ttnn.permute(value, (1, 0, 2))
         bs, num_value, _ = value.shape
@@ -128,9 +122,7 @@ class TtMotionDeformableAttention:
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_steps, self.num_levels, self.num_points)
         )
-        # bs, n_query, n_head, n_steps, N_level, N_points, 2
-        # BS NUM_AGENT NUM_MODE 12 NUM_LEVEL  2
-        ##check if we can do this in preprocess
+
         if reference_trajs.shape[-1] == 2:
             reference_trajs = reference_trajs[:, :, :, self.sample_index :, :, :]
             reference_trajs_ego = self.agent_coords_to_ego_coords(ttnn.clone(reference_trajs), bbox_results)
@@ -187,8 +179,8 @@ class TtMotionDeformableAttention:
 
             sampling_locations = ttnn.permute(
                 sampling_locations, (0, 1, 3, 2, 4, 5, 6)  # "bs nq nh ns nl np c -> bs nq ns nh nl np c"
-            )  # permute([0,1,3,2,4,5,6])
-            attention_weights = ttnn.permute(attention_weights, (0, 1, 3, 2, 4, 5))  # .permute([0,1,3,2,4,5])
+            )
+            attention_weights = ttnn.permute(attention_weights, (0, 1, 3, 2, 4, 5))
             sampling_locations = ttnn.reshape(
                 sampling_locations,
                 (bs, num_query * self.num_steps, self.num_heads, self.num_levels, self.num_points, 2),
@@ -213,9 +205,7 @@ class TtMotionDeformableAttention:
         )
 
         output = ttnn.reshape(output, (bs, num_query, self.num_steps, -1))
-        output = ttnn.reshape(
-            output, (output.shape[0], output.shape[1], output.shape[2] * output.shape[3])
-        )  # (start_dim=2, end_dim=3))
+        output = ttnn.reshape(output, (output.shape[0], output.shape[1], output.shape[2] * output.shape[3]))
         for i in range(2):
             if self.output_proj[i] == ttnn.linear:
                 output = self.output_proj[i](
@@ -245,11 +235,6 @@ class TtMotionDeformableAttention:
             reference_trajs_ego.append(batch_reference_trajs)
         return ttnn.stack(reference_trajs_ego, dim=0)
 
-    # def rot_2d(self, yaw):
-    #     sy, cy = torch.sin(yaw), torch.cos(yaw)
-    #     out = torch.stack([torch.stack([cy, -sy]), torch.stack([sy, cy])]).permute([2, 0, 1])
-    #     return out
-
 
 class TtMotionTransformerAttentionLayer:
     def __init__(
@@ -262,16 +247,13 @@ class TtMotionTransformerAttentionLayer:
             embed_dims=256,
             feedforward_channels=1024,
             num_fcs=2,
-            ffn_drop=0.0,
             act_cfg=dict(type="ReLU", inplace=True),
         ),
         operation_order=None,
         batch_first=False,
         **kwargs,
     ):
-        deprecated_args = dict(
-            feedforward_channels="feedforward_channels", ffn_dropout="ffn_drop", ffn_num_fcs="num_fcs"
-        )
+        deprecated_args = dict(feedforward_channels="feedforward_channels", ffn_num_fcs="num_fcs")
         for ori_name, new_name in deprecated_args.items():
             if ori_name in kwargs:
                 warnings.warn(
@@ -317,9 +299,8 @@ class TtMotionTransformerAttentionLayer:
                     num_heads=8,
                     num_points=4,
                     sample_index=-1,
-                )  # build_attention(attn_cfgs[index])
-                # Some custom attentions used as `self_attn`
-                # or `cross_attn` can have different behavior.
+                )
+
                 attention.operation_name = operation_name
                 self.attentions.append(attention)
                 index += 1
@@ -330,7 +311,7 @@ class TtMotionTransformerAttentionLayer:
 
         num_ffns = operation_order.count("ffn")
         if isinstance(ffn_cfgs, dict):
-            ffn_cfgs = ffn_cfgs  # ConfigDict(ffn_cfgs) added by me
+            ffn_cfgs = ffn_cfgs
         if isinstance(ffn_cfgs, dict):
             ffn_cfgs = [copy.deepcopy(ffn_cfgs) for _ in range(num_ffns)]
         assert len(ffn_cfgs) == num_ffns
@@ -339,9 +320,7 @@ class TtMotionTransformerAttentionLayer:
                 ffn_cfgs[ffn_index]["embed_dims"] = self.embed_dims
             else:
                 assert ffn_cfgs[ffn_index]["embed_dims"] == self.embed_dims
-            self.ffns.append(
-                TtFFN(params=parameters.ffns[str(ffn_index)], device=device)
-            )  # ,feedforward_channels=512,num_fcs=2,ffn_drop=0.1,act_cfg={'type': 'ReLU', 'inplace': True}))
+            self.ffns.append(TtFFN(params=parameters.ffns[str(ffn_index)], device=device))
 
         self.norms = []
         num_norms = operation_order.count("norm")
@@ -421,13 +400,6 @@ class TtMotionTransformerAttentionLayer:
 
 
 class TtMotionTransformerDecoder:
-    """Implements the decoder in DETR3D transformer.
-    Args:
-        return_intermediate (bool): Whether to return intermediate outputs.
-        coder_norm_cfg (dict): Config of last normalization layer. Default：
-            `LN`.
-    """
-
     def __init__(
         self, parameters, device, pc_range=None, embed_dims=256, transformerlayers=None, num_layers=3, **kwargs
     ):
@@ -464,7 +436,6 @@ class TtMotionTransformerDecoder:
                     }
                 ],
                 feedforward_channels=512,
-                ffn_dropout=0.1,
                 operation_order=("cross_attn", "norm", "ffn", "norm"),
             )
             for i in range(self.num_layers)
@@ -519,12 +490,8 @@ class TtMotionTransformerDecoder:
         intermediate_reference_trajs = []
 
         B, _, P, D = agent_level_embedding.shape
-        track_query_bc = ttnn.expand(
-            ttnn.unsqueeze(track_query, 2), (-1, -1, P, -1)
-        )  # .expand(-1, -1, P, -1)  # (B, A, P, D)
-        track_query_pos_bc = ttnn.expand(
-            ttnn.unsqueeze(track_query_pos, 2), (-1, -1, P, -1)
-        )  # .expand(-1, -1, P, -1)  # (B, A, P, D)
+        track_query_bc = ttnn.expand(ttnn.unsqueeze(track_query, 2), (-1, -1, P, -1))
+        track_query_pos_bc = ttnn.expand(ttnn.unsqueeze(track_query_pos, 2), (-1, -1, P, -1))
 
         # static intention embedding, which is imutable throughout all layers
         agent_level_embedding = self.intention_interaction_layers(agent_level_embedding)
@@ -600,18 +567,14 @@ class TtMotionTransformerDecoder:
                             dtype=ttnn.bfloat16,
                         )
 
-            # interaction between agents
             track_query_embed = self.track_agent_interaction_layers[lid](
                 query_embed, track_query, query_pos=track_query_pos_bc, key_pos=track_query_pos
             )
 
-            # interaction between agents and map
             map_query_embed = self.map_interaction_layers[lid](
                 query_embed, lane_query, query_pos=track_query_pos_bc, key_pos=lane_query_pos
             )
 
-            # interaction between agents and bev, ie. interaction between agents and goals
-            # implemented with deformable transformer
             bev_query_embed = self.bev_interaction_layers[lid](
                 query_embed,
                 value=bev_embed,
@@ -621,10 +584,8 @@ class TtMotionTransformerDecoder:
                 **kwargs,
             )
 
-            # fusing the embeddings from different interaction layers
             query_embed = [track_query_embed, map_query_embed, bev_query_embed, track_query_bc + track_query_pos_bc]
             query_embed = ttnn.concat(query_embed, dim=-1)
-            # query_embed = self.out_query_fuser(query_embed)
 
             for index, layer in enumerate(self.out_query_fuser):
                 if layer == ttnn.relu:
@@ -638,7 +599,6 @@ class TtMotionTransformerDecoder:
                     )
 
             if traj_reg_branches is not None:
-                # update reference trajectory
                 tmp = ttnn.clone(query_embed)
                 for index in range(len(traj_reg_branches[lid])):
                     if index % 2 == 0:
@@ -651,11 +611,9 @@ class TtMotionTransformerDecoder:
                     else:
                         tmp = ttnn.relu(tmp)
 
-                # tmp = traj_reg_branches[lid](query_embed)
                 bs, n_agent, n_modes, n_steps, _ = reference_trajs.shape
                 tmp = ttnn.reshape(tmp, (bs, n_agent, n_modes, n_steps, -1))
 
-                # we predict speed of trajectory and use cumsum trick to get the trajectory
                 tmp_a = ttnn.clone(tmp[..., :2])
                 tmp_b = ttnn.clone(tmp[..., 2:])
                 tmp_a = ttnn.cumsum(tmp_a, dim=3)
@@ -670,8 +628,6 @@ class TtMotionTransformerDecoder:
                 reference_trajs = new_reference_trajs
                 reference_trajs_input = ttnn.unsqueeze(reference_trajs, 4)  # BS NUM_AGENT NUM_MODE 12 NUM_LEVEL  2
 
-                # update embedding, which is used in the next layer
-                # only update the embedding of the last step, i.e. the goal
                 ep_offset_embed = ttnn.clone(reference_trajs)
                 ep_ego_embed = ttnn.squeeze(
                     trajectory_coordinate_transform(

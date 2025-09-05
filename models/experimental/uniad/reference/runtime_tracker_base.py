@@ -4,8 +4,6 @@
 
 from models.experimental.uniad.reference.utils import Instances
 
-# from mmdet3d.core.bbox.iou_calculators.iou3d_calculator import (
-#     bbox_overlaps_nearest_3d as iou_3d, )
 from models.experimental.uniad.reference.utils import denormalize_bbox
 
 
@@ -34,10 +32,6 @@ class RuntimeTrackerBase(object):
                 track_instances.obj_idxes[i] = self.max_obj_id
                 self.max_obj_id += 1
             elif track_instances.obj_idxes[i] >= 0 and track_instances.scores[i] < self.filter_score_thresh:
-                # sleep time ++
                 track_instances.disappear_time[i] += 1
                 if track_instances.disappear_time[i] >= self.miss_tolerance:
-                    # mark deaded tracklets: Set the obj_id to -1.
-                    # TODO: remove it by following functions
-                    # Then this track will be removed by TrackEmbeddingLayer.
                     track_instances.obj_idxes[i] = -1

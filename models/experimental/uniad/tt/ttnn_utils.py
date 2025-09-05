@@ -474,7 +474,6 @@ class Instances:
     """
 
     def __init__(self, image_size: Tuple[int, int], ttnn_device=None, **kwargs: Any):
-        print("image_size in init", image_size)
         """
         Args:
             image_size (height, width): the spatial size of the image.

@@ -13,7 +13,6 @@ from models.experimental.uniad.reference.detr_transformer_decoder import Deforma
 
 class Transformer(nn.Module):
     def __init__(self, encoder=None, decoder=None, init_cfg=None):
-        # super(Transformer, self).__init__()
         super().__init__()
         self.encoder = DetrTransformerEncoder()
         self.decoder = DeformableDetrTransformerDecoder(
@@ -24,7 +23,6 @@ class Transformer(nn.Module):
         self.embed_dims = self.encoder.embed_dims
 
     def forward(self, x, mask, query_embed, pos_embed):
-        # use `view` instead of `flatten` for dynamically exporting to ONNX
         x = x.view(bs, c, -1).permute(2, 0, 1)  # [bs, c, h, w] -> [h*w, bs, c]
         pos_embed = pos_embed.view(bs, c, -1).permute(2, 0, 1)
         query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)  # [num_query, dim] -> [num_query, bs, dim]
@@ -63,30 +61,6 @@ class SegDeformableTransformer(Transformer):
             self.reference_points = nn.Linear(self.embed_dims, 2)
 
     def gen_encoder_output_proposals(self, memory, memory_padding_mask, spatial_shapes):
-        """Generate proposals from encoded memory.
-
-        Args:
-            memory (Tensor) : The output of encoder,
-                has shape (bs, num_key, embed_dim).  num_key is
-                equal the number of points on feature map from
-                all level.
-            memory_padding_mask (Tensor): Padding mask for memory.
-                has shape (bs, num_key).
-            spatial_shapes (Tensor): The shape of all feature maps.
-                has shape (num_level, 2).
-
-        Returns:
-            tuple: A tuple of feature map and bbox prediction.
-
-                - output_memory (Tensor): The input of decoder,  \
-                    has shape (bs, num_key, embed_dim).  num_key is \
-                    equal the number of points on feature map from \
-                    all levels.
-                - output_proposals (Tensor): The normalized proposal \
-                    after a inverse sigmoid, has shape \
-                    (bs, num_keys, 4).
-        """
-
         N, S, C = memory.shape
         proposals = []
         _cur = 0
@@ -137,7 +111,6 @@ class SegDeformableTransformer(Transformer):
         return reference_points
 
     def get_valid_ratio(self, mask):
-        """Get the valid radios of feature maps of all  level."""
         _, H, W = mask.shape
         valid_H = torch.sum(~mask[:, :, 0], 1)
         valid_W = torch.sum(~mask[:, 0, :], 1)
@@ -147,7 +120,6 @@ class SegDeformableTransformer(Transformer):
         return valid_ratio
 
     def get_proposal_pos_embed(self, proposals, num_pos_feats=128, temperature=10000):
-        """Get the position embedding of proposal."""
         scale = 2 * math.pi
         dim_t = torch.arange(num_pos_feats, dtype=torch.float32, device=proposals.device)
         dim_t = temperature ** (2 * (dim_t // 2) / num_pos_feats)
@@ -159,7 +131,6 @@ class SegDeformableTransformer(Transformer):
         pos = torch.stack((pos[:, :, :, 0::2].sin(), pos[:, :, :, 1::2].cos()), dim=4).flatten(2)
         return pos
 
-    # @force_fp32(apply_to=('mlvl_feats', 'query_embed', 'mlvl_pos_embeds'))
     def forward(
         self,
         mlvl_feats,
@@ -192,8 +163,7 @@ class SegDeformableTransformer(Transformer):
         mask_flatten = torch.cat(mask_flatten, 1)
         lvl_pos_embed_flatten = torch.cat(lvl_pos_embed_flatten, 1)
         spatial_shapes = torch.as_tensor(spatial_shapes, dtype=torch.long, device=feat_flatten.device)
-        # level_start_index = torch.cat((spatial_shapes.new_zeros(
-        #     (1, )), spatial_shapes.prod(1).cumsum(0)[:-1]))
+
         spatial_shapes_prod = spatial_shapes.prod(1)
         spatial_shapes_cumsum = spatial_shapes_prod.cumsum(0)
         spatial_shapes_cumsum_excl_last = spatial_shapes_cumsum[:-1]
@@ -215,8 +185,8 @@ class SegDeformableTransformer(Transformer):
             level_start_index=level_start_index,
             valid_ratios=valid_ratios,
             **kwargs,
-        )  # PCC drops to 0.13
-        # return memory
+        )
+
         memory = memory.permute(1, 0, 2)
         bs, _, c = memory.shape
         if self.as_two_stage:

@@ -17,32 +17,17 @@ class MultiheadAttention(nn.Module):
         self,
         embed_dims,
         num_heads,
-        attn_drop=0.0,
-        proj_drop=0.0,
-        dropout_layer=dict(type="Dropout", drop_prob=0.0),
         init_cfg=None,
         batch_first=False,
         **kwargs,
     ):
         super(MultiheadAttention, self).__init__()
-        if "dropout" in kwargs:
-            warnings.warn(
-                "The arguments `dropout` in MultiheadAttention "
-                "has been deprecated, now you can separately "
-                "set `attn_drop`(float), proj_drop(float), "
-                "and `dropout_layer`(dict) "
-            )
-            attn_drop = kwargs["dropout"]
-            dropout_layer["drop_prob"] = kwargs.pop("dropout")
 
         self.embed_dims = embed_dims
         self.num_heads = num_heads
         self.batch_first = batch_first
 
-        self.attn = nn.MultiheadAttention(embed_dims, num_heads, attn_drop, **kwargs)
-
-        self.proj_drop = nn.Dropout(proj_drop)
-        self.dropout_layer = nn.Dropout(p=0.1)
+        self.attn = nn.MultiheadAttention(embed_dims, num_heads, **kwargs)
 
     def forward(
         self,
@@ -56,14 +41,6 @@ class MultiheadAttention(nn.Module):
         key_padding_mask=None,
         **kwargs,
     ):
-        """
-        Returns:
-            Tensor: forwarded results with shape
-                [num_queries, bs, embed_dims]
-                if self.batch_first is False, else
-                [bs, num_queries embed_dims].
-        """
-
         if key is None:
             key = query
         if value is None:
@@ -72,7 +49,6 @@ class MultiheadAttention(nn.Module):
             identity = query
         if key_pos is None:
             if query_pos is not None:
-                # use query_pos if key_pos is not available
                 if query_pos.shape == key.shape:
                     key_pos = query_pos
                 else:
@@ -82,12 +58,6 @@ class MultiheadAttention(nn.Module):
         if key_pos is not None:
             key = key + key_pos
 
-        # Because the dataflow('key', 'query', 'value') of
-        # ``torch.nn.MultiheadAttention`` is (num_query, batch,
-        # embed_dims), We should adjust the shape of dataflow from
-        # batch_first (batch, num_query, embed_dims) to num_query_first
-        # (num_query ,batch, embed_dims), and recover ``attn_output``
-        # from num_query_first to batch_first.
         if self.batch_first:
             query = query.transpose(0, 1)
             key = key.transpose(0, 1)
@@ -97,36 +67,10 @@ class MultiheadAttention(nn.Module):
 
         if self.batch_first:
             out = out.transpose(0, 1)
-        return identity + self.dropout_layer(self.proj_drop(out))
+        return identity + out
 
 
 class CustomMSDeformableAttention(nn.Module):
-    """An attention module used in Deformable-Detr.
-
-    `Deformable DETR: Deformable Transformers for End-to-End Object Detection.
-    <https://arxiv.org/pdf/2010.04159.pdf>`_.
-
-    Args:
-        embed_dims (int): The embedding dimension of Attention.
-            Default: 256.
-        num_heads (int): Parallel attention heads. Default: 64.
-        num_levels (int): The number of feature map used in
-            Attention. Default: 4.
-        num_points (int): The number of sampling points for
-            each query in each head. Default: 4.
-        im2col_step (int): The step used in image_to_column.
-            Default: 64.
-        dropout (float): A Dropout layer on `inp_identity`.
-            Default: 0.1.
-        batch_first (bool): Key, Query and Value are shape of
-            (batch, n, embed_dim)
-            or (n, batch, embed_dim). Default to False.
-        norm_cfg (dict): Config dict for normalization layer.
-            Default: None.
-        init_cfg (obj:`mmcv.ConfigDict`): The Config for initialization.
-            Default: None.
-    """
-
     def __init__(
         self,
         embed_dims=256,
@@ -134,7 +78,6 @@ class CustomMSDeformableAttention(nn.Module):
         num_levels=1,
         num_points=4,
         im2col_step=192,
-        dropout=0.1,
         batch_first=False,
         norm_cfg=None,
         init_cfg=None,
@@ -144,24 +87,8 @@ class CustomMSDeformableAttention(nn.Module):
             raise ValueError(f"embed_dims must be divisible by num_heads, " f"but got {embed_dims} and {num_heads}")
         dim_per_head = embed_dims // num_heads
         self.norm_cfg = norm_cfg
-        self.dropout = nn.Dropout(dropout)
         self.batch_first = batch_first
         self.fp16_enabled = False
-
-        # you'd better set dim_per_head to a power of 2
-        # which is more efficient in the CUDA implementation
-        def _is_power_of_2(n):
-            if (not isinstance(n, int)) or (n < 0):
-                raise ValueError("invalid input for _is_power_of_2: {} (type: {})".format(n, type(n)))
-            return (n & (n - 1) == 0) and n != 0
-
-        if not _is_power_of_2(dim_per_head):
-            warnings.warn(
-                "You'd better set embed_dims in "
-                "MultiScaleDeformAttention to make "
-                "the dimension of each attention head a power of 2 "
-                "which is more efficient in our CUDA implementation."
-            )
 
         self.im2col_step = im2col_step
         self.embed_dims = embed_dims
@@ -187,42 +114,6 @@ class CustomMSDeformableAttention(nn.Module):
         flag="decoder",
         **kwargs,
     ):
-        """Forward Function of MultiScaleDeformAttention.
-
-        Args:
-            query (Tensor): Query of Transformer with shape
-                (num_query, bs, embed_dims).
-            key (Tensor): The key tensor with shape
-                `(num_key, bs, embed_dims)`.
-            value (Tensor): The value tensor with shape
-                `(num_key, bs, embed_dims)`.
-            identity (Tensor): The tensor used for addition, with the
-                same shape as `query`. Default None. If None,
-                `query` will be used.
-            query_pos (Tensor): The positional encoding for `query`.
-                Default: None.
-            key_pos (Tensor): The positional encoding for `key`. Default
-                None.
-            reference_points (Tensor):  The normalized reference
-                points with shape (bs, num_query, num_levels, 2),
-                all elements is range in [0, 1], top-left (0,0),
-                bottom-right (1, 1), including padding area.
-                or (N, Length_{query}, num_levels, 4), add
-                additional two dimensions is (w, h) to
-                form reference boxes.
-            key_padding_mask (Tensor): ByteTensor for `query`, with
-                shape [bs, num_key].
-            spatial_shapes (Tensor): Spatial shape of features in
-                different levels. With shape (num_levels, 2),
-                last dimension represents (h, w).
-            level_start_index (Tensor): The start index of each level.
-                A tensor has shape ``(num_levels, )`` and can be represented
-                as [0, h_0*w_0, h_0*w_0+h_1*w_1, ...].
-
-        Returns:
-             Tensor: forwarded results with shape [num_query, bs, embed_dims].
-        """
-
         if value is None:
             value = query
 
@@ -231,7 +122,6 @@ class CustomMSDeformableAttention(nn.Module):
         if query_pos is not None:
             query = query + query_pos
         if not self.batch_first:
-            # change to (bs, num_query ,embed_dims)
             query = query.permute(1, 0, 2)
             value = value.permute(1, 0, 2)
 
@@ -276,10 +166,9 @@ class CustomMSDeformableAttention(nn.Module):
         output = self.output_proj(output)
 
         if not self.batch_first:
-            # (num_query, bs ,embed_dims)
             output = output.permute(1, 0, 2)
 
-        return self.dropout(output) + identity
+        return output + identity
 
 
 class DetrTransformerDecoderLayer(nn.Module):
@@ -291,7 +180,6 @@ class DetrTransformerDecoderLayer(nn.Module):
             embed_dims=256,
             feedforward_channels=1024,
             num_fcs=2,
-            ffn_drop=0.0,
             act_cfg=dict(type="ReLU", inplace=True),
         ),
         operation_order=None,
@@ -300,9 +188,7 @@ class DetrTransformerDecoderLayer(nn.Module):
         batch_first=False,
         **kwargs,
     ):
-        deprecated_args = dict(
-            feedforward_channels="feedforward_channels", ffn_dropout="ffn_drop", ffn_num_fcs="num_fcs"
-        )
+        deprecated_args = dict(feedforward_channels="feedforward_channels", ffn_num_fcs="num_fcs")
         for ori_name, new_name in deprecated_args.items():
             if ori_name in kwargs:
                 warnings.warn(
@@ -463,13 +349,6 @@ class DetrTransformerDecoderLayer(nn.Module):
 
 
 class DetectionTransformerDecoder(nn.Module):
-    """Implements the decoder in DETR3D transformer.
-    Args:
-        return_intermediate (bool): Whether to return intermediate outputs.
-        coder_norm_cfg (dict): Config of last normalization layer. Default：
-            `LN`.
-    """
-
     def __init__(self, num_layers, embed_dim, num_heads, return_intermediate=True):
         super(DetectionTransformerDecoder, self).__init__()
         self.num_layers = num_layers
@@ -478,7 +357,7 @@ class DetectionTransformerDecoder(nn.Module):
             [
                 DetrTransformerDecoderLayer(
                     attn_cfgs=[
-                        {"type": "MultiheadAttention", "embed_dims": embed_dim, "num_heads": num_heads, "dropout": 0.1},
+                        {"type": "MultiheadAttention", "embed_dims": embed_dim, "num_heads": num_heads},
                         {"type": "CustomMSDeformableAttention", "embed_dims": embed_dim, "num_levels": 1},
                     ],
                     ffn_cfgs=dict(
@@ -486,7 +365,6 @@ class DetectionTransformerDecoder(nn.Module):
                         embed_dims=embed_dim,
                         feedforward_channels=512,
                         num_fcs=2,
-                        ffn_drop=0.0,
                         act_cfg=dict(type="ReLU", inplace=True),
                     ),
                     operation_order=("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
@@ -495,7 +373,6 @@ class DetectionTransformerDecoder(nn.Module):
                     batch_first=False,
                     kwargs={
                         "feedforward_channels": 512,
-                        "ffn_dropout": 0.1,
                         "act_cfg": {"type": "ReLU", "inplace": True},
                         "ffn_num_fcs": 2,
                     },
@@ -517,23 +394,6 @@ class DetectionTransformerDecoder(nn.Module):
         cls_branches=None,
         **kwargs,
     ):
-        """Forward function for `Detr3DTransformerDecoder`.
-        Args:
-            query (Tensor): Input query with shape
-                `(num_query, bs, embed_dims)`.
-            reference_points (Tensor): The reference
-                points of offset. has shape
-                (bs, num_query, 4) when as_two_stage,
-                otherwise has shape ((bs, num_query, 2).
-            reg_branch: (obj:`nn.ModuleList`): Used for
-                refining the regression results. Only would
-                be passed when with_box_refine is True,
-                otherwise would be passed a `None`.
-        Returns:
-            Tensor: Results with shape [1, num_query, bs, embed_dims] when
-                return_intermediate is `False`, otherwise it has shape
-                [num_layers, num_query, bs, embed_dims].
-        """
         output = query
         intermediate = []
         intermediate_reference_points = []

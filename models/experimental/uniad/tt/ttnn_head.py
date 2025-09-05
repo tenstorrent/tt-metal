@@ -147,7 +147,6 @@ class TtBEVFormerTrackHead:
         self.code_weights = parameters.code_weights
 
     def _init_layers(self):
-        """Initialize classification branch and regression branch of head."""
         cls_branch = []
         for _ in range(self.num_reg_fcs):
             cls_branch.append(ttnn.linear)
@@ -233,11 +232,9 @@ class TtBEVFormerTrackHead:
         outputs_trajs = []
         for lvl in range(hs.shape[0]):
             if lvl == 0:
-                # reference = init_reference
                 reference = ttnn.sigmoid(ref_points)
             else:
                 reference = inter_references[lvl - 1]
-                # ref_size_base = inter_box_sizes[lvl - 1]
             reference = inverse_sigmoid(reference)
 
             outputs_class = ttnn.clone(hs[lvl])
@@ -256,10 +253,8 @@ class TtBEVFormerTrackHead:
                     )
                 else:
                     outputs_class = ttnn.relu(outputs_class)
-            # outputs_class = self.cls_branches[lvl](hs[lvl])
 
             tmp = ttnn.clone(hs[lvl])
-            # tmp = self.reg_branches[lvl](hs[lvl])  # xydxdyxdz
             for i, layer in enumerate(self.reg_branches[lvl]):
                 if layer == ttnn.linear:
                     tmp = ttnn.linear(
@@ -271,8 +266,6 @@ class TtBEVFormerTrackHead:
                     tmp = ttnn.relu(tmp)
 
             outputs_past_traj = ttnn.clone(hs[lvl])
-            # outputs_past_traj = self.past_traj_reg_branches[lvl](hs[lvl]).view(
-            #     tmp.shape[0], -1, self.past_steps + self.fut_steps, 2)
             for i, layer in enumerate(self.past_traj_reg_branches[lvl]):
                 if layer == ttnn.linear:
                     outputs_past_traj = ttnn.linear(
@@ -315,7 +308,6 @@ class TtBEVFormerTrackHead:
 
             tmp = ttnn.concat([tmp_temp_1, tmp_temp_2, tmp_temp_3, tmp_temp_4, tmp_temp_5], dim=-1)
 
-            # TODO: check if using sigmoid
             outputs_coord = tmp
             outputs_classes.append(outputs_class)
             outputs_coords.append(outputs_coord)

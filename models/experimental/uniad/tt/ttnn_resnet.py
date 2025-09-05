@@ -139,7 +139,6 @@ class TtModulatedDeformConv2dPack:
         offset = ttnn.concat((o1, o2), dim=3)
         ttnn.deallocate(o1)
         ttnn.deallocate(o2)
-        # mask = ttnn.to_torch(mask).to(dtype=torch.float)
         mask = ttnn.sigmoid_accurate(mask)  # low pcc if we use ttnn sigmoid for mask
         mask = ttnn.permute(mask, (0, 3, 1, 2))
 
@@ -379,13 +378,11 @@ class TtResNet:
         conv_cfg=None,
         dcn=None,
         stage_with_dcn=(False, False, False, False),
-        # zero_init_residual=True,
         pretrained=None,
         init_cfg=None,
     ):
         self.conv_args = conv_args
         self.device = device
-        # self.zero_init_residual = zero_init_residual
         if depth not in self.arch_settings:
             raise KeyError(f"invalid depth {depth} for resnet")
 

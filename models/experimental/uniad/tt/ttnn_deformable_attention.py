@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import warnings
 
 from models.experimental.uniad.tt.ttnn_utils import multi_scale_deformable_attn_pytorch
 
@@ -18,7 +17,6 @@ class TtCustomMSDeformableAttention:
         num_levels=1,
         num_points=4,
         im2col_step=192,
-        dropout=0.1,
         batch_first=False,
         norm_cfg=None,
         init_cfg=None,
@@ -32,19 +30,6 @@ class TtCustomMSDeformableAttention:
         self.norm_cfg = norm_cfg
         self.batch_first = batch_first
         self.fp16_enabled = False
-
-        def _is_power_of_2(n):
-            if (not isinstance(n, int)) or (n < 0):
-                raise ValueError("invalid input for _is_power_of_2: {} (type: {})".format(n, type(n)))
-            return (n & (n - 1) == 0) and n != 0
-
-        if not _is_power_of_2(dim_per_head):
-            warnings.warn(
-                "You'd better set embed_dims in "
-                "MultiScaleDeformAttention to make "
-                "the dimension of each attention head a power of 2 "
-                "which is more efficient in our CUDA implementation."
-            )
 
         self.im2col_step = im2col_step
         self.embed_dims = embed_dims

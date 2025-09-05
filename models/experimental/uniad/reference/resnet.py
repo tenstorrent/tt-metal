@@ -256,11 +256,6 @@ class Bottleneck(nn.Module):
         plugins=None,
         init_cfg=None,
     ):
-        """Bottleneck block for ResNet.
-
-        If style is "pytorch", the stride-two layer is the 3x3 conv layer, if
-        it is "caffe", the stride-two layer is the first 1x1 conv layer.
-        """
         super(Bottleneck, self).__init__()
         assert style in ["pytorch", "caffe"]
         assert dcn is None or isinstance(dcn, dict)
@@ -334,22 +329,17 @@ class Bottleneck(nn.Module):
 
     @property
     def norm1(self):
-        """nn.Module: normalization layer after the first convolution layer"""
         return getattr(self, self.norm1_name)
 
     @property
     def norm2(self):
-        """nn.Module: normalization layer after the second convolution layer"""
         return getattr(self, self.norm2_name)
 
     @property
     def norm3(self):
-        """nn.Module: normalization layer after the third convolution layer"""
         return getattr(self, self.norm3_name)
 
     def forward(self, x):
-        """Forward function."""
-
         def _inner_forward(x):
             identity = x
             out = self.conv1(x)
@@ -496,12 +486,10 @@ class ResNet(nn.Module):
         self.feat_dim = self.block.expansion * base_channels * 2 ** (len(self.stage_blocks) - 1)
 
     def make_res_layer(self, **kwargs):
-        """Pack all blocks in a stage into a ``ResLayer``."""
         return ResLayer(**kwargs)
 
     @property
     def norm1(self):
-        """nn.Module: the normalization layer named "norm1" """
         return getattr(self, self.norm1_name)
 
     def _make_stem_layer(self, in_channels, stem_channels):
@@ -539,7 +527,6 @@ class ResNet(nn.Module):
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
     def forward(self, x):
-        """Forward function."""
         if self.deep_stem:
             x = self.stem(x)
         else:

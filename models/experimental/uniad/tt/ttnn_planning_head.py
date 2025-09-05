@@ -76,12 +76,10 @@ class TtConv2d:
         else:
             slice_config = None
         conv_config = ttnn.Conv2dConfig(
-            # dtype=self.dtype,
             weights_dtype=self.dtype,
             shard_layout=self.shard_layout,
             deallocate_activation=self.deallocate,
             activation=self.activation,
-            # reshard_if_not_optimal=True,
         )
         compute_config = ttnn.init_device_compute_kernel_config(
             self.device.arch(),
@@ -151,12 +149,10 @@ class TtPlanningHeadSingleMode:
             ttnn.linear,
         ]
 
-        # # self.loss_planning = build_loss(loss_planning)
         self.planning_steps = planning_steps
         self.training = False
-        # self.planning_eval = planning_eval
 
-        # #### planning head
+        # planning head
         self.attn_module = [
             TtTransformerDecoderLayer(
                 parameters=parameters.attn_module.layers[0],
@@ -262,11 +258,7 @@ class TtPlanningHeadSingleMode:
             bev_feat = ttnn.reshape(bev_feat, (bev_feat.shape[0], out_h, out_w, bev_feat.shape[-1]))
 
             bev_feat = ttnn.permute(bev_feat, (1, 2, 0, 3))
-            bev_feat = ttnn.reshape(
-                bev_feat, (out_h * out_w, bev_feat.shape[2], bev_feat.shape[-1])
-            )  # rearrange(bev_feat, 'b c h w -> (h w) b c')
-
-        ##########################
+            bev_feat = ttnn.reshape(bev_feat, (out_h * out_w, bev_feat.shape[2], bev_feat.shape[-1]))
 
         pos_embed = ttnn.unsqueeze(self.pos_embed, 0)
         plan_query = plan_query + pos_embed  # [1, 1, 256]
@@ -277,11 +269,11 @@ class TtPlanningHeadSingleMode:
 
         sdc_traj_all = self.reg_branch[0](
             plan_query, self.params.reg_branch[0].weight, bias=self.params.reg_branch[0].bias
-        )  # reg_branch.linear1
+        )
         sdc_traj_all = self.reg_branch[1](sdc_traj_all)  # relu
         sdc_traj_all = self.reg_branch[2](
             sdc_traj_all, self.params.reg_branch[2].weight, bias=self.params.reg_branch[2].bias
-        )  # reg_branch.linear2
+        )
 
         sdc_traj_all = ttnn.reshape(sdc_traj_all, (-1, self.planning_steps, 2))
         sdc_traj_all = ttnn.cumsum(sdc_traj_all, dim=1)  # No need to slice sice last dim is 2
@@ -345,9 +337,6 @@ class TtPlanningHeadSingleMode:
             pos_xy_t.append(pos_xy[keep_index].cpu().detach().numpy())
 
             pos_xy = ttnn.from_torch(pos_xy, layout=ttnn.TILE_LAYOUT)
-            # keep_index = ttnn.from_torch(keep_index, layout=ttnn.TILE_LAYOUT)
-
-            # valid_occupancy_num += torch.sum(keep_index>0)
 
         col_optimizer = CollisionNonlinearOptimizer(
             self.planning_steps, 0.5, self.sigma, self.alpha_collision, pos_xy_t

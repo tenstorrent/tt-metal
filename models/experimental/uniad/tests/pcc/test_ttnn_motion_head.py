@@ -69,7 +69,6 @@ def custom_preprocessor_motion_head(model, name):
 
         parameters["layer_track_query_fuser"][2] = {}
 
-        # for layer in ["agent_level_embedding_layer","scene_level_ego_embedding_layer","scene_level_offset_embedding_layer","boxes_query_embedding_layer"]:
         parameters["agent_level_embedding_layer"] = custom_preprocessor_layer(model.agent_level_embedding_layer, None)
         parameters["scene_level_ego_embedding_layer"] = custom_preprocessor_layer(
             model.scene_level_ego_embedding_layer, None
@@ -313,7 +312,7 @@ def test_uniad_MotionHead(device, reset_seeds, model_location_generator):
     ttnn_outs_track["track_query_embeddings"] = ttnn.from_torch(
         outs_track["track_query_embeddings"], device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )
-    # ttnn_outs_track["track_bbox_results"] = ttnn.from_torch(outs_track["track_bbox_results"],device=device,dtype=ttnn.bfloat16,layout=ttnn.TILE_LAYOUT)
+
     ttnn_outs_track["track_bbox_results"] = [
         [
             ttnn_utils.TtLiDARInstance3DBoxes(

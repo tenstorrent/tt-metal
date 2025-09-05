@@ -72,7 +72,6 @@ class TtQueryInteractionModule:
             x = ttnn.relu(x)
             tgt2 = ttnn.linear(x, self.params.linear2.weight, bias=self.params.linear2.bias)
 
-            # tgt = tgt + tgt2
             tgt = ttnn.layer_norm(
                 tgt,
                 weight=self.params.norm2.weight,

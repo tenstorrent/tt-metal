@@ -41,15 +41,13 @@ class PlanningHeadSingleMode(nn.Module):
             nn.ReLU(),
             nn.Linear(embed_dims, planning_steps * 2),
         )
-        # self.loss_planning = build_loss(loss_planning)
+
         self.planning_steps = planning_steps
         self.planning_eval = planning_eval
 
         #### planning head
         fuser_dim = 3
-        attn_module_layer = nn.TransformerDecoderLayer(
-            embed_dims, 8, dim_feedforward=embed_dims * 2, dropout=0.1, batch_first=False
-        )
+        attn_module_layer = nn.TransformerDecoderLayer(embed_dims, 8, dim_feedforward=embed_dims * 2, batch_first=False)
         self.attn_module = nn.TransformerDecoder(attn_module_layer, 3)
 
         self.mlp_fuser = nn.Sequential(
@@ -59,11 +57,6 @@ class PlanningHeadSingleMode(nn.Module):
         )
 
         self.pos_embed = nn.Embedding(1, embed_dims)
-
-        # self.loss_collision = []
-        # for cfg in loss_collision:
-        #     self.loss_collision.append(build_loss(cfg))
-        # self.loss_collision = nn.ModuleList(self.loss_collision)
 
         self.use_col_optim = use_col_optim
         self.occ_filter_range = col_optim_args["occ_filter_range"]
@@ -82,26 +75,26 @@ class PlanningHeadSingleMode(nn.Module):
             bev_adapter = [copy.deepcopy(bev_adapter_block) for _ in range(N_Blocks)]
             self.bev_adapter = nn.Sequential(*bev_adapter)
 
-    def forward_train(
-        self,
-        bev_embed,
-        outs_motion={},
-        sdc_planning=None,
-        sdc_planning_mask=None,
-        command=None,
-        gt_future_boxes=None,
-    ):
-        sdc_traj_query = outs_motion["sdc_traj_query"]
-        sdc_track_query = outs_motion["sdc_track_query"]
-        bev_pos = outs_motion["bev_pos"]
+    # def forward_train(
+    #     self,
+    #     bev_embed,
+    #     outs_motion={},
+    #     sdc_planning=None,
+    #     sdc_planning_mask=None,
+    #     command=None,
+    #     gt_future_boxes=None,
+    # ):
+    #     sdc_traj_query = outs_motion["sdc_traj_query"]
+    #     sdc_track_query = outs_motion["sdc_track_query"]
+    #     bev_pos = outs_motion["bev_pos"]
 
-        occ_mask = None
+    #     occ_mask = None
 
-        outs_planning = self(bev_embed, occ_mask, bev_pos, sdc_traj_query, sdc_track_query, command)
-        loss_inputs = [sdc_planning, sdc_planning_mask, outs_planning, gt_future_boxes]
-        losses = self.loss(*loss_inputs)
-        ret_dict = dict(losses=losses, outs_motion=outs_planning)
-        return ret_dict
+    #     outs_planning = self(bev_embed, occ_mask, bev_pos, sdc_traj_query, sdc_track_query, command)
+    #     loss_inputs = [sdc_planning, sdc_planning_mask, outs_planning, gt_future_boxes]
+    #     losses = self.loss(*loss_inputs)
+    #     ret_dict = dict(losses=losses, outs_motion=outs_planning)
+    #     return ret_dict
 
     def forward_test(self, bev_embed, outs_motion={}, outs_occflow={}, command=None):
         sdc_traj_query = outs_motion["sdc_traj_query"]
@@ -132,18 +125,14 @@ class PlanningHeadSingleMode(nn.Module):
 
         bev_feat = bev_embed + bev_pos
 
-        ##### Plugin adapter #####
         if self.with_adapter:
             bev_feat = rearrange(bev_feat, "(h w) b c -> b c h w", h=self.bev_h, w=self.bev_w)
             bev_feat = bev_feat + self.bev_adapter(bev_feat)  # residual connection
             bev_feat = rearrange(bev_feat, "b c h w -> (h w) b c")
-        ##########################
 
         pos_embed = self.pos_embed.weight
         plan_query = plan_query + pos_embed[None]  # [1, 1, 256]
 
-        # plan_query: [1, 1, 256]
-        # bev_feat: [40000, 1, 256]
         plan_query = self.attn_module(plan_query, bev_feat)  # [1, 1, 256]
 
         sdc_traj_all = self.reg_branch(plan_query).view((-1, self.planning_steps, 2))
@@ -191,13 +180,3 @@ class PlanningHeadSingleMode(nn.Module):
         sol = col_optimizer.solve()
         sdc_traj_optim = np.stack([sol.value(col_optimizer.position_x), sol.value(col_optimizer.position_y)], axis=-1)
         return torch.tensor(sdc_traj_optim[None], device=sdc_traj_all.device, dtype=sdc_traj_all.dtype)
-
-    # def loss(self, sdc_planning, sdc_planning_mask, outs_planning, future_gt_bbox=None):
-    #     sdc_traj_all = outs_planning['sdc_traj_all'] # b, p, t, 5
-    #     loss_dict = dict()
-    #     for i in range(len(self.loss_collision)):
-    #         loss_collision = self.loss_collision[i](sdc_traj_all, sdc_planning[0, :, :self.planning_steps, :3], torch.any(sdc_planning_mask[0, :, :self.planning_steps], dim=-1), future_gt_bbox[0][1:self.planning_steps+1])
-    #         loss_dict[f'loss_collision_{i}'] = loss_collision
-    #     loss_ade = self.loss_planning(sdc_traj_all, sdc_planning[0, :, :self.planning_steps, :2], torch.any(sdc_planning_mask[0, :, :self.planning_steps], dim=-1))
-    #     loss_dict.update(dict(loss_ade=loss_ade))
-    #     return loss_dict
