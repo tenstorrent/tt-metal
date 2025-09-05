@@ -715,7 +715,7 @@ jobs:
           retention-days: 1
 
   ttnn-run-sweeps-parallel:
-    name: Run sweeps in parallel
+    name: Run sweeps in parallel (${{ matrix.test-group.name }}, ${{ matrix.batch }})
     needs:
       - ttnn-generate-sweeps
       - build-artifact
