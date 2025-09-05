@@ -325,6 +325,15 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_ad
     const auto& allocated_ranges_in_dependent_states = this->compute_merged_allocated_ranges(state);
 
     // Helper for subtracting allocated ranges from available ranges
+    // Ranges consist of half-open intervals throughout: [start, end)
+    // Assumptions:
+    // - Each of 'available' and 'allocated' is individually sorted by start and internally non-overlapping
+    // Strategy:
+    // - Two-pointer sweep: a shared pointer 'j' across all available ranges, and a local pointer 'jj' per available
+    //   range to examine overlapping allocated ranges. Complexity O(|available| + |allocated|).
+    // Example:
+    //   available = [(10, 30)], allocated = [(12, 15), (18, 25)]
+    //   result    = [(10, 12), (15, 18), (25, 30)]
     auto subtract_ranges = [](const std::vector<std::pair<DeviceAddr, DeviceAddr>>& available,
                               const std::vector<std::pair<DeviceAddr, DeviceAddr>>& allocated) {
         std::vector<std::pair<DeviceAddr, DeviceAddr>> out;
@@ -333,27 +342,46 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_ad
         for (const auto& fr : available) {
             DeviceAddr s = fr.first;
             DeviceAddr e = fr.second;
+            // 1) Skip allocated ranges that are completely to the left of [s, e)
+            //    available:     [ s---------------------- e )
+            //    allocated: [----oe)
+            //    Condition: allocated[j].second <= s ⇒ cannot overlap current or any later 'available' range.
             while (j < allocated.size() && allocated[j].second <= s) {
                 j++;
             }
             DeviceAddr cur = s;
             size_t jj = j;
+            // 2) Walk allocated ranges that might overlap current [s, e)
+            //    Loop while next allocated starts before e (could overlap or abut inside [s, e))
             while (jj < allocated.size() && allocated[jj].first < e) {
                 DeviceAddr os = allocated[jj].first;
                 DeviceAddr oe = allocated[jj].second;
+                // Case A: Gap exists before next allocated
+                //   cur           os
+                //   |-------------|
+                //   Emit free gap: [cur, min(os, e))
                 if (os > cur) {
                     out.emplace_back(cur, std::min(os, e));
                 }
+                // Case B: This allocated range consumes the tail of [s, e)
+                //   os          e
+                //   |-----------|<= oe
+                //   No remaining free space in [s, e). Finish this available range.
                 if (oe >= e) {
                     cur = e;
                     break;
                 }
-                cur = std::max(cur, oe);
+                // Case C: This allocated ends before e; advance 'cur' to the end of allocation and continue
+                //   cur ... os----oe ... e
+                cur = oe;
                 jj++;
             }
+            // 3) Emit remaining tail (if any) after last overlapping allocated
             if (cur < e) {
                 out.emplace_back(cur, e);
             }
+            // 4) Micro-optimization: carry the last examined allocated index to next available range
+            j = jj;
         }
         return out;
     };
