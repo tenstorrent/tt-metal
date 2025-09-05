@@ -61,9 +61,7 @@ struct MatmulReduceScatterAsync {
         const ttnn::MeshCoordinate& mesh_coordinate,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor>& output_tensors,
-        const std::vector<GlobalSemaphore>& op_semaphores,
-        const GlobalSemaphore& barrier_semaphore) const;
+        std::vector<Tensor>& output_tensors) const;
     tt::tt_metal::operation::Hash compute_program_hash(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
@@ -100,8 +98,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
     uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const GlobalSemaphore& barrier_semaphore,
-    bool do_sync,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     CoreCoord core_grid_offset,
 
@@ -122,9 +120,9 @@ std::vector<Tensor> matmul_reduce_scatter_async(
     Tensor& persistent_intermediate_buffer,
     Tensor& persistent_output_buffer,
     uint32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     CoreCoord reduce_scatter_core_grid_offset,
-    const std::optional<std::vector<GlobalSemaphore>>& multi_device_global_semaphore = std::nullopt,
-    bool do_sync = false,
+    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     const std::optional<const Tensor>& bias = std::nullopt,
     uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config_rs = std::nullopt,

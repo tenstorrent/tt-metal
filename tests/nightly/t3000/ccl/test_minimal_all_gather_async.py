@@ -35,7 +35,8 @@ def run_all_gather_impl(
     num_iters=1,
     enable_trace=True,
     cluster_axis=None,
-    do_sync=False,
+    use_barrier=False,
+    use_persistent_buffers=True,
     chunks_per_sync=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
@@ -127,14 +128,14 @@ def run_all_gather_impl(
     def run_op(i):
         tt_all_gather_out_tensor = ttnn.experimental.all_gather_async(
             input_tensor_mesh_list[i],
-            persistent_output_buffer=None if do_sync else persistent_output_buffers[i],
+            persistent_output_buffer=persistent_output_buffers[i] if use_persistent_buffers else None,
             dim=dim,
             multi_device_global_semaphore=ccl_semaphore_handles[i],
             num_links=num_links,
             memory_config=mem_config_ag,
             topology=all_gather_topology,
             subdevice_id=worker_sub_device_id,
-            barrier_semaphore=barrier_semaphore_handles[i] if do_sync else None,
+            barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
             cluster_axis=cluster_axis,
             chunks_per_sync=chunks_per_sync,
             num_workers_per_link=num_workers_per_link,
@@ -194,21 +195,21 @@ def run_all_gather_impl(
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
+    "num_devices, ag_output_shape, dim, layout, ag_input_dtype, is_training_shape",
     [
-        (8, [1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        (8, [8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        (8, [1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        (8, [1, 1, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        (8, [1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        (8, [1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
         # Composite-AG tests
-        (8, [1, 1, 8, 64], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 64, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 16, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 8, 64], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True),
+        (8, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        (8, [1, 1, 64, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        (8, [1, 16, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
     ],
     ids=[
         "dit_shape",  # this one triggers the default chunks_per_sync
@@ -243,9 +244,13 @@ def run_all_gather_impl(
     ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
-    "do_sync",
-    [True, False],
-    ids=["sync", "no_sync"],
+    "use_barrier, use_persistent_buffers",
+    [
+        (True, True),
+        (True, False),
+        (False, True),
+    ],
+    ids=["barrier_with_persistent_buffers", "barrier_without_persistent_buffers", "no_barrier_with_persistent_buffers"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -263,11 +268,13 @@ def test_all_gather_async(
     dim,
     num_links,
     ag_input_dtype,
+    is_training_shape,
     layout,
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    do_sync,
+    use_barrier,
+    use_persistent_buffers,
     all_gather_topology,
     num_iters,
 ):
@@ -284,7 +291,8 @@ def test_all_gather_async(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        do_sync=do_sync,
+        use_barrier=use_barrier,
+        use_persistent_buffers=use_persistent_buffers,
     )
 
 
@@ -378,7 +386,8 @@ def test_all_gather_async_training_shapes(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        do_sync=True,
+        use_barrier=True,
+        use_persistent_buffers=False,
     )
 
 

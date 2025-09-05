@@ -155,7 +155,7 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
             persistent_output_buffers,
             dim,
             multi_device_global_semaphore,
-            barrier_semaphore.has_value(),
+            barrier_semaphore,
             num_links,
             memory_config,
             intermediate_memory_config,

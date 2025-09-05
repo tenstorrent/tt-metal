@@ -33,7 +33,8 @@ def run_reduce_scatter_impl(
     ones_tensor=False,
     mem_config_intermediate=None,
     cluster_axis=None,
-    do_sync=False,
+    use_barrier=False,
+    use_persistent_buffers=True,
     chunks_per_sync=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
@@ -153,12 +154,12 @@ def run_reduce_scatter_impl(
     def run_op(i):
         tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
             tt_input_tensor_mesh_list[i],
-            persistent_output_buffers=None
-            if do_sync
-            else [persistent_intermediate_buffers[i], persistent_output_buffers[i]],
+            persistent_output_buffers=[persistent_intermediate_buffers[i], persistent_output_buffers[i]]
+            if use_persistent_buffers
+            else None,
             dim=dim,
             multi_device_global_semaphore=ccl_semaphore_handles[i],
-            barrier_semaphore=barrier_semaphore_handles[i] if do_sync else None,
+            barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
             num_links=num_links,
             memory_config=mem_config_rs,
             intermediate_memory_config=mem_config_intermediate,
@@ -290,9 +291,13 @@ def run_reduce_scatter_impl(
     ids=["ones", "random"],
 )
 @pytest.mark.parametrize(
-    "do_sync",
-    [True, False],
-    ids=["sync", "no_sync"],
+    "use_barrier, use_persistent_buffers",
+    [
+        (True, True),
+        (True, False),
+        (False, True),
+    ],
+    ids=["barrier_with_persistent_buffers", "barrier_without_persistent_buffers", "no_barrier_with_persistent_buffers"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -317,7 +322,8 @@ def test_reduce_scatter_async(
     enable_trace,
     num_iters,
     ones_tensor,
-    do_sync,
+    use_barrier,
+    use_persistent_buffers,
     rs_topology,
 ):
     if is_training_shape and enable_trace:
@@ -337,7 +343,8 @@ def test_reduce_scatter_async(
         enable_trace=enable_trace,
         num_iters=num_iters,
         ones_tensor=ones_tensor,
-        do_sync=do_sync,
+        use_barrier=use_barrier,
+        use_persistent_buffers=use_persistent_buffers,
     )
 
 
@@ -444,7 +451,8 @@ def test_reduce_scatter_async_training_shapes(
         enable_trace=enable_trace,
         num_iters=num_iters,
         ones_tensor=ones_tensor,
-        do_sync=True,
+        use_barrier=True,
+        use_persistent_buffers=False,
     )
 
 
