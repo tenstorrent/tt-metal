@@ -968,6 +968,76 @@ def dinov2_head(var0, *args):
     return var1[:, 0, :]
 
 
+def get_dinov2_params(torch_model):
+    state_dict = torch_model.state_dict()
+    return {
+        "embeddings": [
+            state_dict["patch_embed.proj.weight"],
+            state_dict["patch_embed.proj.bias"],
+            state_dict["pos_embed"],
+            state_dict["cls_token"],
+            state_dict["reg_token"],
+        ],
+        "encoder": {
+            f"layer{i}": {
+                "attention": [
+                    state_dict[f"blocks.{i}.norm1.weight"],
+                    state_dict[f"blocks.{i}.norm1.bias"],
+                    state_dict[f"blocks.{i}.attn.qkv.bias"],
+                    state_dict[f"blocks.{i}.attn.qkv.weight"].T,
+                    state_dict[f"blocks.{i}.attn.proj.bias"],
+                    state_dict[f"blocks.{i}.attn.proj.weight"].T,
+                    state_dict[f"blocks.{i}.ls1.scale_factor"],
+                ],
+                "feed_forward": [
+                    state_dict[f"blocks.{i}.norm2.weight"],
+                    state_dict[f"blocks.{i}.norm2.bias"],
+                    state_dict[f"blocks.{i}.mlp.fc1.bias"],
+                    state_dict[f"blocks.{i}.mlp.fc1.weight"].T,
+                    state_dict[f"blocks.{i}.mlp.fc2.bias"],
+                    state_dict[f"blocks.{i}.mlp.fc2.weight"].T,
+                    state_dict[f"blocks.{i}.ls2.scale_factor"],
+                ],
+            }
+            for i in range(len(torch_model.blocks))
+        },
+    }
+
+
+def dinov2_encoder(torch_model, ttnn_device):
+    parameters = get_dinov2_params(torch_model)
+    embedding_params = prepare_dinov2_embedding_constants(parameters["embeddings"][:2], ttnn_device)
+    parameters["embeddings"] = [
+        ttnn.from_torch(t, dtype=ttnn.bfloat16, device=ttnn_device) if isinstance(t, torch.Tensor) else t
+        for t in embedding_params + parameters["embeddings"][2:]
+    ]
+    for layer in parameters["encoder"]:
+        attention_params = prepare_dinov2_attention_constants(
+            parameters["encoder"][layer]["attention"][:7], ttnn_device
+        )
+        parameters["encoder"][layer]["attention"] = [
+            ttnn.from_torch(t, dtype=ttnn.bfloat16, device=ttnn_device) if isinstance(t, torch.Tensor) else t
+            for t in attention_params + parameters["encoder"][layer]["attention"][7:]
+        ]
+        feedforward_params = prepare_dinov2_feedforward_constants(
+            parameters["encoder"][layer]["feed_forward"][:7], ttnn_device
+        )
+        parameters["encoder"][layer]["feed_forward"] = [
+            ttnn.from_torch(t, dtype=ttnn.bfloat16, device=ttnn_device) if isinstance(t, torch.Tensor) else t
+            for t in feedforward_params + parameters["encoder"][layer]["feed_forward"][7:]
+        ]
+
+    def model_forward(pixel_values):
+        embeddings_output = dinov2_embedding(pixel_values, *parameters["embeddings"])
+        embeddings_output = ttnn.to_layout(embeddings_output, layout=ttnn.TILE_LAYOUT)
+        for layer in parameters["encoder"]:
+            embeddings_output = dinov2_attention(embeddings_output, *parameters["encoder"][layer]["attention"])
+            embeddings_output = dinov2_feedforward(embeddings_output, *parameters["encoder"][layer]["feed_forward"])
+        return embeddings_output
+
+    return model_forward
+
+
 def custom_preprocessor_siglip(torch_model, name):
     import timm
 
