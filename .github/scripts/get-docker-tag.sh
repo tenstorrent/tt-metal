@@ -8,6 +8,7 @@
 DOCKERFILE_HASH_FILES=".github/Dockerfile.base \
     .github/Dockerfile.ci \
     .github/Dockerfile.ird \
+    .github/Dockerfile.ird.slim \
     tests/requirements.txt \
     .github/scripts/build-docker-images.sh \
     .github/scripts/install-exalens.sh \
