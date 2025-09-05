@@ -15,13 +15,9 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat val) {
         sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));
         sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));
 
-        constexpr float POLY_D1 = 0.40196114e-7f;
-        constexpr int POLY_D2 = 0xf94ee7;
-        constexpr int POLY_D3 = 0x560e;
-
-        sfpi::vFloat d1 = sfpi::vFloat(POLY_D1);
-        sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(POLY_D2) + zif, 0);
-        sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(POLY_D3) + zif, 0);
+        sfpi::vFloat d1 = sfpi::vFloat(sfpi::vConstFloatPrgm0);
+        sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vConstIntPrgm1 + zif, 0);
+        sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vConstIntPrgm2 + zif, 0);
         d2 = d1 * d2;
         zif = sfpu::_float_to_int32_(d2 * d3);
 
@@ -52,6 +48,13 @@ inline void calculate_expm1() {
         sfpi::dst_reg[0] = _sfpu_expm1_<is_fp32_dest_acc_en>(v);
         sfpi::dst_reg++;
     }
+}
+
+template <bool APPROXIMATION_MODE>
+void expm1_init() {
+    sfpi::vConstFloatPrgm0 = 0.40196114e-7f;
+    sfpi::vConstIntPrgm1 = 0xf94ee7;
+    sfpi::vConstIntPrgm2 = 0x560e;
 }
 
 }  // namespace sfpu
