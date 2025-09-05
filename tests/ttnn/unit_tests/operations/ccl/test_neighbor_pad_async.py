@@ -170,12 +170,13 @@ def run_neighbor_pad_impl(
         torch_np_out_tensor = np_output_tensor_goldens_list[i if not enable_trace else 0]
         tt_np_out = ttnn.from_device(tt_np_out_tensor)
         dims[cluster_axis] = dim
-        dims[1 - cluster_axis] = 1 - dim
+        other_dim = (dim + 1) % len(tt_np_out.shape)
+        dims[1 - cluster_axis] = other_dim
         tt_np_out = ttnn.to_torch(
             tt_np_out,
             mesh_composer=ConcatMesh2dToTensor(t3k_mesh_device, mesh_shape=tuple(t3k_mesh_device.shape), dims=dims),
         )
-        tt_np_out = torch.narrow(tt_np_out, 1 - dim, 0, torch_np_out_tensor.shape[1 - dim])
+        tt_np_out = torch.narrow(tt_np_out, other_dim, 0, torch_np_out_tensor.shape[other_dim])
         eq, output = comp_pcc(tt_np_out, torch_np_out_tensor, 1)
         logger.info(f"{output}, iteration {i}")
         assert eq, f"{i} FAILED np: {output}"
