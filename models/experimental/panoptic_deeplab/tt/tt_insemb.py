@@ -64,28 +64,57 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         use_bias = norm == ""
         decoder_out_ch = decoder_channels[0]
 
-        def _create_tt_conv2d(
-            weight: torch.Tensor, in_ch: int, out_ch: int, kernel_size: int, stride: int, padding: int, use_bias: bool
-        ):
-            param_dict = {"weight": weight}
-            if use_bias:
-                param_dict["bias"] = torch.zeros(1, 1, 1, out_ch)
-            parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
-            return TtConv2d(parameters, stride=(stride, stride), padding=(padding, padding))
-
         # --- Center Prediction ---
-        self.center_head_0 = _create_tt_conv2d(center_head_0_weight, decoder_out_ch, decoder_out_ch, 3, 1, 1, use_bias)
+        # center_head_0 with height slicing
+        param_dict = {"weight": center_head_0_weight}
+        if use_bias:
+            param_dict["bias"] = torch.zeros(1, 1, 1, decoder_out_ch)
+        parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
+        self.center_head_0 = TtConv2d.create_with_height_slicing(
+            parameters, num_slices=2, stride=(1, 1), padding=(1, 1)
+        )
         self.center_head_norm_0 = get_ttnn_norm(norm, decoder_out_ch, device, norm_params=None)
-        self.center_head_1 = _create_tt_conv2d(center_head_1_weight, decoder_out_ch, head_channels, 3, 1, 1, use_bias)
+
+        # center_head_1 with height slicing
+        param_dict = {"weight": center_head_1_weight}
+        if use_bias:
+            param_dict["bias"] = torch.zeros(1, 1, 1, head_channels)
+        parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
+        self.center_head_1 = TtConv2d.create_with_height_slicing(
+            parameters, num_slices=2, stride=(1, 1), padding=(1, 1)
+        )
         self.center_head_norm_1 = get_ttnn_norm(norm, head_channels, device, norm_params=None)
-        self.center_predictor = _create_tt_conv2d(center_predictor_weight, head_channels, 1, 1, 1, 0, True)
+
+        # center_predictor without slicing
+        param_dict = {"weight": center_predictor_weight, "bias": torch.zeros(1, 1, 1, 1)}
+        parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
+        self.center_predictor = TtConv2d.create(parameters, stride=(1, 1), padding=(0, 0))
 
         # --- Offset Prediction ---
-        self.offset_head_0 = _create_tt_conv2d(offset_head_0_weight, decoder_out_ch, decoder_out_ch, 3, 1, 1, use_bias)
+        # offset_head_0 with height slicing
+        param_dict = {"weight": offset_head_0_weight}
+        if use_bias:
+            param_dict["bias"] = torch.zeros(1, 1, 1, decoder_out_ch)
+        parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
+        self.offset_head_0 = TtConv2d.create_with_height_slicing(
+            parameters, num_slices=2, stride=(1, 1), padding=(1, 1)
+        )
         self.offset_head_norm_0 = get_ttnn_norm(norm, decoder_out_ch, device, norm_params=None)
-        self.offset_head_1 = _create_tt_conv2d(offset_head_1_weight, decoder_out_ch, head_channels, 3, 1, 1, use_bias)
+
+        # offset_head_1 with height slicing
+        param_dict = {"weight": offset_head_1_weight}
+        if use_bias:
+            param_dict["bias"] = torch.zeros(1, 1, 1, head_channels)
+        parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
+        self.offset_head_1 = TtConv2d.create_with_height_slicing(
+            parameters, num_slices=2, stride=(1, 1), padding=(1, 1)
+        )
         self.offset_head_norm_1 = get_ttnn_norm(norm, head_channels, device, norm_params=None)
-        self.offset_predictor = _create_tt_conv2d(offset_predictor_weight, head_channels, 2, 1, 1, 0, True)
+
+        # offset_predictor without slicing
+        param_dict = {"weight": offset_predictor_weight, "bias": torch.zeros(1, 1, 1, 2)}
+        parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
+        self.offset_predictor = TtConv2d.create(parameters, stride=(1, 1), padding=(0, 0))
 
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, ttnn.Tensor, Dict, Dict]:
         center_logits, offset_logits = self.layers(features)
@@ -109,43 +138,19 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
 
         # --- 2. Center Prediction Branch ---
-        center_y = self.center_head_0(
-            y,
-            slice_config=ttnn.Conv2dSliceConfig(
-                slice_type=ttnn.Conv2dSliceHeight,
-                num_slices=2,
-            ),
-        )
+        center_y = self.center_head_0(y)
         center_y = self.center_head_norm_0(center_y)
         center_y = self.activation(center_y)
-        center_y = self.center_head_1(
-            center_y,
-            slice_config=ttnn.Conv2dSliceConfig(
-                slice_type=ttnn.Conv2dSliceHeight,
-                num_slices=2,
-            ),
-        )
+        center_y = self.center_head_1(center_y)
         center_y = self.center_head_norm_1(center_y)
         center_y = self.activation(center_y)
         center_logits = self.center_predictor(center_y)
 
         # --- 3. Offset Prediction Branch ---
-        offset_y = self.offset_head_0(
-            y,
-            slice_config=ttnn.Conv2dSliceConfig(
-                slice_type=ttnn.Conv2dSliceHeight,
-                num_slices=2,
-            ),
-        )
+        offset_y = self.offset_head_0(y)
         offset_y = self.offset_head_norm_0(offset_y)
         offset_y = self.activation(offset_y)
-        offset_y = self.offset_head_1(
-            offset_y,
-            slice_config=ttnn.Conv2dSliceConfig(
-                slice_type=ttnn.Conv2dSliceHeight,
-                num_slices=2,
-            ),
-        )
+        offset_y = self.offset_head_1(offset_y)
         offset_y = self.offset_head_norm_1(offset_y)
         offset_y = self.activation(offset_y)
         offset_logits = self.offset_predictor(offset_y)

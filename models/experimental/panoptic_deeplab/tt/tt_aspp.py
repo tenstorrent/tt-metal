@@ -7,7 +7,12 @@ import torch
 
 import ttnn
 
-from models.experimental.panoptic_deeplab.tt.tt_conv2dWrapper import TtConv2d, TtConv2dParameters
+from models.experimental.panoptic_deeplab.tt.tt_conv2dWrapper import (
+    TtConv2d,
+    TtConv2dParameters,
+    SliceConfig,
+    SliceMode,
+)
 
 
 def get_ttnn_activation(activation_name: str):
@@ -146,11 +151,16 @@ class TtASPP(nn.Module):
             param_dict = {
                 "weight": weight,
                 "dilation": (dilation, dilation),
-                "channel_slice_num": channel_slice_num,
             }
             if bias:
                 param_dict["bias"] = torch.empty(1, 1, 1, out_channels, dtype=torch.bfloat16)
-            parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
+
+            # Create slice configuration
+            slice_config = None
+            if channel_slice_num > 1:
+                slice_config = SliceConfig(mode=SliceMode.CHANNEL, num_slices=channel_slice_num)
+
+            parameters = TtConv2dParameters.from_torch(param_dict, device=self.device, slice_config=slice_config)
 
             return TtConv2d(parameters, stride=stride, padding=padding)
 
