@@ -35,7 +35,7 @@ training_config:
 
 # if you want to run as eval with weighgts from hugging face:
 # 1. Run tools/download_weights.py
-# 2. nano_gpt --safetensors /data/hf_cache/Qwen/Qwen2.5-0.5B/  -c configs/training_shakespeare_qwen2_5_0_5B.yaml --eval 1
+# 2. nano_gpt --safetensors /path/to/Qwen2.5-0.5B-folder/  -c configs/training_shakespeare_qwen2_5_0_5B.yaml --eval 1
 
 eval_config:
   repetition_penalty: 1.0
