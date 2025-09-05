@@ -102,6 +102,7 @@ def test_forward_pass(
     deepseek_cache_path,
 ):
     tensor_cache_path = deepseek_cache_path / "ttnn_tensors_cache"
+    mesh_device.disable_and_clear_program_cache()
     mesh_shape = list(mesh_device.shape)
     num_rows, sdpa_dp_factor = mesh_shape
 
