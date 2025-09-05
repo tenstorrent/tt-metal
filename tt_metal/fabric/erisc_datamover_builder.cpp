@@ -475,8 +475,8 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
             }
             uint32_t target_channel = get_worker_connected_sender_channel(direction, topology);
             uint32_t vc1_target_channel = get_worker_or_vc1_connected_sender_channel(direction, topology);
-            size_t default_num_sender_buffer_slots;
-            size_t default_num_receiver_buffer_slots;
+            size_t default_num_sender_buffer_slots = 0;
+            size_t default_num_receiver_buffer_slots = 0;
             // get the default buffer slots
             get_optimal_num_slots(
                 default_with_tensix_buffer_slot_options[arch_index],
