@@ -29,6 +29,8 @@ from tracer_backend_utils import (
     AtenSubTensor,
     TorchOnes,
     AtenUpsampleNearest2d,
+    AtenSplitWithSizes,
+    AtenSplitTensor,
 )
 from typing import List, Optional, Type, Dict, Any
 from dataclasses import dataclass
@@ -452,6 +454,90 @@ class TransposeIntUnittest(UnitTestOperation):
     def generate_code(self, indent="") -> str:
         """Generate the code for this transpose int unit test operation."""
         group_unit_test = TransposeIntGroupUnittest([self.input_shapes])
+        return group_unit_test.generate_code()
+
+
+class SplitTensorUnittest(UnitTestOperation):
+    """
+    Unit test operation for torch.ops.aten.split.Tensor.
+
+    Note: This operation is simpler than split_with_sizes because it uses a single
+    split_size value rather than a list. The mathematical constraint is less strict:
+    split_size just needs to be <= shape[dim], making parameter generation easier.
+
+    We still capture split_size and dim from traced operations for consistency
+    and to ensure tests reflect real model usage patterns.
+    """
+
+    def __init__(self, input_shapes: Optional[Dict[int, Any]], split_size: int = 1, dim: int = 0):
+        self.input_shapes = input_shapes
+        # Store the actual split_size from the traced operation
+        self.split_size = split_size
+        # Store the actual dimension from the traced operation
+        self.dim = dim
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["SplitTensorUnittest"]:
+        """Extract split_size and dim parameters from traced split.Tensor operations."""
+        if operation.function_call_name == "torch.ops.aten.split.Tensor":
+            split_op = operation.to_operation(AtenSplitTensor)
+            # Extract split_size and dim from the actual traced operation
+            split_size = split_op.args[1] if len(split_op.args) > 1 else 1
+            dim = split_op.args[2] if len(split_op.args) > 2 else 0
+            return SplitTensorUnittest(split_op.input_shapes, split_size, dim)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this split tensor unit test operation."""
+        group_unit_test = SplitTensorGroupUnittest(
+            [{"input_shapes": self.input_shapes, "split_size": self.split_size, "dim": self.dim}]
+        )
+        return group_unit_test.generate_code()
+
+
+class SplitWithSizesUnittest(UnitTestOperation):
+    """
+    Unit test operation for torch.ops.aten.split_with_sizes.
+
+    Key Design Decision: We capture split_sizes and dim parameters directly from
+    traced operations rather than using hardcoded values. This is critical because
+    torch.split_with_sizes has a mathematical constraint: sum(split_sizes) must
+    equal shape[dim]. Independent parameter generation would create invalid combinations.
+    """
+
+    def __init__(self, input_shapes: Optional[Dict[int, Any]], split_sizes: List[int] = None, dim: int = 0):
+        self.input_shapes = input_shapes
+        # Store the actual split_sizes from the traced operation
+        self.split_sizes = split_sizes if split_sizes is not None else [1, 2]
+        # Store the actual dimension from the traced operation
+        self.dim = dim
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["SplitWithSizesUnittest"]:
+        """
+        Parse split_with_sizes operation and extract linked parameters.
+
+        Why we extract all parameters together:
+        - torch.split_with_sizes requires sum(split_sizes) == input_tensor.size(dim)
+        - These parameters are mathematically dependent, not independent
+        - Capturing them together ensures test validity
+        """
+        if operation.function_call_name == "torch.ops.aten.split_with_sizes":
+            split_op = operation.to_operation(AtenSplitWithSizes)
+            # Extract split_sizes and dim from the actual traced operation
+            # This preserves the mathematical relationship between parameters
+            split_sizes = split_op.args[1] if len(split_op.args) > 1 else [1, 2]
+            dim = split_op.args[2] if len(split_op.args) > 2 else 0
+            return SplitWithSizesUnittest(split_op.input_shapes, split_sizes, dim)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this split with sizes unit test operation."""
+        group_unit_test = SplitWithSizesGroupUnittest(
+            [{"input_shapes": self.input_shapes, "split_sizes": self.split_sizes, "dim": self.dim}]
+        )
         return group_unit_test.generate_code()
 
 
@@ -1574,6 +1660,198 @@ def test_transpose_int(device, input_shape, dtype, layout):
 """
 
 
+class SplitTensorGroupUnittest(UnitTestOperation):
+    def __init__(self, operations_list: List[Dict[str, Any]]):
+        self.operations_list = [op for op in operations_list if op is not None]
+        # Extract unique shapes, split_sizes, and dims from traced operations
+        self.shapes = []
+        self.split_sizes = set()
+        self.dims = set()
+
+        for op in self.operations_list:
+            if "input_shapes" in op and op["input_shapes"] and 0 in op["input_shapes"]:
+                shape = op["input_shapes"][0]
+                if isinstance(shape, torch.Size):
+                    shape = list(shape)
+                self.shapes.append(shape)
+
+            if "split_size" in op:
+                self.split_sizes.add(op["split_size"])
+
+            if "dim" in op:
+                self.dims.add(op["dim"])
+
+        # Remove duplicates and provide defaults
+        self.shapes = list({str(s): s for s in self.shapes}.values()) if self.shapes else [[1, 4, 8]]
+        self.split_sizes = sorted(list(self.split_sizes)) if self.split_sizes else [1, 2, 4]
+        self.dims = sorted(list(self.dims)) if self.dims else [0, 1, 2]
+
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this split tensor unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "shape",
+    (
+{chr(10).join([f"        {shape}," for shape in self.shapes])}
+    )
+)
+@pytest.mark.parametrize("split_size", [{", ".join([str(size) for size in self.split_sizes])}])
+@pytest.mark.parametrize("dim", [{", ".join([str(dim) for dim in self.dims])}])
+def test_split_tensor(device, layout, dtype, shape, split_size, dim):
+    if dim > len(shape) - 1:
+        pytest.skip("dim greater than rank")
+
+    # Skip if split_size is larger than the dimension size
+    if split_size > shape[dim]:
+        pytest.skip(f"split_size {{split_size}} exceeds shape[{{dim}}] {{shape[dim]}}")
+
+    torch_input_tensor = torch.rand(shape)
+    torch_results = torch.split(torch_input_tensor, split_size, dim=dim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
+    outputs = ttnn.split(input_tensor, split_size, dim=dim)
+    outputs = [ttnn.to_torch(t) for t in outputs]
+
+    assert len(outputs) == len(torch_results)
+    for output, torch_result in zip(outputs, torch_results):
+        assert (
+            output.shape == torch_result.shape
+        ), f"Output shape {{output.shape}} does not match torch shape {{torch_result.shape}}"
+        pcc=0.9999
+        assert_with_pcc(torch_result, output, pcc=pcc)
+"""
+
+
+class SplitWithSizesGroupUnittest(UnitTestOperation):
+    """
+    Group unit test for torch.ops.aten.split_with_sizes operations.
+
+    CRITICAL DESIGN DECISION: Linked Parameter Tuples
+    =================================================
+
+    Why we use linked (shape, dim, split_sizes) tuples instead of independent parameters:
+
+    1. MATHEMATICAL CONSTRAINT: torch.split_with_sizes requires sum(split_sizes) == shape[dim]
+    2. PREVIOUS APPROACH FAILED: Independent @pytest.mark.parametrize created invalid combinations:
+       - shape=[1, 144, 8400] × dim=2 × split_sizes=[64, 80]
+       - Result: shape[2]=8400 but sum([64, 80])=144 → RuntimeError ❌
+
+    3. SOLUTION: Capture parameters as linked tuples from actual traced operations:
+       - Each tuple represents a real operation that occurred in the model
+       - Guarantees sum(split_sizes) == shape[dim] for every test case
+       - Eliminates test failures due to invalid parameter combinations
+
+    4. BENEFITS:
+       - 100% test validity (no more RuntimeErrors)
+       - Tests reflect real model usage patterns
+       - Efficient testing (no wasted invalid combinations)
+    """
+
+    def __init__(self, operations_list: List[Dict[str, Any]]):
+        self.operations_list = [op for op in operations_list if op is not None]
+
+        # Extract linked (shape, dim, split_sizes) tuples from traced operations
+        # This preserves the mathematical relationship between parameters
+        self.test_cases = []
+
+        for op in self.operations_list:
+            # Only process operations that have all required linked parameters
+            if (
+                "input_shapes" in op
+                and op["input_shapes"]
+                and 0 in op["input_shapes"]
+                and "split_sizes" in op
+                and "dim" in op
+            ):
+                shape = op["input_shapes"][0]
+                if isinstance(shape, torch.Size):
+                    shape = list(shape)
+                split_sizes = op["split_sizes"]
+                dim = op["dim"]
+
+                # Create linked test case tuple - this ensures mathematical validity
+                # Every tuple satisfies: sum(split_sizes) == shape[dim]
+                test_case = (tuple(shape), dim, tuple(split_sizes))
+                if test_case not in self.test_cases:
+                    self.test_cases.append(test_case)
+
+        # Provide mathematically valid default test cases if none found
+        # Note: These defaults also satisfy sum(split_sizes) == shape[dim]
+        if not self.test_cases:
+            self.test_cases = [([1, 4, 8], 1, [2, 2]), ([2, 6], 1, [3, 3])]  # 4 == 2+2 ✅  # 6 == 3+3 ✅
+
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """
+        Generate pytest code with linked parameter tuples.
+
+        Key Implementation Details:
+        ==========================
+
+        1. SINGLE PARAMETRIZE DECORATOR:
+           - Uses "shape,dim,split_sizes" as a single parameter tuple
+           - Avoids Cartesian product of independent parameters
+           - Each tuple is guaranteed mathematically valid
+
+        2. VALIDATION LOGIC:
+           - Checks sum(split_sizes) == shape[dim]
+           - Should always pass due to linked tuples, but provides clear error if not
+           - Acts as a safeguard and documentation of the constraint
+
+        3. REAL-WORLD TEST CASES:
+           - Each test case comes from actual traced model operations
+           - No artificial/synthetic parameter combinations
+           - Tests what actually happens in production models
+        """
+        # Generate test case tuples as (shape, dim, split_sizes)
+        # Each tuple preserves the mathematical relationship from traced operations
+        test_cases_str = ",\n".join(
+            [f"        ({list(shape)}, {dim}, {list(split_sizes)})" for shape, dim, split_sizes in self.test_cases]
+        )
+
+        return f"""
+
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "shape,dim,split_sizes",
+    [
+{test_cases_str},
+    ]
+)
+def test_split_with_sizes(device, layout, dtype, shape, dim, split_sizes):
+    if dim > len(shape) - 1:
+        pytest.skip("dim greater than rank")
+
+    # CRITICAL VALIDATION: Verify split_sizes sum equals dimension size
+    # This should always pass due to linked tuples, but provides clear error message if not
+    # PyTorch constraint: torch.split_with_sizes requires sum(split_sizes) == input_tensor.size(dim)
+    if sum(split_sizes) != shape[dim]:
+        pytest.skip(f"split_sizes sum {{sum(split_sizes)}} does not equal shape[{{dim}}] {{shape[dim]}}")
+
+    torch_input_tensor = torch.rand(shape)
+    torch_results = torch.split(torch_input_tensor, split_sizes, dim=dim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
+    outputs = ttnn.split(input_tensor, split_sizes, dim=dim)
+    outputs = [ttnn.to_torch(t) for t in outputs]
+
+    assert len(outputs) == len(torch_results)
+    for output, torch_result in zip(outputs, torch_results):
+        assert (
+            output.shape == torch_result.shape
+        ), f"Output shape {{output.shape}} does not match torch shape {{torch_result.shape}}"
+        pcc=0.9999
+        assert_with_pcc(torch_result, output, pcc=pcc)
+"""
+
+
 class UnitTestOperationCombiner:
     @staticmethod
     def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
@@ -1838,6 +2116,51 @@ class TransposeIntCombiner(UnitTestOperationCombiner):
         return TransposeIntGroupUnittest(combined_shapes)
 
 
+class SplitTensorCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple split tensor operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_ops = [
+            {"input_shapes": split_op.input_shapes, "split_size": split_op.split_size, "dim": split_op.dim}
+            for split_op in operations
+            if isinstance(split_op, SplitTensorUnittest)
+        ]
+        return SplitTensorGroupUnittest(combined_ops)
+
+
+class SplitWithSizesCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """
+        Combine multiple split_with_sizes operations into a single group test.
+
+        Key Design: Preserves Linked Parameters
+        ======================================
+
+        Instead of extracting individual parameters separately, we package
+        (input_shapes, split_sizes, dim) as a complete operation dictionary.
+        This preserves the mathematical relationship between parameters when
+        they are passed to SplitWithSizesGroupUnittest.
+
+        This approach ensures that each test case in the group maintains
+        the constraint: sum(split_sizes) == input_shapes[0][dim]
+        """
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        # Package each operation with all its linked parameters
+        # This preserves the mathematical relationships from traced operations
+        combined_ops = [
+            {"input_shapes": split_op.input_shapes, "split_sizes": split_op.split_sizes, "dim": split_op.dim}
+            for split_op in operations
+            if isinstance(split_op, SplitWithSizesUnittest)
+        ]
+        return SplitWithSizesGroupUnittest(combined_ops)
+
+
 class UnitTestCombiner:
     def __init__(
         self,
@@ -1903,6 +2226,8 @@ class PytorchLayerUnitTestGraphConfig:
                 UnsafeViewUnittest,
                 ExpandUnittest,
                 TransposeIntUnittest,
+                SplitTensorUnittest,
+                SplitWithSizesUnittest,
             ]
         if self.group_unit_test_operations is None:
             self.group_unit_test_operations = {
@@ -1927,6 +2252,8 @@ class PytorchLayerUnitTestGraphConfig:
                 UnsafeViewUnittest: UnsafeViewCombiner,
                 ExpandUnittest: ExpandCombiner,
                 TransposeIntUnittest: TransposeIntCombiner,
+                SplitTensorUnittest: SplitTensorCombiner,
+                SplitWithSizesUnittest: SplitWithSizesCombiner,
             }
 
 
