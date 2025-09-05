@@ -109,7 +109,9 @@ public:
     void reset_size(StateDependencies::StateId state = StateDependencies::StateId{0});
 
 private:
-    // State-independent members
+    /*****************************
+     * State-independent members *
+     *****************************/
     // Type of buffers allocated in the banks (same across states)
     BufferType buffer_type_{0};
     // This is to store offsets for any banks that share a core or node (dram in wh/storage core), so we can view all
@@ -119,7 +121,9 @@ private:
     DeviceAddr interleaved_address_limit_{};
     uint32_t alignment_bytes_{};
 
-    // State-dependent members
+    /***************************
+     * State-dependent members *
+     ***************************/
     // Dependencies between states (also encodes number of states)
     StateDependencies state_dependencies_{};
 
@@ -130,6 +134,9 @@ private:
     // Per-state cache: merged occupied ranges of all other states (size-independent)
     ttsl::SmallVector<std::optional<std::vector<std::pair<DeviceAddr, DeviceAddr>>>> neighbors_occupied_cache_{};
 
+    /*****************************
+     * State-independent methods *
+     *****************************/
     // State-independent methods
     void validate_bank_id(uint32_t bank_id) const;
     void init_allocators_across_states(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset);
@@ -137,7 +144,9 @@ private:
     // Assert on non-const methods that have not been tested with overlapping allocators
     void assert_single_state_allocator() const;
 
-    // State-dependent methods
+    /***************************
+     * State-dependent methods *
+     ***************************/
     allocator::Algorithm* get_allocator_for_state(StateDependencies::StateId state);
     const allocator::Algorithm* get_allocator_for_state(StateDependencies::StateId state) const;
 

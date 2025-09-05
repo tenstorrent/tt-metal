@@ -383,7 +383,9 @@ TEST(FreeListOptTest, AllocatedAddresses) {
     auto allocated_addresses2 = allocator.allocated_addresses();
     ASSERT_EQ(allocated_addresses2, allocated_addresses_1);
 
-    // Check that other APIs properly invalidate the cache
+    /*******************************************************
+     * Check that other APIs properly invalidate the cache *
+     *******************************************************/
     // Deallocate first block -> invalidated and updated
     allocator.deallocate(a.value());
     auto after_free_1 = allocator.allocated_addresses();
