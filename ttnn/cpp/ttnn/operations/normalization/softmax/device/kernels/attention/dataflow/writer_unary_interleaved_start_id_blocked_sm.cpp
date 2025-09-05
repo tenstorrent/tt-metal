@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "../../../../../kernel_helper_functions/pad_tile.hpp"
+#include "../../../../../../kernel_helper_functions/pad_tile.hpp"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
