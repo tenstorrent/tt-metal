@@ -10,6 +10,7 @@
 #include "tt_metal.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
+#include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "device.hpp"
 #include "control_plane.hpp"
@@ -395,9 +396,13 @@ void build_tt_fabric_program(
                 edm_builder1.config.edm_noc_vc = edm_noc_vc;
                 edm_builder2.config.edm_noc_vc = edm_noc_vc;
 
-                if (is_galaxy) {
-                    get_optimal_noc_for_edm(edm_builder1, edm_builder2, num_links, topology);
-                }
+                tt::tt_fabric::core_placement::CorePlacementContext cctx{
+                    .topology = topology,
+                    .is_galaxy = is_galaxy,
+                    .num_links = num_links,
+                };
+                tt::tt_fabric::core_placement::apply_core_placement_optimizations(
+                    cctx, edm_builder1, edm_builder2, link);
             }
         }
     };

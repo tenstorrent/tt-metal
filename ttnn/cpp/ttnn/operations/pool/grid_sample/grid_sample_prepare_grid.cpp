@@ -135,11 +135,7 @@ Tensor convert_grid_tensor(
 
     TT_FATAL(is_cpu_tensor(input_tensor), "Prepare_grid_sample_grid only supports host tensors");
 
-    return Tensor(
-        input_tensor.host_storage().transform(compute),
-        output_spec,
-        input_tensor.distributed_tensor_config(),
-        input_tensor.tensor_topology());
+    return Tensor(input_tensor.host_storage().transform(compute), output_spec, input_tensor.tensor_topology());
 }
 
 }  // anonymous namespace
