@@ -27,11 +27,9 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
-#include "dev_msgs.h"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include "hostdevcommon/common_values.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include "jit_build/build.hpp"
 #include <tt-metalium/kernel_types.hpp>
@@ -171,17 +169,25 @@ int main(int argc, char** argv) {
                 tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
                     tt_metal::HalProgrammableCoreType::TENSIX);
             const tt_metal::KernelGroup* kernel_group = program.impl().kernels_on_core(core, programmable_core_index);
-            TT_FATAL(
-                kernel_group != nullptr && kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].has_value() and
-                    kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and
-                    kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value(),
-                "Error");
-            auto compute_kernel =
-                tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
-            auto riscv0_kernel =
-                tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
-            auto riscv1_kernel =
-                tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
+            TT_FATAL(kernel_group != nullptr, "Error");
+            std::shared_ptr<tt_metal::Kernel> compute_kernel = nullptr;
+            std::shared_ptr<tt_metal::Kernel> riscv0_kernel = nullptr;
+            std::shared_ptr<tt_metal::Kernel> riscv1_kernel = nullptr;
+            for (auto kernel_id : kernel_group->kernel_ids) {
+                auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
+                switch (kernel->get_kernel_processor_class()) {
+                    case tt_metal::HalProcessorClassType::DM:
+                        switch (kernel->get_kernel_processor_type(0)) {
+                            case 0: riscv0_kernel = kernel; break;
+                            case 1: riscv1_kernel = kernel; break;
+                            default: TT_THROW("Error");
+                        }
+                        break;
+                    case tt_metal::HalProcessorClassType::COMPUTE: compute_kernel = kernel; break;
+                    default: TT_THROW("Error");
+                }
+            }
+            TT_FATAL(compute_kernel != nullptr && riscv0_kernel != nullptr && riscv1_kernel != nullptr, "Error");
 
             // Run iteration to get golden
             uint32_t mask =
@@ -234,12 +240,25 @@ int main(int argc, char** argv) {
                                 tt_metal::HalProgrammableCoreType::TENSIX);
                         const tt_metal::KernelGroup* kernel_group =
                             program.impl().kernels_on_core(core, programmable_core_index);
-                        auto compute_kernel = tt_metal::detail::GetKernel(
-                            program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
-                        auto riscv0_kernel = tt_metal::detail::GetKernel(
-                            program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
-                        auto riscv1_kernel = tt_metal::detail::GetKernel(
-                            program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
+                        std::shared_ptr<tt_metal::Kernel> compute_kernel = nullptr;
+                        std::shared_ptr<tt_metal::Kernel> riscv0_kernel = nullptr;
+                        std::shared_ptr<tt_metal::Kernel> riscv1_kernel = nullptr;
+                        for (auto kernel_id : kernel_group->kernel_ids) {
+                            auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
+                            switch (kernel->get_kernel_processor_class()) {
+                                case tt_metal::HalProcessorClassType::DM:
+                                    switch (kernel->get_kernel_processor_type(0)) {
+                                        case 0: riscv0_kernel = kernel; break;
+                                        case 1: riscv1_kernel = kernel; break;
+                                        default: TT_THROW("Error");
+                                    }
+                                    break;
+                                case tt_metal::HalProcessorClassType::COMPUTE: compute_kernel = kernel; break;
+                                default: TT_THROW("Error");
+                            }
+                        }
+                        TT_FATAL(
+                            compute_kernel != nullptr && riscv0_kernel != nullptr && riscv1_kernel != nullptr, "Error");
                         TT_FATAL(
                             tt_metal::KernelImpl::from(*compute_kernel).binaries(mask) == compute_binaries.at(mask),
                             "Error");

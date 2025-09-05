@@ -127,41 +127,35 @@ uint32_t configure_rta_offsets_for_kernel_groups(
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset) {
-    uint32_t processor_classes =
-        MetalContext::instance().hal().get_processor_classes_count(programmable_core_type_index);
-    std::vector<uint32_t> max_rtas(processor_classes);
+    // Note: it's wrong to use HAL processor class here, because HAL will be fixed to have only DM/COMPUTE classes,
+    // whereas the RTA allocation is separate for DM0/DM1/COMPUTE.
+    std::vector<uint32_t> max_rtas(DISPATCH_CLASS_MAX);
     uint32_t max_unique_rta_size = 0;
     uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     for (auto& kg : kernel_groups) {
-        for (std::size_t dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-            max_rtas[dispatch_class] = 0;
-            auto& optional_id = kg->kernel_ids[dispatch_class];
-            if (optional_id) {
-                const auto& kernel = kernels.at(optional_id.value());
-                for (const CoreRange& core_range : kg->core_ranges.ranges()) {
-                    for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-                        for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                            CoreCoord core_coord(x, y);
-                            max_rtas[dispatch_class] =
-                                std::max(max_rtas[dispatch_class], (uint32_t)kernel->runtime_args(core_coord).size());
-                        }
+        std::ranges::fill(max_rtas, 0);
+        for (auto kernel_id : kg->kernel_ids) {
+            const auto& kernel = kernels.at(kernel_id);
+            auto dispatch_class = kernel->dispatch_class();
+            for (const CoreRange& core_range : kg->core_ranges.ranges()) {
+                for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                    for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                        CoreCoord core_coord(x, y);
+                        max_rtas[dispatch_class] =
+                            std::max(max_rtas[dispatch_class], (uint32_t)kernel->runtime_args(core_coord).size());
                     }
                 }
             }
         }
         uint32_t offset = 0;
-        for (std::size_t dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-            auto& optional_id = kg->kernel_ids[dispatch_class];
+        for (auto kernel_id : kg->kernel_ids) {
+            const auto& kernel = kernels.at(kernel_id);
+            auto dispatch_class = kernel->dispatch_class();
             kg->rta_sizes[dispatch_class] = max_rtas[dispatch_class] * sizeof(uint32_t);
-            if (optional_id) {
-                const auto& kernel = kernels.at(optional_id.value());
-                kernel->set_runtime_args_count(kg->core_ranges, max_rtas[dispatch_class]);
-                kg->launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset = base_offset + offset;
-                offset += max_rtas[dispatch_class] * sizeof(uint32_t);
-            } else {
-                kg->launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset = 0;
-            }
+            kernel->set_runtime_args_count(kg->core_ranges, max_rtas[dispatch_class]);
+            kg->launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset = base_offset + offset;
+            offset += max_rtas[dispatch_class] * sizeof(uint32_t);
         }
         kg->total_rta_size = offset;
         offset = tt::align(offset, l1_alignment);
@@ -306,13 +300,10 @@ uint32_t finalize_kernel_bins(
     for (auto& kg : kernel_groups) {
         uint32_t offset = base_offset;
 
-        for (int class_id = 0; class_id < DISPATCH_CLASS_MAX; class_id++) {
-            auto& optional_id = kg->kernel_ids[class_id];
-            if (!optional_id.has_value()) {
-                continue;
-            }
-            const auto& kernel = kernels.at(optional_id.value());
+        for (auto kernel_id : kg->kernel_ids) {
+            const auto& kernel = kernels.at(kernel_id);
             const auto& kernel_impl = KernelImpl::from(*kernel);
+            auto class_id = kernel->dispatch_class();
             const std::vector<const ll_api::memory*>& binaries = kernel_impl.binaries(
                 BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
             // TODO: this is really ugly, save me future-HAL!
@@ -621,13 +612,11 @@ BatchedTransfers assemble_runtime_args_commands(
         for (auto& kg : program.get_kernel_groups(index)) {
             bool has_crtas = false;
             for (auto kernel_id : kg->kernel_ids) {
-                if (kernel_id) {
-                    auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id.value());
-                    auto kernel = detail::GetKernel(program, device_local_kernel_handle);
-                    if (!kernel->common_runtime_args().empty()) {
-                        has_crtas = true;
-                        break;
-                    }
+                auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id);
+                auto kernel = detail::GetKernel(program, device_local_kernel_handle);
+                if (!kernel->common_runtime_args().empty()) {
+                    has_crtas = true;
+                    break;
                 }
             }
             if (has_crtas) {
@@ -687,29 +676,26 @@ BatchedTransfers assemble_runtime_args_commands(
         uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         for (auto& kg : program.get_kernel_groups(index)) {
             for (auto kernel_id : kg->kernel_ids) {
-                if (kernel_id) {
-                    auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id.value());
-                    auto kernel = detail::GetKernel(program, device_local_kernel_handle);
-                    if (kernel->common_runtime_args().empty()) {
-                        continue;
-                    }
-                    uint32_t dispatch_class = kernel->dispatch_class();
-                    const uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
-                    for (auto& transfer_info :
-                         extract_dst_noc_multicast_info(device, kg->core_ranges.ranges(), CoreType::WORKER)) {
-                        auto noc_xy_addr = device->get_noc_multicast_encoding(
-                            constants.noc_index, std::get<CoreRange>(transfer_info.cores));
-                        size_t size =
-                            kernel->common_runtime_args().size() * sizeof(*kernel->common_runtime_args().data());
-                        RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, size);
-                        transfers[std::make_pair(noc_xy_addr, transfer_info.num_dests)][crta_offset] =
-                            std::vector<Transfer>{Transfer{
-                                .start = crta_offset,
-                                .data = tt::stl::Span<const uint8_t>(
-                                    reinterpret_cast<uint8_t*>(kernel->common_runtime_args().data()), size),
-                                .cbs = {},
-                                .rta_data = &kernel->common_runtime_args_data()}};
-                    }
+                auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id);
+                auto kernel = detail::GetKernel(program, device_local_kernel_handle);
+                if (kernel->common_runtime_args().empty()) {
+                    continue;
+                }
+                uint32_t dispatch_class = kernel->dispatch_class();
+                const uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
+                for (auto& transfer_info :
+                     extract_dst_noc_multicast_info(device, kg->core_ranges.ranges(), CoreType::WORKER)) {
+                    auto noc_xy_addr = device->get_noc_multicast_encoding(
+                        constants.noc_index, std::get<CoreRange>(transfer_info.cores));
+                    size_t size = kernel->common_runtime_args().size() * sizeof(*kernel->common_runtime_args().data());
+                    RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, size);
+                    transfers[std::make_pair(noc_xy_addr, transfer_info.num_dests)][crta_offset] =
+                        std::vector<Transfer>{Transfer{
+                            .start = crta_offset,
+                            .data = tt::stl::Span<const uint8_t>(
+                                reinterpret_cast<uint8_t*>(kernel->common_runtime_args().data()), size),
+                            .cbs = {},
+                            .rta_data = &kernel->common_runtime_args_data()}};
                 }
             }
         }
@@ -736,24 +722,20 @@ BatchedTransfers assemble_runtime_args_commands(
 
                             unique_rt_args_data.resize(unique_rt_args_data.size() + 1);
                             unique_rt_data_and_sizes.resize(unique_rt_data_and_sizes.size() + 1);
-                            for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-                                auto& optional_id = kg->kernel_ids[dispatch_class];
-                                if (optional_id) {
-                                    auto device_local_kernel_handle =
-                                        get_device_local_kernel_handle(optional_id.value());
-                                    auto kernel = detail::GetKernel(program, device_local_kernel_handle);
-                                    if (!kernel->cores_with_runtime_args().empty()) {
-                                        const auto& runtime_args_data = kernel->runtime_args(core_coord);
-                                        unique_rt_args_data.back().emplace_back(
-                                            RtaDataPair(kernel->runtime_args_data(core_coord), runtime_args_data));
-                                        TT_ASSERT(
-                                            runtime_args_data.size() * sizeof(uint32_t) <=
-                                            kg->rta_sizes[dispatch_class]);
-                                        unique_rt_data_and_sizes.back().emplace_back(
-                                            kernel->runtime_args_data(core_coord).rt_args_data,
-                                            runtime_args_data.size() * sizeof(uint32_t),
-                                            kg->rta_sizes[dispatch_class]);
-                                    }
+                            for (auto kernel_id : kg->kernel_ids) {
+                                auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id);
+                                auto kernel = detail::GetKernel(program, device_local_kernel_handle);
+                                if (!kernel->cores_with_runtime_args().empty()) {
+                                    auto dispatch_class = kernel->dispatch_class();
+                                    const auto& runtime_args_data = kernel->runtime_args(core_coord);
+                                    unique_rt_args_data.back().emplace_back(
+                                        RtaDataPair(kernel->runtime_args_data(core_coord), runtime_args_data));
+                                    TT_ASSERT(
+                                        runtime_args_data.size() * sizeof(uint32_t) <= kg->rta_sizes[dispatch_class]);
+                                    unique_rt_data_and_sizes.back().emplace_back(
+                                        kernel->runtime_args_data(core_coord).rt_args_data,
+                                        runtime_args_data.size() * sizeof(uint32_t),
+                                        kg->rta_sizes[dispatch_class]);
                                 }
                             }
                             CoreCoord virtual_core = device->virtual_core_from_logical_core(core_coord, core_type);

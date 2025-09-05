@@ -435,18 +435,18 @@ KernelGroup::KernelGroup() : core_ranges(CoreRangeSet()) {}
 KernelGroup::KernelGroup(
     const detail::ProgramImpl& program,
     uint32_t programmable_core_type_index,
-    kernel_id_array_t kernel_ids,
+    std::vector<KernelHandle> kernel_ids,
     bool /*erisc_is_idle*/,
     uint32_t local_cb_mask,
     uint32_t min_remote_cb_start_index,
     const CoreRangeSet& new_ranges) :
-    core_ranges(CoreRangeSet()) {
-    this->programmable_core_type_index = programmable_core_type_index;
+    programmable_core_type_index(programmable_core_type_index),
+    core_ranges(CoreRangeSet()),
+    kernel_ids(std::move(kernel_ids)) {
     this->core_ranges = this->core_ranges.merge(new_ranges);
-    this->kernel_ids = kernel_ids;
-    this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DEDICATED_NOC;
 
     std::memset(&this->launch_msg, 0, sizeof(launch_msg_t));
+    this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DEDICATED_NOC;
 
     // Slow dispatch uses fixed addresses for the kernel config, configured here statically
     // Fast dispatch kernel config mangement happens under the CQ and will re-program the base
@@ -458,33 +458,31 @@ KernelGroup::KernelGroup(
 
     uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
     std::set<NOC_MODE> noc_modes;
-    for (int class_id = 0; class_id < processor_classes; class_id++) {
-        auto& optional_id = kernel_ids[class_id];
-        if (optional_id) {
-            const auto kernel = program.get_kernel(optional_id.value());
-            this->launch_msg.kernel_config.watcher_kernel_ids[class_id] = kernel->get_watcher_kernel_id();
-            this->launch_msg.kernel_config.enables |= 1 << class_id;
+    for (auto kernel_id : this->kernel_ids) {
+        const auto kernel = program.get_kernel(kernel_id);
+        auto class_id = kernel->dispatch_class();
+        this->launch_msg.kernel_config.watcher_kernel_ids[class_id] = kernel->get_watcher_kernel_id();
+        this->launch_msg.kernel_config.enables |= 1 << class_id;
 
-            if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
-                // The code below sets the brisc_noc_id for use by the device firmware
-                // Use 0 if neither brisc nor ncrisc specify a noc
-                if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
-                    noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
-                    // Use brisc's noc if brisc specifies a noc
-                    this->launch_msg.kernel_config.brisc_noc_id = std::get<DataMovementConfig>(kernel->config()).noc;
-                    // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
-                    if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
-                        this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
-                    }
-                } else if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
-                    noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
-                    // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
-                    // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
-                    this->launch_msg.kernel_config.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
-                    // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
-                    if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
-                        this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
-                    }
+        if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
+            // The code below sets the brisc_noc_id for use by the device firmware
+            // Use 0 if neither brisc nor ncrisc specify a noc
+            if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
+                noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
+                // Use brisc's noc if brisc specifies a noc
+                this->launch_msg.kernel_config.brisc_noc_id = std::get<DataMovementConfig>(kernel->config()).noc;
+                // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
+                if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
+                    this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
+                }
+            } else if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
+                noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
+                // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
+                // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
+                this->launch_msg.kernel_config.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
+                // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
+                if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
+                    this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
                 }
             }
         }
@@ -531,36 +529,6 @@ KernelGroup* detail::ProgramImpl::kernels_on_core(const CoreCoord& core, uint32_
     return (index == core_to_kernel_group_invalid_index) ? nullptr : kernel_groups_[programmable_core_type_index].at(index).get();
 }
 
-struct KernelGroupInt {
-    bool valid{};
-    kernel_id_array_t kernel_ids;
-
-    bool operator==(const KernelGroupInt &b) const;
-    // fix this
-    void update(dispatch_core_processor_classes proc_class, size_t kernel_idx) {
-        this->kernel_ids[proc_class] = static_cast<KernelHandle>(kernel_idx);
-    }
-};
-
-bool KernelGroupInt::operator==(const KernelGroupInt &b) const {
-    for (int class_id = 0; class_id < DISPATCH_CLASS_MAX; class_id++) {
-        if (this->kernel_ids[class_id] != b.kernel_ids[class_id]) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-struct KernelGroupIntHasher {
-    std::size_t operator()(const KernelGroupInt &x) const {
-        return
-            static_cast<size_t>(x.kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value_or(0)) << 0 |
-            static_cast<size_t>(x.kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value_or(0)) << 16 |
-            static_cast<size_t>(x.kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value_or(0)) << 32;
-    }
-};
-
 void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_index) {
     if (core_to_kernel_group_index_table_[programmable_core_type_index].size() == 0) {
         bool erisc_is_idle = false;
@@ -585,24 +553,24 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         grid_extent_[programmable_core_type_index].y++;
 
         // grid maps cores to sets-of-kernels running on that core
-        std::vector<KernelGroupInt> grid;
-        grid.resize(grid_extent_[programmable_core_type_index].x * grid_extent_[programmable_core_type_index].y);
+        size_t grid_size = grid_extent_[programmable_core_type_index].x * grid_extent_[programmable_core_type_index].y;
+        std::vector<bool> valid(grid_size, false);
+        std::vector<std::set<KernelHandle>> grid(grid_size);
         for (auto [id, kernel] : kernels_[programmable_core_type_index]) {
             for (auto core : kernel->logical_cores()) {
                 int core_index = core.y * grid_extent_[programmable_core_type_index].x + core.x;
-                grid[core_index].valid = true;
-                grid[core_index].update(enchantum::cast<dispatch_core_processor_classes>(kernel->dispatch_class()).value(), id);
+                valid[core_index] = true;
+                grid[core_index].insert(id);
             }
         }
 
         // Flip the mapping to get sets-of-kernels to cores
-        std::unordered_map<KernelGroupInt, std::set<CoreRange>, KernelGroupIntHasher> map;
+        std::map<std::set<KernelHandle>, std::set<CoreRange>> map;
         for (auto y = base.y; y < grid_extent_[programmable_core_type_index].y; y++) {
             for (auto x = base.x; x < grid_extent_[programmable_core_type_index].x; x++) {
                 int index = y * grid_extent_[programmable_core_type_index].x + x;
-                if (grid[index].valid) {
-                    std::set<CoreRange> &set = map[grid[index]];
-                    set.insert(CoreRange({x, y}, {x, y}));
+                if (valid[index]) {
+                    map[grid[index]].insert(CoreRange({x, y}, {x, y}));
                 }
             }
         }
@@ -615,14 +583,14 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         core_to_kernel_group_index_table_[programmable_core_type_index].resize(
             grid_extent_[programmable_core_type_index].x * grid_extent_[programmable_core_type_index].y, core_to_kernel_group_invalid_index);
         const auto& hal = MetalContext::instance().hal();
-        for (auto &kg_to_cores : map) {
+        for (auto& [kernels, cores] : map) {
             // Start inclusive, max exclusive
             uint32_t max_local_cb_end_index = 0;
             uint32_t min_remote_cb_start_index = NUM_CIRCULAR_BUFFERS;
             uint32_t local_cb_mask = 0;
 
             // Map from core X,Y back to the unique KernelGroup
-            for (CoreRange range : kg_to_cores.second) {
+            for (CoreRange range : cores) {
                 bool logged_noncontiguous = false;
                 for (auto y = range.start_coord.y; y <= range.end_coord.y; y++) {
                     for (auto x = range.start_coord.x; x <= range.end_coord.x; x++) {
@@ -646,15 +614,13 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                                     // ~used_cbs is always nonzero, because otherwise all CBs are in use and therefore
                                     // contiguous.
                                     uint32_t first_unused_index = (uint32_t)__builtin_ctz(~used_cbs);
-                                    std::string kernels;
-                                    for (auto id : kg_to_cores.first.kernel_ids) {
-                                        if (id.has_value()) {
-                                            std::shared_ptr<Kernel> kernel = get_kernel(*id);
-                                            if (!kernels.empty()) {
-                                                kernels += ", ";
-                                            }
-                                            kernels += kernel->kernel_source().name();
+                                    std::string kernels_str;
+                                    for (auto id : kernels) {
+                                        std::shared_ptr<Kernel> kernel = get_kernel(id);
+                                        if (!kernels_str.empty()) {
+                                            kernels_str += ", ";
                                         }
+                                        kernels_str += kernel->kernel_source().name();
                                     }
 
                                     static std::mutex m;
@@ -662,7 +628,8 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                                     // Keep track of which programs have been logged to avoid spamming the log. This is
                                     // particularly important for mesh devices.
                                     static std::set<std::tuple<uint32_t, uint32_t, std::string>> logged;
-                                    auto cb_tuple = std::make_tuple(non_contiguous_cbs, first_unused_index, kernels);
+                                    auto cb_tuple =
+                                        std::make_tuple(non_contiguous_cbs, first_unused_index, kernels_str);
 
                                     if (!logged.contains(cb_tuple)) {
                                         logged.insert(cb_tuple);
@@ -688,7 +655,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                                             "First unused index: {}. Kernels: {}",
                                             cb_ids,
                                             first_unused_index,
-                                            kernels);
+                                            kernels_str);
                                     }
                                     logged_noncontiguous = true;
                                 }
@@ -710,14 +677,19 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 programmable_core_type_index,
                 max_local_cb_end_index,
                 min_remote_cb_start_index);
+            std::vector<KernelHandle> kernel_ids(kernels.begin(), kernels.end());
+            // Sort kernel ids by dispatch class, so loops over this array will be in dispatch class order
+            std::sort(kernel_ids.begin(), kernel_ids.end(), [this](KernelHandle a, KernelHandle b) {
+                return get_kernel(a)->dispatch_class() < get_kernel(b)->dispatch_class();
+            });
             kernel_groups_[programmable_core_type_index].push_back(std::make_shared<KernelGroup>(
                 *this,
                 programmable_core_type_index,
-                kg_to_cores.first.kernel_ids,
+                std::move(kernel_ids),
                 erisc_is_idle,
                 local_cb_mask,
                 min_remote_cb_start_index,
-                kg_to_cores.second));
+                cores));
             index++;
         }
         for (const auto& kg : kernel_groups_[programmable_core_type_index]) {
@@ -1211,17 +1183,16 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                 std::vector<multicast_transfer_info> dst_noc_multicast_info =
                     extract_dst_noc_multicast_info(device, kernel_group->core_ranges.ranges(), core_type);
                 std::vector<KernelHandle> kernel_ids;
-                for (int dispatch_class = 0; dispatch_class < kernel_group->kernel_ids.size(); dispatch_class++) {
-                    auto &optional_id = kernel_group->kernel_ids[dispatch_class];
-                    if (optional_id) {
-                        KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(optional_id.value());
-                        kernel_ids.push_back(device_local_kernel_id);
-                        int proc_sub_class = 0;
-                        for (uint32_t& dst_addr : kernel_transfer_info.at(device_local_kernel_id).dst_base_addrs) {
-                            // TODO: ditch this w/ linear writes based on program config kernel_text_offset and size
-                            dst_addr = kernel_group->kernel_text_offsets[dispatch_class + proc_sub_class];
-                            proc_sub_class++;
-                        }
+                for (auto kernel_id : kernel_group->kernel_ids) {
+                    KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(kernel_id);
+                    kernel_ids.push_back(device_local_kernel_id);
+                    auto kernel = this->get_kernel(device_local_kernel_id);
+                    auto dispatch_class = kernel->dispatch_class();
+                    int proc_sub_class = 0;
+                    for (uint32_t& dst_addr : kernel_transfer_info.at(device_local_kernel_id).dst_base_addrs) {
+                        // TODO: ditch this w/ linear writes based on program config kernel_text_offset and size
+                        dst_addr = kernel_group->kernel_text_offsets[dispatch_class + proc_sub_class];
+                        proc_sub_class++;
                     }
                 }
 
@@ -1239,21 +1210,19 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
 
                 // No checks for max dispatch class
                 // Validated during CreateKernel if the requested processor is supported
-                constexpr auto k_SupportedDispatchClasses = std::array{DISPATCH_CLASS_ETH_DM0, DISPATCH_CLASS_ETH_DM1};
                 std::vector<KernelHandle> kernel_ids;
-                for (auto dispatch_class : k_SupportedDispatchClasses) {
-                    if (kernel_group->kernel_ids[dispatch_class].has_value()) {
-                        KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(
-                            kernel_group->kernel_ids[dispatch_class].value());
-                        kernel_ids.push_back(device_local_kernel_id);
+                for (auto kernel_id : kernel_group->kernel_ids) {
+                    KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(kernel_id);
+                    auto kernel = this->get_kernel(device_local_kernel_id);
+                    auto dispatch_class = kernel->dispatch_class();
+                    kernel_ids.push_back(device_local_kernel_id);
 
-                        // Update destination address by kernel config offset
-                        if (hal.get_core_kernel_stored_in_config_buffer(hal.get_programmable_core_type(index))) {
-                            int proc_sub_class = 0;
-                            for (uint32_t& dst_addr : kernel_transfer_info.at(device_local_kernel_id).dst_base_addrs) {
-                                dst_addr = kernel_group->kernel_text_offsets[dispatch_class + proc_sub_class];
-                                proc_sub_class++;
-                            }
+                    // Update destination address by kernel config offset
+                    if (hal.get_core_kernel_stored_in_config_buffer(hal.get_programmable_core_type(index))) {
+                        int proc_sub_class = 0;
+                        for (uint32_t& dst_addr : kernel_transfer_info.at(device_local_kernel_id).dst_base_addrs) {
+                            dst_addr = kernel_group->kernel_text_offsets[dispatch_class + proc_sub_class];
+                            proc_sub_class++;
                         }
                     }
                 }

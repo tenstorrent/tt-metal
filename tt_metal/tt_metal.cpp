@@ -14,6 +14,7 @@
 #include <host_api.hpp>
 #include <kernel.hpp>
 #include <enchantum/enchantum.hpp>
+#include <memory>
 #include <sub_device_types.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -92,8 +93,9 @@ DataMovementConfigStatus CheckDataMovementConfig(
     DataMovementConfigStatus data_movement_config_status{
         .riscv0_in_use = false, .riscv1_in_use = false, .noc0_in_use = false, .noc1_in_use = false};
 
-    auto set_global_and_local_noc_usage = [&](KernelHandle kernel_id, bool& local_noc0_usage, bool& local_noc1_usage) {
-        const auto kernel = detail::GetKernel(program, kernel_id);
+    auto set_global_and_local_noc_usage = [&](const std::shared_ptr<Kernel>& kernel,
+                                              bool& local_noc0_usage,
+                                              bool& local_noc1_usage) {
         int noc_value;
         switch (programmable_core) {
             case HalProgrammableCoreType::TENSIX:
@@ -114,12 +116,6 @@ DataMovementConfigStatus CheckDataMovementConfig(
         data_movement_config_status.noc1_in_use = local_noc1_usage;
     };
 
-    // TODO (abhullar): Clean this up when brisc/ncrisc are moved to be one processor class with two data movement
-    // processor types
-    uint32_t dm0_idx =
-        programmable_core == HalProgrammableCoreType::TENSIX ? DISPATCH_CLASS_TENSIX_DM0 : DISPATCH_CLASS_ETH_DM0;
-    uint32_t dm1_idx =
-        programmable_core == HalProgrammableCoreType::TENSIX ? DISPATCH_CLASS_TENSIX_DM1 : DISPATCH_CLASS_ETH_DM1;
     const auto& hal = MetalContext::instance().hal();
     for (const auto& core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -129,18 +125,27 @@ DataMovementConfigStatus CheckDataMovementConfig(
                 if (kernel_group != nullptr) {
                     bool local_noc0_in_use = false;
                     bool local_noc1_in_use = false;
-                    if (kernel_group->kernel_ids[dm0_idx].has_value()) {
-                        data_movement_config_status.riscv0_in_use = true;
-                        set_global_and_local_noc_usage(
-                            kernel_group->kernel_ids[dm0_idx].value(), local_noc0_in_use, local_noc1_in_use);
+                    bool has_dm0 = false;
+                    bool has_dm1 = false;
+                    for (auto kernel_id : kernel_group->kernel_ids) {
+                        const auto kernel = detail::GetKernel(program, kernel_id);
+                        if (kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
+                            switch (kernel->get_kernel_processor_type(0)) {
+                                case 0:
+                                    has_dm0 = true;
+                                    data_movement_config_status.riscv0_in_use = true;
+                                    set_global_and_local_noc_usage(kernel, local_noc0_in_use, local_noc1_in_use);
+                                    break;
+                                case 1:
+                                    has_dm1 = true;
+                                    data_movement_config_status.riscv1_in_use = true;
+                                    set_global_and_local_noc_usage(kernel, local_noc0_in_use, local_noc1_in_use);
+                                    break;
+                                default: TT_THROW("Unknown DataMovementProcessor type"); break;
+                            }
+                        }
                     }
-                    if (kernel_group->kernel_ids[dm1_idx].has_value()) {
-                        data_movement_config_status.riscv1_in_use = true;
-                        set_global_and_local_noc_usage(
-                            kernel_group->kernel_ids[dm1_idx].value(), local_noc0_in_use, local_noc1_in_use);
-                    }
-                    if (kernel_group->kernel_ids[dm0_idx].has_value() and
-                        kernel_group->kernel_ids[dm1_idx].has_value()) {
+                    if (has_dm0 and has_dm1) {
                         TT_FATAL(
                             local_noc0_in_use and local_noc1_in_use,
                             "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, "
@@ -163,12 +168,10 @@ void ConfigureKernelGroup(
     const CoreCoord& logical_core) {
     uint32_t kernel_config_base =
         MetalContext::instance().hal().get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
-    for (auto& optional_id : kernel_group->kernel_ids) {
-        if (optional_id) {
-            // Need the individual offsets of each bin
-            detail::GetKernel(program, optional_id.value())
-                ->configure(device, logical_core, kernel_config_base, kernel_group->kernel_text_offsets);
-        }
+    for (auto kernel_id : kernel_group->kernel_ids) {
+        // Need the individual offsets of each bin
+        detail::GetKernel(program, kernel_id)
+            ->configure(device, logical_core, kernel_config_base, kernel_group->kernel_text_offsets);
     }
 }
 
@@ -919,48 +922,45 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                         CoreCoord logical_core(x, y);
                         auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
-                        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-                            auto& optional_id = kg->kernel_ids[dispatch_class];
-                            if (optional_id) {
-                                const auto& kernel = detail::GetKernel(program, optional_id.value());
-                                const auto& rt_args = kernel->runtime_args(logical_core);
+                        for (auto kernel_id : kg->kernel_ids) {
+                            const auto& kernel = detail::GetKernel(program, kernel_id);
+                            const auto& rt_args = kernel->runtime_args(logical_core);
+                            auto dispatch_class = kernel->dispatch_class();
 
-                                if (rt_args.size() > 0) {
-                                    auto rt_args_addr =
-                                        kernel_config_base +
-                                        kg->launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset;
-                                    log_trace(
-                                        tt::LogMetal,
-                                        "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: "
-                                        "{}",
-                                        __FUNCTION__,
-                                        rt_args.size(),
-                                        logical_core.str(),
-                                        physical_core.str(),
-                                        rt_args_addr,
-                                        rt_args);
-                                    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-                                        device_id, physical_core, rt_args, rt_args_addr);
-                                }
+                            if (rt_args.size() > 0) {
+                                auto rt_args_addr = kernel_config_base +
+                                                    kg->launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset;
+                                log_trace(
+                                    tt::LogMetal,
+                                    "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: "
+                                    "{}",
+                                    __FUNCTION__,
+                                    rt_args.size(),
+                                    logical_core.str(),
+                                    physical_core.str(),
+                                    rt_args_addr,
+                                    rt_args);
+                                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                                    device_id, physical_core, rt_args, rt_args_addr);
+                            }
 
-                                const auto& common_rt_args = kernel->common_runtime_args();
-                                if (common_rt_args.size() > 0) {
-                                    auto common_rt_args_addr =
-                                        kernel_config_base +
-                                        kg->launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset;
-                                    log_trace(
-                                        tt::LogMetal,
-                                        "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: "
-                                        "{}",
-                                        __FUNCTION__,
-                                        common_rt_args.size(),
-                                        logical_core.str(),
-                                        physical_core.str(),
-                                        common_rt_args_addr,
-                                        common_rt_args);
-                                    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-                                        device_id, physical_core, common_rt_args, common_rt_args_addr);
-                                }
+                            const auto& common_rt_args = kernel->common_runtime_args();
+                            if (common_rt_args.size() > 0) {
+                                auto common_rt_args_addr =
+                                    kernel_config_base +
+                                    kg->launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset;
+                                log_trace(
+                                    tt::LogMetal,
+                                    "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: "
+                                    "{}",
+                                    __FUNCTION__,
+                                    common_rt_args.size(),
+                                    logical_core.str(),
+                                    physical_core.str(),
+                                    common_rt_args_addr,
+                                    common_rt_args);
+                                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                                    device_id, physical_core, common_rt_args, common_rt_args_addr);
                             }
                         }
                     }
