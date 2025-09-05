@@ -156,7 +156,22 @@ auto get_op_name(const T& op) -> decltype(op.base_name()) {
 
 inline std::string get_op_name(const std::string& op) { return op; }
 
-// helper function for ttnn-op-runtime-predictor
+/**
+ * @brief Serializes op name and args, queries ttnn-op-runtime-predictor, and returns the predicted runtime.
+ *
+ * This function checks if the provided operation is a registered TTNN operation (has a base_name()),
+ * serializes the operation name and its arguments to JSON, and queries the ttnn-op-runtime-predictor
+ * model to obtain a predicted runtime for the operation. If the operation is not registered or the
+ * predictor does not return a valid runtime, std::nullopt is returned.
+ *
+ * @tparam Op The type of the operation to be queried.
+ * @tparam Args The types of the arguments to the operation.
+ * @param op The operation to be queried.
+ * @param transformed_args The arguments to the operation, packed as a tuple.
+ * @return std::optional<RuntimeQueryResponse> containing the predicted runtime in nanoseconds.
+ *         - On success: ExecutionStatus::Success and predicted runtime in nanoseconds.
+ *         - On failure: std::nullopt.
+ */
 template <typename Op, typename... Args>
 std::optional<RuntimeQueryResponse> query_ttnn_op_runtime_predictor(
     const Op& op, const std::tuple<Args...>& transformed_args) {
