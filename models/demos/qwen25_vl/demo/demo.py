@@ -180,6 +180,19 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # ci_only
         ),
+        (  # Batch-1 run with 300 dpi scanned document (Latency) - single user, real-world test
+            "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
+            True,  # instruct mode
+            4,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            12288,  # max_seq_len, allow for image tokens
+            1,  # batch_size -- samples to load from the prompt JSON
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+        ),
     ],
     ids=[
         "batch-1",  # latency
@@ -188,6 +201,7 @@ def create_tt_model(
         "ci-only-32-users",  # ci_only batch-32 for faster testing coverage in CI pipelines
         "ci-only-bleu-score",  # ci_only batch-bleu-score for faster testing coverage in CI pipelines
         "ci-only-text-only",  # ci_only batch-text-only for faster testing coverage in CI pipelines
+        "real-world-test",  # real-world test for 300DPI scanned document
     ],
 )
 @pytest.mark.parametrize(
@@ -341,7 +355,8 @@ def test_demo(
     transformers_logging.set_verbosity_error()
     config = Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
     if ci_only and "bleu-score" not in test_id:
-        # [INFO] use single decoder layer for faster CI runs; bleu-score test uses full model for stable text output
+        # [INFO] bleu-score test uses full model for stable text output
+        logger.info("use single decoder layer in vision model for faster CI runs")
         config.vision_config.depth = 1
     reference_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         ref_model_name, config=config, torch_dtype="auto", device_map="auto"
