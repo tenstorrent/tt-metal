@@ -18,7 +18,6 @@ ttnn.transformer.windowed_scaled_dot_product_attention(
     input_tensor_k,      # Key tensor [B x NH x S x D]
     input_tensor_v,      # Value tensor [B x NH x S x D]
     cu_window_seqlens,   # List of cumulative window lengths
-    is_causal=True,      # Apply causal masking within windows
     scale=None,          # Scale factor (defaults to 1/sqrt(D))
     memory_config=None,  # Memory configuration
     program_config=None, # SDPA program configuration

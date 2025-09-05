@@ -2,13 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// #include <cstdint>
-
-// #define REDUCE_OP (PoolType::MAX)
-// #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
-
 #include "compute_kernel_api.h"
-#include "compute_common.hpp"
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -122,20 +117,7 @@ void MAIN {
                      * QK += MASK
                      */
                     reconfig_data_format(cb_qk_im, cb_mask_in);
-                    // Manually inlining: add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
-                    add_tiles_init(cb_qk_im, cb_mask_in);
-                    cb_wait_front(cb_qk_im, qk_chunk_tiles);
-                    cb_wait_front(cb_mask_in, qk_chunk_tiles);
-                    for (uint32_t i = 0; i < qk_chunk_tiles; i++) {
-                        acquire_dst();
-                        add_tiles(cb_qk_im, cb_mask_in, i, i, 0);
-                        pack_tile(0, cb_qk_im);
-                        release_dst();
-                    }
-                    cb_pop_front(cb_mask_in, qk_chunk_tiles);
-                    cb_pop_front(cb_qk_im, qk_chunk_tiles);
-                    cb_reserve_back(cb_qk_im, qk_chunk_tiles);
-                    cb_push_back(cb_qk_im, qk_chunk_tiles);
+                    add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
 
                     /**
                      * reduce_c can perform both reduce_max and eltwise max with previous result.
@@ -201,7 +183,7 @@ void MAIN {
                          * This is a bcast_cols since max_diff is a column vector and prev_sum is a partial
                          * reduction, containing the sum of tiles in dim=-1 of QK.
                          */
-                        mul_block_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                        mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
                         /* cb_cur_sum += cb_prev_sum */
                         add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
 
