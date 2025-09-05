@@ -71,135 +71,6 @@ def ref_COMPOSITE_49(var0, *args):
     return var4
 
 
-def ttnn_COMPOSITE_48(var0, *args):
-    var2 = ttnn_optimized_vit_highres.vit_patch_embeddings_weight_vars(None, var0, args[0], args[1], patch_size=14)
-    var5 = ttnn.add(var2, args[2])
-    var6 = ttnn.concat([args[3], args[4], var5], dim=1)
-    return var6
-
-
-def ttnn_COMPOSITE_23(var0, *args):
-    hidden_states = ttnn.layer_norm(
-        var0,
-        weight=args[0],
-        bias=args[1],
-        epsilon=1e-06,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    num_heads = 16
-    *_, hidden_size = hidden_states.shape
-    head_size = hidden_size // num_heads
-    query_key_value = ttnn.linear(
-        hidden_states,
-        args[3],
-        bias=args[2],
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
-        # program_config=program_configs["query_key_value_matmul_program_config"],
-    )
-    ttnn.reallocate(hidden_states)
-    (
-        query,
-        key,
-        value,
-    ) = ttnn.transformer.split_query_key_value_and_split_heads(
-        query_key_value,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        num_heads=num_heads,
-    )
-    ttnn.deallocate(query_key_value)
-    scale = 1.0 / (head_size**0.5)
-    query = ttnn.mul_(
-        query,
-        scale,
-    )
-    value = ttnn.reallocate(value)
-    attention_scores = ttnn.matmul(
-        query,
-        key,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
-        # program_config=program_configs["query_by_key_matmul_program_config"],
-    )
-
-    ttnn.deallocate(query)
-    ttnn.deallocate(key)
-    attention_probs = ttnn.softmax_in_place(attention_scores, numeric_stable=True)
-
-    context_layer = ttnn.matmul(
-        attention_probs,
-        value,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
-        # program_config=program_configs["attention_probabilities_by_value_matmul_program_config"],
-    )
-    ttnn.deallocate(attention_probs)
-    ttnn.deallocate(value)
-    context_layer = ttnn.transformer.concatenate_heads(
-        context_layer,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    self_output = ttnn.linear(
-        context_layer,
-        args[5],
-        bias=args[4],
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=12),
-        # program_config=program_configs["self_output_matmul_program_config"],
-    )
-    ttnn.deallocate(context_layer)
-    var19 = ttnn.mul(self_output, args[6])
-    var20 = ttnn.add(var0, var19)
-    return var20
-
-
-def ttnn_COMPOSITE_47(var0, *args):
-    hidden_states = ttnn.layer_norm(
-        var0,
-        weight=args[0],
-        bias=args[1],
-        epsilon=1e-06,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    hidden_states = ttnn.linear(
-        hidden_states,
-        args[3],
-        bias=args[2],
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-        # program_config=program_configs["ff1_matmul_program_config"],
-        core_grid=ttnn.CoreGrid(y=8, x=8),
-        activation="gelu",
-    )
-    hidden_states = ttnn.linear(
-        hidden_states,
-        args[5],
-        bias=args[4],
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
-        # program_config=program_configs["ff2_matmul_program_config"],
-    )
-    hidden_states = ttnn.mul(hidden_states, args[6])
-    var11 = ttnn.add(var0, hidden_states)
-    return var11
-
-
-def ttnn_COMPOSITE_49(var0, *args):
-    var1 = ttnn.layer_norm(
-        var0,
-        weight=args[0],
-        bias=args[1],
-        epsilon=1e-06,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    return var1[:, 0, :]
-
-
 @pytest.mark.parametrize(
     "input_specs",
     [
@@ -232,20 +103,12 @@ def test_COMPOSITE_48(device, input_specs):
     pixel_values = torch.permute(tensors[0], (0, 2, 3, 1))
     pixel_values = torch.nn.functional.pad(pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
     tensors[0] = pixel_values
-    proj_weight = tensors[1]
-    proj_bias = tensors[2]
-    three_times_hidden_size, c, _, _ = proj_weight.shape
-    pad_value = 4 - c
-    preprocessed_weight = torch.nn.functional.pad(proj_weight, (0, 0, 0, 0, 0, pad_value))
-    preprocessed_weight = torch.permute(preprocessed_weight, (2, 3, 1, 0))
-    preprocessed_weight = torch.reshape(preprocessed_weight, (-1, three_times_hidden_size))
-
-    tensors[1] = ttnn.from_torch(preprocessed_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-    tensors[2] = ttnn.from_torch(proj_bias.unsqueeze(0), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tensors_tt = ttnn_optimized_vit_highres.prepare_dinov2_embedding_constants(tensors[1:3], device)
     tensors_tt = [
-        ttnn.from_torch(t, dtype=ttnn.bfloat16, device=device) if isinstance(t, torch.Tensor) else t for t in tensors
+        ttnn.from_torch(t, dtype=ttnn.bfloat16, device=device) if isinstance(t, torch.Tensor) else t
+        for t in [tensors[0]] + tensors_tt + tensors[3:]
     ]
-    out_opt = ttnn_COMPOSITE_48(*tensors_tt)
+    out_opt = ttnn_optimized_vit_highres.dinov2_embedding(*tensors_tt)
     out_opt = ttnn.to_torch(out_opt)
     assert_with_pcc(out_ref, out_opt, 0.999)
 
@@ -548,17 +411,12 @@ def test_COMPOSITE_23(device, input_specs):
     tensors = get_tensors_from_input_spec(input_specs)
     out_ref = ref_COMPOSITE_23(*tensors)
     tensors[0] = ttnn.from_torch(tensors[0], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tensors[1] = ttnn.from_torch(tensors[1].unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tensors[2] = ttnn.from_torch(tensors[2].unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tensors[3] = ttnn.from_torch(tensors[3].unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tensors[4] = ttnn.from_torch(tensors[4].contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tensors[5] = ttnn.from_torch(tensors[5].unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tensors[6] = ttnn.from_torch(tensors[6].contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tensors[7] = ttnn.from_torch(tensors[7].contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tensors_tt = ttnn_optimized_vit_highres.prepare_dinov2_attention_constants(tensors[1:8], device)
     tensors_tt = [
-        ttnn.from_torch(t, dtype=ttnn.bfloat16, device=device) if isinstance(t, torch.Tensor) else t for t in tensors
+        ttnn.from_torch(t, dtype=ttnn.bfloat16, device=device) if isinstance(t, torch.Tensor) else t
+        for t in [tensors[0]] + tensors_tt + tensors[8:]
     ]
-    out_opt = ttnn_COMPOSITE_23(*tensors_tt)
+    out_opt = ttnn_optimized_vit_highres.dinov2_attention(*tensors_tt)
     out_opt = ttnn.to_torch(out_opt)
     diff = torch.abs(out_ref - out_opt)
     print(diff.mean(), diff.std(), diff.max(), diff.min())
@@ -833,17 +691,12 @@ def test_COMPOSITE_47(device, input_specs):
     tensors = get_tensors_from_input_spec(input_specs)
     out_ref = ref_COMPOSITE_47(*tensors)
     tensors[0] = ttnn.from_torch(tensors[0], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tensors[1] = ttnn.from_torch(tensors[1].unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tensors[2] = ttnn.from_torch(tensors[2].unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tensors[3] = ttnn.from_torch(tensors[3].unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tensors[4] = ttnn.from_torch(tensors[4].contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tensors[5] = ttnn.from_torch(tensors[5].unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tensors[6] = ttnn.from_torch(tensors[6].contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tensors[7] = ttnn.from_torch(tensors[7].contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tensors_tt = ttnn_optimized_vit_highres.prepare_dinov2_feedforward_constants(tensors[1:8], device)
     tensors_tt = [
-        ttnn.from_torch(t, dtype=ttnn.bfloat16, device=device) if isinstance(t, torch.Tensor) else t for t in tensors
+        ttnn.from_torch(t, dtype=ttnn.bfloat16, device=device) if isinstance(t, torch.Tensor) else t
+        for t in [tensors[0]] + tensors_tt + tensors[8:]
     ]
-    out_opt = ttnn_COMPOSITE_47(*tensors_tt)
+    out_opt = ttnn_optimized_vit_highres.dinov2_feedforward(*tensors_tt)
     out_opt = ttnn.to_torch(out_opt)
     diff = torch.abs(out_ref - out_opt)
     print(diff.mean(), diff.std(), diff.max(), diff.min())
@@ -867,11 +720,11 @@ def test_COMPOSITE_49(device, input_specs):
     tensors = get_tensors_from_input_spec(input_specs)
     out_ref = ref_COMPOSITE_49(*tensors)
     tensors[0] = ttnn.from_torch(tensors[0], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tensors[1] = ttnn.from_torch(tensors[1].unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tensors[2] = ttnn.from_torch(tensors[2].unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tensors_tt = ttnn_optimized_vit_highres.prepare_dinov2_head_constants(tensors[1:3], device)
     tensors_tt = [
-        ttnn.from_torch(t, dtype=ttnn.bfloat16, device=device) if isinstance(t, torch.Tensor) else t for t in tensors
+        ttnn.from_torch(t, dtype=ttnn.bfloat16, device=device) if isinstance(t, torch.Tensor) else t
+        for t in [tensors[0]] + tensors_tt + tensors[3:]
     ]
-    out_opt = ttnn_COMPOSITE_49(*tensors_tt)
+    out_opt = ttnn_optimized_vit_highres.dinov2_head(*tensors_tt)
     out_opt = ttnn.to_torch(out_opt)
     assert_with_pcc(out_ref, out_opt, 0.999)
