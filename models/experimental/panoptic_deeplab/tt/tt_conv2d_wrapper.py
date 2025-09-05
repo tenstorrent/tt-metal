@@ -9,6 +9,7 @@ from typing import Optional
 from enum import Enum
 
 import ttnn
+from loguru import logger
 
 from .common import from_torch_fast
 
@@ -188,7 +189,9 @@ class TtConv2d:
         memory_config: ttnn.MemoryConfig | None = None,
     ) -> tuple[ttnn.Tensor, list[int]]:
         """Perform channel slicing convolution"""
-        print(f"--- Running Conv2d with Channel Slicing (factor={self._slice_config.num_slices}) ---")
+        logger.trace(
+            f"TtConv2d channel slicing - input shape: {x.shape}, slices: {self._slice_config.num_slices}, kernel: {self._kernel_size}, stride: {self._stride}, padding: {self._padding}, memory_config: {memory_config}"
+        )
 
         assert (
             self._in_channels % self._slice_config.num_slices == 0
@@ -224,7 +227,9 @@ class TtConv2d:
 
         # Process each channel slice
         for i in range(self._slice_config.num_slices):
-            print(f"  Processing channel slice {i+1}/{self._slice_config.num_slices}...")
+            logger.trace(
+                f"TtConv2d processing channel slice {i+1}/{self._slice_config.num_slices}, input_slice shape: {input_slices[i].shape}, weight_slice shape: {self._weight_slices[i].shape}"
+            )
             input_slice = input_slices[i]
             output_slice, [output_height, output_width], [self._weight_slices[i], bias_tmp] = ttnn.conv2d(
                 input_tensor=input_slice,
@@ -260,6 +265,9 @@ class TtConv2d:
             accumulated_output = ttnn.add(accumulated_output, self._bias, output_tensor=accumulated_output)
 
         final_shape = [batch_size, output_height, output_width, self._out_channels]
+        logger.trace(
+            f"TtConv2d channel slicing complete - output shape: {final_shape}, memory_config: {accumulated_output.memory_config()}"
+        )
         return accumulated_output, final_shape
 
     def _perform_standard_conv(
@@ -273,6 +281,9 @@ class TtConv2d:
         spatial_slice_config: Optional[ttnn.Conv2dSliceConfig] = None,
     ) -> tuple[ttnn.Tensor, list[int]]:
         """Perform standard convolution with optional spatial slicing"""
+        logger.trace(
+            f"TtConv2d standard conv - input shape: {x.shape}, kernel: {self._kernel_size}, stride: {self._stride}, padding: {self._padding}, spatial_slice_config: {spatial_slice_config}, memory_config: {memory_config}"
+        )
         output, [output_height, output_width], [prepared_weight, prepared_bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self._weight,
@@ -300,6 +311,9 @@ class TtConv2d:
         self._bias = prepared_bias
 
         shape = [batch_size, output_height, output_width, self._out_channels]
+        logger.trace(
+            f"TtConv2d standard conv complete - output shape: {shape}, memory_config: {output.memory_config()}"
+        )
         return output, shape
 
     def _call_without_reshape(

@@ -16,7 +16,7 @@ from .pytorch_semseg import PanopticDeepLabSemSegHead, ShapeSpec
 from .pytorch_insemb import PanopticDeepLabInsEmbedHead
 from .pytorch_postprocessing import get_panoptic_segmentation
 from .pytorch_resnet import ResNet
-from ..tt.common import create_real_resnet_state_dict
+from ..tt.common import create_resnet_state_dict
 
 
 class PytorchPanopticDeepLab(nn.Module):
@@ -323,9 +323,9 @@ class PytorchPanopticDeepLab(nn.Module):
         return weights
 
     def _load_resnet_weights(self, weights_path: Optional[str] = None):
-        """Load real ResNet weights into the backbone."""
-        # Create state dict using real weights from R-52.pkl
-        state_dict = create_real_resnet_state_dict(weights_path)
+        """Load ResNet weights into the backbone."""
+        # Create state dict using weights from R-52.pkl
+        state_dict = create_resnet_state_dict(weights_path)
 
         # Convert TTNN-style state dict to PyTorch format
         pytorch_state_dict = {}
@@ -339,7 +339,6 @@ class PytorchPanopticDeepLab(nn.Module):
 
         # Load the weights into the backbone
         self.backbone.load_state_dict(pytorch_state_dict)
-        print("Loaded real ResNet weights into PyTorch backbone")
 
     def forward(
         self, x, return_features: bool = False

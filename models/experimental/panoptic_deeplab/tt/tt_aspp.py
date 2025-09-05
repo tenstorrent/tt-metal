@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch
 
 import ttnn
+from loguru import logger
 
 from models.experimental.panoptic_deeplab.tt.tt_conv2d_wrapper import (
     TtConv2d,
@@ -127,6 +128,9 @@ class TtASPP(nn.Module):
         shared_weight_tensor_kernel1_output5: torch.Tensor,
     ):
         super(TtASPP, self).__init__()
+        logger.debug(
+            f"Initializing TtASPP with in_channels: {in_channels}, out_channels: {out_channels}, dilations: {dilations}"
+        )
         assert len(dilations) == 3, "ASPP expects 3 dilations, got {}".format(len(dilations))
         self.dropout = dropout
         use_bias = False
@@ -223,6 +227,7 @@ class TtASPP(nn.Module):
 
         # Initialize upsample wrapper for global pooling branch
         self.pool_upsample = TtUpsample.create(device=device, scale_factor=(1, 1), mode="bilinear")
+        logger.debug("TtASPP initialization complete")
 
     def forward(self, x):
         input_shape = x.shape
@@ -230,6 +235,8 @@ class TtASPP(nn.Module):
         H = x.shape[1]  # Height
         W = x.shape[2]  # Width
         C = x.shape[3]  # Channels
+
+        logger.debug(f"TtASPP forward pass - input shape: {input_shape}, pool_kernel_size: {self.pool_kernel_size}")
 
         if H % self.pool_kernel_size[0] or W % self.pool_kernel_size[1]:
             raise ValueError(
@@ -284,8 +291,10 @@ class TtASPP(nn.Module):
         res.append(pooled)
 
         res = ttnn.concat(res, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        logger.debug(f"TtASPP concatenated branches, shape: {res.shape}")
 
         res = self.project_conv(res)
         res = self.project_norm(res)
         res = self.activation(res)
+        logger.debug(f"TtASPP forward pass complete - output shape: {res.shape}")
         return res
