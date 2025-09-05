@@ -42,8 +42,7 @@
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include "umd/device/tt_xy_pair.h"
 #include <tt-metalium/distributed.hpp>
-
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

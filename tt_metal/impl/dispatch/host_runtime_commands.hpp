@@ -28,7 +28,8 @@
 #include "worker_config_buffer.hpp"
 #include "program/dispatch.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
+
 namespace tt {
 namespace tt_metal {
 class IDevice;

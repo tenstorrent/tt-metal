@@ -47,7 +47,8 @@
 #include "impl/context/metal_context.hpp"
 #include "umd/device/types/arch.h"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
+
 namespace tt {
 namespace tt_metal {
 class CommandQueue;
