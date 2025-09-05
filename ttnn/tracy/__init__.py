@@ -120,7 +120,7 @@ def run_report_setup(verbose, outputFolder, binFolder, port):
         )
         sys.exit(1)
 
-    return toolsReady, captureProcess
+    return captureProcess
 
 
 def generate_report(
