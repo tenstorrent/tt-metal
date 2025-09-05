@@ -476,6 +476,7 @@ class ModelArgs:
         self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
         self.cached_hf_model = None  # Save any HF model object to avoid loading it multiple times for reference methods
         self.num_experts_per_tok = 2
+        self.is_mixture_of_experts = False
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
