@@ -22,11 +22,9 @@ NUM_DEVICES = ttnn.get_num_devices()
 
 
 parameters = {
-    "suite_1": {
+    "generality_suite": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
-        "fabric_config": [ttnn.FabricConfig.FABRIC_1D],
-        # TODO this seem to reliably cause hangs, and we can't recover from hangs right now
-        #        "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
+        "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
         "num_links": [1],
         "input_shape": [
             [1, 1, 32, 32],
@@ -35,13 +33,23 @@ parameters = {
             [1, 1, 1, 32, 32],
             [2, 32, 32],
             [1, 1, 32, 16384],
-            [1, 1, 1, 2048],  # the following shapes are from training
-            [
-                1,
-                1,
-                1,
-                4096,
-            ],  # https://docs.google.com/spreadsheets/d/18lQ_dJpodMkoDFZjt7TfHdt0cEGsa5GCxxRKDzErGvM/edit?usp=sharing
+            [1, 1, 1, 2048],
+        ],
+        "dim": [0, 1, 2, 3, 4],
+        "cluster_axis": [0, 1, None],
+        "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16],
+        "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
+        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
+        "num_iters": [1],
+    },
+    # parameters from:
+    # https://docs.google.com/spreadsheets/d/18lQ_dJpodMkoDFZjt7TfHdt0cEGsa5GCxxRKDzErGvM/edit?usp=sharing
+    "model_suite": {
+        "mesh_shape": [(2, 4)],
+        "fabric_config": [ttnn.FabricConfig.FABRIC_1D],
+        "num_links": [1],
+        "input_shape": [
             [1, 32, 2048, 8],
             [1, 32, 2048, 16],
             [1, 32, 4096, 16],
@@ -55,18 +63,22 @@ parameters = {
             [1, 1, 8, 8],
             [1, 1, 16, 16],
         ],
-        "dim": [0, 1, 2, 3, 4],
+        "dim": [4],
         "cluster_axis": [0, 1, None],
-        "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "layout": [ttnn.TILE_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
         "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
-        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
+        "topology": [ttnn.Topology.Linear],
         "num_iters": [1],
     },
 }
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    cluster_axis = test_vector["cluster_axis"]
+    if cluster_axis is not None and test_vector["mesh_shape"][cluster_axis] == 1:
+        return True, "Only one device along axis"
+
     if test_vector["dim"] >= len(test_vector["input_shape"]):
         return True, "Dim greater than rank"
     if (
@@ -130,7 +142,7 @@ def run(
         ccl_sub_device_crs = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )
-        semaphore = ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0)
+        semaphores = [ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(2)]
 
         for i in range(num_iters):
             try:
@@ -141,7 +153,7 @@ def run(
                     cluster_axis=cluster_axis,
                     mesh_device=device,
                     topology=topology,
-                    multi_device_global_semaphore=semaphore,
+                    multi_device_global_semaphore=semaphores,
                     num_links=num_links,
                     memory_config=mem_config,
                 )

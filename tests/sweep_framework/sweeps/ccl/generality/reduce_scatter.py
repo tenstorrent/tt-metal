@@ -24,9 +24,7 @@ NUM_DEVICES = ttnn.get_num_devices()
 parameters = {
     "suite_1": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
-        "fabric_config": [ttnn.FabricConfig.FABRIC_1D],
-        # TODO this seem to reliably cause hangs, and we can't recover from hangs right now
-        # "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
+        "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
         "num_links": [1],
         "input_shape": [
             [1, 1, 32, 256],
@@ -41,7 +39,7 @@ parameters = {
         "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
         "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
-        "topology": [ttnn.Topology.Linear],  # , ttnn.Topology.Ring],
+        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
         "num_iters": [1],
     },
 }
