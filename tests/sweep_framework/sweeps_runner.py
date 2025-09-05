@@ -35,6 +35,8 @@ from framework.result_destination import ResultDestinationFactory
 from framework.serialize import deserialize, deserialize_vector_structured
 from sweep_utils.roofline_utils import get_updated_message
 
+# DEBUG
+import pickle
 
 PROCESS_TERMINATION_TIMEOUT_SECONDS = 5
 
@@ -460,8 +462,6 @@ def execute_suite(
                 result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 result["host"] = get_hostname()
                 result["user"] = get_username()
-                suite_pbar.update()
-                results.append(result)
 
                 # Check if we should skip remaining tests in the suite
                 if config.skip_on_timeout:
@@ -614,6 +614,7 @@ def run_sweeps(
                     max_test_cases_per_module = module_total
                     max_test_cases_module = module_name
                 header_info, test_vectors = sanitize_inputs(vectors)
+
                 results = execute_suite(
                     module_name, test_vectors, pbar_manager, suite, module_name, header_info, config
                 )
@@ -634,7 +635,7 @@ def run_sweeps(
                         if test_status == "failure":
                             final_status = "failure"
                     except Exception as e:
-                        logger.error(f"Failed to export results for {module_name}, suite {suite}: {e}")
+                        logger.exception(f"Failed to export results for {module_name}, suite {suite}: {e}")
                         final_status = "failure"
                         # continue with other suites
 
