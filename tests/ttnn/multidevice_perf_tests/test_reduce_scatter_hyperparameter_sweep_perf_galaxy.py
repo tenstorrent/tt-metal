@@ -40,7 +40,7 @@ def test_reduce_scatter_chunk_perf():
 
     chunks_per_sync_list = CHUNKS_PER_SYNC
     num_workers_per_link_list = WORKERS_PER_LINK
-    topology_list = TOPOLOGY
+    topology_list = ["linear"]
     start_time = time.time()
     results_subdir = f"ReduceScatter_{start_time}"
     os.makedirs(results_subdir, exist_ok=True)
@@ -156,6 +156,17 @@ def test_reduce_scatter_chunk_perf():
             logger.info(
                 f"Best bandwidth for shape {rs_input_shape}: {best_bandwidth_gbps:.6f} GB/s at (chunks per sync: {best_chunks_per_sync}, num workers per link: {best_num_workers_per_link})"
             )
+
+            # checkpoint here
+            rows_subdir = f"ReduceScatter_{start_time}_{topology}"
+            os.makedirs(rows_subdir, exist_ok=True)
+            curr_time = time.strftime("%Y_%m_%d_%H%M%S")
+            csv_path = f"{rows_subdir}/ReduceScatterPerformance_{curr_time}_{topology}.csv"
+            logger.info(f"Saving performance table to {csv_path}")
+            if len(rows) > 0:
+                df = pd.DataFrame(rows)
+                df.to_csv(csv_path, index=False)
+                logger.info(f"Saved performance table for topology {topology} to {csv_path}")
 
         curr_time = time.strftime("%Y_%m_%d_%H%M%S")
         csv_path = f"{results_subdir}/ReduceScatterPerformance_{curr_time}_{topology}.csv"
