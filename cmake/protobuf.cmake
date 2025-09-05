@@ -59,4 +59,17 @@ function(GENERATE_PROTO_FILES PROTO_FILE)
         )
         add_dependencies(all_generated_files ${PROTO_FILE_NAME})
     endif()
+
+    # Generate .clang-tidy configuration file in the build directory
+    file(
+        WRITE
+        ${PROTO_GENERATED_DIR}/.clang-tidy
+        "InheritParentConfig: true
+    Checks: >
+        -bugprone-reserved-identifier,
+        -readability-duplicate-include,
+        -cppcoreguidelines-pro-type-static-cast-downcast,
+        -readability-redundant-access-specifiers
+    "
+    )
 endfunction()
