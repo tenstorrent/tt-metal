@@ -818,10 +818,9 @@ def test_demo_text(
 
             # Print perf after every iteration (skip in CI to avoid performance overhead)
             tokens_per_second_per_user = 1 / decode_iteration_time
-            if not is_ci_env:
-                logger.info(
-                    f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({global_batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
-                )
+            logger.debug(
+                f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({global_batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+            )
 
             if not stress_test:  # During stress test runs we will iterate over the same position for X iterations
                 current_pos += 1
@@ -837,19 +836,17 @@ def test_demo_text(
                         stop_at_eos
                     ):  # For performance gathering in CI, we want to sometimes force decoding for a fixed number of iterations
                         user_done[user] = True
-                        if not is_ci_env:
-                            logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
+                        logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
                         if all(user_done):
                             users_decoding = False
 
             # Print out generated outputs for each user at the end of every iteration
-            if not is_ci_env:
-                for user in range(global_batch_size):
-                    text = "".join(tokenizer.decode(all_outputs[user]))
-                    if len(text) > 100:
-                        text = "..." + text[-97:]
-                    text = text.replace("\n", " ")
-                    logger.info("[User {}] {}".format(user, text))
+            for user in range(global_batch_size):
+                text = "".join(tokenizer.decode(all_outputs[user]))
+                if len(text) > 100:
+                    text = "..." + text[-97:]
+                text = text.replace("\n", " ")
+                logger.debug("[User {}] {}".format(user, text))
 
             iteration += 1
 
