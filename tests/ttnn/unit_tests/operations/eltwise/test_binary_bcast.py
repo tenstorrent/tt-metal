@@ -1984,7 +1984,7 @@ profile_a_b_shape_pairs = [
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     (
-        (torch.bfloat16, ttnn.bfloat16)
+        (torch.bfloat16, ttnn.bfloat16),
         # (torch.float32, ttnn.float32)
     ),
 )
