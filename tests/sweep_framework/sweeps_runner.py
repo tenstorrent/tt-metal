@@ -2,35 +2,39 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+# standard
 import argparse
+import builtins
 from contextlib import contextmanager
-import enlighten
-import sys
+from dataclasses import dataclass
+import datetime as dt
+import importlib
+from multiprocessing import Process
 import os
 from pathlib import Path
-import importlib
-import datetime as dt
-from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
-from multiprocessing import Process
-from faster_fifo import Queue
+import subprocess
+import sys
 from queue import Empty
-import builtins
-import framework.tt_smi_util as tt_smi_util
+from typing import Optional
+
+# third party
 from elasticsearch import Elasticsearch, NotFoundError
+import enlighten
+from faster_fifo import Queue
+
+# tt
+from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
+from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
 from framework.device_fixtures import default_device
 from framework.elastic_config import *
 from framework.statuses import VectorValidity, TestStatus
+import framework.tt_smi_util as tt_smi_util
 from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
-from framework.serialize import deserialize, deserialize_vector_structured
-import subprocess
-from dataclasses import dataclass
-from typing import Optional
 from framework.result_destination import ResultDestinationFactory
-from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
+from framework.serialize import deserialize, deserialize_vector_structured
 from sweep_utils.roofline_utils import get_updated_message
+
 
 PROCESS_TERMINATION_TIMEOUT_SECONDS = 5
 

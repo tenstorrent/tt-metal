@@ -14,7 +14,7 @@ class ResetUtil:
         self.arch = arch
         self.command = os.getenv("TT_SMI_RESET_COMMAND")
         self.args = []
-        if arch not in ["grayskull", "wormhole_b0", "blackhole"]:
+        if arch not in ["wormhole_b0", "blackhole"]:
             raise Exception(f"SWEEPS: Unsupported Architecture for TT-SMI Reset: {arch}")
         if self.command is not None:
             command_parts = self.command.split()
@@ -30,7 +30,6 @@ class ResetUtil:
                 self.command = executable
                 self.args = ["-r"]
 
-                # TODO this is broken on multi-chip machines
                 self.reset()
                 return
 
