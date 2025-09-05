@@ -656,12 +656,12 @@ TEST_P(FabricLite, ReadActiveEth) {
 
 TEST_P(FabricLite, ReadArc) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const uint64_t test_addr = 0x1FE80000;
-    CoreCoord target_worker{0, 0};
-    CoreCoord virtual_worker =
-        cluster.get_virtual_coordinate_from_logical_coordinates(0, target_worker, CoreType::WORKER);
-    const uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
-    uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)0x70000;
+    // const uint64_t test_addr = 0x1FE80000;
+    // CoreCoord target_worker{0, 0};
+    // CoreCoord virtual_worker =
+    //     cluster.get_virtual_coordinate_from_logical_coordinates(0, target_worker, CoreType::WORKER);
+    // const uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
+    // uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)0x70000;
 
     // CoreCoord virtual_worker =
     //     cluster.get_virtual_coordinate_from_logical_coordinates(1, arc_core, CoreType::ARC);
@@ -669,11 +669,11 @@ TEST_P(FabricLite, ReadArc) {
     // uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)l1_base;
 
     // log_info(tt::LogTest, "Reading from arc address using PCIe {:#x}", test_addr);
-    uint32_t correct_value = 0;
+    // uint32_t correct_value = 0;
     // tt::tt_metal::MetalContext::instance().get_cluster().read_core(&correct_value, 4, {1, 8, 0}, test_addr);
 
-    std::vector<uint32_t> read_val;
-    read_val.resize(100);
+    // std::vector<uint32_t> read_val;
+    // read_val.resize(100);
     // host_interface.read(read_val.data(), 16, dest_noc_addr);
     // tt::tt_metal::MetalContext::instance().get_cluster().read_core(
     //     read_val.data(), 16, {1, virtual_worker.x, virtual_worker.y}, dest_noc_addr);
@@ -711,26 +711,49 @@ TEST_P(FabricLite, ReadArc) {
     //     test_addr,
     //     correct_value);
 
-    if (mesh_device_) {
-        log_info(
-            tt::LogTest,
-            "Allocator Base {:#x}",
-            mesh_device_->get_devices()[0]->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
-    }
+    // if (mesh_device_) {
+    //     log_info(
+    //         tt::LogTest,
+    //         "Allocator Base {:#x}",
+    //         mesh_device_->get_devices()[0]->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
+    // }
 
-    read_val.clear();
-    read_val.resize(100);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        read_val.data(), 4, {0, virtual_worker.x, virtual_worker.y}, 0x19000);
-    log_info(tt::LogTest, "Read From Local Worker (PCIE) {:#x}", read_val[0]);
+    // read_val.clear();
+    // read_val.resize(100);
+    // tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+    //     read_val.data(), 4, {0, virtual_worker.x, virtual_worker.y}, 0x19000);
+    // log_info(tt::LogTest, "Read From Local Worker (PCIE) {:#x}", read_val[0]);
 
-    read_val.clear();
-    read_val.resize(100);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_core(read_val.data(), 4, {0, 8, 0}, test_addr);
-    log_info(
-        tt::LogTest,
-        "Read From Local ARC (PCIE) {:#x} from arc address {:#x}. correct value {:#x}",
-        read_val[0],
-        test_addr,
-        correct_value);
+    // read_val.clear();
+    // read_val.resize(100);
+    // tt::tt_metal::MetalContext::instance().get_cluster().read_core(read_val.data(), 4, {0, 8, 0}, test_addr);
+    // log_info(
+    //     tt::LogTest,
+    //     "Read From Local ARC (PCIE) {:#x} from arc address {:#x}. correct value {:#x}",
+    //     read_val[0],
+    //     test_addr,
+    //     correct_value);
+
+    for (uint32_t i = 8; i <= 0x1F; i+=4) {
+        std::cout << "----- Iteration " << std::hex << i  << std::dec << " -----" << std::endl;
+        uint32_t arc_addr = 0x80030400 | i;
+        std::cout << "arc addr 0x" << std::hex << arc_addr << std::dec << std::endl;
+        for (int j = 0; j < 2; j++) {
+            uint32_t arc_val = 1234;
+            tt::tt_metal::MetalContext::instance().get_cluster().read_core(&arc_val, 4, {1, 8, 0}, arc_addr);
+
+            std::cout << "arc val " << arc_val << std::endl; 
+
+            uint32_t read_value_fabric = 123;
+            uint64_t dest_noc_addr_arc = (0ULL << (36 + 6)) | (8ULL << 36) | (uint64_t)arc_addr;
+            host_interface.read(&read_value_fabric, 4, dest_noc_addr_arc);
+
+            std::cout << "arc val fabric " << read_value_fabric << std::endl;
+
+            if (arc_val == read_value_fabric) {
+                std::cout << "fabric match" << std::endl;
+                // return;
+            }
+        }
+    } 
 }

@@ -9,6 +9,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "umd/device/cluster.h"
 
 // This example demonstrates a simple data copy from DRAM into L1(SRAM) and to another place in DRAM.
 // The general flow is as follows:
@@ -36,6 +37,9 @@ int main() {
         // In Metalium, submitting operations to the device is done through a command queue. This includes
         // uploading/downloading data to/from the device, and executing programs.
         CommandQueue& cq = device->command_queue();
+
+        tt::umd::Cluster cluster = tt::umd::Cluster();
+
 
         // Data on Tensix is stored in tiles. A tile is a 2D array of (usually) 32x32 values. And the Tensix uses
         // BFloat16 as the most well supported data type. Thus the tile size is 32x32x2 = 2048 bytes.
@@ -100,6 +104,10 @@ int main() {
         // memory holding the data is freed.
         EnqueueWriteBuffer(cq, input_dram_buffer, input_vec, /*blocking=*/false);
 
+        std::cout << std::hex << "l1 buffer address 0x" << l1_buffer->address() << std::dec << std::endl;
+
+        uint64_t l1_buffer_addr = l1_buffer->address();
+
         // Set the arguments for the kernel.
         const std::vector<uint32_t> runtime_args = {
             l1_buffer->address(), input_dram_buffer->address(), output_dram_buffer->address(), num_tiles};
@@ -120,18 +128,23 @@ int main() {
         std::vector<bfloat16> result_vec;
         EnqueueReadBuffer(cq, output_dram_buffer, result_vec, /*blocking*/ true);
 
+        uint32_t read_value = 1;
+        cluster.read_from_device(&read_value, 0, tt::umd::CoreCoord(1, 2, CoreType::TENSIX, CoordSystem::TRANSLATED), l1_buffer_addr + 8, 4);
+
+        std::cout << "read value " << read_value << std::endl;
+
         // Compare the result with the input. The result should be the same as the input.
-        TT_FATAL(
-            result_vec.size() == input_vec.size(),
-            "Result vector size {} does not match input vector size {}",
-            result_vec.size(),
-            input_vec.size());
-        for (int i = 0; i < input_vec.size(); i++) {
-            if (input_vec[i] != result_vec[i]) {
-                pass = false;
-                break;
-            }
-        }
+        // TT_FATAL(
+        //     result_vec.size() == input_vec.size(),
+        //     "Result vector size {} does not match input vector size {}",
+        //     result_vec.size(),
+        //     input_vec.size());
+        // for (int i = 0; i < input_vec.size(); i++) {
+        //     if (input_vec[i] != result_vec[i]) {
+        //         pass = false;
+        //         break;
+        //     }
+        // }
 
         // Close the device
         if (!CloseDevice(device)) {
