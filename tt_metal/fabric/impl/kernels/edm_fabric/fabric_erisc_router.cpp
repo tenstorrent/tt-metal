@@ -1555,7 +1555,7 @@ void run_sender_channel_step_impl(
     bool has_unsent_packet = free_slots != SENDER_NUM_BUFFERS;
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        can_send = can_send && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
+        can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
     if constexpr (enable_first_level_ack) {
         bool sender_backpressured_from_sender_side = free_slots == 0;
@@ -1830,7 +1830,7 @@ void run_receiver_channel_step_impl(
         auto& completion_counter = receiver_channel_pointers.completion_counter;
         bool unsent_completions = !completion_counter.is_caught_up_to(completion_counter, wr_flush_counter);
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            unsent_completions = unsent_completions && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
+            unsent_completions = unsent_completions && !internal_::eth_txq_is_busy(receiver_txq_id);
         }
         if (unsent_completions) {
             // completion ptr incremented in callee
@@ -1850,7 +1850,7 @@ void run_receiver_channel_step_impl(
         bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         bool can_send_completion = unflushed_writes && next_trid_flushed;
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
+            can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
         }
         if (can_send_completion) {
             receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
