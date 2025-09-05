@@ -34,7 +34,7 @@ def _mesh_and_coords_iterator(num_devices, mesh_limit=None):
 
 
 parameters = {
-    "suite_1": {
+    "generality_suite": {
         "mesh_shape_and_coords": _mesh_and_coords_iterator(NUM_DEVICES),
         "fabric_config": FABRIC_CONFIGS,
         "num_links": [1],
