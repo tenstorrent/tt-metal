@@ -25,11 +25,6 @@ struct IsInProgramFactory {
         std::vector<CoreCoord> cores;
     };
 
-    static constexpr const char* READER_KERNEL_PATH =
-        "ttnn/cpp/ttnn/operations/experimental/isin/device/kernels/dataflow/isin_reader.cpp";
-    static constexpr const char* WRITER_KERNEL_PATH =
-        "ttnn/cpp/ttnn/operations/experimental/isin/device/kernels/dataflow/isin_writer.cpp";
-
     using cached_program_t = CachedProgram<shared_variables_t>;
     static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 
