@@ -65,5 +65,6 @@ def test_ufldv2_e2e_performant(device, batch_size, model_location_generator):
     ((1),),
 )
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 def test_ufldv2_e2e_performant_dp(mesh_device, batch_size_per_device, model_location_generator):
     run_ufldv2_e2e(mesh_device, batch_size_per_device, model_location_generator)
