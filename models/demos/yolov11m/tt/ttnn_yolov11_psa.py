@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.yolov11.tt.common import TtnnConv
-from models.demos.yolov11.tt.ttnn_yolov11_attention import TtnnAttention
+from models.demos.yolov11m.tt.common import TtnnConv
+from models.demos.yolov11m.tt.ttnn_yolov11_attention import TtnnAttention
 
 
 class TtnnPSABlock:
