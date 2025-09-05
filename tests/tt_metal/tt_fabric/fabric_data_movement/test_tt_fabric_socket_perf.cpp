@@ -20,6 +20,7 @@
 #include <fstream>
 #include <filesystem>
 #include <iomanip>
+#include <cmath>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -74,6 +75,100 @@ struct PerfParams {
     CoreCoord sender_core = {0, 0};
     CoreCoord receiver_core = {0, 0};
 };
+struct PerfStats {
+    uint64_t bytes = 0;
+    int iters = 0;
+    double mean_ms = 0.0;
+    double std_ms = 0.0;
+    double p50_ms = 0.0;  // median
+    double p95_ms = 0.0;
+    double min_ms = 0.0;
+    double max_ms = 0.0;
+    double mean_gbps = 0.0;
+};
+
+static inline PerfPoint RunUnicastConnWithParams(BaseFabricFixture* fixture, const PerfParams& p);
+
+static inline double mean_of(const std::vector<double>& v) {
+    if (v.empty()) {
+        return 0.0;
+    }
+    double s = std::accumulate(v.begin(), v.end(), 0.0);
+    return s / static_cast<double>(v.size());
+}
+
+static inline double stddev_of(const std::vector<double>& v, double m) {
+    if (v.size() < 2) {
+        return 0.0;
+    }
+    double acc = 0.0;
+    for (double x : v) {
+        double d = x - m;
+        acc += d * d;
+    }
+    return std::sqrt(acc / static_cast<double>(v.size() - 1));
+}
+
+static inline double percentile(std::vector<double> v, double p_in_0_100) {
+    if (v.empty()) {
+        return 0.0;
+    }
+    p_in_0_100 = std::clamp(p_in_0_100, 0.0, 100.0);
+    const size_t n = v.size();
+    const size_t k = static_cast<size_t>(std::round((p_in_0_100 / 100.0) * (n - 1)));
+    std::nth_element(v.begin(), v.begin() + k, v.end());
+    return v[k];
+}
+
+static inline PerfStats aggregate_stats(const std::vector<PerfPoint>& pts) {
+    PerfStats s;
+    if (pts.empty()) {
+        return s;
+    }
+    s.bytes = pts.front().bytes;
+    s.iters = static_cast<int>(pts.size());
+
+    std::vector<double> v_ms;
+    v_ms.reserve(pts.size());
+    std::vector<double> v_gbps;
+    v_gbps.reserve(pts.size());
+    for (const auto& p : pts) {
+        v_ms.push_back(p.ms);
+        v_gbps.push_back(p.gbps);
+    }
+    s.mean_ms = mean_of(v_ms);
+    s.std_ms = stddev_of(v_ms, s.mean_ms);
+    s.p50_ms = percentile(v_ms, 50.0);
+    s.p95_ms = percentile(v_ms, 95.0);
+    s.min_ms = *std::min_element(v_ms.begin(), v_ms.end());
+    s.max_ms = *std::max_element(v_ms.begin(), v_ms.end());
+    s.mean_gbps = mean_of(v_gbps);
+    return s;
+}
+
+// Warm a given (src,dst) path once (or a few times)
+static inline void warmup_once(BaseFabricFixture* fixture, PerfParams base, int iters = 1) {
+    // small transfer to prime the path; keep same cores for comparability
+    base.tensor_bytes = 4 * base.page_size;
+    for (int i = 0; i < iters; ++i) {
+        (void)RunUnicastConnWithParams(fixture, base);
+    }
+}
+
+// Run the same measurement multiple times, with optional per-case warmups.
+// Returns aggregated statistics.
+static inline PerfStats run_repeated(BaseFabricFixture* fixture, const PerfParams& p, int warmup_iters, int iters) {
+    for (int w = 0; w < warmup_iters; ++w) {
+        (void)RunUnicastConnWithParams(fixture, p);
+    }
+
+    std::vector<PerfPoint> pts;
+    pts.reserve(std::max(iters, 0));
+    for (int i = 0; i < iters; ++i) {
+        pts.push_back(RunUnicastConnWithParams(fixture, p));
+    }
+    return aggregate_stats(pts);
+}
 
 static inline tt::tt_metal::IDevice* find_device_by_id(chip_id_t phys_id) {
     auto devices = DevicePool::instance().get_all_active_devices();
@@ -288,6 +383,9 @@ TEST_F(Fabric2DFixture, UnicastConn_SweepTensorSize) {
     base.sender_core = {0, 0};
     base.receiver_core = {0, 0};
 
+    // global warmup (once) for this src/dst pair
+    warmup_once(this, base, /*iters=*/1);
+
     std::vector<uint32_t> sizes_bytes = {
         1 * base.page_size,
         2 * base.page_size,
@@ -299,6 +397,9 @@ TEST_F(Fabric2DFixture, UnicastConn_SweepTensorSize) {
         128 * base.page_size,
         256 * base.page_size};
 
+    const int repeats = 5;          // measure each size 5 times
+    const int warmup_per_size = 1;  // one per-size warmup
+
     std::vector<PerfPoint> results;
     results.reserve(sizes_bytes.size());
 
@@ -306,8 +407,17 @@ TEST_F(Fabric2DFixture, UnicastConn_SweepTensorSize) {
         PerfParams p = base;
         p.tensor_bytes = sz;
 
-        auto r = RunUnicastConnWithParams(this, p);
-        results.push_back(r);
+        auto stats = run_repeated(this, p, /*warmup_iters=*/warmup_per_size, /*iters=*/repeats);
+
+        results.push_back(PerfPoint{
+            .bytes = static_cast<uint64_t>(sz),
+            .sec = 0.0,
+            .ms = stats.p50_ms,
+            .gbps = stats.mean_gbps,
+        });
+
+        std::cout << "[perf] size=" << sz << " bytes median_ms=" << stats.p50_ms << " p95_ms=" << stats.p95_ms
+                  << " mean_gbps=" << stats.mean_gbps << " (n=" << stats.iters << ")\n";
     }
 
     std::filesystem::create_directories("artifacts");
@@ -320,6 +430,7 @@ TEST_F(Fabric2DFixture, UnicastConn_SweepTensorSize) {
         base.dst_chip,
         base.page_size,
         ts);
+
     std::ofstream ofs(csv_name);
     ofs << std::fixed << std::setprecision(6);
     ofs << "bytes,ms,gbps\n";
@@ -341,6 +452,9 @@ TEST_F(Fabric2DFixture, UnicastConn_HeatmapDstCore) {
     base.receiver_core = {0, 0};
     base.tensor_bytes = 64 * base.page_size;
 
+    // global warmup for this src/dst chip pair
+    warmup_once(this, base, /*iters=*/1);
+
     // Discover available worker cores on the destination device
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
     tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{base.mesh_id}, base.dst_chip};
@@ -351,7 +465,9 @@ TEST_F(Fabric2DFixture, UnicastConn_HeatmapDstCore) {
     auto dst_workers =
         dst_dev->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::SubDeviceId{0});
 
-    // CSV: (x,y,ms,gbps)
+    const int repeats = 3;          // measure each core a few times
+    const int warmup_per_core = 1;  // one per-core warmup
+
     std::filesystem::create_directories("artifacts");
     const auto ts =
         std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -368,18 +484,17 @@ TEST_F(Fabric2DFixture, UnicastConn_HeatmapDstCore) {
     ofs << std::fixed << std::setprecision(6);
     ofs << "x,y,ms,gbps\n";
 
-    // Iterate each rectangular CoreRange, then each CoreCoord within it
     for (const auto& rect : dst_workers.ranges()) {
         for (auto it = rect.begin(); it != rect.end(); ++it) {
             CoreCoord rc = *it;  // logical dest worker core (x,y)
+
             PerfParams p = base;
             p.receiver_core = rc;
 
-            // per-core warmup
-            (void)RunUnicastConnWithParams(this, p);
+            auto stats = run_repeated(this, p, /*warmup_iters=*/warmup_per_core, /*iters=*/repeats);
 
-            auto r = RunUnicastConnWithParams(this, p);
-            ofs << rc.x << "," << rc.y << "," << r.ms << "," << r.gbps << "\n";
+            // Keep schema: use median latency, mean throughput
+            ofs << rc.x << "," << rc.y << "," << stats.p50_ms << "," << stats.mean_gbps << "\n";
         }
     }
 
