@@ -103,3 +103,8 @@ def set_deterministic_env():
     """
     torch.manual_seed(5)
     torch.use_deterministic_algorithms(True)
+
+
+pytest_plugins = [
+    "models.demos.deepseek_v3.utils.results_csv_plugin",
+]

@@ -109,6 +109,10 @@ def get_reference_output(torch_input, reference_model):
     "module_path",
     ["model.layers.3.mlp.experts.0-255"],
 )
+@pytest.mark.parametrize(
+    "batch_size",
+    [1],
+)
 def test_forward_pass(
     mode: str,
     seq_len: int,
@@ -119,9 +123,8 @@ def test_forward_pass(
     module_path: str,
     model_path: Path,
     reset_seeds: Any,
+    batch_size: int,
 ):
-    batch_size = 1
-
     reference_model = get_reference_model(weight_type, hf_config, module_path, model_path)
     torch_input = get_reference_input(batch_size, seq_len, hf_config)
     reference_output = get_reference_output(torch_input, reference_model)

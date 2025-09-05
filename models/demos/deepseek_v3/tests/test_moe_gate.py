@@ -36,6 +36,10 @@ def reference_model(hf_config, use_bitonic_sort):
         (True, True),
     ],
 )
+@pytest.mark.parametrize(
+    "batch_size",
+    [1],
+)
 def test_forward_pass(
     mode,
     seq_len,
@@ -46,10 +50,9 @@ def test_forward_pass(
     use_bitonic_sort,
     tmp_path,
     mesh_device,
+    batch_size,
 ):
     """Test forward pass against reference model."""
-    batch_size = 1
-
     # Get state dict from actual model - pass directly to convert_weights
     hf_state_dict = reference_model.state_dict()
 

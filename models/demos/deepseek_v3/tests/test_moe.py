@@ -38,6 +38,10 @@ def reference_model(hf_config):
         ("prefill", 2048),
     ],
 )
+@pytest.mark.parametrize(
+    "batch_size",
+    [1],
+)
 def test_forward_pass(
     mode,
     seq_len,
@@ -47,10 +51,9 @@ def test_forward_pass(
     tmp_path,
     mesh_device,
     ccl,
+    batch_size,
 ):
     """Test forward pass against reference model."""
-    batch_size = 1
-
     # Get state dict from actual model - pass directly to convert_weights
     hf_state_dict = reference_model.state_dict()
 
