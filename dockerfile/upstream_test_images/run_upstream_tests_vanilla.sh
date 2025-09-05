@@ -12,7 +12,7 @@ test_suite_bh_single_pcie_metal_unit_tests() {
     echo "[upstream-tests] Running BH upstream metal runtime tests"
     ARCH_NAME=blackhole TT_METAL_SLOW_DISPATCH_MODE=1 ./tests/scripts/run_cpp_fd2_tests.sh
     # I wonder why we can't put these in the validation suite?
-    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueSingleCardProgramFixture.*
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardProgramFixture.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQProgramFixture.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=*RandomProgramFixture.*
@@ -154,7 +154,6 @@ test_suite_wh_6u_metal_unit_tests() {
     ./build/test/tt_metal/tt_fabric/test_system_health
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardFixture.*"
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardFixture.*"
-    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardProgramFixture.*"
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardProgramFixture.*"
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites"
     TT_METAL_USE_MGD_2_0=1 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
