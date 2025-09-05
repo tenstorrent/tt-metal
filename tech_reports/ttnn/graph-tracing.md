@@ -354,12 +354,6 @@ export TT_METAL_OPERATION_TIMEOUT_SECONDS=30
 This environment variable will enable a timeout mechanism for operations, the value is the amount of seconds we will wait for the operation to finish.
 
 
-If we want the device to synchronize after each operation, we should add
-```
-export TT_METAL_OPERATION_SYNCHRONIZE_AFTER_OPERATION=1
-```
-This can be particularly helpful when we have a huge model and we want to get the hang information asap
-
 Here is an example of how to use all this:
 ```
 def test_graph_capture_with_hang_device_operation(device):
@@ -376,6 +370,7 @@ def test_graph_capture_with_hang_device_operation(device):
 
     try:
         ttnn.prim.test_hang_device_operation(tt_input)
+        # this allows the device to throw the exception inside the try block
         ttnn._ttnn.device.synchronize_device(device)
     except Exception as e:
         print("Exception captured")

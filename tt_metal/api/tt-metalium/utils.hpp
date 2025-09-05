@@ -18,10 +18,6 @@ bool run_command(const std::string& cmd, const std::string& log_file, bool verbo
 void create_file(const std::string& file_path_str);
 const std::string& get_reports_dir();
 
-std::chrono::duration<float> get_timeout_duration_for_operations();
-
-bool synchronize_after_operation();
-
 // Cancellable timeout wrapper: invokes on_timeout() before throwing and waits for task to exit
 // Please note that the FuncBody is going to loop until the FuncWait returns false.
 template <typename FuncBody, typename FuncWait, typename OnTimeout, typename... Args>
@@ -36,7 +32,11 @@ auto loop_and_wait_with_timeout(
 
         do {
             func_body(args...);
-            std::this_thread::yield();
+            if (wait_condition(args...)) {
+                // If somehow finished up the operation, we don't need to yield
+                std::this_thread::yield();
+            }
+
             auto current_time = std::chrono::high_resolution_clock::now();
             auto elapsed = std::chrono::duration<float>(current_time - start_time).count();
 

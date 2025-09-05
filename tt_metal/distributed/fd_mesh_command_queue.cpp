@@ -132,7 +132,7 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
         // This allows physical device close to proceed correctly, since we still
         // rely on single device CQs during this step. Not needed for functionality
         // once single device CQs are removed, however this is still good practice.
-        this->clear_expected_num_workers_completed();
+        s this->clear_expected_num_workers_completed();
     }
 
     TT_FATAL(completion_queue_reads_.empty(), "The completion reader queue must be empty when closing devices.");

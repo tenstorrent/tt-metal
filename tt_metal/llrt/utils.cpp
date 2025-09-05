@@ -56,36 +56,6 @@ const std::string& get_reports_dir() {
     }
     return outpath;
 }
-
-std::chrono::duration<float> get_timeout_duration_for_operations() {
-    static std::once_flag flag;
-    static std::chrono::duration<float> cached_duration;
-
-    std::call_once(flag, [&]() {
-        const char* env_value = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");
-        float seconds = env_value ? std::stof(env_value) : 0.f;
-        cached_duration = std::chrono::duration<float>(seconds);
-    });
-
-    return cached_duration;
-}
-
-bool synchronize_after_operation() {
-    if (get_timeout_duration_for_operations().count() > 0.0f) {
-        static std::once_flag flag;
-        static bool cached_result;
-
-        std::call_once(flag, [&]() {
-            const char* env_value = std::getenv("TT_METAL_OPERATION_SYNCHRONIZE_AFTER_OPERATION");
-            bool cached_result = env_value ? std::stoi(env_value) : false;
-        });
-
-        return cached_result;
-    }
-
-    return false;
-}
-
 }  // namespace utils
 
 }  // namespace tt
