@@ -53,20 +53,21 @@ jobs:
       - name: Get tag version
         id: get-tag-version
         run: |
-          baseVersion=${{ steps.get-next-semantic-base-version.outputs.version }}
-          tagType="${{ inputs.tag_type }}"
-          if [ "$tagType" = "rc" ]; then
-            currentNumberRCs=$(git tag | grep "$baseVersion"-rc | wc -l)
-            newNumber=$(($currentNumberRCs+1))
-            version="$baseVersion-rc$newNumber"
-          elif [ "$tagType" = "dev" ]; then
-            dateTimeInt=$(date +%Y%m%d%H%M%S)
-            version="$baseVersion-dev$dateTimeInt-nightly"
-          else
-            version="$baseVersion"
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "$version"
+            baseVersion=${{ steps.get-next-semantic-base-version.outputs.version }}
+            tagType="${{ inputs.tag_type }}"
+            if [ "$tagType" = "rc" ]; then
+              currentNumberRCs=$(git tag | grep "$baseVersion"-rc | wc -l)
+              newNumber=$(($currentNumberRCs+1))
+              version="$baseVersion-rc$newNumber"
+            elif [ "$tagType" = "dev" ]; then
+              dateInt=$(date +%Y%m%d)
+              gitHash=$(git rev-parse --short=8 HEAD)
+              version="$baseVersion-dev$dateInt-nightly-$gitHash"
+            else
+              version="$baseVersion"
+            fi
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "$version"
       - name: Create tag
         if: ${{ !inputs.dry-run }}
         uses: actions/github-script@v7.0.1
