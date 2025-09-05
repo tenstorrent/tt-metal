@@ -175,12 +175,18 @@ int main(int argc, char** argv) {
     // result into a third circular buffer. `tile_write` reads tiles from the
     // third circular buffer and writes them to the output buffer C.
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)tt::CBIndex::c_0, (std::uint32_t)tt::CBIndex::c_1};
+    std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
+        {"c_0", (std::uint32_t)tt::CBIndex::c_0}, {"c_1", (std::uint32_t)tt::CBIndex::c_1}};
     TensorAccessorArgs(*a).append_to(reader_compile_time_args);
     TensorAccessorArgs(*b).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)tt::CBIndex::c_2};
     TensorAccessorArgs(*c).append_to(writer_compile_time_args);
     std::vector<uint32_t> compute_compile_time_args = {
         (std::uint32_t)tt::CBIndex::c_0, (std::uint32_t)tt::CBIndex::c_1, (std::uint32_t)tt::CBIndex::c_2};
+    std::unordered_map<std::string, uint32_t> compute_named_compile_time_args = {
+        {"c_0", (std::uint32_t)tt::CBIndex::c_0},
+        {"c_1", (std::uint32_t)tt::CBIndex::c_1},
+        {"c_2", (std::uint32_t)tt::CBIndex::c_2}};
 
     auto reader = CreateKernel(
         program,
@@ -190,7 +196,8 @@ int main(int argc, char** argv) {
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = reader_compile_time_args});
+            .compile_args = reader_compile_time_args,
+            .named_compile_args = reader_named_compile_time_args});
     auto writer = CreateKernel(
         program,
         "tt_metal/programming_examples/vecadd_multi_core/kernels/"
@@ -205,7 +212,11 @@ int main(int argc, char** argv) {
         "tt_metal/programming_examples/vecadd_multi_core/"
         "kernels/add_multi_core.cpp",
         all_cores,
-        ComputeConfig{.math_approx_mode = false, .compile_args = compute_compile_time_args, .defines = {}});
+        ComputeConfig{
+            .math_approx_mode = false,
+            .compile_args = compute_compile_time_args,
+            .defines = {},
+            .named_compile_args = compute_named_compile_time_args});
 
     auto work_groups = {
         std::make_pair(core_group_1, num_tiles_per_core_group_1),
