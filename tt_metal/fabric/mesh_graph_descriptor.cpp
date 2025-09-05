@@ -298,14 +298,16 @@ void MeshGraphDescriptor::validate_mesh_topology(const proto::MeshGraphDescripto
         
         // Check that the device topology dimensions are divisible by the host topology dimensions
         if (mesh.device_topology().dims_size() > 0) {
-            if (mesh.device_topology().dims(0) % mesh.host_topology().dims(0) != 0 || mesh.device_topology().dims(1) % mesh.host_topology().dims(1) != 0) {
-                error_messages.push_back(
-                    fmt::format(
-                        "Device topology dimensions must be divisible by host topology dimensions (Mesh: {})",
-                        mesh.name()
-                    )
-                );
-                continue;
+            for (int i = 0; i < mesh.device_topology().dims_size(); i++) {
+                if (mesh.device_topology().dims(i) % mesh.host_topology().dims(i) != 0) {
+                    error_messages.push_back(
+                        fmt::format(
+                            "Device topology dimensions must be divisible by host topology dimensions (Mesh: {})",
+                            mesh.name()
+                        )
+                    );
+                    continue;
+                }
             }
         }
     }
@@ -1020,13 +1022,18 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
             std::vector<GlobalNodeId> nodes_copy = nodes;
             std::swap(nodes_copy[0], nodes_copy[i]);
 
+            proto::RoutingDirection routing_direction = proto::RoutingDirection::NONE;
+            if (connection.routing_direction_size() != 0) {
+                routing_direction = connection.routing_direction(i);
+            }
+
             ConnectionData data{
                 .nodes = nodes_copy,
                 .count = connection.channels().count(),
                 .policy = connection.channels().policy(),
                 .directional = connection.directional(),
                 .parent_instance_id = graph_id,
-                .routing_direction = connection.routing_direction(i),
+                .routing_direction = routing_direction,
             };
 
             const auto id = data.connection_id;
