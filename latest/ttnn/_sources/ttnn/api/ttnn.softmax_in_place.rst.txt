@@ -1,0 +1,8 @@
+﻿ttnn.softmax\_in\_place
+=======================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.softmax_in_place:
+
+.. autodata:: ttnn.softmax_in_place

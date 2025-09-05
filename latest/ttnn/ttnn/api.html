@@ -196,7 +196,6 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.silu.html">ttnn.silu</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.sin.html">ttnn.sin</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.sinh.html">ttnn.sinh</a></li>
-<li class="toctree-l4"><a class="reference internal" href="api/ttnn.softmax.html">ttnn.softmax</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.softplus.html">ttnn.softplus</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.softshrink.html">ttnn.softshrink</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.softsign.html">ttnn.softsign</a></li>
@@ -430,6 +429,17 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.layer_norm.html">ttnn.layer_norm</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.rms_norm.html">ttnn.rms_norm</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.batch_norm.html">ttnn.batch_norm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.softmax.html">ttnn.softmax</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.scale_mask_softmax.html">ttnn.scale_mask_softmax</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.softmax_in_place.html">ttnn.softmax_in_place</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.scale_mask_softmax_in_place.html">ttnn.scale_mask_softmax_in_place</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.scale_causal_mask_hw_dims_softmax_in_place.html">ttnn.scale_causal_mask_hw_dims_softmax_in_place</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#normalization-program-configs">Normalization Program Configs</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.SoftmaxProgramConfig.html">ttnn.SoftmaxProgramConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.SoftmaxDefaultProgramConfig.html">ttnn.SoftmaxDefaultProgramConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.SoftmaxShardedMultiCoreProgramConfig.html">ttnn.SoftmaxShardedMultiCoreProgramConfig</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#moreh-operations">Moreh Operations</a><ul>
@@ -1069,406 +1079,402 @@
 <td><p>Performs sinh function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
 <tr class="row-even">
-<td><p><a class="reference internal" href="api/ttnn.softmax.html#ttnn.softmax" title="ttnn.softmax"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.softmax</span></code></a></p></td>
-<td><p>ttnn.Tensor, dim: int, memory_config: Optional[ttnn.MemoryConfig] = None, compute_kernel_config: Optional[DeviceComputeKernelConfig]) -&gt; ttnn.Tensor</p></td>
-</tr>
-<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.softplus.html#ttnn.softplus" title="ttnn.softplus"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.softplus</span></code></a></p></td>
 <td><p>Applies softplus to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.softshrink.html#ttnn.softshrink" title="ttnn.softshrink"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.softshrink</span></code></a></p></td>
 <td><p>Performs softshrink function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">lambd</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.softsign.html#ttnn.softsign" title="ttnn.softsign"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.softsign</span></code></a></p></td>
 <td><p>Applies softsign to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.sqrt.html#ttnn.sqrt" title="ttnn.sqrt"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.sqrt</span></code></a></p></td>
 <td><p>Applies sqrt to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.square.html#ttnn.square" title="ttnn.square"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.square</span></code></a></p></td>
 <td><p>Applies square to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.swiglu.html#ttnn.swiglu" title="ttnn.swiglu"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.swiglu</span></code></a></p></td>
 <td><p>Applies swiglu to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.swish.html#ttnn.swish" title="ttnn.swish"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.swish</span></code></a></p></td>
 <td><p>Performs swish function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.tan.html#ttnn.tan" title="ttnn.tan"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.tan</span></code></a></p></td>
 <td><p>Applies tan to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.tanh.html#ttnn.tanh" title="ttnn.tanh"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.tanh</span></code></a></p></td>
 <td><p>Applies tanh to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.tanhshrink.html#ttnn.tanhshrink" title="ttnn.tanhshrink"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.tanhshrink</span></code></a></p></td>
 <td><p>Applies tanhshrink to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.threshold.html#ttnn.threshold" title="ttnn.threshold"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.threshold</span></code></a></p></td>
 <td><p>Performs threshold function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">threshold</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">value</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.tril.html#ttnn.tril" title="ttnn.tril"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.tril</span></code></a></p></td>
 <td><p>Performs tril function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">diagonal</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.triu.html#ttnn.triu" title="ttnn.triu"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.triu</span></code></a></p></td>
 <td><p>Performs triu function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">diagonal</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.trunc.html#ttnn.trunc" title="ttnn.trunc"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.trunc</span></code></a></p></td>
 <td><p>Applies trunc to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.unary_chain.html#ttnn.unary_chain" title="ttnn.unary_chain"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.unary_chain</span></code></a></p></td>
 <td><p>Applies unary_chain to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.clamp_bw.html#ttnn.clamp_bw" title="ttnn.clamp_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.clamp_bw</span></code></a></p></td>
 <td><p>Performs backward operations for clamp on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">min</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">max</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.clip_bw.html#ttnn.clip_bw" title="ttnn.clip_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.clip_bw</span></code></a></p></td>
 <td><p>Performs backward operations for clip on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">min</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">max</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.hardtanh_bw.html#ttnn.hardtanh_bw" title="ttnn.hardtanh_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.hardtanh_bw</span></code></a></p></td>
 <td><p>Performs backward operations for hardtanh activation function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">min</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">max</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.threshold_bw.html#ttnn.threshold_bw" title="ttnn.threshold_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.threshold_bw</span></code></a></p></td>
 <td><p>Performs backward operations for threshold on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">threshold</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">value</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.softplus_bw.html#ttnn.softplus_bw" title="ttnn.softplus_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.softplus_bw</span></code></a></p></td>
 <td><p>Performs backward operations for softplus on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">beta</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">threshold</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.rdiv_bw.html#ttnn.rdiv_bw" title="ttnn.rdiv_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.rdiv_bw</span></code></a></p></td>
 <td><p>Performs backward operations for Unary rdiv on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">scalar</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code> using given <code class="xref py py-attr docutils literal notranslate"><span class="pre">round_mode</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.pow_bw.html#ttnn.pow_bw" title="ttnn.pow_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.pow_bw</span></code></a></p></td>
 <td><p>Performs backward operations for power on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">exponent</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.exp_bw.html#ttnn.exp_bw" title="ttnn.exp_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.exp_bw</span></code></a></p></td>
 <td><p>Performs backward operations for exponential function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.tanh_bw.html#ttnn.tanh_bw" title="ttnn.tanh_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.tanh_bw</span></code></a></p></td>
 <td><p>Performs backward operations for hyperbolic tangent (tanh) function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.sqrt_bw.html#ttnn.sqrt_bw" title="ttnn.sqrt_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.sqrt_bw</span></code></a></p></td>
 <td><p>Performs backward operations for square-root on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.multigammaln_bw.html#ttnn.multigammaln_bw" title="ttnn.multigammaln_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.multigammaln_bw</span></code></a></p></td>
 <td><p>Performs backward operations for multivariate logarithmic gamma function (also referred to as mvlgamma) on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.lgamma_bw.html#ttnn.lgamma_bw" title="ttnn.lgamma_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.lgamma_bw</span></code></a></p></td>
 <td><p>Performs backward operations for lgamma on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.fill_bw.html#ttnn.fill_bw" title="ttnn.fill_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.fill_bw</span></code></a></p></td>
 <td><p>Performs backward operations for fill on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.hardsigmoid_bw.html#ttnn.hardsigmoid_bw" title="ttnn.hardsigmoid_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.hardsigmoid_bw</span></code></a></p></td>
 <td><p>Performs backward operations for hardsigmoid on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.cos_bw.html#ttnn.cos_bw" title="ttnn.cos_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.cos_bw</span></code></a></p></td>
 <td><p>Performs backward operations for cosine on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.acosh_bw.html#ttnn.acosh_bw" title="ttnn.acosh_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.acosh_bw</span></code></a></p></td>
 <td><p>Performs backward operations for inverse hyperbolic cosine (acosh) on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.acos_bw.html#ttnn.acos_bw" title="ttnn.acos_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.acos_bw</span></code></a></p></td>
 <td><p>Performs backward operations for inverse cosine (acos) on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.atan_bw.html#ttnn.atan_bw" title="ttnn.atan_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.atan_bw</span></code></a></p></td>
 <td><p>Performs backward operations for inverse tangenr (atan) on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.rad2deg_bw.html#ttnn.rad2deg_bw" title="ttnn.rad2deg_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.rad2deg_bw</span></code></a></p></td>
 <td><p>Performs backward operations for radian to degree conversion (rad2deg) on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.frac_bw.html#ttnn.frac_bw" title="ttnn.frac_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.frac_bw</span></code></a></p></td>
 <td><p>Performs backward operations for frac on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.trunc_bw.html#ttnn.trunc_bw" title="ttnn.trunc_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.trunc_bw</span></code></a></p></td>
 <td><p>Performs backward operations for truncation on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.log_sigmoid_bw.html#ttnn.log_sigmoid_bw" title="ttnn.log_sigmoid_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.log_sigmoid_bw</span></code></a></p></td>
 <td><p>Performs backward operations for log sigmoid on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.fill_zero_bw.html#ttnn.fill_zero_bw" title="ttnn.fill_zero_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.fill_zero_bw</span></code></a></p></td>
 <td><p>Performs backward operations for fill zero on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.i0_bw.html#ttnn.i0_bw" title="ttnn.i0_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.i0_bw</span></code></a></p></td>
 <td><p>Performs backward operations for i0 on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.tan_bw.html#ttnn.tan_bw" title="ttnn.tan_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.tan_bw</span></code></a></p></td>
 <td><p>Performs backward operations for tan on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.sigmoid_bw.html#ttnn.sigmoid_bw" title="ttnn.sigmoid_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.sigmoid_bw</span></code></a></p></td>
 <td><p>Performs backward operations for sigmoid on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.rsqrt_bw.html#ttnn.rsqrt_bw" title="ttnn.rsqrt_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.rsqrt_bw</span></code></a></p></td>
 <td><p>Performs backward operations for reciprocal of square-root on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.neg_bw.html#ttnn.neg_bw" title="ttnn.neg_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.neg_bw</span></code></a></p></td>
 <td><p>Performs backward operations for neg on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.relu_bw.html#ttnn.relu_bw" title="ttnn.relu_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.relu_bw</span></code></a></p></td>
 <td><p>Performs backward operations for relu on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.logit_bw.html#ttnn.logit_bw" title="ttnn.logit_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.logit_bw</span></code></a></p></td>
 <td><p>Performs backward operations for logit on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.hardshrink_bw.html#ttnn.hardshrink_bw" title="ttnn.hardshrink_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.hardshrink_bw</span></code></a></p></td>
 <td><p>Performs backward operations for hardshrink on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">lambd</span></code>, with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.softshrink_bw.html#ttnn.softshrink_bw" title="ttnn.softshrink_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.softshrink_bw</span></code></a></p></td>
 <td><p>Performs backward operations for softshrink on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">lambd</span></code>, with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.leaky_relu_bw.html#ttnn.leaky_relu_bw" title="ttnn.leaky_relu_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.leaky_relu_bw</span></code></a></p></td>
 <td><p>Performs backward operations for leaky_relu on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">negative_slope</span></code>, with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.elu_bw.html#ttnn.elu_bw" title="ttnn.elu_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.elu_bw</span></code></a></p></td>
 <td><p>Performs backward operations for elu on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">alpha</span></code>, with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.celu_bw.html#ttnn.celu_bw" title="ttnn.celu_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.celu_bw</span></code></a></p></td>
 <td><p>Performs backward operations for celu on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">alpha</span></code>, with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.rpow_bw.html#ttnn.rpow_bw" title="ttnn.rpow_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.rpow_bw</span></code></a></p></td>
 <td><p>Performs backward operations for rpow on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">exponent</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.floor_bw.html#ttnn.floor_bw" title="ttnn.floor_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.floor_bw</span></code></a></p></td>
 <td><p>Performs backward operations for floor on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.round_bw.html#ttnn.round_bw" title="ttnn.round_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.round_bw</span></code></a></p></td>
 <td><p>Performs backward operations for round on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.log_bw.html#ttnn.log_bw" title="ttnn.log_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.log_bw</span></code></a></p></td>
 <td><p>Performs backward operations for logarithm on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.relu6_bw.html#ttnn.relu6_bw" title="ttnn.relu6_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.relu6_bw</span></code></a></p></td>
 <td><p>Performs backward operations for relu6 on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.abs_bw.html#ttnn.abs_bw" title="ttnn.abs_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.abs_bw</span></code></a></p></td>
 <td><p>Performs backward operations for abs on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.silu_bw.html#ttnn.silu_bw" title="ttnn.silu_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.silu_bw</span></code></a></p></td>
 <td><p>Performs backward operations for silu on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.selu_bw.html#ttnn.selu_bw" title="ttnn.selu_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.selu_bw</span></code></a></p></td>
 <td><p>Performs backward operations for selu on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.square_bw.html#ttnn.square_bw" title="ttnn.square_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.square_bw</span></code></a></p></td>
 <td><p>Performs backward operations for square on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.prod_bw.html#ttnn.prod_bw" title="ttnn.prod_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.prod_bw</span></code></a></p></td>
 <td><p>Performs backward operations for prod on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code> along a particular <cite>dim</cite>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.hardswish_bw.html#ttnn.hardswish_bw" title="ttnn.hardswish_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.hardswish_bw</span></code></a></p></td>
 <td><p>Performs backward operations for  hardswish on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.tanhshrink_bw.html#ttnn.tanhshrink_bw" title="ttnn.tanhshrink_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.tanhshrink_bw</span></code></a></p></td>
 <td><p>Performs backward operations for  tanhshrink on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.atanh_bw.html#ttnn.atanh_bw" title="ttnn.atanh_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.atanh_bw</span></code></a></p></td>
 <td><p>Performs backward operations for inverse hyperbolic tangent (atanh) on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.asin_bw.html#ttnn.asin_bw" title="ttnn.asin_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.asin_bw</span></code></a></p></td>
 <td><p>Performs backward operations for inverse sine (asin) on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.asinh_bw.html#ttnn.asinh_bw" title="ttnn.asinh_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.asinh_bw</span></code></a></p></td>
 <td><p>Performs backward operations for inverse hyperbolic sine (asinh) on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.sin_bw.html#ttnn.sin_bw" title="ttnn.sin_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.sin_bw</span></code></a></p></td>
 <td><p>Performs backward operations for sin on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.sinh_bw.html#ttnn.sinh_bw" title="ttnn.sinh_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.sinh_bw</span></code></a></p></td>
 <td><p>Performs backward operations for hyperbolic sine (sinh) on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.log10_bw.html#ttnn.log10_bw" title="ttnn.log10_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.log10_bw</span></code></a></p></td>
 <td><p>Performs backward operations for log10 on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.log1p_bw.html#ttnn.log1p_bw" title="ttnn.log1p_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.log1p_bw</span></code></a></p></td>
 <td><p>Performs backward operations for log1p on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.erfc_bw.html#ttnn.erfc_bw" title="ttnn.erfc_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.erfc_bw</span></code></a></p></td>
 <td><p>Performs backward operations for erfc on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.ceil_bw.html#ttnn.ceil_bw" title="ttnn.ceil_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.ceil_bw</span></code></a></p></td>
 <td><p>Performs backward operations for ceil on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.softsign_bw.html#ttnn.softsign_bw" title="ttnn.softsign_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.softsign_bw</span></code></a></p></td>
 <td><p>Performs backward operations for softsign on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.cosh_bw.html#ttnn.cosh_bw" title="ttnn.cosh_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.cosh_bw</span></code></a></p></td>
 <td><p>Performs backward operations for hyperbolic cosine (cosh) on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.logiteps_bw.html#ttnn.logiteps_bw" title="ttnn.logiteps_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.logiteps_bw</span></code></a></p></td>
 <td><p>Performs backward operations for logiteps on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">eps</span></code>, with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.log2_bw.html#ttnn.log2_bw" title="ttnn.log2_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.log2_bw</span></code></a></p></td>
 <td><p>Performs backward operations for log2 on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.sign_bw.html#ttnn.sign_bw" title="ttnn.sign_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.sign_bw</span></code></a></p></td>
 <td><p>Performs backward operations for sign on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.div_no_nan_bw.html#ttnn.div_no_nan_bw" title="ttnn.div_no_nan_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.div_no_nan_bw</span></code></a></p></td>
 <td><p>Performs backward operations for div_no_nan on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">scalar</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.exp2_bw.html#ttnn.exp2_bw" title="ttnn.exp2_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.exp2_bw</span></code></a></p></td>
 <td><p>Performs backward operations for exp2 on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.expm1_bw.html#ttnn.expm1_bw" title="ttnn.expm1_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.expm1_bw</span></code></a></p></td>
 <td><p>Performs backward operations for expm1 on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.reciprocal_bw.html#ttnn.reciprocal_bw" title="ttnn.reciprocal_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.reciprocal_bw</span></code></a></p></td>
 <td><p>Performs backward operations for reciprocal on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.digamma_bw.html#ttnn.digamma_bw" title="ttnn.digamma_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.digamma_bw</span></code></a></p></td>
 <td><p>Performs backward operations for digamma on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.erfinv_bw.html#ttnn.erfinv_bw" title="ttnn.erfinv_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.erfinv_bw</span></code></a></p></td>
 <td><p>Performs backward operations for erfinv on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.erf_bw.html#ttnn.erf_bw" title="ttnn.erf_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.erf_bw</span></code></a></p></td>
 <td><p>Performs backward operations for erf on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.deg2rad_bw.html#ttnn.deg2rad_bw" title="ttnn.deg2rad_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.deg2rad_bw</span></code></a></p></td>
 <td><p>Performs backward operations for degree to radian conversion (deg2rad) on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.polygamma_bw.html#ttnn.polygamma_bw" title="ttnn.polygamma_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.polygamma_bw</span></code></a></p></td>
 <td><p>Performs backward operations for polygamma on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">scalar</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.gelu_bw.html#ttnn.gelu_bw" title="ttnn.gelu_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.gelu_bw</span></code></a></p></td>
 <td><p>Performs backward operations for gelu on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code> using given <code class="xref py py-attr docutils literal notranslate"><span class="pre">approximate</span></code> mode.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.repeat_bw.html#ttnn.repeat_bw" title="ttnn.repeat_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.repeat_bw</span></code></a></p></td>
 <td><p>Performs backward operations for repeat on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code> using given <code class="xref py py-attr docutils literal notranslate"><span class="pre">shape</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.real.html#ttnn.real" title="ttnn.real"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.real</span></code></a></p></td>
 <td><p>Performs complex operations for real of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.imag.html#ttnn.imag" title="ttnn.imag"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.imag</span></code></a></p></td>
 <td><p>Performs complex operations for imag of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.angle.html#ttnn.angle" title="ttnn.angle"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.angle</span></code></a></p></td>
 <td><p>Performs complex operations for angle of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.is_imag.html#ttnn.is_imag" title="ttnn.is_imag"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.is_imag</span></code></a></p></td>
 <td><p>Returns boolean tensor if value of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> is imag.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.is_real.html#ttnn.is_real" title="ttnn.is_real"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.is_real</span></code></a></p></td>
 <td><p>Returns boolean tensor if value of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> is real.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.polar_bw.html#ttnn.polar_bw" title="ttnn.polar_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.polar_bw</span></code></a></p></td>
 <td><p>Performs backward operations for complex polar function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.imag_bw.html#ttnn.imag_bw" title="ttnn.imag_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.imag_bw</span></code></a></p></td>
 <td><p>Performs backward operations for complex imaginary function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.real_bw.html#ttnn.real_bw" title="ttnn.real_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.real_bw</span></code></a></p></td>
 <td><p>Performs backward operations for complex real function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.angle_bw.html#ttnn.angle_bw" title="ttnn.angle_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.angle_bw</span></code></a></p></td>
 <td><p>Performs backward operations for complex angle function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.conj_bw.html#ttnn.conj_bw" title="ttnn.conj_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.conj_bw</span></code></a></p></td>
 <td><p>Performs backward operations for complex conj function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.conj.html#ttnn.conj" title="ttnn.conj"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.conj</span></code></a></p></td>
 <td><p>Returns complex conjugate value of complex tensor <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.polar.html#ttnn.polar" title="ttnn.polar"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.polar</span></code></a></p></td>
 <td><p>Perform an polar to Cartesian transformation on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, input_tensor.real(r), input_tensor.imag(theta) into x + i*y generating a complex tensor.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.alt_complex_rotate90.html#ttnn.alt_complex_rotate90" title="ttnn.alt_complex_rotate90"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.alt_complex_rotate90</span></code></a></p></td>
 <td><p>Applies alt_complex_rotate90 to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
 </tr>
@@ -1988,6 +1994,46 @@
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.batch_norm.html#ttnn.batch_norm" title="ttnn.batch_norm"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.batch_norm</span></code></a></p></td>
 <td><p>Applies batch norm over each channel on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.softmax.html#ttnn.softmax" title="ttnn.softmax"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.softmax</span></code></a></p></td>
+<td><p>Computes the softmax function over the specified dimension of the input tensor.</p></td>
+</tr>
+<tr class="row-even">
+<td><p><a class="reference internal" href="api/ttnn.scale_mask_softmax.html#ttnn.scale_mask_softmax" title="ttnn.scale_mask_softmax"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.scale_mask_softmax</span></code></a></p></td>
+<td><p>Computes a fused scale-mask-softmax operation along the last dimension of the input tensor.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.softmax_in_place.html#ttnn.softmax_in_place" title="ttnn.softmax_in_place"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.softmax_in_place</span></code></a></p></td>
+<td><p>Computes the softmax function along the last dimension of the input tensor in-place.</p></td>
+</tr>
+<tr class="row-even">
+<td><p><a class="reference internal" href="api/ttnn.scale_mask_softmax_in_place.html#ttnn.scale_mask_softmax_in_place" title="ttnn.scale_mask_softmax_in_place"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.scale_mask_softmax_in_place</span></code></a></p></td>
+<td><p>Computes a fused scale-mask-softmax operation along the last dimension in-place.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.scale_causal_mask_hw_dims_softmax_in_place.html#ttnn.scale_causal_mask_hw_dims_softmax_in_place" title="ttnn.scale_causal_mask_hw_dims_softmax_in_place"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.scale_causal_mask_hw_dims_softmax_in_place</span></code></a></p></td>
+<td><p>Specialized in-place operation for causal masked softmax with height-width dimension constraints.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="normalization-program-configs">
+<h3>Normalization Program Configs<a class="headerlink" href="#normalization-program-configs" title="Permalink to this heading"></a>
+</h3>
+<table class="autosummary longtable docutils align-default">
+<tbody>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.SoftmaxProgramConfig.html#ttnn.SoftmaxProgramConfig" title="ttnn.SoftmaxProgramConfig"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.SoftmaxProgramConfig</span></code></a></p></td>
+<td><p>Base program configuration class for Softmax operations.</p></td>
+</tr>
+<tr class="row-even">
+<td><p><a class="reference internal" href="api/ttnn.SoftmaxDefaultProgramConfig.html#ttnn.SoftmaxDefaultProgramConfig" title="ttnn.SoftmaxDefaultProgramConfig"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.SoftmaxDefaultProgramConfig</span></code></a></p></td>
+<td><p>Default program configuration for Softmax operations.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.SoftmaxShardedMultiCoreProgramConfig.html#ttnn.SoftmaxShardedMultiCoreProgramConfig" title="ttnn.SoftmaxShardedMultiCoreProgramConfig"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.SoftmaxShardedMultiCoreProgramConfig</span></code></a></p></td>
+<td><p>Multi-core sharded program configuration for Softmax operations.</p></td>
 </tr>
 </tbody>
 </table>

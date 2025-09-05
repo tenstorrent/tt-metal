@@ -71,6 +71,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#reduction">Reduction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization">Normalization</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#transformer">Transformer</a><ul class="current">
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.split_query_key_value_and_split_heads.html">ttnn.transformer.split_query_key_value_and_split_heads</a></li>
@@ -155,7 +156,7 @@
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>head_size</strong> (<em>int</em><em>, </em><em>optional</em>) – Number of heads. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>attention_mask</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Attention Mask. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>program_config</strong> (<em>SoftmaxProgramConfig</em>) – Program Config of the output tensor. Defaults to <cite>SoftmaxDefaultProgramConfig()</cite>.</p></li>
+<li><p><strong>program_config</strong> (<a class="reference internal" href="ttnn.SoftmaxProgramConfig.html#ttnn.SoftmaxProgramConfig" title="ttnn.SoftmaxProgramConfig"><em>SoftmaxProgramConfig</em></a>) – Program Config of the output tensor. Defaults to <cite>SoftmaxDefaultProgramConfig()</cite>.</p></li>
 <li><p><strong>causal_mask</strong> (<em>bool</em><em>, </em><em>optional</em>) – the attention mask is causal. Defaults to <cite>false</cite>.</p></li>
 </ul>
 </dd>

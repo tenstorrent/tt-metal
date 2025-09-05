@@ -25,8 +25,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.softplus" href="ttnn.softplus.html" />
-    <link rel="prev" title="ttnn.sinh" href="ttnn.sinh.html" /> 
+    <link rel="next" title="ttnn.scale_mask_softmax" href="ttnn.scale_mask_softmax.html" />
+    <link rel="prev" title="ttnn.batch_norm" href="ttnn.batch_norm.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -66,205 +66,25 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#core">Core</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#tensor-creation">Tensor Creation</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#matrix-multiplication">Matrix Multiplication</a></li>
-<li class="toctree-l3 current"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a><ul class="current">
-<li class="toctree-l4"><a class="reference internal" href="ttnn.abs.html">ttnn.abs</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.acos.html">ttnn.acos</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.acosh.html">ttnn.acosh</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.asin.html">ttnn.asin</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.asinh.html">ttnn.asinh</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.atan.html">ttnn.atan</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.atanh.html">ttnn.atanh</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.bitwise_not.html">ttnn.bitwise_not</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.bitwise_left_shift.html">ttnn.bitwise_left_shift</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.bitwise_right_shift.html">ttnn.bitwise_right_shift</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.cbrt.html">ttnn.cbrt</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.ceil.html">ttnn.ceil</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.celu.html">ttnn.celu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.clamp.html">ttnn.clamp</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.clip.html">ttnn.clip</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.clone.html">ttnn.clone</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.cos.html">ttnn.cos</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.cosh.html">ttnn.cosh</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.deg2rad.html">ttnn.deg2rad</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.digamma.html">ttnn.digamma</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.dropout.html">ttnn.experimental.dropout</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.gelu_bw.html">ttnn.experimental.gelu_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.elu.html">ttnn.elu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.eqz.html">ttnn.eqz</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.erf.html">ttnn.erf</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.erfc.html">ttnn.erfc</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.erfinv.html">ttnn.erfinv</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.exp.html">ttnn.exp</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.exp2.html">ttnn.exp2</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.expm1.html">ttnn.expm1</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.fill.html">ttnn.fill</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.floor.html">ttnn.floor</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.frac.html">ttnn.frac</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.geglu.html">ttnn.geglu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.gelu.html">ttnn.gelu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.glu.html">ttnn.glu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.gez.html">ttnn.gez</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.gtz.html">ttnn.gtz</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.hardshrink.html">ttnn.hardshrink</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.hardsigmoid.html">ttnn.hardsigmoid</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.hardswish.html">ttnn.hardswish</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.hardtanh.html">ttnn.hardtanh</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.heaviside.html">ttnn.heaviside</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.i0.html">ttnn.i0</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.identity.html">ttnn.identity</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.isfinite.html">ttnn.isfinite</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.isinf.html">ttnn.isinf</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.isnan.html">ttnn.isnan</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.isneginf.html">ttnn.isneginf</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.isposinf.html">ttnn.isposinf</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.leaky_relu.html">ttnn.leaky_relu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.lez.html">ttnn.lez</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.lgamma.html">ttnn.lgamma</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.log.html">ttnn.log</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.log10.html">ttnn.log10</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.log1p.html">ttnn.log1p</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.log2.html">ttnn.log2</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.log_sigmoid.html">ttnn.log_sigmoid</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.logical_not.html">ttnn.logical_not</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.logical_not_.html">ttnn.logical_not_</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.logit.html">ttnn.logit</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.ltz.html">ttnn.ltz</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.mish.html">ttnn.mish</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.multigammaln.html">ttnn.multigammaln</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.neg.html">ttnn.neg</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.nez.html">ttnn.nez</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.normalize_global.html">ttnn.normalize_global</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.normalize_hw.html">ttnn.normalize_hw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.polygamma.html">ttnn.polygamma</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.prelu.html">ttnn.prelu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.rad2deg.html">ttnn.rad2deg</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.rdiv.html">ttnn.rdiv</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.reciprocal.html">ttnn.reciprocal</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.reglu.html">ttnn.reglu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.relu.html">ttnn.relu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.relu_max.html">ttnn.relu_max</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.relu_min.html">ttnn.relu_min</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.relu6.html">ttnn.relu6</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.remainder.html">ttnn.remainder</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.round.html">ttnn.round</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.rsqrt.html">ttnn.rsqrt</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.selu.html">ttnn.selu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.sigmoid.html">ttnn.sigmoid</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.sigmoid_accurate.html">ttnn.sigmoid_accurate</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.sign.html">ttnn.sign</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.signbit.html">ttnn.signbit</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.silu.html">ttnn.silu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.sin.html">ttnn.sin</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.sinh.html">ttnn.sinh</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.softmax</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.softplus.html">ttnn.softplus</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.softshrink.html">ttnn.softshrink</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.softsign.html">ttnn.softsign</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.sqrt.html">ttnn.sqrt</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.square.html">ttnn.square</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.swiglu.html">ttnn.swiglu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.swish.html">ttnn.swish</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.tan.html">ttnn.tan</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.tanh.html">ttnn.tanh</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.tanhshrink.html">ttnn.tanhshrink</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.threshold.html">ttnn.threshold</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.tril.html">ttnn.tril</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.triu.html">ttnn.triu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.trunc.html">ttnn.trunc</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.unary_chain.html">ttnn.unary_chain</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.clamp_bw.html">ttnn.clamp_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.clip_bw.html">ttnn.clip_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.hardtanh_bw.html">ttnn.hardtanh_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.threshold_bw.html">ttnn.threshold_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.softplus_bw.html">ttnn.softplus_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.rdiv_bw.html">ttnn.rdiv_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.pow_bw.html">ttnn.pow_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.exp_bw.html">ttnn.exp_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.tanh_bw.html">ttnn.tanh_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.sqrt_bw.html">ttnn.sqrt_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.multigammaln_bw.html">ttnn.multigammaln_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.lgamma_bw.html">ttnn.lgamma_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.fill_bw.html">ttnn.fill_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.hardsigmoid_bw.html">ttnn.hardsigmoid_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.cos_bw.html">ttnn.cos_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.acosh_bw.html">ttnn.acosh_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.acos_bw.html">ttnn.acos_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.atan_bw.html">ttnn.atan_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.rad2deg_bw.html">ttnn.rad2deg_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.frac_bw.html">ttnn.frac_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.trunc_bw.html">ttnn.trunc_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.log_sigmoid_bw.html">ttnn.log_sigmoid_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.fill_zero_bw.html">ttnn.fill_zero_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.i0_bw.html">ttnn.i0_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.tan_bw.html">ttnn.tan_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.sigmoid_bw.html">ttnn.sigmoid_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.rsqrt_bw.html">ttnn.rsqrt_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.neg_bw.html">ttnn.neg_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.relu_bw.html">ttnn.relu_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.logit_bw.html">ttnn.logit_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.hardshrink_bw.html">ttnn.hardshrink_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.softshrink_bw.html">ttnn.softshrink_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.leaky_relu_bw.html">ttnn.leaky_relu_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.elu_bw.html">ttnn.elu_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.celu_bw.html">ttnn.celu_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.rpow_bw.html">ttnn.rpow_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.floor_bw.html">ttnn.floor_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.round_bw.html">ttnn.round_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.log_bw.html">ttnn.log_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.relu6_bw.html">ttnn.relu6_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.abs_bw.html">ttnn.abs_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.silu_bw.html">ttnn.silu_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.selu_bw.html">ttnn.selu_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.square_bw.html">ttnn.square_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.prod_bw.html">ttnn.prod_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.hardswish_bw.html">ttnn.hardswish_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.tanhshrink_bw.html">ttnn.tanhshrink_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.atanh_bw.html">ttnn.atanh_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.asin_bw.html">ttnn.asin_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.asinh_bw.html">ttnn.asinh_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.sin_bw.html">ttnn.sin_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.sinh_bw.html">ttnn.sinh_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.log10_bw.html">ttnn.log10_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.log1p_bw.html">ttnn.log1p_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.erfc_bw.html">ttnn.erfc_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.ceil_bw.html">ttnn.ceil_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.softsign_bw.html">ttnn.softsign_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.cosh_bw.html">ttnn.cosh_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.logiteps_bw.html">ttnn.logiteps_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.log2_bw.html">ttnn.log2_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.sign_bw.html">ttnn.sign_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.div_no_nan_bw.html">ttnn.div_no_nan_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.exp2_bw.html">ttnn.exp2_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.expm1_bw.html">ttnn.expm1_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.reciprocal_bw.html">ttnn.reciprocal_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.digamma_bw.html">ttnn.digamma_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.erfinv_bw.html">ttnn.erfinv_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.erf_bw.html">ttnn.erf_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.deg2rad_bw.html">ttnn.deg2rad_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.polygamma_bw.html">ttnn.polygamma_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.gelu_bw.html">ttnn.gelu_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.repeat_bw.html">ttnn.repeat_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.real.html">ttnn.real</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.imag.html">ttnn.imag</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.angle.html">ttnn.angle</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.is_imag.html">ttnn.is_imag</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.is_real.html">ttnn.is_real</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.polar_bw.html">ttnn.polar_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.imag_bw.html">ttnn.imag_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.real_bw.html">ttnn.real_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.angle_bw.html">ttnn.angle_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.conj_bw.html">ttnn.conj_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.conj.html">ttnn.conj</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.polar.html">ttnn.polar</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.alt_complex_rotate90.html">ttnn.alt_complex_rotate90</a></li>
-</ul>
-</li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-ternary">Pointwise Ternary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#losses">Losses</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#reduction">Reduction</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../api.html#normalization">Normalization</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../api.html#normalization">Normalization</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="ttnn.group_norm.html">ttnn.group_norm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm.html">ttnn.layer_norm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm.html">ttnn.rms_norm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.batch_norm.html">ttnn.batch_norm</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.softmax</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.scale_mask_softmax.html">ttnn.scale_mask_softmax</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.softmax_in_place.html">ttnn.softmax_in_place</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.scale_mask_softmax_in_place.html">ttnn.scale_mask_softmax_in_place</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.scale_causal_mask_hw_dims_softmax_in_place.html">ttnn.scale_causal_mask_hw_dims_softmax_in_place</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
@@ -326,39 +146,40 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">softmax</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.softmax',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.normalization.softmax_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.softmax" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>ttnn.Tensor, dim: int, memory_config: Optional[ttnn.MemoryConfig] = None, compute_kernel_config: Optional[DeviceComputeKernelConfig]) -&gt; ttnn.Tensor</p>
-<p>Compute softmax over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> along <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>.</p>
+<p>Computes the softmax function over the specified dimension of the input tensor.</p>
+<p>The softmax function is defined as:</p>
 <div class="math notranslate nohighlight">
-\[\sigma(z_i) = \frac{e^{z_{i}}}{\sum_{j=1}^K e^{z_{j}}} \ \ \ for\ i=1,2,\dots,K\]</div>
+\[\text{softmax}(x_i) = \frac{e^{x_i}}{\sum_{j=1}^{K} e^{x_j}}\]</div>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – The input tensor.</p></li>
-<li><p><strong>dim</strong> (<em>int</em>) – The dimension along which to compute softmax.</p></li>
+<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – The input tensor to apply softmax to.</p></li>
+<li><p><strong>dim</strong> (<em>int</em><em>, </em><em>optional</em>) – The dimension along which to compute softmax. Defaults to -1 (last dimension).</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the memory configuration for the output tensor. If not provided, the memory configuration of the input tensor is used.</p></li>
-<li><p><strong>compute_kernel_config</strong> (<em>ttnn.ComputeKernelConfig</em><em>, </em><em>optional</em>) – the compute kernel configuration for the op. If not provided, the default configuration of the op is used.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the output tensor. If not provided, inherits from input tensor.</p></li>
+<li><p><strong>compute_kernel_config</strong> (<em>DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Compute kernel configuration for the operation.</p></li>
+<li><p><strong>numeric_stable</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to use numerically stable softmax computation. Defaults to False.</p></li>
 </ul>
 </dd>
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><em>ttnn.Tensor</em> – Output tensor with softmax applied along the specified dimension.</p>
+</dd>
 </dl>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>Supported data types and layouts by tensor:</p>
-<table class="docutils align-default" id="id2">
-<caption>
-<span class="caption-text">input_tensor</span><a class="headerlink" href="#id2" title="Permalink to this table"></a>
-</caption>
+<p>Supported dtypes and layouts</p>
+<table class="docutils align-default">
 <thead>
 <tr class="row-odd">
-<th class="head"><p>dtype</p></th>
-<th class="head"><p>layout</p></th>
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
 </tr>
 </thead>
 <tbody>
@@ -368,68 +189,14 @@
 </tr>
 </tbody>
 </table>
-<table class="docutils align-default" id="id3">
-<caption>
-<span class="caption-text">mask (optional)</span><a class="headerlink" href="#id3" title="Permalink to this table"></a>
-</caption>
-<thead>
-<tr class="row-odd">
-<th class="head"><p>dtype</p></th>
-<th class="head"><p>layout</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>BFLOAT16, BFLOAT8_B</p></td>
-<td><p>TILE, ROW_MAJOR</p></td>
-</tr>
-</tbody>
-</table>
-<table class="docutils align-default" id="id4">
-<caption>
-<span class="caption-text">output_tensor</span><a class="headerlink" href="#id4" title="Permalink to this table"></a>
-</caption>
-<thead>
-<tr class="row-odd">
-<th class="head"><p>dtype</p></th>
-<th class="head"><p>layout</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>matches input_tensor dtype</p></td>
-<td><p>TILE</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<dl class="simple">
-<dt>Limitations:</dt>
-<dd>
-<ul class="simple">
-<li><p>All tensors must be on-device.</p></li>
-<li><p>Unsharded inputs are interleaved; sharded runs require M and K to be divisible by TILE_WIDTH.</p></li>
-<li><p>If a mask is provided:
-- If sharded: mask must have identical padded shape to input.
-- If unsharded and ROW_MAJOR: last padded dim must be TILE_WIDTH; broadcast dims must be 1 except the last two; padded last two dims must align to input’s width tiles and TILE_WIDTH.</p></li>
-</ul>
-</dd>
-</dl>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-<span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">result</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
-<dl class="field-list simple">
-<dt class="field-odd">Type<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p>softmax(input_tensor</p>
-</dd>
-</dl>
 </dd>
 </dl>
 
@@ -440,8 +207,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.sinh.html" class="btn btn-neutral float-left" title="ttnn.sinh" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.softplus.html" class="btn btn-neutral float-right" title="ttnn.softplus" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.batch_norm.html" class="btn btn-neutral float-left" title="ttnn.batch_norm" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.scale_mask_softmax.html" class="btn btn-neutral float-right" title="ttnn.scale_mask_softmax" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
