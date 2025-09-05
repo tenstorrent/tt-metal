@@ -59,7 +59,7 @@ jobs:
           repository: tenstorrent/ttsim
           ref: 7193bee260c6c7fc91d731c3e2e5a52d2eeea6fd
           path: docker-job/ttsim
-          token: ${{ secrets.WILDER_PAT }}
+          token: ${{ secrets.TTSIM_TOKEN }}
 
       - name: Build ttsim
         run: |
