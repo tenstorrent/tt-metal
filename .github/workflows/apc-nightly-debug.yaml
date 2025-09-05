@@ -1,4 +1,4 @@
-name: "APC nightly debug run"
+name: "apc nightly debug run"
 
 on:
   schedule:
@@ -27,12 +27,3 @@ jobs:
     with:
       build-type: RelWithDebInfo
       version: ${{ matrix.version }}
-
-  nightly-debug-watcher:
-    name: apc nightly debug run - watcher
-    uses: ./.github/workflows/all-post-commit-workflows.yaml
-    secrets: inherit
-    with:
-      build-type: RelWithDebInfo
-    env:
-      TT_METAL_WATCHER: 1
