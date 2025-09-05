@@ -881,7 +881,7 @@ jobs:
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
-          sftp-batchfile: dynamic_batchfile.txt
+          sftp-batchfile: .github/actions/upload-data-via-sftp/optest_batchfile.txt
           username: ml-kernel-op-test-writer
           hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
           path: ${{ github.workspace }}

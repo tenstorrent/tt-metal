@@ -3,7 +3,7 @@
 # a batchfile in the context of SFTP is a text file that contains a series of SFTP commands to be executed in sequence like a script.
 
 # Upload all oprun files from the local results_export directory to server home directory
-put tests/sweep_framework/results_export/oprun_*
+put -r tests/sweep_framework/results_export/oprun_*.json
 
 # List files to verify upload
 ls -hal
