@@ -659,9 +659,11 @@ void InitDeviceProfiler(IDevice* device) {
         if (profiler_state_manager->device_profiler_map.find(device_id) ==
             profiler_state_manager->device_profiler_map.end()) {
             if (firstInit.exchange(false)) {
-                profiler_state_manager->device_profiler_map.emplace(device_id, DeviceProfiler(device, true));
+                // DeviceProfiler profiler(device, true);
+                profiler_state_manager->device_profiler_map.try_emplace(device_id, device, true);
             } else {
-                profiler_state_manager->device_profiler_map.emplace(device_id, DeviceProfiler(device, false));
+                // DeviceProfiler profiler(device, false);
+                profiler_state_manager->device_profiler_map.try_emplace(device_id, device, false);
             }
         }
 
@@ -824,6 +826,7 @@ void ProcessDeviceProfilerResults(
     if (getDeviceProfilerState()) {
         const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
             tt::tt_metal::MetalContext::instance().profiler_state_manager();
+
         auto profiler_it = profiler_state_manager->device_profiler_map.find(device->id());
         TT_ASSERT(profiler_it != profiler_state_manager->device_profiler_map.end());
         DeviceProfiler& profiler = profiler_it->second;
@@ -839,10 +842,20 @@ void ProcessDeviceProfilerResults(
         }
 
         if (dumpDeviceProfilerDataMidRun(state)) {
-            // std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
-            //     getSortedDeviceMarkersVector(profiler.device_markers_per_core_risc_map);
-            // profiler.pushTracyDeviceResults(device_markers_vec);
-            profiler.dumpDeviceResults();
+            // hide this in a helper function behind profiler.cpp
+            profiler.initializeMissingTracyContexts();
+
+            std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
+                getSortedDeviceMarkersVector(profiler.device_markers_per_core_risc_map);
+
+            {
+                std::scoped_lock lock(profiler_state_manager->mid_run_dump_mutex);
+                profiler_state_manager->thread_pool->enqueue([&profiler]() { profiler.dumpDeviceResults(); });
+                profiler.pushTracyDeviceResults(device_markers_vec);
+            }
+
+            profiler_state_manager->thread_pool->wait();
+
             profiler.device_markers_per_core_risc_map.clear();
         }
     }
@@ -966,9 +979,10 @@ void ReadMeshDeviceProfilerResults(
     if (getDeviceProfilerState()) {
         TT_ASSERT(mesh_device.is_initialized());
 
+        const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
+            tt::tt_metal::MetalContext::instance().profiler_state_manager();
+
         if (useFastDispatch(&mesh_device)) {
-            const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-                tt::tt_metal::MetalContext::instance().profiler_state_manager();
             for (IDevice* device : mesh_device.get_devices()) {
                 auto profiler_it = profiler_state_manager->device_profiler_map.find(device->id());
                 TT_ASSERT(profiler_it != profiler_state_manager->device_profiler_map.end());
@@ -993,13 +1007,13 @@ void ReadMeshDeviceProfilerResults(
         }
 
         for (IDevice* device : mesh_device.get_devices()) {
-            tt::tt_metal::MetalContext::instance().profiler_thread_pool_->enqueue([device, state, &metadata]() {
+            mesh_device.enqueue_to_thread_pool([device, state, &metadata]() {
                 const std::vector<CoreCoord> virtual_cores = detail::getVirtualCoresForProfiling(device, state);
                 detail::ProcessDeviceProfilerResults(device, virtual_cores, state, metadata);
             });
         }
 
-        tt::tt_metal::MetalContext::instance().profiler_thread_pool_->wait();
+        mesh_device.wait_for_thread_pool();
     }
 #endif
 }
