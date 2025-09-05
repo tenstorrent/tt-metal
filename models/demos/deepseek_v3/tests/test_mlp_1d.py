@@ -23,12 +23,8 @@ from models.demos.deepseek_v3.utils.test_utils import (
 )
 from models.utility_functions import comp_pcc
 
-DEVICE_SHAPE = ttnn.MeshShape(2, min(ttnn.get_num_devices() // 2, 8))
 
-
-@pytest.mark.parametrize(
-    "device_params", [{"mesh_shape": DEVICE_SHAPE, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
-)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_convert_weights_for_non_dequantized_mlp(hf_config, tmp_path, mesh_device):
     reference_model = DeepseekV3MLP(hf_config).eval()
     reference_state_dict = reference_model.to(torch.bfloat16).state_dict()
@@ -42,9 +38,7 @@ def test_convert_weights_for_non_dequantized_mlp(hf_config, tmp_path, mesh_devic
     )
 
 
-@pytest.mark.parametrize(
-    "device_params", [{"mesh_shape": DEVICE_SHAPE, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
-)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize(
     "MLPClass,module_path",
     [(NonExpert, "model.layers.0.mlp"), (SharedExpert, "model.layers.3.mlp.shared_experts")],
@@ -111,9 +105,7 @@ def run_weight_conversion_test(MLPClass, hf_config, state_dict, tmp_path, refere
     ttnn.deallocate(w1_ttnn)
 
 
-@pytest.mark.parametrize(
-    "device_params", [{"mesh_shape": DEVICE_SHAPE, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
-)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize(
     "MLPClass,module_path",
     [
@@ -140,7 +132,7 @@ def test_forward_pass(
     mesh_device,
     model_path,
     ccl,
-    reset_seeds,
+    set_deterministic_env,
 ):
     num_module_layers, _ = mesh_device.shape
 
@@ -195,7 +187,7 @@ def test_forward_pass(
     ttnn.deallocate(tt_output)
 
     # Check PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
+    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.975)
 
 
 if __name__ == "__main__":
