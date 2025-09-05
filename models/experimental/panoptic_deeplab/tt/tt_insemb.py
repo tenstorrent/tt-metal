@@ -3,11 +3,11 @@ from typing import Dict, List, Optional, Tuple
 import ttnn
 from loguru import logger
 
-from .tt_aspp import get_ttnn_norm
-from .tt_conv2d_wrapper import TtConv2d, TtConv2dParameters
-from .tt_upsample_wrapper import TtUpsample
-from .tt_semseg import TtDeepLabV3PlusHead
-from ..reference.pytorch_semseg import ShapeSpec
+from models.experimental.panoptic_deeplab.tt.tt_aspp import get_ttnn_norm
+from models.experimental.panoptic_deeplab.tt.tt_conv2d_wrapper import TtConv2d, TtConv2dParameters
+from models.experimental.panoptic_deeplab.tt.tt_upsample_wrapper import TtUpsample
+from models.experimental.panoptic_deeplab.tt.tt_semseg import TtDeepLabV3PlusHead
+from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 
 
 class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
