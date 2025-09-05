@@ -18,10 +18,10 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 45
 NUM_DEVICES = ttnn.get_num_devices()
-FABRIC_CONFIGS = [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING]
+FABRIC_CONFIGS = [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D]
 
 
-# heuristic
+# heuristic to cut down on combinatorial explosion. Send/receive to/from the (up to) 4 corners of the mesh.
 def _coords_set_iterator(mesh_shape):
     coords = {(0, 0), (mesh_shape[0] - 1, 0), (0, mesh_shape[1] - 1), (mesh_shape[0] - 1, mesh_shape[1] - 1)}
     yield from set(permutations(coords, 2))
