@@ -64,8 +64,8 @@ constexpr uint32_t num_tiles = 50;
 constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
 tt_metal::InterleavedBufferConfig l1_config{
                                       .device=device,
-                                      .size = dram_buffer_size,
-                                      .page_size = dram_buffer_size,
+                                      .size = single_tile_size,
+                                      .page_size = single_tile_size,
                                       .buffer_type = tt_metal::BufferType::L1
                                       };
 

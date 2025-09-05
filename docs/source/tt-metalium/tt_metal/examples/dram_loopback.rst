@@ -56,7 +56,7 @@ Note that almost all operations on the Tensix are aligned with tiles. And a tile
 
 Note the ``page_size`` argument in the buffer config and the ``Interleaved`` in the buffer type. Both L1 and DRAM are split into banks. Each bank is a physical memory unit that can be accessed independently. However, managing banks separately is tricky and not scalable. Interleaved buffers simply round-robin the data across all banks every ``page_size`` bytes. This allows the programmer to treat the buffer as a single unit, while taking advantage of the parallelism of the banks for higher bandwidth. Usually the page size is set to the tile size, which is 2048 bytes in this case. This enabels easy programming while still maintaining high performance. Other values are also supported, but the programmer is then responsible for the performance implications and programming complexity.
 
-The L1 buffer is created with a size equal to the size of a single tile, which will act as a buffer for old temporary data. Then be written back to DRAM.
+The L1 buffer is created with a size equal to the size of a single tile (2048 bytes), which will act as a temporary buffer for copying data one tile at a time from input DRAM to output DRAM.
 
 .. code-block:: cpp
 
@@ -73,7 +73,7 @@ The L1 buffer is created with a size equal to the size of a single tile, which w
 
   Buffer l1_buffer = CreateBuffer(l1_config);
 
-The only difference between the L1 and DRAM buffer is the ``BufferType``. The L1 buffer is created with a ``BufferType::L1`` and the DRAM buffer is created with a ``BufferType::DRAM``.
+The DRAM buffers differ from the L1 buffer in two ways: the ``BufferType`` (``BufferType::DRAM`` instead of ``BufferType::L1``) and the size (50 tiles for DRAM vs. 1 tile for L1). The L1 buffer acts as a temporary single-tile buffer while the kernel copies data tile-by-tile from input to output DRAM.
 
 .. code-block:: cpp
 
