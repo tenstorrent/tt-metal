@@ -116,8 +116,6 @@ class VisionTransformer(LightweightModule):
         self,
         x,
         unpadded_seq_len,
-        cu_seqlens,
-        cu_window_seqlens,
         rot_mats,
         cu_seqlens,
         cu_window_seqlens,
@@ -287,8 +285,6 @@ class DropInVisionTransformer(torch.nn.Module):
             tt_out = self.tt_model(
                 tt_input,
                 unpadded_seq_len=unpadded_seq_len,
-                cu_seqlens=cu_seqlens,
-                cu_window_seqlens=cu_window_seqlens,
                 rot_mats=rot_mats,  # Use rot_mats generated in this forward pass
                 cu_seqlens=ttnn.from_torch(
                     cu_seqlens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.model_args.mesh_device
@@ -299,7 +295,6 @@ class DropInVisionTransformer(torch.nn.Module):
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     device=self.model_args.mesh_device,
                 ),
-                profiler=profiler,
             )
 
             # deallocate device tensors that are not needed by decode
