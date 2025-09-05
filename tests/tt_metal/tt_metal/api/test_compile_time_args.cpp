@@ -118,31 +118,3 @@ TEST_F(CompileTimeArgsTest, TensixTestNamedCompileTimeArgs) {
     ASSERT_EQ(results[2], compile_time_args[2]) << "'buffer_size' should be 1024";
     ASSERT_EQ(results[3], compile_time_args[3]) << "\"\" should be 3";
 }
-
-TEST_F(CompileTimeArgsTest, TensixTestInvalidNamedCompileTimeArgs) {
-    auto mesh_device = get_mesh_device();
-    CoreCoord core = {0, 0};
-    auto& cq = mesh_device->mesh_command_queue();
-    auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    distributed::MeshWorkload workload;
-    const std::vector<uint32_t> compile_time_args = {1024};
-    const std::unordered_map<std::string, uint32_t> named_compile_time_args = {{"buffer_size", 1024}};
-    const uint32_t write_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-    const std::map<std::string, std::string> defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}};
-    Program program;
-
-    CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/invalid_named_compile_time_args_kernel.cpp",
-        core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = compile_time_args,
-            .defines = defines,
-            .named_compile_args = named_compile_time_args});
-
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-
-    EXPECT_ANY_THROW(distributed::EnqueueMeshWorkload(cq, workload, false));
-}

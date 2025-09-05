@@ -34,6 +34,7 @@ constexpr std::pair<std::string_view, uint32_t> named_args_map[] = {KERNEL_COMPI
 }
 #endif
 
+// TODO #28026: Migrate to C++20 standards when available, see related issue for more details.
 #ifdef KERNEL_COMPILE_TIME_ARG_MAP
 constexpr uint32_t get_named_ct_arg(std::string_view name) {
     for (const auto& [arg_name, arg_value] : named_args_map) {
