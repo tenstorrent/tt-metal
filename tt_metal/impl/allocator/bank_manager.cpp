@@ -254,42 +254,39 @@ const std::vector<std::pair<DeviceAddr, DeviceAddr>>& BankManager::compute_merge
         return allocated_ranges_cache_[state.value].value();
     }
 
-    // Collect allocated address ranges per dependent state
+    // Collect allocated address ranges per dependent state (single pass)
     const auto& dependent_states = state_dependencies_.dependencies[state.value];
-    std::vector<std::pair<DeviceAddr, DeviceAddr>> all_used;
-    size_t total_pairs = 0;
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> all_allocated_ranges;
     for (const auto dep_state : dependent_states) {
         auto* dep_alloc = this->get_allocator_for_state(dep_state);
         TT_ASSERT(bool(dep_alloc), "Allocator not initialized!");
-        const auto allocated = dep_alloc->allocated_addresses();
-        total_pairs += allocated.size();
-    }
-    all_used.reserve(total_pairs);
-    for (const auto dep_state : dependent_states) {
-        auto* dep_alloc = this->get_allocator_for_state(dep_state);
-        const auto allocated = dep_alloc->allocated_addresses();
-        for (const auto& [addr, sz] : allocated) {
+        const auto allocated_addresses = dep_alloc->allocated_addresses();
+        all_allocated_ranges.reserve(all_allocated_ranges.size() + allocated_addresses.size());
+        for (const auto& [addr, sz] : allocated_addresses) {
             if (sz > 0) {
-                all_used.emplace_back(addr, addr + static_cast<DeviceAddr>(sz));
+                all_allocated_ranges.emplace_back(addr, addr + static_cast<DeviceAddr>(sz));
             }
         }
     }
 
     // Sort by start address
-    std::sort(all_used.begin(), all_used.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    // NOTE: This can be optimized because set of allocated addresses for each state is already sorted
+    std::sort(all_allocated_ranges.begin(), all_allocated_ranges.end(), [](const auto& a, const auto& b) {
+        return a.first < b.first;
+    });
 
     // Coalesce overlaps across all dependent states
-    std::vector<std::pair<DeviceAddr, DeviceAddr>> coalesced;
-    coalesced.reserve(all_used.size());
-    for (const auto& r : all_used) {
-        if (coalesced.empty() || r.first > coalesced.back().second) {
-            coalesced.push_back(r);
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> coalesced_ranges;
+    coalesced_ranges.reserve(all_allocated_ranges.size());
+    for (const auto& r : all_allocated_ranges) {
+        if (coalesced_ranges.empty() || r.first > coalesced_ranges.back().second) {
+            coalesced_ranges.push_back(r);
         } else {
-            coalesced.back().second = std::max(coalesced.back().second, r.second);
+            coalesced_ranges.back().second = std::max(coalesced_ranges.back().second, r.second);
         }
     }
 
-    allocated_ranges_cache_[state.value] = std::move(coalesced);
+    allocated_ranges_cache_[state.value] = std::move(coalesced_ranges);
     return allocated_ranges_cache_[state.value].value();
 }
 
@@ -298,7 +295,7 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_ad
     auto* alloc = this->get_allocator_for_state(state);
     TT_ASSERT(bool(alloc), "Allocator not initialized!");
 
-    // Clamp helper for ranges according to address_limit
+    // Helper for clamping ranges according to address_limit
     // This is needed because the allocator's available_addresses method does not clamp to address_limit
     auto clamp_ranges = [address_limit](std::vector<std::pair<DeviceAddr, DeviceAddr>> ranges) {
         if (address_limit == 0) {
@@ -317,46 +314,54 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_ad
         return out;
     };
 
-    // Current state's free ranges (clamped if needed)
-    std::vector<std::pair<DeviceAddr, DeviceAddr>> current_ranges =
+    // Current state's available ranges (clamped if needed)
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> available_ranges =
         clamp_ranges(alloc->available_addresses(size_per_bank));
-    std::sort(
-        current_ranges.begin(), current_ranges.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::sort(available_ranges.begin(), available_ranges.end(), [](const auto& a, const auto& b) {
+        return a.first < b.first;
+    });
 
-    // Occupied ranges from dependent states (merged and cached)
-    const auto& occupied = this->compute_merged_allocated_ranges(state);
+    // Allocated ranges from dependent states; ranges are merged
+    const auto& allocated_ranges_in_dependent_states = this->compute_merged_allocated_ranges(state);
 
-    // Subtract occupied from current free ranges
-    std::vector<std::pair<DeviceAddr, DeviceAddr>> allowed;
-    allowed.reserve(current_ranges.size());
-    size_t j = 0;
-    for (const auto& fr : current_ranges) {
-        DeviceAddr s = fr.first;
-        DeviceAddr e = fr.second;
-        while (j < occupied.size() && occupied[j].second <= s) {
-            j++;
-        }
-        DeviceAddr cur = s;
-        size_t jj = j;
-        while (jj < occupied.size() && occupied[jj].first < e) {
-            DeviceAddr os = occupied[jj].first;
-            DeviceAddr oe = occupied[jj].second;
-            if (os > cur) {
-                allowed.emplace_back(cur, std::min(os, e));
+    // Helper for subtracting allocated ranges from available ranges
+    auto subtract_ranges = [](const std::vector<std::pair<DeviceAddr, DeviceAddr>>& available,
+                              const std::vector<std::pair<DeviceAddr, DeviceAddr>>& allocated) {
+        std::vector<std::pair<DeviceAddr, DeviceAddr>> out;
+        out.reserve(available.size());
+        size_t j = 0;
+        for (const auto& fr : available) {
+            DeviceAddr s = fr.first;
+            DeviceAddr e = fr.second;
+            while (j < allocated.size() && allocated[j].second <= s) {
+                j++;
             }
-            if (oe >= e) {
-                cur = e;
-                break;
+            DeviceAddr cur = s;
+            size_t jj = j;
+            while (jj < allocated.size() && allocated[jj].first < e) {
+                DeviceAddr os = allocated[jj].first;
+                DeviceAddr oe = allocated[jj].second;
+                if (os > cur) {
+                    out.emplace_back(cur, std::min(os, e));
+                }
+                if (oe >= e) {
+                    cur = e;
+                    break;
+                }
+                cur = std::max(cur, oe);
+                jj++;
             }
-            cur = std::max(cur, oe);
-            jj++;
+            if (cur < e) {
+                out.emplace_back(cur, e);
+            }
         }
-        if (cur < e) {
-            allowed.emplace_back(cur, e);
-        }
-    }
+        return out;
+    };
 
-    return allowed;
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> updated_available_ranges =
+        subtract_ranges(available_ranges, allocated_ranges_in_dependent_states);
+
+    return updated_available_ranges;
 }
 
 uint64_t BankManager::allocate_buffer(
