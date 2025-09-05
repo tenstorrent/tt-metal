@@ -134,11 +134,9 @@ std::unordered_map<uint16_t, tracy::MarkerDetails> generateZoneSourceLocationsHa
 
 void mergeSortedDeviceMarkerChunks(
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
-    const std::vector<uint32_t>& device_markers_chunk_offsets) {
+    const std::vector<uint32_t>& device_markers_chunk_offsets,
+    ThreadPool* thread_pool) {
     ZoneScoped;
-
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        tt::tt_metal::MetalContext::instance().profiler_state_manager();
 
     const uint32_t num_chunks = device_markers_chunk_offsets.size() - 1;
 
@@ -146,30 +144,29 @@ void mergeSortedDeviceMarkerChunks(
     while (num_chunks_to_merge_together <= num_chunks) {
         uint32_t i = 0;
         while (i <= num_chunks - num_chunks_to_merge_together) {
-            // profiler_state_manager->thread_pool->enqueue([&device_markers, &device_markers_chunk_offsets, i,
-            // num_chunks_to_merge_together]() {
-            TT_ASSERT(std::is_sorted(
-                device_markers.begin() + device_markers_chunk_offsets[i],
-                device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
-                [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
-                   std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
-            TT_ASSERT(std::is_sorted(
-                device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
-                device_markers.begin() + device_markers_chunk_offsets[i + num_chunks_to_merge_together],
-                [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
-                   std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
+            thread_pool->enqueue([&device_markers, &device_markers_chunk_offsets, i, num_chunks_to_merge_together]() {
+                TT_ASSERT(std::is_sorted(
+                    device_markers.begin() + device_markers_chunk_offsets[i],
+                    device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
+                    [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
+                       std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
+                TT_ASSERT(std::is_sorted(
+                    device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
+                    device_markers.begin() + device_markers_chunk_offsets[i + num_chunks_to_merge_together],
+                    [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
+                       std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
 
-            std::inplace_merge(
-                device_markers.begin() + device_markers_chunk_offsets[i],
-                device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
-                device_markers.begin() + device_markers_chunk_offsets[i + num_chunks_to_merge_together],
-                [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
-                   std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); });
-            // });
+                std::inplace_merge(
+                    device_markers.begin() + device_markers_chunk_offsets[i],
+                    device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
+                    device_markers.begin() + device_markers_chunk_offsets[i + num_chunks_to_merge_together],
+                    [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
+                       std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); });
+            });
             i += num_chunks_to_merge_together;
         }
 
-        // profiler_state_manager->thread_pool->wait();
+        thread_pool->wait();
 
         TT_ASSERT(std::is_sorted(
             device_markers.begin() + device_markers_chunk_offsets[i - num_chunks_to_merge_together],
@@ -208,7 +205,8 @@ void mergeSortedDeviceMarkerChunks(
 // while these references are in use, as this could invalidate the references and cause undefined behavior.
 std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDeviceMarkersVector(
     const std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>>&
-        device_markers_per_core_risc_map) {
+        device_markers_per_core_risc_map,
+    ThreadPool* thread_pool) {
     ZoneScoped;
 
     uint32_t total_num_markers = 0;
@@ -232,23 +230,19 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDevice
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec(
         total_num_markers, std::cref(dummy_marker));
 
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        tt::tt_metal::MetalContext::instance().profiler_state_manager();
-
-    // profiler_state_manager->thread_pool->enqueue([&device_markers_vec, &device_markers_per_core_risc_map, middle,
-    // middle_index]() {
-    uint32_t i = middle_index;
-    for (auto it = middle; it != device_markers_per_core_risc_map.end(); ++it) {
-        for (const auto& [_, markers] : it->second) {
-            for (const tracy::TTDeviceMarker& marker : markers) {
-                device_markers_vec[i] = std::cref(marker);
-                ++i;
+    thread_pool->enqueue([&device_markers_vec, &device_markers_per_core_risc_map, middle, middle_index]() {
+        uint32_t i = middle_index;
+        for (auto it = middle; it != device_markers_per_core_risc_map.end(); ++it) {
+            for (const auto& [_, markers] : it->second) {
+                for (const tracy::TTDeviceMarker& marker : markers) {
+                    device_markers_vec[i] = std::cref(marker);
+                    ++i;
+                }
             }
         }
-    }
-    // });
+    });
 
-    i = 0;
+    uint32_t i = 0;
     for (auto it = device_markers_per_core_risc_map.begin(); it != middle; ++it) {
         for (const auto& [_, markers] : it->second) {
             for (const tracy::TTDeviceMarker& marker : markers) {
@@ -258,9 +252,9 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDevice
         }
     }
 
-    // profiler_state_manager->thread_pool->wait();
+    thread_pool->wait();
 
-    mergeSortedDeviceMarkerChunks(device_markers_vec, device_markers_chunk_offsets);
+    mergeSortedDeviceMarkerChunks(device_markers_vec, device_markers_chunk_offsets, thread_pool);
 
     return device_markers_vec;
 }
@@ -1561,6 +1555,7 @@ bool DeviceProfiler::isLastFDReadDone() const { return this->is_last_fd_read_don
 DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
 #if defined(TRACY_ENABLE)
     ZoneScopedC(tracy::Color::Green);
+    this->thread_pool = create_device_bound_thread_pool(6);
     this->device_id = device->id();
     this->device_arch = device->arch();
     this->device_core_frequency =
@@ -1587,38 +1582,34 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
 #endif
 }
 
-void DeviceProfiler::cleanup() {
+void DeviceProfiler::dumpDeviceResults() {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
     initializeMissingTracyContexts(/*blocking=*/false);
 
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        tt::tt_metal::MetalContext::instance().profiler_state_manager();
-
     for (auto& [core, _] : this->device_markers_per_core_risc_map) {
-        // profiler_state_manager->thread_pool->enqueue([this, core]() {
-        for (auto& [risc_num, device_markers] : this->device_markers_per_core_risc_map[core]) {
-            processDeviceMarkerData(device_markers);
-        }
-        // });
+        this->thread_pool->enqueue([this, core]() {
+            for (auto& [risc_num, device_markers] : this->device_markers_per_core_risc_map[core]) {
+                processDeviceMarkerData(device_markers);
+            }
+        });
     }
 
-    // profiler_state_manager->thread_pool->wait();
+    this->thread_pool->wait();
 
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
-        getSortedDeviceMarkersVector(this->device_markers_per_core_risc_map);
+        getSortedDeviceMarkersVector(this->device_markers_per_core_risc_map, this->thread_pool.get());
 
-    // profiler_state_manager->thread_pool->enqueue([this]() { dumpDeviceResults(); });
-    // dumpDeviceResults();
+    this->thread_pool->enqueue([this]() { writeDeviceResultsToFiles(); });
     pushTracyDeviceResults(device_markers_vec);
 
     for (auto& [device_core, _] : device_tracy_contexts) {
-        // profiler_state_manager->thread_pool->enqueue(
-        //     [this, device_core]() {
-        TracyTTDestroy(device_tracy_contexts.at(device_core).release());
-        // });
+        this->thread_pool->enqueue(
+            [this, device_core]() { TracyTTDestroy(device_tracy_contexts.at(device_core).release()); });
     }
+
+    this->thread_pool->wait();
 #endif
 }
 
@@ -1795,9 +1786,11 @@ bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {
          ((old_info.device_time / old_info.frequency) < (new_info.device_time / new_info.frequency))));
 }
 
-void DeviceProfiler::dumpDeviceResults() const {
+void DeviceProfiler::writeDeviceResultsToFiles() const {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
+
+    std::scoped_lock lock(tt::tt_metal::MetalContext::instance().profiler_state_manager()->mid_run_dump_mutex);
 
     const std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
     dumpDeviceResultsToCSV(device_markers_per_core_risc_map, device_arch, device_core_frequency, log_path);
@@ -1819,9 +1812,6 @@ void DeviceProfiler::pushTracyDeviceResults(
             setSyncInfo(info);
         }
     }
-
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        tt::tt_metal::MetalContext::instance().profiler_state_manager();
 
     // Tracy contexts must be updated in order of their first timestamps
     std::unordered_set<std::pair<chip_id_t, CoreCoord>, pair_hash<chip_id_t, CoreCoord>> device_cores_to_update;
@@ -1931,20 +1921,17 @@ void DeviceProfiler::initializeMissingTracyContexts(bool blocking) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        tt::tt_metal::MetalContext::instance().profiler_state_manager();
-
     // TODO: benchmark parallel construction/destruction of tracy contexts
     for (const auto& [device_core, _] : device_tracy_contexts) {
         if (device_tracy_contexts.at(device_core) == nullptr) {
-            // profiler_state_manager->thread_pool->enqueue([this, device_core]() {
-            device_tracy_contexts.at(device_core) = std::unique_ptr<tracy::TTCtx>(TracyTTContext());
-            // });
+            this->thread_pool->enqueue([this, device_core]() {
+                device_tracy_contexts.at(device_core) = std::unique_ptr<tracy::TTCtx>(TracyTTContext());
+            });
         }
     }
 
     if (blocking) {
-        // profiler_state_manager->thread_pool->wait();
+        this->thread_pool->wait();
     }
 #endif
 }

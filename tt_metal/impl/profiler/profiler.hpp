@@ -188,7 +188,9 @@ public:
 
     ~DeviceProfiler();
 
-    void cleanup();
+    void dumpDeviceResults();
+
+    std::shared_ptr<ThreadPool> thread_pool{};
 
     // Device-core Syncdata
     std::map<CoreCoord, SyncInfo> device_core_sync_info;
@@ -239,7 +241,7 @@ public:
     void dumpClusterCoordinates() const;
 
     // Dump device results to files
-    void dumpDeviceResults() const;
+    void writeDeviceResultsToFiles() const;
 
     // Push device results to tracy
     void pushTracyDeviceResults(std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec);
@@ -270,7 +272,8 @@ public:
 // while these references are in use, as this could invalidate the references and cause undefined behavior.
 std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDeviceMarkersVector(
     const std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>>&
-        device_markers_per_core_risc_map);
+        device_markers_per_core_risc_map,
+    ThreadPool* thread_pool);
 
 bool useFastDispatch(IDevice* device);
 
