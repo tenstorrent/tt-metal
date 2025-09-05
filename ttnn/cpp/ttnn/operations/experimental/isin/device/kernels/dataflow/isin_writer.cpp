@@ -18,13 +18,16 @@ void kernel_main() {
     const uint32_t subchunks_offset = get_arg_val<uint32_t>(2);
     const auto output_addr_gtor = TensorAccessor{ctas.output_accessor_args, output_buffer_address, ctas.elements_size};
 
+    /*
+        this loop goes over the same range as the reader with its elements subchunk loop
+        elements' and output's values have a 1-to-1 correspondence
+    */
     for (uint32_t output_subchunk_id = subchunks_offset,
                   output_offset = subchunks_offset * ctas.single_fetch_subchunk_size;
          output_offset < ((subchunks_offset + subchunks_per_core) * ctas.single_fetch_subchunk_size);
          ++output_subchunk_id, output_offset += ctas.single_fetch_subchunk_size) {
         const uint32_t output_subchunk_size =
             std::min(ctas.elements_size - output_offset, ctas.single_fetch_subchunk_size);
-        // const uint32_t output_l1_write_addr = get_write_ptr(ctas.output_cb);
         write_to_dram<decltype(output_addr_gtor)>(
             ctas.output_cb, output_addr_gtor, output_offset, output_subchunk_size);
     }
