@@ -730,7 +730,6 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
                    NC = shape[0];
     const uint32_t tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const uint32_t tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
-    const uint32_t tile_hw = tensor_args.input_tensor.tensor_spec().tile().get_tile_hw();
     const uint32_t Wt = W / tile_width;
     const uint32_t Ht = H / tile_height;
     const auto& shape_unpadded = tensor_args.input_tensor.logical_shape();
@@ -1089,7 +1088,6 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
                    NC = shape[0];
     const uint32_t tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const uint32_t tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
-    const uint32_t tile_hw = tensor_args.input_tensor.tensor_spec().tile().get_tile_hw();
     uint32_t Wt = W / tile_width;
     uint32_t Ht = H / tile_height;
 
@@ -1305,7 +1303,6 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     const uint32_t tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const uint32_t tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
     const uint32_t tile_hw = tensor_args.input_tensor.tensor_spec().tile().get_tile_hw();
-    uint32_t M = shape[2] * shape[0];
     uint32_t num_cores_per_batch =
         (shape[1] * shape[2] * shape[3]) / (tensor_args.input_tensor.shard_spec().value().shape[0] *
                                             tensor_args.input_tensor.shard_spec().value().shape[1]);
