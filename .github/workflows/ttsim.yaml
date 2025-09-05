@@ -93,8 +93,8 @@ jobs:
               cmake -G Ninja -S "$example_path" -B .
               cmake --build .
               # Find and run the built executable
-              exec_path=$(find . -maxdepth 2 -type f -executable -not -name "*.so")
-              for exe in $exec_path; do
+              readarray -t exec_paths < <(find . -maxdepth 2 -type f -executable -not -name "*.so")
+              for exe in "${exec_paths[@]}"; do
                 exe_basename=$(basename "$exe")
                 echo "Running ${exe_basename}"
                 "$exe"
