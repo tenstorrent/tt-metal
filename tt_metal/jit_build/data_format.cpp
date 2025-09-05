@@ -316,7 +316,8 @@ std::vector<DataFormat> get_pack_src_formats(
     bool int_fpu_en,
     tt::ARCH arch) {
     std::vector<DataFormat> pack_src_formats;
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+    pack_src_formats.reserve(NUM_CIRCULAR_BUFFERS);
+for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         pack_src_formats.emplace_back(get_single_pack_src_format(
             data_formats[i], unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, int_fpu_en, arch));
     }
