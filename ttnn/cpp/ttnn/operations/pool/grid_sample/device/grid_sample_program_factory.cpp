@@ -180,7 +180,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             dummy_cb_id,                                         // 16: Index Output CB (unused)
             one_scalar_per_core,                                 // 17: Scalar mode
             false,                                               // 18: Return Indices (unused)
-            out_ntiles_c                                         // 19: Tiles per channel (for CB space reservation)
         };
 
         compute_kernel_group_1 = tt::tt_metal::CreateKernel(
@@ -217,7 +216,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             dummy_cb_id,                                         // 16: Index Output CB (unused)
             one_scalar_per_core,                                 // 17: Scalar mode
             false,                                               // 18: Return Indices (unused)
-            out_ntiles_c                                         // 19: Tiles per channel (for CB space reservation)
         };
 
         compute_kernel_group_2 = tt::tt_metal::CreateKernel(
