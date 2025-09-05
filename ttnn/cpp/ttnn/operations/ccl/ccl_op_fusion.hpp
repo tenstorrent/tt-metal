@@ -5,6 +5,8 @@
 #pragma once
 
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
 
 namespace ttnn {
 namespace experimental {
@@ -49,9 +51,9 @@ struct AllGatherFusedOpSignaler {
 
     void init_all_gather(
         tt::tt_metal::Program& program,
-        tt::tt_metal::IDevice const* device,
+        const tt::tt_metal::IDevice* device,
 
-        CoreRangeSet const& all_gather_workers,
+        const CoreRangeSet& all_gather_workers,
         std::vector<CoreCoord>& all_gather_worker_cores);
 
     void push_all_gather_fused_op_rt_args(

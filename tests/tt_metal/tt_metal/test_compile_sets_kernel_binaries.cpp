@@ -62,7 +62,7 @@ std::string get_latest_kernel_binary_path(
     std::filesystem::path kernel_path{kernel_root_path + kernel->name()};
     std::filesystem::file_time_type ftime = std::filesystem::last_write_time(*kernel_path.begin());
     std::string latest_hash;
-    for (auto const& dir_entry : std::filesystem::directory_iterator{kernel_path}) {
+    for (const auto& dir_entry : std::filesystem::directory_iterator{kernel_path}) {
         auto kbtime = std::filesystem::last_write_time(dir_entry.path());
         if (kbtime > ftime) {
             ftime = kbtime;
@@ -148,9 +148,9 @@ int main(int argc, char** argv) {
         auto devices = tt::tt_metal::detail::CreateDevices(ids);
         std::vector<tt_metal::Program> programs;
         // kernel->binaries() returns 32B aligned binaries
-        std::map<uint32_t, std::vector<ll_api::memory const*>> compute_binaries;
-        std::map<uint32_t, std::vector<ll_api::memory const*>> brisc_binaries;
-        std::map<uint32_t, std::vector<ll_api::memory const*>> ncrisc_binaries;
+        std::map<uint32_t, std::vector<const ll_api::memory*>> compute_binaries;
+        std::map<uint32_t, std::vector<const ll_api::memory*>> brisc_binaries;
+        std::map<uint32_t, std::vector<const ll_api::memory*>> ncrisc_binaries;
 
         for (int i = 0; i < num_devices; i++) {
             auto device = devices[i];
@@ -177,11 +177,9 @@ int main(int argc, char** argv) {
                     kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value(),
                 "Error");
             auto compute_kernel =
-                tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
-            auto riscv0_kernel =
-                tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
-            auto riscv1_kernel =
-                tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
+                program.impl().get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
+            auto riscv0_kernel = program.impl().get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
+            auto riscv1_kernel = program.impl().get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
 
             // Run iteration to get golden
             uint32_t mask =
@@ -234,12 +232,12 @@ int main(int argc, char** argv) {
                                 tt_metal::HalProgrammableCoreType::TENSIX);
                         const tt_metal::KernelGroup* kernel_group =
                             program.impl().kernels_on_core(core, programmable_core_index);
-                        auto compute_kernel = tt_metal::detail::GetKernel(
-                            program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
-                        auto riscv0_kernel = tt_metal::detail::GetKernel(
-                            program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
-                        auto riscv1_kernel = tt_metal::detail::GetKernel(
-                            program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
+                        auto compute_kernel =
+                            program.impl().get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
+                        auto riscv0_kernel =
+                            program.impl().get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
+                        auto riscv1_kernel =
+                            program.impl().get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
                         TT_FATAL(
                             tt_metal::KernelImpl::from(*compute_kernel).binaries(mask) == compute_binaries.at(mask),
                             "Error");

@@ -203,7 +203,8 @@ bool flatten(
     return pass;
 }
 
-bool flatten_stress(std::shared_ptr<distributed::MeshDevice> mesh_device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
+bool flatten_stress(
+    std::shared_ptr<distributed::MeshDevice> mesh_device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
     // Test Simulating Program Caching with Async Command Queues
     bool pass = true;
     // Create a program used across all loops

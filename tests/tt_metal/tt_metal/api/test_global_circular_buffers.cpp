@@ -23,6 +23,9 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
+// Access to internal API: ProgramImpl::finalize_offsets
+#include "impl/program/program_impl.hpp"
+
 namespace tt::tt_metal {
 
 TEST_F(MeshDispatchFixture, TensixCreateGlobalCircularBuffers) {
@@ -101,7 +104,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
         auto remote_cb =
             tt::tt_metal::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
         tt::tt_metal::detail::CompileProgram(device, program);
-        program.finalize_offsets(device);
+        program.impl().finalize_offsets(device);
         tt::tt_metal::experimental::UpdateDynamicCircularBufferAddress(program, remote_cb, global_cb);
         EXPECT_THROW(UpdateDynamicCircularBufferAddress(program, remote_cb, dummy_global_cb), std::exception);
     }
@@ -125,7 +128,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
         tt::tt_metal::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
         distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
         auto& program_ = workload.get_programs().at(device_range);
-        EXPECT_THROW(program_.finalize_offsets(device), std::exception);
+        EXPECT_THROW(program_.impl().finalize_offsets(device), std::exception);
     }
 }
 
