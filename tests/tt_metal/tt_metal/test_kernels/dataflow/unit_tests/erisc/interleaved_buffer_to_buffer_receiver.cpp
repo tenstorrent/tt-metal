@@ -15,7 +15,8 @@ void kernel_main() {
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
 
-    const InterleavedAddrGen<dst_is_dram> s = {.bank_base_address = dst_addr, .page_size = page_size};
+    constexpr auto dst_args = TensorAccessorArgs<1>();
+    const auto s = TensorAccessor(dst_args, dst_addr, page_size);
 
     uint32_t page_idx = 0;
     for (uint32_t i = 0; i < num_loops; ++i) {
