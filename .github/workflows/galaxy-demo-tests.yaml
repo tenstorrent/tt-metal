@@ -13,19 +13,19 @@ jobs:
     with:
       version: 22.04
       build-wheel: true
-  tg-demo-tests:
+  galaxy-demo-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/tg-demo-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: topology-6u
-  tg-deepseek-tests:
+  galaxy-deepseek-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/tg-deepseek-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-deepseek-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

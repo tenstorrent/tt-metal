@@ -32,7 +32,7 @@ on:
         required: false
         type: boolean
         default: false
-      tg-demo:
+      galaxy-demo:
         required: false
         type: boolean
         default: false
@@ -93,7 +93,7 @@ jobs:
               echo "run-quick=${{ inputs.galaxy-quick }}" >> $GITHUB_OUTPUT
               echo "run-unit=${{ inputs.tg-unit }}" >> $GITHUB_OUTPUT
               echo "run-frequent=${{ inputs.tg-frequent }}" >> $GITHUB_OUTPUT
-              echo "run-demo=${{ inputs.tg-demo }}" >> $GITHUB_OUTPUT
+              echo "run-demo=${{ inputs.galaxy-demo }}" >> $GITHUB_OUTPUT
               echo "run-model-perf=${{ inputs.tg-model-perf }}" >> $GITHUB_OUTPUT
               echo "run-stress=${{ inputs.tg-stress }}" >> $GITHUB_OUTPUT
               ;;
@@ -161,7 +161,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology-6u: ${{ needs.determine-tests.outputs.is-config-tg == 'false'}}
 
-  tg-unit-tests:
+  galaxy-unit-tests:
     if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
@@ -172,7 +172,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: 'topology-6u'
-  tg-frequent-tests:
+  galaxy-frequent-tests:
     if: ${{ needs.determine-tests.outputs.run-frequent == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
@@ -183,18 +183,18 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: 'topology-6u'
-  tg-demo-tests:
+  galaxy-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/tg-demo-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
     with:
       extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: 'topology-6u'
-  tg-model-perf-tests:
+  galaxy-model-perf-tests:
     if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
@@ -205,7 +205,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: 'topology-6u'
-  tg-stress-test:
+  galaxy-stress-test:
     if: ${{ needs.determine-tests.outputs.run-stress == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
