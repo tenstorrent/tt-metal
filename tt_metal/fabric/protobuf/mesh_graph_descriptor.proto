@@ -292,7 +292,7 @@ message GraphTopology {
     // Required graph topology type.
     Type layout_type = 1;
 
-    // Channels for the graph topoogy
+    // Channels for the graph topology
     Channels channels = 2;
 }
 
