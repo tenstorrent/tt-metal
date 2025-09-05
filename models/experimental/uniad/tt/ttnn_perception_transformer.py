@@ -59,7 +59,6 @@ class TtPerceptionTransformer:
         self.rotate_center = rotate_center
 
     def init_layers(self):
-        """Initialize layers of the Detr3DTransformer."""
         self.level_embeds = self.parameters["level_embeds"]
         self.cams_embeds = self.parameters["cams_embeds"]
         self.can_bus_mlp = [
@@ -82,10 +81,6 @@ class TtPerceptionTransformer:
         prev_bev=None,
         img_metas=None,
     ):
-        """
-        obtain bev features.
-        """
-
         bs = mlvl_feats[0].shape[0]
         bev_queries = ttnn.unsqueeze(bev_queries, 1)
         bev_queries = ttnn.repeat(bev_queries, (1, bs, 1))
@@ -201,10 +196,10 @@ class TtPerceptionTransformer:
     ):
         bs = bev_embed.shape[1]
         query_pos, query = object_query_embed[:, :256], object_query_embed[:, 256:]
-        query_pos = ttnn.expand(ttnn.unsqueeze(query_pos, 0), (bs, -1, -1))  # .unsqueeze(0).expand(bs, -1, -1)
-        query = ttnn.expand(ttnn.unsqueeze(query, 0), (bs, -1, -1))  # .expand(bs, -1, -1)
+        query_pos = ttnn.expand(ttnn.unsqueeze(query_pos, 0), (bs, -1, -1))
+        query = ttnn.expand(ttnn.unsqueeze(query, 0), (bs, -1, -1))
 
-        reference_points = ttnn.expand(ttnn.unsqueeze(reference_points, 0), (bs, -1, -1))  # .expand(bs, -1, -1)
+        reference_points = ttnn.expand(ttnn.unsqueeze(reference_points, 0), (bs, -1, -1))
         reference_points = ttnn.sigmoid(reference_points)
 
         init_reference_out = ttnn.clone(reference_points)

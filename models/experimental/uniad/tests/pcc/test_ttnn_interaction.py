@@ -134,7 +134,7 @@ def custom_preprocessor(model, name):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
 def test_MapInteraction(device, reset_seeds, model_location_generator):
-    reference_model = MapInteraction(embed_dims=256, num_heads=8, dropout=0.1, batch_first=True)
+    reference_model = MapInteraction(embed_dims=256, num_heads=8, batch_first=True)
 
     reference_model = load_torch_model(
         torch_model=reference_model,
@@ -160,9 +160,7 @@ def test_MapInteraction(device, reset_seeds, model_location_generator):
     ttnn_query_pos = ttnn.from_torch(query_pos, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     ttnn_key_pos = ttnn.from_torch(key_pos, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
-    ttnn_model = TtMapInteraction(
-        parameters=parameters, device=device, embed_dims=256, num_heads=8, dropout=0.1, batch_first=True
-    )
+    ttnn_model = TtMapInteraction(parameters=parameters, device=device, embed_dims=256, num_heads=8, batch_first=True)
 
     ttnn_output = ttnn_model(query=ttnn_query, key=ttnn_key, query_pos=ttnn_query_pos, key_pos=ttnn_key_pos)
 
@@ -171,7 +169,7 @@ def test_MapInteraction(device, reset_seeds, model_location_generator):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
 def test_TrackAgentInteraction(device, reset_seeds, model_location_generator):
-    reference_model = TrackAgentInteraction(embed_dims=256, num_heads=8, dropout=0.1, batch_first=True)
+    reference_model = TrackAgentInteraction(embed_dims=256, num_heads=8, batch_first=True)
 
     reference_model = load_torch_model(
         torch_model=reference_model,
@@ -198,7 +196,7 @@ def test_TrackAgentInteraction(device, reset_seeds, model_location_generator):
     ttnn_key_pos = ttnn.from_torch(key_pos, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
     ttnn_model = TtTrackAgentInteraction(
-        parameters=parameters, device=device, embed_dims=256, num_heads=8, dropout=0.1, batch_first=True
+        parameters=parameters, device=device, embed_dims=256, num_heads=8, batch_first=True
     )
 
     ttnn_output = ttnn_model(query=ttnn_query, key=ttnn_key, query_pos=ttnn_query_pos, key_pos=ttnn_key_pos)
@@ -208,7 +206,7 @@ def test_TrackAgentInteraction(device, reset_seeds, model_location_generator):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
 def test_IntentionInteraction(device, reset_seeds, model_location_generator):
-    reference_model = IntentionInteraction(embed_dims=256, num_heads=8, dropout=0.1, batch_first=True)
+    reference_model = IntentionInteraction(embed_dims=256, num_heads=8, batch_first=True)
     reference_model = load_torch_model(
         torch_model=reference_model,
         layer="motion_head.motionformer.intention_interaction_layers",
@@ -228,7 +226,7 @@ def test_IntentionInteraction(device, reset_seeds, model_location_generator):
     ttnn_query = ttnn.from_torch(query, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
     ttnn_model = TtIntentionInteraction(
-        parameters=parameters, device=device, embed_dims=256, num_heads=8, dropout=0.1, batch_first=True
+        parameters=parameters, device=device, embed_dims=256, num_heads=8, batch_first=True
     )
 
     ttnn_output = ttnn_model(query=ttnn_query)

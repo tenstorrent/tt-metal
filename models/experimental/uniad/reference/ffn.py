@@ -12,9 +12,8 @@ class FFN(nn.Module):
         self.activate = nn.ReLU(inplace=True)
 
         self.layers = nn.Sequential(
-            nn.Sequential(nn.Linear(self.embed_dims, 512), nn.ReLU(inplace=True), nn.Dropout(p=0.1)),
+            nn.Sequential(nn.Linear(self.embed_dims, 512), nn.ReLU(inplace=True)),
             nn.Linear(512, self.embed_dims),
-            nn.Dropout(p=0.1),
         )
 
     def forward(self, x, identity=None):

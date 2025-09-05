@@ -23,7 +23,6 @@ class MotionDeformableAttention(nn.Module):
         num_steps=1,
         sample_index=-1,
         im2col_step=64,
-        dropout=0.1,
         bev_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
         voxel_size=[0.2, 0.2, 8],
         batch_first=True,
@@ -35,25 +34,9 @@ class MotionDeformableAttention(nn.Module):
             raise ValueError(f"embed_dims must be divisible by num_heads, " f"but got {embed_dims} and {num_heads}")
         dim_per_head = embed_dims // num_heads
         self.norm_cfg = norm_cfg
-        self.dropout = nn.Dropout(dropout)
         self.batch_first = batch_first
         self.fp16_enabled = False
         self.bev_range = bev_range
-
-        # you'd better set dim_per_head to a power of 2
-        # which is more efficient in the CUDA implementation
-        def _is_power_of_2(n):
-            if (not isinstance(n, int)) or (n < 0):
-                raise ValueError("invalid input for _is_power_of_2: {} (type: {})".format(n, type(n)))
-            return (n & (n - 1) == 0) and n != 0
-
-        if not _is_power_of_2(dim_per_head):
-            warnings.warn(
-                "You'd better set embed_dims in "
-                "MultiScaleDeformAttention to make "
-                "the dimension of each attention head a power of 2 "
-                "which is more efficient in our CUDA implementation."
-            )
 
         self.im2col_step = im2col_step
         self.embed_dims = embed_dims
@@ -113,8 +96,7 @@ class MotionDeformableAttention(nn.Module):
         attention_weights = attention_weights.view(
             bs, num_query, self.num_heads, self.num_steps, self.num_levels, self.num_points
         )
-        # bs, n_query, n_head, n_steps, N_level, N_points, 2
-        # BS NUM_AGENT NUM_MODE 12 NUM_LEVEL  2
+
         if reference_trajs.shape[-1] == 2:
             reference_trajs = reference_trajs[:, :, :, [self.sample_index], :, :]
             reference_trajs_ego = self.agent_coords_to_ego_coords(copy.deepcopy(reference_trajs), bbox_results).detach()
@@ -163,7 +145,7 @@ class MotionDeformableAttention(nn.Module):
         output = torch.flatten(output, start_dim=2, end_dim=3)
         output = self.output_proj(output)
         output = output.view(bs, num_agent, num_mode, -1)
-        return self.dropout(output) + identity
+        return output + identity
 
     def agent_coords_to_ego_coords(self, reference_trajs, bbox_results):
         batch_size = len(bbox_results)
@@ -183,39 +165,6 @@ class MotionDeformableAttention(nn.Module):
 
 
 class MotionTransformerAttentionLayer(nn.Module):
-    """Base `TransformerLayer` for vision transformer.
-    It can be built from `mmcv.ConfigDict` and support more flexible
-    customization, for example, using any number of `FFN or LN ` and
-    use different kinds of `attention` by specifying a list of `ConfigDict`
-    named `attn_cfgs`. It is worth mentioning that it supports `prenorm`
-    when you specifying `norm` as the first element of `operation_order`.
-    More details about the `prenorm`: `On Layer Normalization in the
-    Transformer Architecture <https://arxiv.org/abs/2002.04745>`_ .
-    Args:
-        attn_cfgs (list[`mmcv.ConfigDict`] | obj:`mmcv.ConfigDict` | None )):
-            Configs for `self_attention` or `cross_attention` modules,
-            The order of the configs in the list should be consistent with
-            corresponding attentions in operation_order.
-            If it is a dict, all of the attention modules in operation_order
-            will be built with this config. Default: None.
-        ffn_cfgs (list[`mmcv.ConfigDict`] | obj:`mmcv.ConfigDict` | None )):
-            Configs for FFN, The order of the configs in the list should be
-            consistent with corresponding ffn in operation_order.
-            If it is a dict, all of the attention modules in operation_order
-            will be built with this config.
-        operation_order (tuple[str]): The execution order of operation
-            in transformer. Such as ('self_attn', 'norm', 'ffn', 'norm').
-            Support `prenorm` when you specifying first element as `norm`.
-            Default：None.
-        norm_cfg (dict): Config dict for normalization layer.
-            Default: dict(type='LN').
-        init_cfg (obj:`mmcv.ConfigDict`): The Config for initialization.
-            Default: None.
-        batch_first (bool): Key, Query and Value are shape
-            of (batch, n, embed_dim)
-            or (n, batch, embed_dim). Default to False.
-    """
-
     def __init__(
         self,
         attn_cfgs=None,
@@ -224,7 +173,6 @@ class MotionTransformerAttentionLayer(nn.Module):
             embed_dims=256,
             feedforward_channels=1024,
             num_fcs=2,
-            ffn_drop=0.0,
             act_cfg=dict(type="ReLU", inplace=True),
         ),
         operation_order=None,
@@ -233,9 +181,7 @@ class MotionTransformerAttentionLayer(nn.Module):
         batch_first=False,
         **kwargs,
     ):
-        deprecated_args = dict(
-            feedforward_channels="feedforward_channels", ffn_dropout="ffn_drop", ffn_num_fcs="num_fcs"
-        )
+        deprecated_args = dict(feedforward_channels="feedforward_channels", ffn_num_fcs="num_fcs")
         for ori_name, new_name in deprecated_args.items():
             if ori_name in kwargs:
                 warnings.warn(
@@ -277,9 +223,7 @@ class MotionTransformerAttentionLayer(nn.Module):
                     attn_cfgs[index]["batch_first"] = self.batch_first
                 attention = MotionDeformableAttention(
                     num_steps=12, embed_dims=256, num_levels=1, num_heads=8, num_points=4, sample_index=-1
-                )  # build_attention(attn_cfgs[index])
-                # Some custom attentions used as `self_attn`
-                # or `cross_attn` can have different behavior.
+                )
                 attention.operation_name = operation_name
                 self.attentions.append(attention)
                 index += 1
@@ -290,7 +234,7 @@ class MotionTransformerAttentionLayer(nn.Module):
 
         num_ffns = operation_order.count("ffn")
         if isinstance(ffn_cfgs, dict):
-            ffn_cfgs = ffn_cfgs  # ConfigDict(ffn_cfgs) added by me
+            ffn_cfgs = ffn_cfgs
         if isinstance(ffn_cfgs, dict):
             ffn_cfgs = [copy.deepcopy(ffn_cfgs) for _ in range(num_ffns)]
         assert len(ffn_cfgs) == num_ffns
@@ -299,9 +243,7 @@ class MotionTransformerAttentionLayer(nn.Module):
                 ffn_cfgs[ffn_index]["embed_dims"] = self.embed_dims
             else:
                 assert ffn_cfgs[ffn_index]["embed_dims"] == self.embed_dims
-            self.ffns.append(
-                FFN(embed_dims=256)
-            )  # ,feedforward_channels=512,num_fcs=2,ffn_drop=0.1,act_cfg={'type': 'ReLU', 'inplace': True}))
+            self.ffns.append(FFN(embed_dims=256))
 
         self.norms = nn.ModuleList()
         num_norms = operation_order.count("norm")
@@ -381,27 +323,18 @@ class MotionTransformerAttentionLayer(nn.Module):
 
 
 class MapInteraction(nn.Module):
-    """
-    Modeling the interaction between the agent and the map
-    """
-
-    def __init__(self, embed_dims=256, num_heads=8, dropout=0.1, batch_first=True, norm_cfg=None, init_cfg=None):
+    def __init__(self, embed_dims=256, num_heads=8, batch_first=True, norm_cfg=None, init_cfg=None):
         super().__init__()
 
         self.batch_first = batch_first
         self.interaction_transformer = nn.TransformerDecoderLayer(
             d_model=embed_dims,
             nhead=num_heads,
-            dropout=dropout,
             dim_feedforward=embed_dims * 2,
             batch_first=batch_first,
         )
 
     def forward(self, query, key, query_pos=None, key_pos=None):
-        """
-        x: context query (B, A, P, D)
-        query_pos: mode pos embedding (B, A, P, D)
-        """
         B, A, P, D = query.shape
         if query_pos is not None:
             query = query + query_pos
@@ -417,36 +350,24 @@ class MapInteraction(nn.Module):
 
 
 class TrackAgentInteraction(nn.Module):
-    """
-    Modeling the interaction between the agents
-    """
-
-    def __init__(self, embed_dims=256, num_heads=8, dropout=0.1, batch_first=True, norm_cfg=None, init_cfg=None):
+    def __init__(self, embed_dims=256, num_heads=8, batch_first=True, norm_cfg=None, init_cfg=None):
         super().__init__()
 
         self.batch_first = batch_first
         self.interaction_transformer = nn.TransformerDecoderLayer(
             d_model=embed_dims,
             nhead=num_heads,
-            dropout=dropout,
             dim_feedforward=embed_dims * 2,
             batch_first=batch_first,
         )
 
     def forward(self, query, key, query_pos=None, key_pos=None):
-        """
-        query: context query (B, A, P, D)
-        query_pos: mode pos embedding (B, A, P, D)
-        key: (B, A, D)
-        key_pos: (B, A, D)
-        """
         B, A, P, D = query.shape
         if query_pos is not None:
             query = query + query_pos
         if key_pos is not None:
             key = key + key_pos
         mem = key.expand(B * A, -1, -1)
-        # N, A, P, D -> N*A, P, D
         query = torch.flatten(query, start_dim=0, end_dim=1)
         query = self.interaction_transformer(query, mem)
         query = query.view(B, A, P, D)
@@ -454,18 +375,13 @@ class TrackAgentInteraction(nn.Module):
 
 
 class IntentionInteraction(nn.Module):
-    """
-    Modeling the interaction between anchors
-    """
-
-    def __init__(self, embed_dims=256, num_heads=8, dropout=0.1, batch_first=True, norm_cfg=None, init_cfg=None):
+    def __init__(self, embed_dims=256, num_heads=8, batch_first=True, norm_cfg=None, init_cfg=None):
         super().__init__()
 
         self.batch_first = batch_first
         self.interaction_transformer = nn.TransformerEncoderLayer(
             d_model=embed_dims,
             nhead=num_heads,
-            dropout=dropout,
             dim_feedforward=embed_dims * 2,
             batch_first=batch_first,
         )
@@ -480,13 +396,6 @@ class IntentionInteraction(nn.Module):
 
 
 class MotionTransformerDecoder(nn.Module):
-    """Implements the decoder in DETR3D transformer.
-    Args:
-        return_intermediate (bool): Whether to return intermediate outputs.
-        coder_norm_cfg (dict): Config of last normalization layer. Default：
-            `LN`.
-    """
-
     def __init__(self, pc_range=None, embed_dims=256, transformerlayers=None, num_layers=3, **kwargs):
         super(MotionTransformerDecoder, self).__init__()
         self.pc_range = pc_range
@@ -511,7 +420,6 @@ class MotionTransformerDecoder(nn.Module):
                         }
                     ],
                     feedforward_channels=512,
-                    ffn_dropout=0.1,
                     operation_order=("cross_attn", "norm", "ffn", "norm"),
                 )
                 for i in range(self.num_layers)
@@ -558,19 +466,6 @@ class MotionTransformerDecoder(nn.Module):
         scene_level_offset_embedding_layer=None,
         **kwargs,
     ):
-        """Forward function for `MotionTransformerDecoder`.
-        Args:
-            agent_query (B, A, D)
-            map_query (B, M, D)
-            map_query_pos (B, G, D)
-            static_intention_embed (B, A, P, D)
-            offset_query_embed (B, A, P, D)
-            global_intention_embed (B, A, P, D)
-            learnable_intention_embed (B, A, P, D)
-            det_query_pos (B, A, D)
-        Returns:
-            None
-        """
         intermediate = []
         intermediate_reference_trajs = []
 
@@ -578,39 +473,30 @@ class MotionTransformerDecoder(nn.Module):
         track_query_bc = track_query.unsqueeze(2).expand(-1, -1, P, -1)  # (B, A, P, D)
         track_query_pos_bc = track_query_pos.unsqueeze(2).expand(-1, -1, P, -1)  # (B, A, P, D)
 
-        # static intention embedding, which is imutable throughout all layers
         agent_level_embedding = self.intention_interaction_layers(agent_level_embedding)
         static_intention_embed = agent_level_embedding + scene_level_offset_embedding + learnable_embed
         reference_trajs_input = reference_trajs.unsqueeze(4).detach()
 
         query_embed = torch.zeros_like(static_intention_embed)
         for lid in range(self.num_layers):
-            # fuse static and dynamic intention embedding
-            # the dynamic intention embedding is the output of the previous layer, which is initialized with anchor embedding
             dynamic_query_embed = self.dynamic_embed_fuser(
                 torch.cat([agent_level_embedding, scene_level_offset_embedding, scene_level_ego_embedding], dim=-1)
             )
 
-            # fuse static and dynamic intention embedding
             query_embed_intention = self.static_dynamic_fuser(
                 torch.cat([static_intention_embed, dynamic_query_embed], dim=-1)
             )  # (B, A, P, D)
 
-            # fuse intention embedding with query embedding
             query_embed = self.in_query_fuser(torch.cat([query_embed, query_embed_intention], dim=-1))
 
-            # interaction between agents
             track_query_embed = self.track_agent_interaction_layers[lid](
                 query_embed, track_query, query_pos=track_query_pos_bc, key_pos=track_query_pos
             )
 
-            # interaction between agents and map
             map_query_embed = self.map_interaction_layers[lid](
                 query_embed, lane_query, query_pos=track_query_pos_bc, key_pos=lane_query_pos
             )
 
-            # interaction between agents and bev, ie. interaction between agents and goals
-            # implemented with deformable transformer
             bev_query_embed = self.bev_interaction_layers[lid](
                 query_embed,
                 value=bev_embed,
@@ -620,26 +506,21 @@ class MotionTransformerDecoder(nn.Module):
                 **kwargs,
             )
 
-            # fusing the embeddings from different interaction layers
             query_embed = [track_query_embed, map_query_embed, bev_query_embed, track_query_bc + track_query_pos_bc]
             query_embed = torch.cat(query_embed, dim=-1)
             query_embed = self.out_query_fuser(query_embed)
 
             if traj_reg_branches is not None:
-                # update reference trajectory
                 tmp = traj_reg_branches[lid](query_embed)
                 bs, n_agent, n_modes, n_steps, _ = reference_trajs.shape
                 tmp = tmp.view(bs, n_agent, n_modes, n_steps, -1)
 
-                # we predict speed of trajectory and use cumsum trick to get the trajectory
                 tmp[..., :2] = torch.cumsum(tmp[..., :2], dim=3)
                 new_reference_trajs = torch.zeros_like(reference_trajs)
                 new_reference_trajs = tmp[..., :2]
                 reference_trajs = new_reference_trajs.detach()
                 reference_trajs_input = reference_trajs.unsqueeze(4)  # BS NUM_AGENT NUM_MODE 12 NUM_LEVEL  2
 
-                # update embedding, which is used in the next layer
-                # only update the embedding of the last step, i.e. the goal
                 ep_offset_embed = reference_trajs.detach()
                 ep_ego_embed = (
                     trajectory_coordinate_transform(

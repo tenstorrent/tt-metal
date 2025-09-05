@@ -8,17 +8,6 @@ from models.experimental.uniad.tt.ttnn_utils import TtBaseBBoxCoder, denormalize
 
 
 class TtDETRTrack3DCoder(TtBaseBBoxCoder):
-    """Bbox coder for DETR3D.
-    Args:
-        pc_range (list[float]): Range of point cloud.
-        post_center_range (list[float]): Limit of the center.
-            Default: None.
-        max_num (int): Max number to be kept. Default: 100.
-        score_threshold (float): Threshold to filter boxes based on score.
-            Default: None.
-        code_size (int): Code size of bboxes. Default: 9
-    """
-
     def __init__(
         self,
         pc_range,
@@ -42,7 +31,6 @@ class TtDETRTrack3DCoder(TtBaseBBoxCoder):
         self.post_center_range = ttnn.from_torch(
             torch.tensor(self.post_center_range), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
-        # preprocess
 
     def encode(self):
         pass
@@ -105,13 +93,6 @@ class TtDETRTrack3DCoder(TtBaseBBoxCoder):
 
             mask = ttnn.to_torch(mask).bool()
 
-            if self.score_threshold:  # not used
-                mask &= thresh_mask
-            if not with_mask:
-                mask = torch.ones_like(mask) > 0  # not used
-            if self.with_nms:  # not used
-                mask &= nms_mask
-
             final_box_preds = ttnn.to_torch(final_box_preds)  # Indexing
 
             boxes3d = final_box_preds[mask]
@@ -152,7 +133,6 @@ class TtDETRTrack3DCoder(TtBaseBBoxCoder):
         track_scores = preds_dicts["track_scores"]
         obj_idxes = preds_dicts["obj_idxes"]
 
-        # batch_size = all_cls_scores.size()[0]
         batch_size = 1
         predictions_list = []
         predictions_list.append(

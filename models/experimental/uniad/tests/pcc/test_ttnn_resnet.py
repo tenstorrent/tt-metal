@@ -74,21 +74,17 @@ def custom_preprocessor(model, name):
                             if weight_torch is not None
                             else None
                         )
-                        parameters["res_model"][prefix][block_idx]["bn2"][
-                            "weight"
-                        ] = weight  # ttnn.to_device(weight, device)
+                        parameters["res_model"][prefix][block_idx]["bn2"]["weight"] = weight
 
                         bias = (
                             ttnn.from_torch(bias_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
                             if bias_torch is not None
                             else None
                         )
-                        parameters["res_model"][prefix][block_idx]["bn2"]["bias"] = bias  # ttnn.to_device(bias, device)
+                        parameters["res_model"][prefix][block_idx]["bn2"]["bias"] = bias
 
                         running_mean = ttnn.from_torch(batch_mean_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                        parameters["res_model"][prefix][block_idx]["bn2"][
-                            "running_mean"
-                        ] = running_mean  # ttnn.to_device(running_mean, device)
+                        parameters["res_model"][prefix][block_idx]["bn2"]["running_mean"] = running_mean
 
                         running_var = ttnn.from_torch(batch_var_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
                         parameters["res_model"][prefix][block_idx]["bn2"]["running_var"] = running_var
@@ -321,7 +317,6 @@ def test_uniad_reslayer1(device, reset_seeds, model_location_generator):
         device,
         inplanes=64,
         num_blocks=3,
-        # downsample_first=True,
         is_downsample=False,
         blk_sharded=False,
         activation_dtype=ttnn.bfloat16,

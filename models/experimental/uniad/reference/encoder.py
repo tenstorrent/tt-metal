@@ -26,7 +26,6 @@ class BEVFormerEncoder(nn.Module):
         kernel_size=(3, 5),
         im2col_step=192,
         feedforward_channels=512,
-        ffn_dropout=0.1,
         operation_order=("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
     ):
         super(BEVFormerEncoder, self).__init__()
@@ -52,7 +51,6 @@ class BEVFormerEncoder(nn.Module):
                 ),
             ],
             feedforward_channels=feedforward_channels,
-            ffn_dropout=ffn_dropout,
             operation_order=operation_order,
         )
 
@@ -162,24 +160,6 @@ class BEVFormerEncoder(nn.Module):
         shift=0.0,
         **kwargs,
     ):
-        """Forward function for `TransformerDecoder`.
-        Args:
-            bev_query (Tensor): Input BEV query with shape
-                `(num_query, bs, embed_dims)`.
-            key & value (Tensor): Input multi-cameta features with shape
-                (num_cam, num_value, bs, embed_dims)
-            reference_points (Tensor): The reference
-                points of offset. has shape
-                (bs, num_query, 4) when as_two_stage,
-                otherwise has shape ((bs, num_query, 2).
-            valid_ratios (Tensor): The radios of valid
-                points on the feature map, has shape
-                (bs, num_levels, 2)
-        Returns:
-            Tensor: Results with shape [1, num_query, bs, embed_dims] when
-                return_intermediate is `False`, otherwise it has shape
-                [num_layers, num_query, bs, embed_dims].
-        """
         output = bev_query
         intermediate = []
 
@@ -244,7 +224,7 @@ class BEVFormerEncoder(nn.Module):
 
 
 class BEVFormerLayer(nn.Module):
-    def __init__(self, attn_cfgs, feedforward_channels, ffn_dropout=0.0, operation_order=None, ffn_num_fcs=2, **kwargs):
+    def __init__(self, attn_cfgs, feedforward_channels, operation_order=None, ffn_num_fcs=2, **kwargs):
         attn_cfgs = [
             {"type": "TemporalSelfAttention", "embed_dims": 256, "num_levels": 1},
             {
@@ -263,7 +243,6 @@ class BEVFormerLayer(nn.Module):
 
         self.attn_cfgs = attn_cfgs
         self.feedforward_channels = feedforward_channels
-        self.ffn_dropout = ffn_dropout
         self.operation_order = operation_order
         self.ffn_num_fcs = ffn_num_fcs
         self.fp16_enabled = False

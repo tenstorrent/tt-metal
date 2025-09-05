@@ -10,7 +10,7 @@ from typing import Optional
 
 
 class AttentionTail(nn.Module):
-    def __init__(self, cfg, dim, num_heads=2, qkv_bias=False, qk_scale=None, attn_drop=0.0, proj_drop=0.0):
+    def __init__(self, cfg, dim, num_heads=2, qkv_bias=False, qk_scale=None):
         super().__init__()
         self.num_heads = num_heads
         head_dim = dim // num_heads
@@ -44,11 +44,8 @@ class AttentionTail(nn.Module):
         return mask
 
 
-count = 0
-
-
 class Mlp(nn.Module):
-    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.0):
+    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
@@ -56,28 +53,23 @@ class Mlp(nn.Module):
 
         self.act = act_layer()
         self.fc2 = nn.Linear(hidden_features, out_features)
-        self.drop = nn.Dropout(drop)
 
     def forward(self, x):
         x = self.fc1(x)
         x = self.act(x)
-        x = self.drop(x)
         x = self.fc2(x)
-        x = self.drop(x)
         return x
 
 
 class SelfAttention(nn.Module):
-    def __init__(self, cfg, dim, num_heads=2, qkv_bias=False, qk_scale=None, attn_drop=0.0, proj_drop=0.0):
+    def __init__(self, cfg, dim, num_heads=2, qkv_bias=False, qk_scale=None):
         super().__init__()
         self.num_heads = num_heads
         head_dim = dim // num_heads
         self.scale = qk_scale or head_dim**-0.5
 
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
-        self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
-        self.proj_drop = nn.Dropout(proj_drop)
 
     def forward(self, x):
         B, N, C = x.shape
@@ -88,16 +80,14 @@ class SelfAttention(nn.Module):
         attn = (q @ k.transpose(-2, -1)) * self.scale
 
         attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
-        x = self.proj_drop(x)
 
         return x
 
 
 class Attention(nn.Module):
-    def __init__(self, cfg, dim, num_heads=2, qkv_bias=False, qk_scale=None, attn_drop=0.0, proj_drop=0.0):
+    def __init__(self, cfg, dim, num_heads=2, qkv_bias=False, qk_scale=None):
         super().__init__()
         self.num_heads = num_heads
         head_dim = dim // num_heads
@@ -105,9 +95,7 @@ class Attention(nn.Module):
         self.q = nn.Linear(dim, dim, bias=qkv_bias)
         self.k = nn.Linear(dim, dim, bias=qkv_bias)
         self.v = nn.Linear(dim, dim, bias=qkv_bias)
-        self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
-        self.proj_drop = nn.Dropout(proj_drop)
         self.linear_l1 = nn.Sequential(
             nn.Linear(self.num_heads, self.num_heads),
             nn.ReLU(),
@@ -140,11 +128,9 @@ class Attention(nn.Module):
 
         attn = attn.permute(0, 3, 1, 2)
         attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
 
         x = (attn @ v).transpose(1, 2).contiguous().reshape(B, N, C)
         x = self.proj(x)
-        x = self.proj_drop(x)
 
         return x, mask
 
@@ -158,9 +144,6 @@ class Block(nn.Module):
         mlp_ratio=4.0,
         qkv_bias=False,
         qk_scale=None,
-        drop=0.0,
-        attn_drop=0.0,
-        drop_path=0.0,
         act_layer=nn.GELU,
         norm_layer=nn.LayerNorm,
         self_attn=False,
@@ -168,65 +151,36 @@ class Block(nn.Module):
         super().__init__()
         self.head_norm1 = norm_layer(dim)
         self.self_attn = self_attn
-        self.attn = Attention(
-            cfg, dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop
-        )
-        # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
+        self.attn = Attention(cfg, dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale)
 
-        self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.head_norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer)
         if self.self_attn:
             self.self_attention = SelfAttention(
-                cfg, dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop
+                cfg,
+                dim,
+                num_heads=num_heads,
+                qkv_bias=qkv_bias,
+                qk_scale=qk_scale,
             )
             self.norm3 = norm_layer(dim)
 
     def forward(self, query, key, value, key_padding_mask=None, hw_lvl=None):
         if self.self_attn:
-            query = query + self.drop_path(self.self_attention(query))
+            query = query + self.self_attention(query)
             query = self.norm3(query)
         x, mask = self.attn(query, key, value, key_padding_mask, hw_lvl=hw_lvl)
-        query = query + self.drop_path(x)
+        query = query + x
         query = self.head_norm1(query)
 
-        query = query + self.drop_path(self.mlp(query))
+        query = query + self.mlp(query)
         query = self.head_norm2(query)
         return query, mask
 
 
-def drop_path(x, drop_prob: float = 0.0, training: bool = False):
-    """Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks).
-    This is the same as the DropConnect impl I created for EfficientNet, etc networks, however,
-    the original name is misleading as 'Drop Connect' is a different form of dropout in a separate paper...
-    See discussion: https://github.com/tensorflow/tpu/issues/494#issuecomment-53296self.num_heads956 ... I've opted for
-    changing the layer and argument names to 'drop path' rather than mix DropConnect as a layer name and use
-    'survival rate' as the argument.
-    """
-    if drop_prob == 0.0 or not training:
-        return x
-    keep_prob = 1 - drop_prob
-    shape = (x.shape[0],) + (1,) * (x.ndim - 1)  # work with diff dim tensors, not just 2D ConvNets
-    random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
-    random_tensor.floor_()  # binarize
-    output = x.div(keep_prob) * random_tensor
-    return output
-
-
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
-
-
-class DropPath(nn.Module):
-    """Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks)."""
-
-    def __init__(self, drop_prob=None):
-        super(DropPath, self).__init__()
-        self.drop_prob = drop_prob
-
-    def forward(self, x):
-        return drop_path(x, self.drop_prob, self.training)
 
 
 class SegMaskHead(nn.Module):

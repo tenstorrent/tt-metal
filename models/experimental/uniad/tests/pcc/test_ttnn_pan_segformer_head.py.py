@@ -23,7 +23,6 @@ class DotDict(dict):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_uniad_TtPansegformerhead(device, reset_seeds, model_location_generator):
-    # weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
     kwargs = {
         "num_query": 300,
         "num_classes": 4,

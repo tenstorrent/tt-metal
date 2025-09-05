@@ -132,13 +132,6 @@ class OccHead(nn.Module):
         self.query_to_occ_feat = MLP(query_dim, query_dim, bev_proj_dim, num_layers=query_mlp_layers)
         self.temporal_mlp_for_mask = copy.deepcopy(self.query_to_occ_feat)
 
-        # Loss
-        # For matching
-        self.sample_ignore_mode = sample_ignore_mode
-        assert self.sample_ignore_mode in ["all_valid", "past_valid", "none"]
-
-        self.aux_loss_weight = aux_loss_weight
-
         self.pan_eval = pan_eval
         self.test_seg_thresh = test_seg_thresh
 

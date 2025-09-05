@@ -17,7 +17,6 @@ from models.experimental.uniad.reference.decoder import (
 from models.experimental.uniad.reference.motion_transformer_decoder import (
     MotionDeformableAttention,
     MotionTransformerAttentionLayer,
-    # FFN,
 )
 
 from models.experimental.uniad.reference.temporal_self_attention import TemporalSelfAttention
@@ -405,7 +404,6 @@ def custom_preprocessor(model, name):
 
     if isinstance(model, ResNet):
         backbone = model
-        # parameters["img_backbone"] = {}
 
         # Initial conv + bn
         weight, bias = fold_batch_norm2d_into_conv2d(backbone.conv1, backbone.bn1)
@@ -417,7 +415,7 @@ def custom_preprocessor(model, name):
         # Loop over all layers (layer1 to layer4)
         for layer_idx in range(1, 5):
             layer = getattr(backbone, f"layer{layer_idx}")
-            prefix = f"layer{layer_idx}"  # _{block_idx}"
+            prefix = f"layer{layer_idx}"
             parameters[prefix] = {}
             for block_idx, block in enumerate(layer):
                 parameters[prefix][block_idx] = {}
@@ -465,9 +463,7 @@ def custom_preprocessor(model, name):
                         parameters[prefix][block_idx]["bn2"]["bias"] = bias  # ttnn.to_device(bias, device)
 
                         running_mean = ttnn.from_torch(batch_mean_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-                        parameters[prefix][block_idx]["bn2"][
-                            "running_mean"
-                        ] = running_mean  # ttnn.to_device(running_mean, device)
+                        parameters[prefix][block_idx]["bn2"]["running_mean"] = running_mean
 
                         running_var = ttnn.from_torch(batch_var_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
                         parameters[prefix][block_idx]["bn2"]["running_var"] = running_var
@@ -612,7 +608,6 @@ def custom_preprocessor(model, name):
 
         parameters["layer_track_query_fuser"][2] = {}
 
-        # for layer in ["agent_level_embedding_layer","scene_level_ego_embedding_layer","scene_level_offset_embedding_layer","boxes_query_embedding_layer"]:
         parameters["agent_level_embedding_layer"] = custom_preprocessor_layer(
             motion_head.agent_level_embedding_layer, None
         )
@@ -708,8 +703,6 @@ def custom_preprocessor_interaction(model, name):
         child = model.interaction_transformer
         if isinstance(child, nn.TransformerDecoderLayer):
             parameters_tmp = {}
-            # parameters_tmp["self_attn"] = child.self_attn
-            # parameters_tmp["multihead_attn"] = child.multihead_attn
 
             parameters_tmp["self_attn"] = {}
             parameters_tmp["self_attn"]["in_proj_weight"] = ttnn.from_torch(

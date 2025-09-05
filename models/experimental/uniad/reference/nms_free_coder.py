@@ -7,17 +7,6 @@ from models.experimental.uniad.reference.utils import denormalize_bbox, BaseBBox
 
 
 class NMSFreeCoder(BaseBBoxCoder):
-    """Bbox coder for NMS-free detector.
-    Args:
-        pc_range (list[float]): Range of point cloud.
-        post_center_range (list[float]): Limit of the center.
-            Default: None.
-        max_num (int): Max number to be kept. Default: 100.
-        score_threshold (float): Threshold to filter boxes based on score.
-            Default: None.
-        code_size (int): Code size of bboxes. Default: 9
-    """
-
     def __init__(
         self, pc_range, voxel_size=None, post_center_range=None, max_num=100, score_threshold=None, num_classes=10
     ):
@@ -32,17 +21,6 @@ class NMSFreeCoder(BaseBBoxCoder):
         pass
 
     def decode_single(self, cls_scores, bbox_preds):
-        """Decode bboxes.
-        Args:
-            cls_scores (Tensor): Outputs from the classification head, \
-                shape [num_query, cls_out_channels]. Note \
-                cls_out_channels should includes background.
-            bbox_preds (Tensor): Outputs from the regression \
-                head with normalized coordinate format (cx, cy, w, l, cz, h, rot_sine, rot_cosine, vx, vy). \
-                Shape [num_query, 9].
-        Returns:
-            list[dict]: Decoded boxes.
-        """
         max_num = min(self.max_num, cls_scores.shape[0])
 
         cls_scores = cls_scores.sigmoid()
@@ -93,17 +71,6 @@ class NMSFreeCoder(BaseBBoxCoder):
         return predictions_dict
 
     def decode(self, preds_dicts):
-        """Decode bboxes.
-        Args:
-            all_cls_scores (Tensor): Outputs from the classification head, \
-                shape [nb_dec, bs, num_query, cls_out_channels]. Note \
-                cls_out_channels should includes background.
-            all_bbox_preds (Tensor): Sigmoid outputs from the regression \
-                head with normalized coordinate format (cx, cy, w, l, cz, h, rot_sine, rot_cosine, vx, vy). \
-                Shape [nb_dec, bs, num_query, 9].
-        Returns:
-            list[dict]: Decoded boxes.
-        """
         all_cls_scores = preds_dicts["all_cls_scores"][-1]
         all_bbox_preds = preds_dicts["all_bbox_preds"][-1]
 
