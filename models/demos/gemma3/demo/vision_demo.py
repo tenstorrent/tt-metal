@@ -266,7 +266,7 @@ def test_multimodal_demo_text(
 
     # Create random images for trace capture with specific dimensions
 
-    trace_img_1120x560 = create_random_image(1120, 560)
+    trace_img_1120x560 = create_random_image(4096, 4096)
 
     with open(IMG_PATH / "ocr_image.jpeg", "rb") as f:
         ocr_image = PIL_Image.open(f).convert("RGB")

@@ -375,13 +375,64 @@ def prepare_generator_args(
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            32 * 1024,  # max_seq_len
+            16 * 1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
+            False,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+        ),
+        (  # Long-context-2k run - Single user, long prompt (may vary based on the model's tokenizer)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_2k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            32 * 1024,  # max_seq_len
+            1,  # batch_size
+            2000,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+        ),
+        (  # Long-context-1k run - Single user, long prompt (may vary based on the model's tokenizer)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            32 * 1024,  # max_seq_len
+            1,  # batch_size
+            2000,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+        ),
+        (  # stress test
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            20,  # repeat_batches
+            32 * 1024,  # max_seq_len
+            32,  # batch_size
+            3000,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
@@ -602,6 +653,9 @@ def prepare_generator_args(
         "long-context-64k",  # 64k context, max_seq_len=128k
         "long-context-32k",  # 32k context, max_seq_len=32k
         "long-context-16k",  # 16k context, max_seq_len=32k
+        "long-context-2k",  # 2k context, max_seq_len=32k
+        "long-context-1k",  # 1k context, max_seq_len=32k
+        "stress-test",  # stress test
         "reasoning-1",  # reasoning
         "ci-1",  # CI batch 1
         "ci-32",  # CI batch 32
@@ -935,8 +989,10 @@ def test_demo_text(
             if not stress_test:  # During stress test runs we will iterate over the same position for X iterations
                 current_pos += 1
             # Save output token to print out later
+
             for user in range(global_batch_size):
                 user_tok = out_tok[user].item()
+                logger.info(f"user_tok out= {user_tok}")
                 if (
                     user_tok not in tokenizer.stop_tokens and user_done[user] == False
                 ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
@@ -946,7 +1002,7 @@ def test_demo_text(
                         stop_at_eos
                     ):  # For performance gathering in CI, we want to sometimes force decoding for a fixed number of iterations
                         user_done[user] = True
-                        logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
+                        logger.info(f"[User {user}] Finished decoding at iteration {iteration}")
                         if all(user_done):
                             users_decoding = False
 
@@ -954,8 +1010,8 @@ def test_demo_text(
             if not is_ci_env:
                 for user in range(global_batch_size):
                     text = "".join(tokenizer.decode(all_outputs[user]))
-                    if len(text) > 100:
-                        text = "..." + text[-97:]
+                    # if len(text) > 100:
+                    #     text = "..." + text[-97:]
                     text = text.replace("\n", " ")
                     logger.info("[User {}] {}".format(user, text))
 
@@ -963,6 +1019,9 @@ def test_demo_text(
 
             # Upper limit of generated tokens for each user
             if iteration >= max_generated_tokens:
+                logger.info(
+                    f"Finishing decoding at iteration = {iteration} (max_generated_tokens = {max_generated_tokens})"
+                )
                 users_decoding = False
 
             # Final print

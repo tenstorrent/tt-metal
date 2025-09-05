@@ -355,22 +355,25 @@ def get_rot_mats(
         rope_scaling=rope_scaling,
     )
 
-    cos_matrix = ttnn.from_torch(
+    ttnn_cos_matrix = ttnn.from_torch(
         cos_matrix,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         dtype=datatype,
         mesh_mapper=replicate_tensor_to_mesh_mapper(device),
     )
-    sin_matrix = ttnn.from_torch(
+    ttnn_sin_matrix = ttnn.from_torch(
         sin_matrix,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         dtype=datatype,
         mesh_mapper=replicate_tensor_to_mesh_mapper(device),
     )
+    cos_matrix = torch.concat([cos_matrix[..., ::2], cos_matrix[..., 1::2]], dim=-1)
+    sin_matrix = torch.concat([sin_matrix[..., ::2], sin_matrix[..., 1::2]], dim=-1)
 
-    return [cos_matrix, sin_matrix]
+    # return [ttnn_cos_matrix, ttnn_sin_matrix]
+    return [cos_matrix, sin_matrix, ttnn_cos_matrix, ttnn_sin_matrix]
 
 
 class RotarySetup(LightweightModule):
@@ -396,9 +399,11 @@ class RotarySetup(LightweightModule):
         else:
             self.batch_size_per_device_group = self.batch_size
         self.core_grid = device.compute_with_storage_grid_size()
+        self.rope_theta = rope_theta
+        self.rope_scaling = rope_scaling
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
-        self.cos_matrix, self.sin_matrix = get_rot_mats(
+        self.cos_matrix_torch, self.sin_matrix_torch, self.cos_matrix, self.sin_matrix = get_rot_mats(
             head_dim=head_dim,
             device=device,
             seq_len=max_seq_len,
@@ -535,4 +540,5 @@ class RotarySetup(LightweightModule):
 
         if return_rot_idxs:
             return [cos, sin], rot_idxs
+        # return [cos, sin, self.cos_matrix_torch[:, :, position_idxs[0], :], self.sin_matrix_torch[:, :, position_idxs[0], :]]
         return [cos, sin]

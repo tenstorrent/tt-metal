@@ -2,8 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
+import pytest
 import torch
 
+import ttnn
 from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs, rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotaryEmbedding, rotary_embedding_factory
 
@@ -139,6 +143,201 @@ class TestRope:
         # Make sure we actually ran the scaling
         assert max_cos_diff > 1e-6, f"Cos values are the same as non scaled. Max diff = {max_cos_diff}"
         assert max_sin_diff > 1e-6, f"Sin values are the same as non scaled. Max diff = {max_sin_diff}"
+
+    @pytest.mark.parametrize(
+        "device_params",
+        [{"fabric_config": True, "trace_region_size": 30000000, "num_command_queues": 1}],
+        indirect=True,
+    )
+    @pytest.mark.parametrize(
+        "mesh_device",
+        [
+            {
+                "N150": (1, 1),
+                "N300": (1, 2),
+                "N150x4": (1, 4),
+                "T3K": (1, 8),
+                "TG": (8, 4),
+                "P150": (1, 1),
+                "P300": (1, 2),
+                "P150x4": (1, 4),
+                "P150x8": (1, 8),
+            }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
+        ],
+        indirect=True,
+    )
+    def test_rope_gemma(self, mesh_device):
+        import copy
+
+        from transformers import AutoConfig
+        from transformers.models.gemma3.modeling_gemma3 import Gemma3RotaryEmbedding
+
+        from models.demos.gemma3.tt.model_config import ModelArgs
+        from models.tt_transformers.tt.model import Transformer
+
+        config = AutoConfig.from_pretrained("/proj_sw/user_dev/google/gemma-3-27b-it").text_config
+        gemma_rope = Gemma3RotaryEmbedding(config)
+        local_config = copy.deepcopy(config)
+        local_config.rope_theta = local_config.rope_local_base_freq
+        local_config.rope_scaling = {"rope_type": "default"}
+        gemma_rope_local = Gemma3RotaryEmbedding(local_config)
+        max_seq_len = 4096
+        tt_model_args = ModelArgs(
+            mesh_device,
+            instruct=False,
+            max_batch_size=1,
+            max_seq_len=max_seq_len,
+        )
+        state_dict = tt_model_args.load_state_dict()
+        model = Transformer(
+            args=tt_model_args,
+            mesh_device=mesh_device,
+            dtype=ttnn.bfloat8_b,
+            state_dict=state_dict,
+            weight_cache_path=tt_model_args.weight_cache_path(ttnn.bfloat8_b),
+        )
+
+        x = torch.tensor([0.0])
+        ttnn_cos_matrix = ttnn.to_torch(
+            model.rope_setup.cos_matrix,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 0), mesh_shape=(1, 8)),
+        )[0]
+        ttnn_sin_matrix = ttnn.to_torch(
+            model.rope_setup.sin_matrix,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 0), mesh_shape=(1, 8)),
+        )[0]
+
+        ttnn_local_cos_matrix = ttnn.to_torch(
+            model.rope_local_setup.cos_matrix,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 0), mesh_shape=(1, 8)),
+        )[0]
+        ttnn_local_sin_matrix = ttnn.to_torch(
+            model.rope_local_setup.sin_matrix,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 0), mesh_shape=(1, 8)),
+        )[0]
+
+        max_cos_diff = []
+        max_sin_diff = []
+        max_local_cos_diff = []
+        max_local_sin_diff = []
+        for i in range(max_seq_len):
+            max_cos_diff.append(
+                torch.abs(ttnn_cos_matrix[..., i, ::2] - gemma_rope(x, torch.tensor([[i]]))[0][..., :64]).max()
+            )
+            max_sin_diff.append(
+                torch.abs(ttnn_sin_matrix[..., i, ::2] - gemma_rope(x, torch.tensor([[i]]))[1][..., :64]).max()
+            )
+
+            max_local_cos_diff.append(
+                torch.abs(
+                    ttnn_local_cos_matrix[..., i, ::2] - gemma_rope_local(x, torch.tensor([[i]]))[0][..., :64]
+                ).max()
+            )
+            max_local_sin_diff.append(
+                torch.abs(
+                    ttnn_local_sin_matrix[..., i, ::2] - gemma_rope_local(x, torch.tensor([[i]]))[1][..., :64]
+                ).max()
+            )
+
+        print(f"Max cos diff: {max(max_cos_diff)}")
+        print(f"Max sin diff: {max(max_sin_diff)}")
+        print(f"Max local cos diff: {max(max_local_cos_diff)}")
+        print(f"Max local sin diff: {max(max_local_sin_diff)}")
+
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(2, 1, figsize=(10, 10))
+        ax[0].plot(max_cos_diff, label="Global")
+        ax[0].plot(max_local_cos_diff, label="Local")
+        ax[0].legend()
+        ax[1].plot(max_sin_diff, label="Global")
+        ax[1].plot(max_local_sin_diff, label="Local")
+        ax[1].legend()
+
+        plt.savefig("max_cos_sin_diff.png")
+
+    @pytest.mark.parametrize(
+        "device_params",
+        [{"fabric_config": True, "trace_region_size": 30000000, "num_command_queues": 1}],
+        indirect=True,
+    )
+    @pytest.mark.parametrize(
+        "mesh_device",
+        [
+            {
+                "N150": (1, 1),
+                "N300": (1, 2),
+                "N150x4": (1, 4),
+                "T3K": (1, 8),
+                "TG": (8, 4),
+                "P150": (1, 1),
+                "P300": (1, 2),
+                "P150x4": (1, 4),
+                "P150x8": (1, 8),
+            }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
+        ],
+        indirect=True,
+    )
+    def test_rope_qwen(self, mesh_device):
+        import copy
+
+        from transformers import AutoConfig
+        from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLRotaryEmbedding
+
+        from models.demos.qwen25_vl.tt.model_config import ModelArgs
+        from models.tt_transformers.tt.model import Transformer
+
+        config = AutoConfig.from_pretrained("/proj_sw/user_dev/Qwen/Qwen2.5-VL-7B-Instruct")
+        qwen_rope = Qwen2_5_VLRotaryEmbedding(config)
+        local_config = copy.deepcopy(config)
+        max_seq_len = 4096
+        tt_model_args = ModelArgs(
+            mesh_device,
+            instruct=False,
+            max_batch_size=1,
+            max_seq_len=max_seq_len,
+        )
+        state_dict = tt_model_args.load_state_dict()
+        model = Transformer(
+            args=tt_model_args,
+            mesh_device=mesh_device,
+            dtype=ttnn.bfloat8_b,
+            state_dict=state_dict,
+            weight_cache_path=tt_model_args.weight_cache_path(ttnn.bfloat8_b),
+        )
+
+        x = torch.tensor([0.0])
+        ttnn_cos_matrix = ttnn.to_torch(
+            model.rope_setup.cos_matrix,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 0), mesh_shape=(1, 2)),
+        )[0]
+        ttnn_sin_matrix = ttnn.to_torch(
+            model.rope_setup.sin_matrix,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 0), mesh_shape=(1, 2)),
+        )[0]
+
+        max_cos_diff = []
+        max_sin_diff = []
+        for i in range(max_seq_len):
+            max_cos_diff.append(
+                torch.abs(ttnn_cos_matrix[..., i, ::2] - qwen_rope(x, torch.tensor([[[i]]]))[0][..., :64]).max()
+            )
+            max_sin_diff.append(
+                torch.abs(ttnn_sin_matrix[..., i, ::2] - qwen_rope(x, torch.tensor([[[i]]]))[1][..., :64]).max()
+            )
+
+        print(f"Max cos diff: {max(max_cos_diff)}")
+        print(f"Max sin diff: {max(max_sin_diff)}")
+
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(2, 1, figsize=(10, 10))
+        ax[0].plot(max_cos_diff, label="Global")
+        ax[0].legend()
+        ax[1].plot(max_sin_diff, label="Global")
+        ax[1].legend()
+
+        plt.savefig("max_cos_sin_diff_qwen.png")
 
 
 if __name__ == "__main__":

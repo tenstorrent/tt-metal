@@ -47,7 +47,7 @@ from models.tt_transformers.tt.model_config import CheckpointType, DecodersPreci
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (2048,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 @pytest.mark.parametrize(
     "optimizations",
@@ -80,6 +80,7 @@ def test_model_inference(
     ensure_gc,
     request,
 ):
+    from models.demos.gemma3.tt.model_config import ModelArgs
     model_name_env = os.getenv("HF_MODEL")
     if model_name_env:
         if "Mistral-7B" in model_name_env and weights == "instruct":
@@ -175,7 +176,7 @@ def test_model_inference(
 
         iterations = quick_iterations
     else:
-        iterations = 9
+        iterations = 100
 
     if layers is not None:
         model_args.n_layers = layers
@@ -185,17 +186,19 @@ def test_model_inference(
         k[len(state_dict_prefix) :]: v
         for k, v in state_dict.items()
         if (
-            any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
-            or any(
-                [
-                    f"{state_dict_prefix}{name}" in k
-                    for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
-                ]
+            (
+                any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
+                or any(
+                    [
+                        f"{state_dict_prefix}{name}" in k
+                        for name in ["tok_embeddings.weight", "norm.weight", "output.weight", "lm_head"]
+                    ]
+                )
             )
+            and not any(name in k for name in ["vision_tower", "multi_modal_projector"])
         )
     }
-
-    prompts = ["This is a test"] * model_args.max_batch_size
+    prompts = ["What is a test?"] * model_args.max_batch_size
     if dummy_weights:
         # "This is a test" encoded prompt
         if model_name == "Mistral-7B":
@@ -292,6 +295,11 @@ def test_model_inference(
         ),
     )
 
+    pccs = {"model": [], "kv_cache": []}
+    atols = {"model": [], "kv_cache": []}
+    rtols = {"model": [], "kv_cache": []}
+    abs_max_vals_ref = []
+    abs_max_vals_tt = []
     for i in range(generation_length):
         logger.info(f"[Model] Generating token {i}")
 
@@ -302,12 +310,14 @@ def test_model_inference(
 
         # Get cos/sin matrices for the current position of each user
         rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
+        rot_mats_local = tt_model.rope_local_setup.get_rot_mats(current_pos) if hasattr(tt_model, "rope_local_setup") else None
 
         # Run TT model
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
             rot_mats_global=rot_mats,
+            rot_mats_local=rot_mats_local,
             mode="decode",
             page_table=page_table_tt,
         )
@@ -376,8 +386,15 @@ def test_model_inference(
                     final_tests_pass = False
             else:
                 passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
+            pccs["model"].append(pcc_message)
+            abs_max_vals_ref.append(torch.max(torch.abs(ref_output.to(torch.float32))))
+            abs_max_vals_tt.append(torch.max(torch.abs(tt_output_torch.to(torch.float32))))
+            passing_allclose, atol_delta, rtol_delta = comp_allclose(ref_output, tt_output_torch)
+            atols["model"].append(atol_delta)
+            rtols["model"].append(rtol_delta)
 
-            logger.info(comp_allclose(ref_output, tt_output_torch))
+            # logger.info(comp_allclose(ref_output, tt_output_torch))
+            logger.info(f"Max ATOL Delta: {atol_delta}, Max RTOL Delta: {rtol_delta}")
             logger.info(f"PCC: {pcc_message}")
 
             if passing:
@@ -454,6 +471,7 @@ def test_model_inference(
                                 does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, final_v_cache_pcc)
                         else:
                             does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
+                        pccs["kv_cache"].append(output_pcc)
                         if kv_cache == 0:
                             logger.info(f"K cache output: {output_pcc}")
                         else:
@@ -469,6 +487,39 @@ def test_model_inference(
             logger.info("[ttnn generation User 0] " + tokenizer.decode(all_outputs).replace("\n", "\\n"))
             if run_ref_pt:
                 logger.info("[Ref generation User 0] " + tokenizer.decode(all_outputs_ref).replace("\n", "\\n"))
+
+    import json
+    json.dump(pccs, open(f"pccs_model_{model_args.model_name}.json", "w"))
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(3)
+    ax[0].plot(pccs["model"])
+    ax[0].set_title("Model PCCs")
+    ax[0].set_ylim(0, 1.05)
+    ax[1].plot(atols["model"])
+    ax[1].set_title("ATOL Deltas")
+    ax[2].plot(rtols["model"])
+    ax[2].set_title("RTOL Deltas")
+    plt.tight_layout()
+    plt.savefig(f"pccs_model_{model_args.model_name}.png")
+
+    fig, ax = plt.subplots(1)
+    ax.plot(abs_max_vals_ref, label="Reference")
+    ax.plot(abs_max_vals_tt, label="TT")
+    ax.set_title("Absolute Max Values")
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(f"abs_max_vals_model_{model_args.model_name}.png")
+
+    fig, ax = plt.subplots(3)
+    ax[0].plot(pccs["kv_cache"])
+    ax[0].set_title("KV Cache PCCs")
+    ax[0].set_ylim(0, 1.05)
+    ax[1].plot(atols["kv_cache"])
+    ax[1].set_title("ATOL Deltas")
+    ax[2].plot(rtols["kv_cache"])
+    ax[2].set_title("RTOL Deltas")
+    plt.tight_layout()
+    plt.savefig(f"pccs_kv_cache_{model_args.model_name}.png")
 
     if run_ref_pt:
         if all_tests_pass:
