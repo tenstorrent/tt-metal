@@ -5,7 +5,7 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <stdlib.h>
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <cstdint>
