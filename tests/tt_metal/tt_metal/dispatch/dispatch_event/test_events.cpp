@@ -107,7 +107,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
 
     for (size_t i = 0; i < num_events; i++) {
         auto event = std::make_shared<distributed::MeshEvent>(
-            -1,
+            i + 1,
             mesh_device.get(),
             cq.id(),
             distributed::MeshCoordinateRange(
@@ -139,18 +139,16 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventAndSynchronize) {
     // A bunch of events recorded, occasionally will sync from host.
     for (size_t i = 0; i < num_events; i++) {
         auto event = sync_events.emplace_back(std::make_shared<distributed::MeshEvent>(
-            -1,
+            0,
             mesh_device.get(),
             cq.id(),
             distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0))));
         distributed::EnqueueRecordEvent(cq);
-
         // Host synchronize every N number of events.
         if (i > 0 && ((i % num_events_between_sync) == 0)) {
             distributed::EventSynchronize(*event);
         }
     }
-
     // A bunch of bonus syncs where event_id is mod on earlier ID's.
     distributed::EventSynchronize(*sync_events.at(2));
     distributed::EventSynchronize(*sync_events.at(sync_events.size() - 2));
@@ -172,7 +170,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventAndSynchronizeHang) {
         true);  // Required for finish hang breakout.
 
     auto future_event = std::make_shared<distributed::MeshEvent>(
-        -1,
+        0,
         mesh_device.get(),
         cq.id(),
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0)));
@@ -207,12 +205,12 @@ TEST_F(UnitMeshCQEventFixture, TestEventsQueueWaitForEventHang) {
     auto& cq = mesh_device->mesh_command_queue();
     auto device = mesh_device->get_devices()[0];
     // Skip this test until #7216 is implemented.
-    GTEST_SKIP();
+    // GTEST_SKIP();
     tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(
         true);  // Required for finish hang breakout.
 
     auto future_event = std::make_shared<distributed::MeshEvent>(
-        -1,
+        0,
         mesh_device.get(),
         cq.id(),
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0)));
@@ -254,7 +252,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsQueueWaitForEventBasic) {
     // A bunch of events recorded, occasionally will sync from device.
     for (size_t i = 0; i < num_events; i++) {
         auto event = sync_events.emplace_back(std::make_shared<distributed::MeshEvent>(
-            -1,
+            0,
             mesh_device.get(),
             cq.id(),
             distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0))));
@@ -292,7 +290,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEventsQueryBasic) {
     // Record many events, occasionally query from host, but cannot guarantee completion status.
     for (size_t i = 0; i < num_events; i++) {
         auto event = sync_events.emplace_back(std::make_shared<distributed::MeshEvent>(
-            -1,
+            0,
             mesh_device.get(),
             cq.id(),
             distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0))));
@@ -346,7 +344,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
 
     auto start = std::chrono::system_clock::now();
 
-    uint32_t completion_queue_base = mesh_device->sysmem_manager().get_completion_queue_read_ptr(0);
+    uint32_t completion_queue_base = device->sysmem_manager().get_completion_queue_read_ptr(0);
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
     uint16_t channel =
