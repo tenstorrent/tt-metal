@@ -26,7 +26,11 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
-
+      gtest_filter:
+        required: false
+        default: "*"
+        type: string
+        description: "Filter for gtest"
 jobs:
   cpp-unit-tests-slow-dispatch:
     strategy:
@@ -37,22 +41,24 @@ jobs:
         test-group:
           - name: All C++, API and user kernel path tests
             cmd: |
-              ./tests/scripts/run_cpp_unit_tests.sh
-              ./build/test/tt_metal/unit_tests_api
+              { [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && echo "Skipping run_cpp_unit_tests.sh (nightly filter: $GTEST_FILTER)" || ./tests/scripts/run_cpp_unit_tests.sh
+              ./build/test/tt_metal/unit_tests_api --gtest_filter=$GTEST_FILTER
               rm -rf /tmp/kernels
               mkdir -p /tmp/kernels
-              TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*
+              TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.${GTEST_FILTER}
           - name: data_movement
-            cmd: ./build/test/tt_metal/unit_tests_data_movement
+            cmd: |
+              ./build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER
           - name: debug_tools and device and dispatch
             cmd: |
-              ./build/test/tt_metal/unit_tests_debug_tools
-              ./build/test/tt_metal/unit_tests_device
-              ./build/test/tt_metal/unit_tests_dispatch
+              ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=$GTEST_FILTER
+              ./build/test/tt_metal/unit_tests_device --gtest_filter=$GTEST_FILTER
+              ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=$GTEST_FILTER
           - name: llk
-            cmd: ./build/test/tt_metal/unit_tests_llk
+            cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter=$GTEST_FILTER
           - name: FD2
-            cmd: ./tests/scripts/run_cpp_fd2_tests.sh
+            cmd: |
+              { [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && echo "Skipping run_cpp_fd2_tests.sh (nightly filter: $GTEST_FILTER)" || ./tests/scripts/run_cpp_fd2_tests.sh
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
     runs-on: >-
       ${{
@@ -90,6 +96,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           mkdir -p generated/test_reports
+          GTEST_FILTER="${{inputs.gtest_filter}}"
           ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
