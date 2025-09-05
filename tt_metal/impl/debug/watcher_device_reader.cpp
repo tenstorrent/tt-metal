@@ -940,7 +940,7 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
     }
     for (size_t i = 0; i < symbols.size(); i++) {
         char c = symbols[i];
-        if ((launch_msg_->kernel_config.enables & (1 << i)) == 0) {
+        if ((launch_msg_->kernel_config.enables & (1u << i)) == 0) {
             c = tolower(c);
         }
         fputc(c, reader_.f);
