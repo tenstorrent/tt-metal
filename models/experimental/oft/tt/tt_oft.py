@@ -30,7 +30,9 @@ def perspective_torch(matrix, vector):
     return homogenous[..., :-1] / homogenous[..., [-1]]
 
 
-def calculate_initialization_parameters(device, channels, cell_size, grid_height, features, calib, grid, scale):
+def calculate_initialization_parameters(
+    device, channels, cell_size, grid_height, features, calib, grid, scale, use_precomputed_grid
+):
     y_corners = torch.arange(0, grid_height, cell_size) - grid_height / 2.0
     y_corners = F.pad(y_corners.view(-1, 1, 1, 1), [1, 1])
     # Expand the grid in the y dimension
@@ -67,16 +69,40 @@ def calculate_initialization_parameters(device, channels, cell_size, grid_height
     area_nhwc = area.permute(0, 2, 3, 1)  # Convert to NHWC format
     visible_nhwc = visible.permute(0, 2, 3, 1)  # Convert to NHWC format
     top_left_bc = bbox_corners[..., [0, 1]]
-    # print(f"TTNN: top_left_bc shape: {top_left_bc.shape}, dtype: {top_left_bc.dtype}")
     btm_right_bc = bbox_corners[..., [2, 3]]
     top_right_bc = bbox_corners[..., [2, 1]]
     btm_left_bc = bbox_corners[..., [0, 3]]
 
+    batch_size, grid_h, grid_w, _ = top_left_bc.shape
+    batch_size, channels, height, width = features.shape
+    input_shape_nhwc = [batch_size, height, width, channels]
+
     # bbox_corners_tt = ttnn.from_torch(bbox_corners, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    top_left_bc_tt = ttnn.from_torch(top_left_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    btm_right_bc_tt = ttnn.from_torch(btm_right_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    top_right_bc_tt = ttnn.from_torch(top_right_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    btm_left_bc_tt = ttnn.from_torch(btm_left_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    if use_precomputed_grid:
+        prepare_grid_lambda = lambda torch_grid_bf16, input_shape_nhwc: ttnn.to_device(
+            ttnn.prepare_grid_sample_grid(
+                ttnn.from_torch(torch_grid_bf16, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32),
+                input_shape_nhwc,
+                padding_mode="zeros",
+                output_dtype=ttnn.bfloat16,
+            ),
+            device,
+        )
+        top_left_bc_tt = prepare_grid_lambda(top_left_bc, input_shape_nhwc)
+        btm_right_bc_tt = prepare_grid_lambda(btm_right_bc, input_shape_nhwc)
+        top_right_bc_tt = prepare_grid_lambda(top_right_bc, input_shape_nhwc)
+        btm_left_bc_tt = prepare_grid_lambda(btm_left_bc, input_shape_nhwc)
+
+    else:
+        top_left_bc_tt = ttnn.from_torch(top_left_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        btm_right_bc_tt = ttnn.from_torch(
+            btm_right_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        top_right_bc_tt = ttnn.from_torch(
+            top_right_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        btm_left_bc_tt = ttnn.from_torch(btm_left_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
     visible_tt = ttnn.from_torch(visible_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     area_tt = ttnn.from_torch(area_nhwc, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     return (
@@ -89,15 +115,28 @@ def calculate_initialization_parameters(device, channels, cell_size, grid_height
 
 
 class OFT:
-    def __init__(self, device, parameters, channels, cell_size, grid_height, features, calib, grid, scale=1):
+    def __init__(
+        self,
+        device,
+        parameters,
+        channels,
+        cell_size,
+        grid_height,
+        features,
+        calib,
+        grid,
+        scale=1,
+        use_precomputed_grid=True,
+    ):
         # params for conv3d
         self.linear_weight = parameters.conv3d.weight
         self.linear_bias = parameters.conv3d.bias
         # self.conv3d = ttnn.Linear()
         self.scale = scale
+        self.use_precomputed_grid = use_precomputed_grid
 
         self.bbox_corners, self.visible, self.area, self.shape = calculate_initialization_parameters(
-            device, channels, cell_size, grid_height, features, calib, grid, self.scale
+            device, channels, cell_size, grid_height, features, calib, grid, self.scale, use_precomputed_grid
         )
         # self.area = calculate_initialization_parameters(
         #     device, channels, cell_size, grid_height, features, calib, grid, self.scale
@@ -106,7 +145,7 @@ class OFT:
 
     def forward(self, device, features, calib, grid):
         if use_signpost:
-            signpost(header="OFT block started")
+            signpost(header=f"OFT block started {features.shape=}_{self.scale=}_{self.use_precomputed_grid=}")
         # print(f"TTNN: features shape: {features.shape}, dtype: {features.dtype}")
         integral_image = ttnn_integral_image_channel_last(features)
         # print(
@@ -142,13 +181,18 @@ class OFT:
         # vox_feats = ttnn.from_torch(vox_feats_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
         # end torch grid sample
 
-        top_left = ttnn.grid_sample(integral_image, self.bbox_corners[0])
-        # # return top_left
-        # # print(f"TTNN: top_left after grid_sample shape: {top_left.shape}, dtype: {top_left.dtype}")
-
-        btm_right = ttnn.grid_sample(integral_image, self.bbox_corners[1])
-        top_right = ttnn.grid_sample(integral_image, self.bbox_corners[2])
-        btm_left = ttnn.grid_sample(integral_image, self.bbox_corners[3])
+        top_left = ttnn.grid_sample(
+            integral_image, self.bbox_corners[0], use_precomputed_grid=self.use_precomputed_grid
+        )
+        btm_right = ttnn.grid_sample(
+            integral_image, self.bbox_corners[1], use_precomputed_grid=self.use_precomputed_grid
+        )
+        top_right = ttnn.grid_sample(
+            integral_image, self.bbox_corners[2], use_precomputed_grid=self.use_precomputed_grid
+        )
+        btm_left = ttnn.grid_sample(
+            integral_image, self.bbox_corners[3], use_precomputed_grid=self.use_precomputed_grid
+        )
 
         vox_feats = ttnn.subtract(top_left, top_right)
         vox_feats = ttnn.add(vox_feats, btm_right)
