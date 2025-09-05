@@ -10,12 +10,7 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 
 namespace ttnn {
-
-namespace operations {
-namespace unary {
-struct UnaryWithParam;
-}
-namespace binary {
+namespace operations::binary {
 
 bool is_legacy_only(
     const Tensor& lhs,
@@ -179,8 +174,7 @@ struct BinaryOperationSubalpha {
         const std::optional<Tensor>& output = std::nullopt);
 };
 
-}  // namespace binary
-}  // namespace operations
+}  // namespace operations::binary
 
 constexpr auto add =
     ttnn::register_operation<"ttnn::add", operations::binary::BinaryOperation<operations::binary::BinaryOpType::ADD>>();

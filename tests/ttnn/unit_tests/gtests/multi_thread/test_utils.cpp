@@ -24,22 +24,6 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace unary {
-enum class UnaryOpType;
-struct UnaryWithParam;
-}  // namespace unary
-}  // namespace operations
-}  // namespace ttnn
-namespace tt {
-namespace tt_metal {
-namespace distributed {
-class MeshDevice;
-}  // namespace distributed
-}  // namespace tt_metal
-}  // namespace tt
-
 namespace ttnn::distributed::test {
 
 static constexpr size_t TEST_WORKERS_SUBDEVICE_INDEX = 0;

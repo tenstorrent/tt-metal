@@ -5,6 +5,7 @@
 #pragma once
 
 #include <vector>
+#include <tt_stl/overloaded.hpp>
 #include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::unary {
@@ -124,13 +125,40 @@ enum class VecMode {
     Invalid = 0xFF,
 };
 
-struct UnaryWithParam {
-    UnaryOpType op_type;
-    std::vector<float> params;
+template <typename... Ts>
+    requires(... and (std::integral<Ts> or std::floating_point<Ts>))
+struct BasicUnaryWithParam {
+    std::variant<BasicUnaryWithParam<Ts>...> base;
 
-    UnaryWithParam(UnaryOpType op_type, const std::vector<float>& params) : op_type{op_type}, params{params} {}
-    UnaryWithParam(UnaryOpType op_type, float param) : op_type{op_type}, params{param} {}
-    UnaryWithParam(UnaryOpType op_type) : op_type{op_type} {}
+    template <typename T>
+        requires(... or std::same_as<T, Ts>)
+    BasicUnaryWithParam(UnaryOpType op_type, const std::vector<T>& params) :
+        base{std::in_place_type<BasicUnaryWithParam<T>>, op_type, params} {}
+
+    template <typename T>
+        requires(... or std::same_as<T, Ts>)
+    BasicUnaryWithParam(UnaryOpType op_type, T param) :
+        base{std::in_place_type<BasicUnaryWithParam<T>>, op_type, param} {}
+
+    BasicUnaryWithParam(UnaryOpType op_type) : base{std::in_place_index<0>, op_type} {}
+
+    bool has_parameter() const {
+        constexpr ttsl::overloaded visitor = {std::mem_fn(BasicUnaryWithParam<Ts>::has_parameter)...};
+        return std::visit(visitor, base);
+    }
+
+    static constexpr auto attribute_names = std::forward_as_tuple("base");
+    auto attribute_values() const { return std::forward_as_tuple(this->base); }
+};
+
+template <typename T>
+struct BasicUnaryWithParam<T> {
+    UnaryOpType op_type;
+    std::vector<T> params;
+
+    BasicUnaryWithParam(UnaryOpType op_type, const std::vector<T>& params) : op_type{op_type}, params{params} {}
+    BasicUnaryWithParam(UnaryOpType op_type, T param) : op_type{op_type}, params{param} {}
+    BasicUnaryWithParam(UnaryOpType op_type) : op_type{op_type} {}
 
     bool has_parameter() const { return params.size() > 0; }
 
@@ -138,18 +166,20 @@ struct UnaryWithParam {
     auto attribute_values() const { return std::forward_as_tuple(this->op_type, this->params); }
 };
 
+using UnaryWithParam = BasicUnaryWithParam<float>;
+
+template <typename... Ts>
+using BasicFusedActivations = std::vector<ttnn::operations::unary::BasicUnaryWithParam<Ts...>>;
+
 using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
 
 }  // namespace ttnn::operations::unary
 
-namespace ttsl::json {
-
-template <>
-struct from_json_t<ttnn::operations::unary::UnaryWithParam> {
+template <typename... Ts>
+struct ttsl::json::from_json_t<ttnn::operations::unary::BasicUnaryWithParam<Ts...>> {
     auto operator()(const nlohmann::json& json_object) const {
-        return ttnn::operations::unary::UnaryWithParam{
+        return ttnn::operations::unary::BasicUnaryWithParam<Ts...>{
             from_json<ttnn::operations::unary::UnaryOpType>(json_object["op_type"]),
             from_json<std::vector<float>>(json_object["params"])};
     }
 };
-};  // namespace ttsl::json
