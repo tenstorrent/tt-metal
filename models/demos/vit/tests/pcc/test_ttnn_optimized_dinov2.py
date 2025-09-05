@@ -38,7 +38,6 @@ def ref_COMPOSITE_23(var0, *args):
     q = q * scale
     attn = q @ k.transpose(-2, -1)
     attn = attn.softmax(dim=-1)
-    return attn
     x = attn @ v
     x = x.transpose(1, 2).reshape(1, 261, -1)
     var16 = torch.ops.aten.view(x, [261, 1024])
@@ -127,8 +126,8 @@ def ttnn_COMPOSITE_23(var0, *args):
 
     ttnn.deallocate(query)
     ttnn.deallocate(key)
-    attention_probs = ttnn.softmax_in_place(attention_scores)
-    return attention_probs
+    attention_probs = ttnn.softmax_in_place(attention_scores, numeric_stable=True)
+
     context_layer = ttnn.matmul(
         attention_probs,
         value,
@@ -143,7 +142,6 @@ def ttnn_COMPOSITE_23(var0, *args):
         context_layer,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    return context_layer
     self_output = ttnn.linear(
         context_layer,
         args[5],
