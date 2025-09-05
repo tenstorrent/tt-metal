@@ -4,6 +4,7 @@
 import torch.nn as nn
 import torch
 import ttnn
+from loguru import logger
 
 from .tt_stem import TtStem
 from .tt_bottleneck import TtBottleneck
@@ -30,9 +31,12 @@ class TtResNet(nn.Module):
         super().__init__()
         self.device = device
 
+        logger.debug("Initializing TtResNet components")
+
         # Initialize stem
         stem_state = {k.replace("stem.", ""): v for k, v in state_dict.items() if k.startswith("stem.")}
         self.stem = TtStem(device, stem_state, dtype)
+        logger.debug("Stem initialization complete")
 
         # Initialize res2 (3 blocks, first has shortcut)
         self.res2 = nn.ModuleList()
@@ -46,6 +50,7 @@ class TtResNet(nn.Module):
             self.res2.append(
                 TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride, block_id)
             )
+        logger.debug("Res2 layer initialization complete (3 blocks)")
 
         # Initialize res3 (4 blocks, first has shortcut with stride=2)
         self.res3 = nn.ModuleList()
@@ -59,6 +64,7 @@ class TtResNet(nn.Module):
             self.res3.append(
                 TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride, block_id)
             )
+        logger.debug("Res3 layer initialization complete (4 blocks)")
 
         # Initialize res4 (6 blocks, first has shortcut with stride=2)
         self.res4 = nn.ModuleList()
@@ -72,6 +78,7 @@ class TtResNet(nn.Module):
             self.res4.append(
                 TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride, block_id)
             )
+        logger.debug("Res4 layer initialization complete (6 blocks)")
 
         # Initialize res5 (3 blocks, first has shortcut, uses dilated convolutions)
         self.res5 = nn.ModuleList()
@@ -86,6 +93,8 @@ class TtResNet(nn.Module):
             self.res5.append(
                 TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride, block_id)
             )
+        logger.debug("Res5 layer initialization complete (3 blocks)")
+        logger.debug("TtResNet initialization complete")
 
     def forward(self, x: ttnn.Tensor) -> dict[str, ttnn.Tensor]:
         """
@@ -101,32 +110,39 @@ class TtResNet(nn.Module):
             - "res4": Output from res4 layer (1024 channels)
             - "res5": Output from res5 layer (2048 channels)
         """
+        logger.debug(f"Starting TtResNet forward pass with input shape: {x.shape}")
+
         # Stem processing
         x = self.stem(x)
+        logger.debug(f"Stem processing complete, output shape: {x.shape}")
 
         # res2
         for block in self.res2:
             x = block(x)
         res2_out = x
         res2_out = ttnn.to_memory_config(res2_out, ttnn.DRAM_MEMORY_CONFIG)
+        logger.debug(f"Res2 processing complete, output shape: {res2_out.shape}")
 
         # res3
         for block in self.res3:
             x = block(x)
         res3_out = x
         res3_out = ttnn.to_memory_config(res3_out, ttnn.DRAM_MEMORY_CONFIG)
+        logger.debug(f"Res3 processing complete, output shape: {res3_out.shape}")
 
         # res4
         for block in self.res4:
             x = block(x)
         res4_out = x
         res4_out = ttnn.to_memory_config(res4_out, ttnn.DRAM_MEMORY_CONFIG)
+        logger.debug(f"Res4 processing complete, output shape: {res4_out.shape}")
 
         # res5
         for block in self.res5:
             x = block(x)
         res5_out = x
         res5_out = ttnn.to_memory_config(res5_out, ttnn.DRAM_MEMORY_CONFIG)
+        logger.debug(f"Res5 processing complete, output shape: {res5_out.shape}")
 
         return {
             "res2": res2_out,

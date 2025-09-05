@@ -4,9 +4,11 @@
 import pytest
 import torch
 import ttnn
+from loguru import logger
+
 from models.experimental.panoptic_deeplab.reference.pytorch_aspp import ASPP
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.panoptic_deeplab.tt.tt_aspp import TtASPP
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -80,6 +82,6 @@ def test_ttnn_aspp(
 
     pcc_passed, pcc_message = assert_with_pcc(torch_output, ttnn_output, pcc=0.99)
 
-    print(f"PCC: {pcc_message}")
-    assert pcc_passed, f"PCC check failed: {pcc_message}"
+    logger.info(f"PCC: {pcc_message}")
+    assert pcc_passed, f"ASPP PCC test failed: {pcc_message}"
     assert torch_output.shape == ttnn_output.shape, f"Shape mismatch: {torch_output.shape} vs {ttnn_output.shape}"
