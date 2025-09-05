@@ -76,17 +76,9 @@ Program create_simple_unary_program(Buffer& input, Buffer& output) {
     std::shared_ptr<RuntimeArgs> writer_runtime_args = std::make_shared<RuntimeArgs>();
     std::shared_ptr<RuntimeArgs> reader_runtime_args = std::make_shared<RuntimeArgs>();
 
-    *writer_runtime_args = {
-        &output,
-        (uint32_t)0,
-        output.num_pages()
-    };
+    *writer_runtime_args = {&output, (uint32_t)0, output.num_pages()};
 
-    *reader_runtime_args = {
-        &input,
-        (uint32_t)0,
-        input.num_pages()
-    };
+    *reader_runtime_args = {&input, (uint32_t)0, input.num_pages()};
 
     SetRuntimeArgs(device, detail::GetKernel(program, writer_kernel), worker, writer_runtime_args);
     SetRuntimeArgs(device, detail::GetKernel(program, reader_kernel), worker, reader_runtime_args);

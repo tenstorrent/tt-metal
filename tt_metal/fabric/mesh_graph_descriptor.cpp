@@ -224,12 +224,11 @@ void MeshGraphDescriptor::validate_architecture_consistency(
 
         // Check that the number of dimensions is not greater than the maximum allowed for the architecture
         if (mesh.device_topology().dims_size() > max_num_dims) {
-            error_messages.push_back(
-                fmt::format(
-                    "Architecture devices allow a maximum of {} dimensions, but {} were provided (Mesh: {})",
-                    max_num_dims,
-                    mesh.device_topology().dims_size(),
-                    mesh.name()));
+            error_messages.push_back(fmt::format(
+                "Architecture devices allow a maximum of {} dimensions, but {} were provided (Mesh: {})",
+                max_num_dims,
+                mesh.device_topology().dims_size(),
+                mesh.name()));
             continue;
         }
     }
@@ -315,19 +314,15 @@ void MeshGraphDescriptor::validate_graph_topology_and_connections(
     for (const auto& graph : proto.graph_descriptors()) {
         // Check that there is a graph topology or connections for each graph descriptor
         if (!graph.has_graph_topology() && graph.connections_size() == 0) {
-            error_messages.push_back(
-                fmt::format(
-                    "Graph descriptor must have either graph_topology or connections defined (Graph: {})",
-                    graph.name()));
+            error_messages.push_back(fmt::format(
+                "Graph descriptor must have either graph_topology or connections defined (Graph: {})", graph.name()));
             continue;
         }
 
         // Check that both graph_topology and connections are not defined at the same time
         if (graph.has_graph_topology() && graph.connections_size() > 0) {
-            error_messages.push_back(
-                fmt::format(
-                    "Graph descriptor cannot have both graph_topology and connections defined (Graph: {})",
-                    graph.name()));
+            error_messages.push_back(fmt::format(
+                "Graph descriptor cannot have both graph_topology and connections defined (Graph: {})", graph.name()));
             continue;
         }
 

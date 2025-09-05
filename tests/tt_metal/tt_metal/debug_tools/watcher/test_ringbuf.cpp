@@ -75,7 +75,7 @@ static void RunTest(
     log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
 
     // Set up the kernel on the correct risc
-    switch(riscv_type) {
+    switch (riscv_type) {
         case DebugBrisc:
             CreateKernel(
                 program_,
@@ -143,7 +143,7 @@ static void RunTest(
         )
     );
 }
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 
 TEST_F(MeshWatcherFixture, TestWatcherRingBufferBrisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
