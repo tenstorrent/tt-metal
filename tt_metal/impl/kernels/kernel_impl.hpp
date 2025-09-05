@@ -6,6 +6,7 @@
 
 #include <umd/device/tt_core_coordinates.h>
 #include <string>
+#include <unordered_map>
 
 #include "api/tt-metalium/kernel.hpp"
 #include "core_coord.hpp"
@@ -26,6 +27,8 @@ public:
     const std::string& get_full_kernel_name() const override;
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
     void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
+    void process_named_compile_time_args(
+        std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
 
     virtual void set_build_options(JitBuildOptions& build_options) const {}
     virtual void generate_binaries(IDevice* device, JitBuildOptions& build_options) const = 0;
@@ -53,8 +56,16 @@ protected:
         const KernelSource& kernel_src,
         const CoreRangeSet& core_range_set,
         const std::vector<uint32_t>& compile_args,
-        const std::map<std::string, std::string>& defines) :
-        Kernel(programmable_core_type, processor_class, kernel_src, core_range_set, compile_args, defines) {}
+        const std::map<std::string, std::string>& defines,
+        const std::unordered_map<std::string, uint32_t>& named_compile_args) :
+        Kernel(
+            programmable_core_type,
+            processor_class,
+            kernel_src,
+            core_range_set,
+            compile_args,
+            defines,
+            named_compile_args) {}
     // DataMovement kernels have one binary each and Compute kernels have three binaries
     // Different set of binaries per device because kernel compilation is device dependent
     // TODO: break this dependency by https://github.com/tenstorrent/tt-metal/issues/3381
@@ -72,7 +83,8 @@ public:
             kernel_src,
             cr_set,
             config.compile_args,
-            config.defines),
+            config.defines,
+            config.named_compile_args),
         config_(config) {
         this->dispatch_class_ =
             enchantum::to_underlying(HalProcessorClassType::DM) + enchantum::to_underlying(config.processor);
@@ -115,7 +127,8 @@ public:
             kernel_src,
             cr_set,
             config.compile_args,
-            config.defines),
+            config.defines,
+            config.named_compile_args),
         config_(config) {
         this->dispatch_class_ =
             enchantum::to_underlying(HalProcessorClassType::DM) + enchantum::to_underlying(config.processor);
@@ -157,7 +170,8 @@ public:
             kernel_src,
             cr_set,
             config.compile_args,
-            config.defines),
+            config.defines,
+            config.named_compile_args),
         config_(config) {
         this->dispatch_class_ = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
     }
