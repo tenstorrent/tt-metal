@@ -1312,6 +1312,7 @@ private:
         // first need to re-init contorl plane so that it checks out the latest fabric config.
         tt::tt_metal::MetalContext::instance().initialize_control_plane();
         control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
+        local_host_rank_ = control_plane_ptr_->get_local_host_rank_id_binding();
 
         // Initialize mesh and device info that was deferred from init()
         const auto user_meshes = control_plane_ptr_->get_user_physical_mesh_ids();
