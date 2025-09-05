@@ -224,47 +224,7 @@ public:
     }
 };
 
-class DeviceSingleCardFixture : public DispatchFixture {
-protected:
-    void SetUp() override {
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        this->create_devices();
-    }
-
-    void TearDown() override {
-        if (!reserved_devices_.empty()) {
-            tt::tt_metal::detail::CloseDevices(reserved_devices_);
-        }
-    }
-
-    virtual bool validate_dispatch_mode() {
-        this->slow_dispatch_ = true;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (!slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
-            this->slow_dispatch_ = false;
-            return false;
-        }
-        return true;
-    }
-
-    void create_devices() {
-        const chip_id_t mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
-        this->reserved_devices_ = tt::tt_metal::detail::CreateDevices({mmio_device_id});
-        this->device_ = this->reserved_devices_.at(mmio_device_id);
-        this->devices_ = tt::DevicePool::instance().get_all_active_devices();
-        this->num_devices_ = this->reserved_devices_.size();
-    }
-
-    tt::tt_metal::IDevice* device_{};
-    std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
-    size_t num_devices_{};
-};
-
-class BlackholeSingleCardFixture : public DeviceSingleCardFixture {
+class BlackholeSingleCardFixture : public MeshDeviceSingleCardFixture {
 protected:
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
