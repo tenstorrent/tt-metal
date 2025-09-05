@@ -21,7 +21,7 @@ class TTOftNet:
         layers,
         mean,
         std,
-        features,
+        input_shape_hw,
         calib,
         grid,
         topdown_layers=8,
@@ -46,18 +46,16 @@ class TTOftNet:
         self.lat32 = Conv(parameters.lat32, conv_pt.lat32, output_layout=ttnn.ROW_MAJOR_LAYOUT)
         self.bn32 = GroupNorm(parameters.bn32, num_groups=16, channels=256, eps=1e-5, dtype=ttnn.bfloat8_b)
 
-        # note scale=1 because features is actually input image, without scaling
-        # mbezulj: to clean up this
         self.oft8 = TtOFT(
             device,
             parameters.oft8,
             256,
             grid_res,
             grid_height,
-            features,
+            [int(x * 1 / 8) for x in input_shape_hw],
             calib,
             grid,
-            scale=1,
+            scale=1 / 8,
             use_precomputed_grid=True,
         )
         self.oft16 = TtOFT(
@@ -66,10 +64,10 @@ class TTOftNet:
             256,
             grid_res,
             grid_height,
-            features,
+            [int(x * 1 / 16) for x in input_shape_hw],
             calib,
             grid,
-            scale=1,
+            scale=1 / 16,
             use_precomputed_grid=True,
         )
         self.oft32 = TtOFT(
@@ -78,10 +76,10 @@ class TTOftNet:
             256,
             grid_res,
             grid_height,
-            features,
+            [int(x * 1 / 32) for x in input_shape_hw],
             calib,
             grid,
-            scale=1,
+            scale=1 / 32,
             use_precomputed_grid=True,
         )
 
