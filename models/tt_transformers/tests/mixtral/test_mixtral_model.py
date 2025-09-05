@@ -94,7 +94,7 @@ def test_model_inference(
     reset_seeds,
     ensure_gc,
     request,
-    device_params
+    device_params,
 ):
     model_name_env = os.getenv("HF_MODEL")
     if model_name_env and "Mistral-7B" in model_name_env and weights == "instruct":
