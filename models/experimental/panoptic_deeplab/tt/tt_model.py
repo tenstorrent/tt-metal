@@ -19,12 +19,12 @@ from typing import Dict, List, Optional, Tuple, Any
 import ttnn
 from loguru import logger
 
-from .tt_resnet import TtResNet
-from .tt_semseg import TtPanopticDeepLabSemSegHead
-from .tt_insemb import TtPanopticDeepLabInsEmbedHead
-from .common import create_resnet_state_dict
-from ..reference.pytorch_postprocessing import get_panoptic_segmentation
-from ..reference.pytorch_semseg import ShapeSpec
+from models.experimental.panoptic_deeplab.tt.tt_resnet import TtResNet
+from models.experimental.panoptic_deeplab.tt.tt_semseg import TtPanopticDeepLabSemSegHead
+from models.experimental.panoptic_deeplab.tt.tt_insemb import TtPanopticDeepLabInsEmbedHead
+from models.experimental.panoptic_deeplab.tt.common import create_resnet_state_dict
+from models.experimental.panoptic_deeplab.reference.pytorch_postprocessing import get_panoptic_segmentation
+from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 
 
 class TtPanopticDeepLab:

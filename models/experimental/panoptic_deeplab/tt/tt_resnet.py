@@ -6,8 +6,8 @@ import torch
 import ttnn
 from loguru import logger
 
-from .tt_stem import TtStem
-from .tt_bottleneck import TtBottleneck
+from models.experimental.panoptic_deeplab.tt.tt_stem import TtStem
+from models.experimental.panoptic_deeplab.tt.tt_bottleneck import TtBottleneck
 
 
 class TtResNet(nn.Module):

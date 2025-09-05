@@ -11,7 +11,7 @@ from enum import Enum
 import ttnn
 from loguru import logger
 
-from .common import from_torch_fast
+from models.experimental.panoptic_deeplab.tt.common import from_torch_fast
 
 
 class SliceMode(Enum):
