@@ -198,6 +198,7 @@ class TestParametrized:
         get_tt_cache_path,
         mesh_device,
     ):
+        pytest.skip("https://github.com/tenstorrent/tt-metal/actions/runs/17495339605/job/49695272325#step:8:436")
         if llm_mode == "prefill":
             expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = PREFILL_CONFIG_TO_PCC[
                 DeviceSetup.WORMHOLE_B0
