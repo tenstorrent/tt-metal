@@ -45,6 +45,11 @@ on:
         required: false
         type: boolean
         default: false
+      run_APC_cpp_tests:
+        description: 'Run APC C++ tests'
+        required: false
+        type: boolean
+        default: false
       timeout:
         description: 'Test timeout in minutes'
         required: false
@@ -113,6 +118,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD C++ Unit Tests
   cpp-unit-tests:
+    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -132,6 +138,7 @@ jobs:
       gtest_filter: "*NIGHTLY_*"
   # Slow Dispatch Unit Tests
   sd-unit-tests:
+    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
     needs: build-artifact
     secrets: inherit
     strategy:
