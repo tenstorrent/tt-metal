@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// REVERT ME
-
 #include "tt_cluster.hpp"
 #include "llrt/rtoptions.hpp"
 
