@@ -263,7 +263,10 @@ class Model1D(SharedStateAddOn, AbstractModule):
 
         x = ttnn.to_memory_config(x, **cfg["norm_reshard"])
         x = DistributedRMSNorm.forward_decode(x, cfg["norm"])
-
+        # Note: The output shard spec of Model1D after RMSNorm may not match
+        # the LMHead's expected input shard spec. Downstream pipelines (e.g.,
+        # the demo generator) should reshard to LMHead's input_memory_config
+        # before invoking the head.
         return x
 
     @classmethod
