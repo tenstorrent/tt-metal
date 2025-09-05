@@ -5,7 +5,7 @@
 #include <vector>
 #include <flatbuffers/flatbuffers.h>
 #include "tt_metal/fabric/serialization/connections_table.hpp"
-#include "connections_table_generated.h"
+#include "flatbuffers/connections_table_generated.h"
 
 namespace tt::tt_fabric {
 

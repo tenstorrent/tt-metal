@@ -4,7 +4,7 @@
 
 #include <vector>
 #include "tt_metal/fabric/serialization/port_id_table.hpp"
-#include "port_id_table_generated.h"
+#include "flatbuffers/port_id_table_generated.h"
 
 namespace tt::tt_fabric {
 

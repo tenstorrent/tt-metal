@@ -1403,10 +1403,6 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                     // Check if the neighbor belongs to the same mesh and owns the connected chip
                     // If so, iterate over all cross host connections between the neighbors
                     // Assign this edge to all links on the local chip part of this intramesh connection
-                    if (*distributed_context.rank() == 1) {
-                        std::cout << "Assign " << fabric_node_id.chip_id << " to " << logical_connected_chip_id
-                                  << std::endl;
-                    }
                     for (const auto& neighbor_host : neighbor_hosts) {
                         auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
                         auto neighbor_mesh_id =
@@ -1415,23 +1411,11 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                         auto neighbor_mesh_host_rank =
                             this->logical_node_ids_.at(tt::tt_metal::distributed::multihost::Rank{neighbor_host_rank})
                                 .second;
-                        // std::cout << "Neighbor host rank " << *neighbor_mesh_host_rank << " connected host rank " <<
-                        // *connected_host_rank_id << std::endl;
                         if (neighbor_mesh_id == mesh_id && neighbor_mesh_host_rank == connected_host_rank_id) {
                             const auto& neighbor_exit_nodes =
                                 physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
                             for (const auto& exit_node : neighbor_exit_nodes) {
-                                if (*distributed_context.rank() == 1) {
-                                    std::cout << "Exit node src "
-                                              << this->get_fabric_node_id_from_asic_id(*exit_node.src_exit_node)
-                                              << std::endl;
-                                }
                                 if (*exit_node.src_exit_node == unique_chip_id) {
-                                    if (*distributed_context.rank() == 1) {
-                                        std::cout << "Assigning direction to " << fabric_node_id << " for eth chan "
-                                                  << +exit_node.eth_conn.src_chan << " in direction "
-                                                  << static_cast<int>(edge.port_direction) << std::endl;
-                                    }
                                     this->assign_direction_to_fabric_eth_chan(
                                         fabric_node_id, exit_node.eth_conn.src_chan, edge.port_direction);
                                 }
@@ -1442,11 +1426,8 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
             }
         }
     }
-    exit(0);
     for (const auto& [exit_node_fabric_node_id, exit_node_directions] : this->exit_node_directions_) {
         for (const auto& [src_eth_chan, port_direction] : exit_node_directions) {
-            std::cout << "Assigning direction to " << exit_node_fabric_node_id << " for eth chan " << +src_eth_chan
-                      << " in direction " << static_cast<int>(port_direction) << std::endl;
             this->assign_direction_to_fabric_eth_chan(exit_node_fabric_node_id, src_eth_chan, port_direction);
         }
     }
