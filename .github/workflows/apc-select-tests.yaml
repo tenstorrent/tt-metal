@@ -234,22 +234,23 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
-  tg-demo-apc-tests:
+  galaxy-apc-fast-tests:
     needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'tg-demo-apc-tests') }}
+    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'galaxy-apc-fast-tests') }}
     secrets: inherit
     strategy:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: in-service-dedicated-apc },
+          { arch: wormhole_b0, runner-label: in-service, topology: topology-6u },
         ]
-    uses: ./.github/workflows/tg-demo-all-post-commit-impl.yaml
+    uses: ./.github/workflows/galaxy-apc-fast-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       runner-label: ${{ matrix.test-group.runner-label }}
+      topology: ${{ matrix.test-group.topology }}
 
   test-ttnn-tutorials:
     needs: [parse-tests-json, build-artifact]
