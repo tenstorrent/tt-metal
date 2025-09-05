@@ -153,7 +153,7 @@ jobs:
       - blackhole-multi-card-demos
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
-    if: github.ref == 'refs/heads/stable'
+    if: ${{ github.ref == 'refs/heads/stable' || inputs.dry-run }}
     with:
       version: ${{ inputs.tag-version }}
       tag-latest:  ${{ inputs.is-release-candidate != 'true' }}
@@ -223,7 +223,7 @@ jobs:
       - blackhole-multi-card-demos
 
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/stable'
+    if: ${{ github.ref == 'refs/heads/stable' || inputs.dry-run }}
     environment:
       name: pypi
       url: https://pypi.org/project/ttnn/

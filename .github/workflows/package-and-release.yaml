@@ -143,7 +143,7 @@ jobs:
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: ${{ github.ref == 'refs/heads/stable' }}
+    if: ${{ github.ref == 'refs/heads/stable' || inputs.dry-run }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
