@@ -489,8 +489,6 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                 result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 result["host"] = get_hostname()
                 result["user"] = get_username()
-                suite_pbar.update()
-                results.append(result)
 
                 # Check if we should skip remaining tests in the suite
                 if config.skip_on_timeout:
@@ -643,7 +641,6 @@ def run_sweeps(
                 header_info, test_vectors = sanitize_inputs(vectors)
                 results = execute_suite(test_vectors, pbar_manager, suite, module_name, header_info, config)
 
-
                 suite_end_time = dt.datetime.now()
                 logger.info(f"Completed tests for module {module_name}, suite {suite}.")
 
@@ -660,7 +657,7 @@ def run_sweeps(
                         if test_status == "failure":
                             final_status = "failure"
                     except Exception as e:
-                        logger.error(f"Failed to export results for {module_name}, suite {suite}: {e}")
+                        logger.exception(f"Failed to export results for {module_name}, suite {suite}: {e}")
                         final_status = "failure"
                         # continue with other suites
 
