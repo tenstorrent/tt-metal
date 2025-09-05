@@ -31,7 +31,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/buffer_page_mapping.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
 namespace tt {

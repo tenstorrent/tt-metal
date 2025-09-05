@@ -10,7 +10,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/soc_descriptor.hpp>
 
 namespace tt::tt_metal::detail {
 

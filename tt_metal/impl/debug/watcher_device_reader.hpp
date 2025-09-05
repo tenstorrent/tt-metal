@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt::tt_metal {
