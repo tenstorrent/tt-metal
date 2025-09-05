@@ -28,7 +28,7 @@
 #include <umd/device/cluster.h>
 #include <umd/device/device_api_metal.h>
 #include <umd/device/tt_cluster_descriptor.h>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/tt_io.hpp>
 #include <umd/device/tt_silicon_driver_common.hpp>
 #include <umd/device/tt_soc_descriptor.h>
