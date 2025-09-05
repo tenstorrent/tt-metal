@@ -16,14 +16,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "in_channel, out_channel, kernel, stride, padding, dilation, groups,fwd_input_shape",
     [
         (
-            [128, 128, 128, 128, 256],
-            [256, 128, 128, 256, 128],
+            [256, 256, 256, 256, 256],
+            [512, 256, 256, 256, 256],
             [1, 1, 3, 1, 1],
             [1, 1, 1, 1, 1],
             [0, 0, 1, 0, 0],
             [1, 1, 1, 1, 1],
             [1, 1, 128, 1, 1],
-            [1, 128, 7, 7],
+            [1, 256, 7, 7],
         ),
     ],
 )
