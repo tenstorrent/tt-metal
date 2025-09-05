@@ -4,6 +4,7 @@
 
 import hashlib
 import json
+import math
 import os
 import warnings
 from datetime import datetime
@@ -1237,9 +1238,9 @@ def test_demo_text(
                     f"No CI performance targets found for {model_device_key}. Skipping performance verification."
                 )
     if token_accuracy:
-        total_top1_acc = round(acc[0]) * 100
-        total_top5_acc = round(acc[1]) * 100
-        logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
+        total_top1_acc = math.ceil(acc[0] * 100)
+        total_top5_acc = math.ceil(acc[1] * 100)
+        # logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
 
         if not json_config_file:
             # Get accuracy thresholds from PERF.md, unless the configuration is from a json
