@@ -183,7 +183,7 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
         this->return_code = DPrintErrorMath;
         return;
 #endif
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
         this->return_code = DPrintErrorEthernet;
         return;
 #endif
