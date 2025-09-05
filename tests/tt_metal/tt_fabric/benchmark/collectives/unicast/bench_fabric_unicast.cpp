@@ -42,7 +42,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include "test_common.hpp"
+#include "tests/tt_metal/test_utils/test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "umd/device/types/xy_pair.h"
@@ -109,9 +109,11 @@ PerfPoint RunUnicastConnWithParams(BaseFabricFixture* fixture, const PerfParams&
         tt::tt_metal::BufferType::L1);
 
     const CoreCoord receiver_core = p.receiver_core;
+
+    constexpr const char* KDIR = "tests/tt_metal/tt_fabric/benchmark/collectives/unicast/kernels/";
     auto rx_wait_k = tt::tt_metal::CreateKernel(
         receiver_prog,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver_for_perf.cpp",
+        std::string(KDIR) + "unicast_rx.cpp",
         receiver_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
@@ -139,7 +141,7 @@ PerfPoint RunUnicastConnWithParams(BaseFabricFixture* fixture, const PerfParams&
     // READER kernel (DRAM->CB or L1->CB). We read from src_buf (DRAM).
     auto reader_k = tt::tt_metal::CreateKernel(
         sender_prog,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_sender_reader_for_perf.cpp",
+        std::string(KDIR) + "unicast_tx_reader_to_cb.cpp",
         p.sender_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -150,7 +152,7 @@ PerfPoint RunUnicastConnWithParams(BaseFabricFixture* fixture, const PerfParams&
     // WRITER kernel (CB->Fabric->dst + final sem INC)
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_sender_writer_for_perf.cpp",
+        std::string(KDIR) + "unicast_tx_writer_cb_to_dst.cpp",
         p.sender_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -372,7 +374,6 @@ TEST_F(Fabric2DFixture, UnicastConn_HeatmapDstCore) {
 
             auto stats = run_repeated(this, p, /*warmup_iters=*/warmup_per_core, /*iters=*/repeats);
 
-            // Keep schema: use median latency, mean throughput
             ofs << rc.x << "," << rc.y << "," << stats.p50_ms << "," << stats.mean_gbps << "\n";
         }
     }
