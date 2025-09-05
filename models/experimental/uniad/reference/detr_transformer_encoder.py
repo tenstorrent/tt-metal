@@ -7,7 +7,6 @@ from torch import nn
 from models.experimental.uniad.reference.utils import multi_scale_deformable_attn_pytorch
 from models.experimental.uniad.reference.ffn import FFN
 
-import warnings
 from typing import Optional
 
 
@@ -19,7 +18,6 @@ class MultiScaleDeformableAttention(nn.Module):
         num_levels: int = 4,
         num_points: int = 4,
         im2col_step: int = 64,
-        dropout: float = 0.1,
         batch_first: bool = False,
         norm_cfg=None,
     ):
@@ -28,23 +26,7 @@ class MultiScaleDeformableAttention(nn.Module):
             raise ValueError(f"embed_dims must be divisible by num_heads, " f"but got {embed_dims} and {num_heads}")
         dim_per_head = embed_dims // num_heads
         self.norm_cfg = norm_cfg
-        self.dropout = nn.Dropout(dropout)
         self.batch_first = batch_first
-
-        # you'd better set dim_per_head to a power of 2
-        # which is more efficient in the CUDA implementation
-        def _is_power_of_2(n):
-            if (not isinstance(n, int)) or (n < 0):
-                raise ValueError("invalid input for _is_power_of_2: {} (type: {})".format(n, type(n)))
-            return (n & (n - 1) == 0) and n != 0
-
-        if not _is_power_of_2(dim_per_head):
-            warnings.warn(
-                "You'd better set embed_dims in "
-                "MultiScaleDeformAttention to make "
-                "the dimension of each attention head a power of 2 "
-                "which is more efficient in our CUDA implementation."
-            )
 
         self.im2col_step = im2col_step
         self.embed_dims = embed_dims
@@ -125,10 +107,9 @@ class MultiScaleDeformableAttention(nn.Module):
         output = self.output_proj(output)
 
         if not self.batch_first:
-            # (num_query, bs ,embed_dims)
             output = output.permute(1, 0, 2)
 
-        return self.dropout(output) + identity
+        return output + identity
 
 
 class DetrTransformerEncoder(nn.Module):
@@ -140,7 +121,6 @@ class DetrTransformerEncoder(nn.Module):
         num_levels=4,
         num_points=4,
         im2col_step=64,
-        dropout=0.1,
         post_norm=False,
         feedforward_channels=512,
     ):
@@ -148,9 +128,7 @@ class DetrTransformerEncoder(nn.Module):
         self.layers = nn.ModuleList()
 
         for _ in range(num_layers):
-            attentions = nn.ModuleList(
-                [MultiScaleDeformableAttention(embed_dims, num_heads, num_levels, num_points, dropout)]
-            )
+            attentions = nn.ModuleList([MultiScaleDeformableAttention(embed_dims, num_heads, num_levels, num_points)])
             ffns = nn.ModuleList([FFN(embed_dims)])
             norms = nn.ModuleList([nn.LayerNorm(embed_dims), nn.LayerNorm(embed_dims)])
             layer = nn.ModuleDict({"attentions": attentions, "ffns": ffns, "norms": norms})

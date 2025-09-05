@@ -11,8 +11,6 @@ import torch.utils.checkpoint as checkpoint
 from einops import rearrange
 
 
-# Grid sampler
-# Sample a smaller receptive-field bev from larger one
 class BevFeatureSlicer(nn.Module):
     def __init__(self, grid_conf, map_grid_conf):
         super().__init__()
@@ -43,7 +41,6 @@ class BevFeatureSlicer(nn.Module):
             self.map_grid = torch.stack([tmp_m, tmp_n], dim=2)
 
     def forward(self, x):
-        # x: bev feature map tensor of shape (b, c, h, w)
         if self.identity_mapping:
             return x
         else:
@@ -123,10 +120,6 @@ class Interpolate(nn.Module):
 
 
 class Bottleneck(nn.Module):
-    """
-    Defines a bottleneck module with a residual connection
-    """
-
     def __init__(
         self,
         in_channels,
@@ -136,7 +129,6 @@ class Bottleneck(nn.Module):
         groups=1,
         upsample=False,
         downsample=False,
-        dropout=0.0,
     ):
         super().__init__()
         self._downsample = downsample
@@ -194,7 +186,6 @@ class Bottleneck(nn.Module):
                     ("conv_up_project", nn.Conv2d(bottleneck_channels, out_channels, kernel_size=1, bias=False)),
                     ("abn_up_project", nn.Sequential(nn.BatchNorm2d(out_channels), nn.ReLU(inplace=True))),
                     # Regulariser
-                    ("dropout", nn.Dropout2d(p=dropout)),
                 ]
             )
         )
@@ -226,10 +217,7 @@ class Bottleneck(nn.Module):
         return x_residual + x
 
 
-# General layers
 class MLP(nn.Module):
-    """Very simple multi-layer perceptron (also called FFN)"""
-
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
         super().__init__()
         self.num_layers = num_layers
@@ -338,47 +326,41 @@ class CVT_Decoder(nn.Module):
 
 
 class MultiheadAttention(nn.Module):
-    def __init__(self, embed_dim=256, num_heads=8, dropout=0.0):
+    def __init__(self, embed_dim=256, num_heads=8):
         super().__init__()
-        self.attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
-        self.proj_drop = nn.Dropout(dropout)
-        self.dropout_layer = nn.Identity()
+        self.attn = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
 
     def forward(self, query, key, value, **kwargs):
         out, _ = self.attn(query, key, value, **kwargs)
-        out = self.proj_drop(out)
         return out
 
 
 class FFN(nn.Module):
-    def __init__(self, embed_dim=256, ffn_dim=2048, dropout=0.0):
+    def __init__(self, embed_dim=256, ffn_dim=2048):
         super().__init__()
         self.activate = nn.ReLU(inplace=True)
         self.layers = nn.Sequential(
             nn.Sequential(
                 nn.Linear(embed_dim, ffn_dim),
                 nn.ReLU(inplace=True),
-                nn.Dropout(dropout),
             ),
             nn.Linear(ffn_dim, embed_dim),
-            nn.Dropout(dropout),
         )
-        self.dropout_layer = nn.Identity()
 
     def forward(self, x):
         return self.layers(x)
 
 
 class DetrTransformerDecoderLayer(nn.Module):
-    def __init__(self, embed_dim=256, num_heads=8, ffn_dim=2048, dropout=0.0):
+    def __init__(self, embed_dim=256, num_heads=8, ffn_dim=2048):
         super().__init__()
         self.attentions = nn.ModuleList(
             [
-                MultiheadAttention(embed_dim, num_heads, dropout),
-                MultiheadAttention(embed_dim, num_heads, dropout),
+                MultiheadAttention(embed_dim, num_heads),
+                MultiheadAttention(embed_dim, num_heads),
             ]
         )
-        self.ffns = nn.ModuleList([FFN(embed_dim, ffn_dim, dropout)])
+        self.ffns = nn.ModuleList([FFN(embed_dim, ffn_dim)])
         self.norms = nn.ModuleList(
             [
                 nn.LayerNorm(embed_dim),
@@ -393,10 +375,10 @@ class DetrTransformerDecoderLayer(nn.Module):
 
 
 class DetrTransformerDecoder(nn.Module):
-    def __init__(self, num_layers=5, embed_dim=256, num_heads=8, ffn_dim=2048, dropout=0.0):
+    def __init__(self, num_layers=5, embed_dim=256, num_heads=8, ffn_dim=2048):
         super().__init__()
         self.layers = nn.ModuleList(
-            [DetrTransformerDecoderLayer(embed_dim, num_heads, ffn_dim, dropout) for _ in range(num_layers)]
+            [DetrTransformerDecoderLayer(embed_dim, num_heads, ffn_dim) for _ in range(num_layers)]
         )
         self.post_norm = nn.LayerNorm(embed_dim)
 

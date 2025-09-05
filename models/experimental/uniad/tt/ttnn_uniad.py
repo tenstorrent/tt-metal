@@ -23,10 +23,6 @@ from models.experimental.uniad.tt.ttnn_occ_head import TtOccHead
 
 
 class TtUniAD:
-    """
-    UniAD: Unifying Detection, Tracking, Segmentation, Motion Forecasting, Occupancy Prediction and Planning for Autonomous Driving
-    """
-
     def __init__(
         self,
         parameters=None,
@@ -47,10 +43,8 @@ class TtUniAD:
         loss_cfg=None,
         qim_args=dict(
             qim_type="QIMBase",
-            merger_dropout=0,
             update_query_pos=False,
             fp_ratio=0.3,
-            random_drop=0.1,
         ),
         mem_args=dict(
             memory_bank_type="MemoryBank",
@@ -83,9 +77,6 @@ class TtUniAD:
         queue_length=3,
         **kwargs,
     ):
-        # super().__init__()
-        # ------mvx starting
-
         self.parameters = parameters
         self.device = device
 
@@ -177,7 +168,7 @@ class TtUniAD:
             "prev_angle": 0,
         }
         self.query_embedding = ttnn.embedding
-        self.reference_points = ttnn.linear  # nn.Linear(self.embed_dims, 3)
+        self.reference_points = ttnn.linear
 
         self.mem_bank_len = mem_args["memory_bank_len"]
         self.track_base = TtRuntimeTrackerBase(
@@ -293,7 +284,6 @@ class TtUniAD:
                             }
                         ],
                         "feedforward_channels": 512,
-                        "ffn_dropout": 0.1,
                         "operation_order": ("cross_attn", "norm", "ffn", "norm"),
                     },
                 },
@@ -333,8 +323,8 @@ class TtUniAD:
                 planning_eval=True,
             )
 
-        self.task_loss_weight = task_loss_weight
-        assert set(task_loss_weight.keys()) == {"track", "occ", "motion", "map", "planning"}
+        # self.task_loss_weight = task_loss_weight
+        # assert set(task_loss_weight.keys()) == {"track", "occ", "motion", "map", "planning"}
 
     @property
     def with_planning_head(self):
@@ -357,10 +347,7 @@ class TtUniAD:
         return self.forward_test(img=img, img_metas=[[dummy_metas]])
 
     def __call__(self, return_loss=True, **kwargs):
-        if return_loss:
-            return self.forward_train(**kwargs)
-        else:
-            return self.forward_test(**kwargs)
+        return self.forward_test(**kwargs)
 
     def forward_test(
         self,
@@ -380,17 +367,13 @@ class TtUniAD:
         gt_occ_img_is_valid=None,
         **kwargs,
     ):
-        """Test function"""
-
         for var, name in [(img_metas, "img_metas")]:
             if not isinstance(var, list):
                 raise TypeError("{} must be a list, but got {}".format(name, type(var)))
         img = [img] if img is None else img
 
         if img_metas[0][0]["scene_token"] != self.prev_frame_info["scene_token"]:
-            # the first sample of each scene is truncated
             self.prev_frame_info["prev_bev"] = None
-        # update idx
         self.prev_frame_info["scene_token"] = img_metas[0][0]["scene_token"]
 
         # do not use temporal information
@@ -500,7 +483,6 @@ class TtUniAD:
             (1, 1), ttnn_device=self.device
         )  # used as torch need ttnn support(will be replaced soon)
         num_queries, dim = self.parameters["query_embedding"].weight.shape  # (300, 256 * 2)
-        # device = self.query_embedding.weight.device
         query = ttnn.to_layout(self.parameters["query_embedding"].weight, layout=ttnn.TILE_LAYOUT)
         ref_pts_input = query[:901, :256]
 
@@ -549,11 +531,8 @@ class TtUniAD:
         img_metas=None,
         timestamp=None,
     ):
-        """only support bs=1 and sequential input"""
-
         bs = img.shape[0]
 
-        """ init track instances for first frame """
         if self.test_track_instances is None or img_metas[0]["scene_token"] != self.scene_token:
             self.timestamp = timestamp
             self.scene_token = img_metas[0]["scene_token"]
@@ -568,13 +547,10 @@ class TtUniAD:
             l2g_r2 = l2g_r_mat
             l2g_t2 = l2g_t
 
-        """ get time_delta and l2g r/t infos """
-        """ update frame info for next frame"""
         self.timestamp = timestamp
         self.l2g_t = l2g_t
         self.l2g_r_mat = l2g_r_mat
 
-        """ predict and update """
         prev_bev = self.prev_bev
         frame_res = self._forward_single_frame_inference(
             img,
@@ -612,7 +588,6 @@ class TtUniAD:
         return results
 
     def extract_img_feat(self, img, len_queue=None):
-        """Extract features of images."""
         if img is None:
             return None
         assert len(img.shape) == 5
@@ -756,11 +731,6 @@ class TtUniAD:
         l2g_t2=None,
         time_delta=None,
     ):
-        """
-        img: B, num_cam, C, H, W = img.shape
-        """
-
-        """ velo update """
         active_inst = track_instances[track_instances.obj_idxes >= 0]
         other_inst = track_instances[track_instances.obj_idxes < 0]
 
@@ -775,7 +745,6 @@ class TtUniAD:
 
         track_instances = TtInstances.cat([other_inst, active_inst], device=self.device)
 
-        # NOTE: You can replace BEVFormer with other BEV encoder and provide bev_embed here
         bev_embed, bev_pos = self.get_bevs(img, img_metas, prev_bev=prev_bev)
         det_output = self.pts_bbox_head.get_detections(
             bev_embed,
@@ -798,15 +767,13 @@ class TtUniAD:
             "bev_pos": bev_pos,
         }
 
-        """ update track instances with predict results """
         track_scores = ttnn.to_torch(ttnn.sigmoid(output_classes[-1, 0, :])).max(dim=-1).values
-        # each track will be assigned an unique global id by the track base.
+
         track_instances.scores = ttnn.from_torch(track_scores, device=self.device, layout=ttnn.TILE_LAYOUT)
         track_instances.pred_logits = output_classes[-1, 0]  # [300, num_cls]
         track_instances.pred_boxes = output_coords[-1, 0]  # [300, box_dim]
         track_instances.output_embedding = query_feats[-1][0]  # [300, feat_dim]
         track_instances.ref_pts = last_ref_pts[0]
-        # hard_code: assume the 901 query is sdc query
 
         obj_idxes = ttnn.to_torch(track_instances.obj_idxes)
 
@@ -814,7 +781,6 @@ class TtUniAD:
         track_instances.obj_idxes = ttnn.from_torch(
             obj_idxes, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32
         )
-        """ update track base """
         self.track_base.update(track_instances, None)
 
         active_index = ttnn.bitwise_and(
@@ -828,17 +794,15 @@ class TtUniAD:
                     device=self.device,
                 )
             ),
-        )  # filter out sleep objects
+        )
 
         out.update(self.select_active_track_query(track_instances, active_index, img_metas))
         out.update(self.select_sdc_track_query(track_instances[track_instances.obj_idxes == -2], img_metas))
 
         track_instances.mem_padding_mask = ttnn.to_torch(track_instances.mem_padding_mask).to(dtype=torch.bool)
-        """ update with memory_bank """
         if self.memory_bank is not None:
             track_instances = self.memory_bank(track_instances)
 
-        """  Update track instances using matcher """
         tmp = {}
         tmp["init_track_instances"] = self._generate_empty_tracks()
         tmp["track_instances"] = track_instances
@@ -854,7 +818,6 @@ class TtUniAD:
         return out
 
     def _det_instances2results(self, instances, results, img_metas):
-        # filter out sleep querys
         if instances.pred_logits.shape[0] == 0:
             return [None]
         bbox_dict = dict(
@@ -904,6 +867,7 @@ class TtUniAD:
             # prev_bev
             prev_bev = outs_track.get("prev_bev", None)
             if prev_bev is not None:
+                assert False
                 if self.training:
                     #  [1, 10000, 256]
                     prev_bev = rearrange(prev_bev, "b (h w) c -> b c h w", h=h, w=w)

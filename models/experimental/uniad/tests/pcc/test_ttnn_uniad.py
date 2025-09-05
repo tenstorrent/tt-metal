@@ -5,7 +5,7 @@
 
 import torch
 import pytest
-
+from loguru import logger
 import ttnn
 from models.experimental.uniad.reference.uniad import UniAD
 from models.experimental.uniad.tt.ttnn_uniad import TtUniAD
@@ -64,7 +64,6 @@ def test_uniad(device, reset_seeds, model_location_generator):
             "filter_score_thresh": 0.35,
             "qim_args": {
                 "qim_type": "QIMBase",
-                "merger_dropout": 0,
                 "update_query_pos": True,
                 "fp_ratio": 0.3,
                 "random_drop": 0.1,
@@ -125,7 +124,6 @@ def test_uniad(device, reset_seeds, model_location_generator):
                                 },
                             ],
                             "feedforward_channels": 512,
-                            "ffn_dropout": 0.1,
                             "operation_order": ("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
                         },
                     },
@@ -136,11 +134,10 @@ def test_uniad(device, reset_seeds, model_location_generator):
                         "transformerlayers": {
                             "type": "DetrTransformerDecoderLayer",
                             "attn_cfgs": [
-                                {"type": "MultiheadAttention", "embed_dims": 256, "num_heads": 8, "dropout": 0.1},
+                                {"type": "MultiheadAttention", "embed_dims": 256, "num_heads": 8},
                                 {"type": "CustomMSDeformableAttention", "embed_dims": 256, "num_levels": 1},
                             ],
                             "feedforward_channels": 512,
-                            "ffn_dropout": 0.1,
                             "operation_order": ("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
                         },
                     },
@@ -285,7 +282,6 @@ def test_uniad(device, reset_seeds, model_location_generator):
                 "flip": False,
                 "pcd_horizontal_flip": False,
                 "pcd_vertical_flip": False,
-                # 'box_mode_3d': Box3DMode.LIDAR,
                 "box_type_3d": LiDARInstance3DBoxes,
                 "img_norm_cfg": {
                     "mean": np.array([103.53, 116.28, 123.675], dtype=np.float32),
@@ -411,7 +407,6 @@ def test_uniad(device, reset_seeds, model_location_generator):
             "filter_score_thresh": 0.35,
             "qim_args": {
                 "qim_type": "QIMBase",
-                "merger_dropout": 0,
                 "update_query_pos": True,
                 "fp_ratio": 0.3,
                 "random_drop": 0.1,
@@ -472,7 +467,6 @@ def test_uniad(device, reset_seeds, model_location_generator):
                                 },
                             ],
                             "feedforward_channels": 512,
-                            "ffn_dropout": 0.1,
                             "operation_order": ("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
                         },
                     },
@@ -483,11 +477,10 @@ def test_uniad(device, reset_seeds, model_location_generator):
                         "transformerlayers": {
                             "type": "DetrTransformerDecoderLayer",
                             "attn_cfgs": [
-                                {"type": "MultiheadAttention", "embed_dims": 256, "num_heads": 8, "dropout": 0.1},
+                                {"type": "MultiheadAttention", "embed_dims": 256, "num_heads": 8},
                                 {"type": "CustomMSDeformableAttention", "embed_dims": 256, "num_levels": 1},
                             ],
                             "feedforward_channels": 512,
-                            "ffn_dropout": 0.1,
                             "operation_order": ("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
                         },
                     },
@@ -564,5 +557,5 @@ def test_uniad(device, reset_seeds, model_location_generator):
         command=ttnn_command,
     )
 
-    print("reference_output", reference_output)
-    print("ttnn_output", ttnn_output)
+    logger.info(f"reference_output: {reference_output}")
+    logger.info(f"ttnn_output: {ttnn_output}")

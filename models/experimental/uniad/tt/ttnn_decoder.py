@@ -5,8 +5,6 @@
 
 import ttnn
 from models.experimental.uniad.tt.ttnn_detr_transformer_decoder_layer import TtDetrTransformerDecoderLayer
-
-
 from models.experimental.uniad.tt.ttnn_utils import inverse_sigmoid
 
 
@@ -19,7 +17,7 @@ class TtDetectionTransformerDecoder:
 
         self.layers = [
             TtDetrTransformerDecoderLayer(
-                params.layers[i],  # Changed here
+                params.layers[i],
                 self.device,
                 attn_cfgs=[
                     {
@@ -38,7 +36,6 @@ class TtDetectionTransformerDecoder:
                     "embed_dims": embed_dim,
                     "feedforward_channels": 512,
                     "num_fcs": 2,
-                    "ffn_drop": 0.0,
                     "act_cfg": {"type": "ReLU", "inplace": True},
                 },
                 operation_order=("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
@@ -95,7 +92,7 @@ class TtDetectionTransformerDecoder:
                             tmp,
                             layers[i]["weight"],
                             bias=layers[i]["bias"],
-                            memory_config=ttnn.L1_MEMORY_CONFIG,  # Changed here
+                            memory_config=ttnn.L1_MEMORY_CONFIG,
                         )
 
                 assert reference_points.shape[-1] == 3

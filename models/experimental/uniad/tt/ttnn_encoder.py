@@ -27,7 +27,6 @@ class TtBEVFormerEncoder:
         kernel_size=(3, 5),
         im2col_step=192,
         feedforward_channels=512,
-        ffn_dropout=0.1,
         operation_order=("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
     ):
         super(TtBEVFormerEncoder, self).__init__()
@@ -57,7 +56,6 @@ class TtBEVFormerEncoder:
                 ),
             ],
             feedforward_channels=feedforward_channels,
-            ffn_dropout=ffn_dropout,
             operation_order=operation_order,
         )
 
@@ -291,7 +289,6 @@ class TtBEVFormerLayer:
         params,
         attn_cfgs,
         feedforward_channels,
-        ffn_dropout=0.0,
         operation_order=None,
         ffn_num_fcs=2,
         **kwargs,
@@ -301,7 +298,6 @@ class TtBEVFormerLayer:
         self.device = device
         self.attn_cfgs = attn_cfgs
         self.feedforward_channels = feedforward_channels
-        self.ffn_dropout = ffn_dropout
         self.operation_order = operation_order
         self.ffn_num_fcs = ffn_num_fcs
         self.fp16_enabled = False

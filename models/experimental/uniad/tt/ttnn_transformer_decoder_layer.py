@@ -22,7 +22,6 @@ class TtTransformerDecoderLayer:
         d_model: int,
         nhead: int,
         dim_feedforward: int = 2048,
-        dropout: float = 0.1,
         activation: Union[str, Callable[[Tensor], Tensor]] = F.relu,
         layer_norm_eps: float = 1e-5,
         batch_first: bool = False,
@@ -49,7 +48,6 @@ class TtTransformerDecoderLayer:
         self.norm2 = ttnn.layer_norm
         self.norm3 = ttnn.layer_norm
 
-        # Legacy string support for activation function.
         self.activation = ttnn.relu
 
     def __call__(
@@ -75,27 +73,13 @@ class TtTransformerDecoderLayer:
             x = x + self._ff_block(self.norm3(x))
         else:
             x = self.norm1(
-                (
-                    x
-                    + self.self_attn(
-                        x,
-                        x,
-                        x,
-                    )[0]
-                ),
+                (x + self.self_attn(x, x, x)[0]),
                 weight=self.parameters.norm1.weight,
                 bias=self.parameters.norm1.bias,
             )
 
             x = self.norm2(
-                (
-                    x
-                    + self.multihead_attn(
-                        x,
-                        memory,
-                        memory,
-                    )[0]
-                ),
+                (x + self.multihead_attn(x, memory, memory)[0]),
                 weight=self.parameters.norm2.weight,
                 bias=self.parameters.norm2.bias,
             )

@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import warnings
 import torch
 import torch.nn as nn
 
@@ -18,7 +17,6 @@ class TemporalSelfAttention(nn.Module):
         num_points=4,
         num_bev_queue=2,
         im2col_step=64,
-        dropout=0.1,
         batch_first=True,
         norm_cfg=None,
         init_cfg=None,
@@ -28,24 +26,8 @@ class TemporalSelfAttention(nn.Module):
             raise ValueError(f"embed_dims must be divisible by num_heads, " f"but got {embed_dims} and {num_heads}")
         dim_per_head = embed_dims // num_heads
         self.norm_cfg = norm_cfg
-        self.dropout = nn.Dropout(dropout)
         self.batch_first = batch_first
         self.fp16_enabled = False
-
-        # you'd better set dim_per_head to a power of 2
-        # which is more efficient in the CUDA implementation
-        def _is_power_of_2(n):
-            if (not isinstance(n, int)) or (n < 0):
-                raise ValueError("invalid input for _is_power_of_2: {} (type: {})".format(n, type(n)))
-            return (n & (n - 1) == 0) and n != 0
-
-        if not _is_power_of_2(dim_per_head):
-            warnings.warn(
-                "You'd better set embed_dims in "
-                "MultiScaleDeformAttention to make "
-                "the dimension of each attention head a power of 2 "
-                "which is more efficient in our CUDA implementation."
-            )
 
         self.im2col_step = im2col_step
         self.embed_dims = embed_dims
@@ -61,7 +43,6 @@ class TemporalSelfAttention(nn.Module):
         )
         self.value_proj = nn.Linear(embed_dims, embed_dims)
         self.output_proj = nn.Linear(embed_dims, embed_dims)
-        # self.init_weights()
 
     def forward(
         self,
@@ -81,8 +62,6 @@ class TemporalSelfAttention(nn.Module):
             assert self.batch_first
             bs, len_bev, c = query.shape
             value = torch.stack([query, query], 1).reshape(bs * 2, len_bev, c)
-
-            # value = torch.cat([query, query], 0)
 
         if identity is None:
             identity = query
@@ -148,8 +127,6 @@ class TemporalSelfAttention(nn.Module):
             value, spatial_shapes, level_start_index, sampling_locations, attention_weights, self.im2col_step
         )
 
-        # output shape (bs*num_bev_queue, num_query, embed_dims)
-        # (bs*num_bev_queue, num_query, embed_dims)-> (num_query, embed_dims, bs*num_bev_queue)
         output = output.permute(1, 2, 0)
 
         output = output.view(num_query, embed_dims, bs, self.num_bev_queue)
@@ -163,6 +140,6 @@ class TemporalSelfAttention(nn.Module):
         if not self.batch_first:
             output = output.permute(1, 0, 2)
 
-        output = self.dropout(output) + identity
+        output = output + identity
 
         return output

@@ -262,14 +262,14 @@ class TtPansegformerHead(nn.Module):
                 thing_query_pos, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
             )
 
-            query_weight = self.params.stuff_query.weight  # [None, :, :self.embed_dims])
+            query_weight = self.params.stuff_query.weight
             query_weight = ttnn.unsqueeze(query_weight, dim=0)
             query_weight = query_weight[:, :, : self.embed_dims]
             query_weight = ttnn.to_layout(query_weight, ttnn.TILE_LAYOUT)
 
             joint_query = ttnn.concat([thing_query, query_weight], dim=1)
 
-            stuff_query_pos = self.params.stuff_query.weight  # [None, :,self.embed_dims:]
+            stuff_query_pos = self.params.stuff_query.weight
             stuff_query_pos = ttnn.unsqueeze(stuff_query_pos, 0)
             stuff_query_pos = stuff_query_pos[:, :, self.embed_dims :]
 
@@ -307,7 +307,7 @@ class TtPansegformerHead(nn.Module):
             mask_pred = ttnn.reshape(attn_map, (-1, *hw_lvl[0]))
 
             mask_pred = ttnn.unsqueeze(mask_pred, 0)
-            target_size = (ori_shape[0], ori_shape[1])  # check ttnn.upsample
+            target_size = (ori_shape[0], ori_shape[1])
             mask_pred = ttnn.to_layout(mask_pred, ttnn.ROW_MAJOR_LAYOUT)
             mask_pred = ttnn.upsample(mask_pred, scale_factor=1)
             mask_pred = ttnn.squeeze(mask_pred, 0)
@@ -334,7 +334,7 @@ class TtPansegformerHead(nn.Module):
 
             scores_all = ttnn.mul(scores_all, seg_scores)
 
-            scores_all = ttnn.unsqueeze(scores_all, dim=0)  # added by me
+            scores_all = ttnn.unsqueeze(scores_all, dim=0)
             scores_all, index = ttnn.sort(scores_all, descending=True)
             scores_all = ttnn.squeeze(scores_all, dim=0)
             index = ttnn.squeeze(index, dim=0)
@@ -571,14 +571,11 @@ class TtPansegformerHead(nn.Module):
                 drivable_pred.view(1, -1), drivable_gt.view(1, -1)
             )
 
-            # results[0]['lane'] = ttnn.to_torch(results[0]['lane'])
-            # gt_lane_masks[0][0] = ttnn.to_torch(gt_lane_masks[0][0])
             lane_pred = results[0]["lane"]
             lanes_pred = (results[0]["lane"].sum(0) > 0).int()
             lanes_gt = (ttnn.to_torch(gt_lane_masks[0][0][:-1]).sum(0) > 0).int()
             lanes_iou, lanes_intersection, lanes_union = IOU(lanes_pred.view(1, -1), lanes_gt.view(1, -1))
 
-            # gt_lane_masks[0][0][gt_lane_labels[0][0]] = ttnn.to_torch(gt_lane_masks[0][0][gt_lane_labels[0][0]])
             divider_gt = (ttnn.to_torch(gt_lane_masks[0][0])[ttnn.to_torch(gt_lane_labels[0][0]) == 0].sum(0) > 0).int()
             crossing_gt = (
                 ttnn.to_torch(gt_lane_masks[0][0])[ttnn.to_torch(gt_lane_labels[0][0]) == 1].sum(0) > 0

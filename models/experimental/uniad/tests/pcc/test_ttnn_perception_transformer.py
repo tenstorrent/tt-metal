@@ -24,8 +24,6 @@ from models.experimental.uniad.common import load_torch_model
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_perception_transformer_get_bev_features_function(device, reset_seeds, model_location_generator):
-    # weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
-
     reference_model = PerceptionTransformer(
         num_feature_levels=4,
         num_cams=6,
@@ -194,8 +192,6 @@ def test_perception_transformer_get_bev_features_function(device, reset_seeds, m
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_perception_transformer_get_states_and_refs(device, reset_seeds, model_location_generator):
-    # weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
-
     reference_model = PerceptionTransformer(
         num_feature_levels=4,
         num_cams=6,

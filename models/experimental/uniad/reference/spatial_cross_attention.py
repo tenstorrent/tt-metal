@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import warnings
 import torch
 import torch.nn as nn
 from models.experimental.uniad.reference.utils import multi_scale_deformable_attn_pytorch
@@ -14,7 +13,6 @@ class SpatialCrossAttention(nn.Module):
         embed_dims=256,
         num_cams=6,
         pc_range=None,
-        dropout=0.1,
         init_cfg=None,
         batch_first=False,
         deformable_attention=dict(type="MSDeformableAttention3D", embed_dims=256, num_levels=4),
@@ -23,7 +21,6 @@ class SpatialCrossAttention(nn.Module):
         super(SpatialCrossAttention, self).__init__()
 
         self.init_cfg = init_cfg
-        self.dropout = nn.Dropout(dropout)
         self.pc_range = pc_range
         self.fp16_enabled = False
         self.deformable_attention = MSDeformableAttention3D()
@@ -102,7 +99,7 @@ class SpatialCrossAttention(nn.Module):
         slots = slots / count[..., None]
         slots = self.output_proj(slots)
 
-        return self.dropout(slots) + inp_residual
+        return slots + inp_residual
 
 
 class MSDeformableAttention3D(nn.Module):
@@ -113,7 +110,6 @@ class MSDeformableAttention3D(nn.Module):
         num_levels=4,
         num_points=8,
         im2col_step=64,
-        dropout=0.1,
         batch_first=True,
         norm_cfg=None,
         init_cfg=None,
@@ -126,21 +122,6 @@ class MSDeformableAttention3D(nn.Module):
         self.batch_first = batch_first
         self.output_proj = None
         self.fp16_enabled = False
-
-        # you'd better set dim_per_head to a power of 2
-        # which is more efficient in the CUDA implementation
-        def _is_power_of_2(n):
-            if (not isinstance(n, int)) or (n < 0):
-                raise ValueError("invalid input for _is_power_of_2: {} (type: {})".format(n, type(n)))
-            return (n & (n - 1) == 0) and n != 0
-
-        if not _is_power_of_2(dim_per_head):
-            warnings.warn(
-                "You'd better set embed_dims in "
-                "MultiScaleDeformAttention to make "
-                "the dimension of each attention head a power of 2 "
-                "which is more efficient in our CUDA implementation."
-            )
 
         self.im2col_step = im2col_step
         self.embed_dims = embed_dims
@@ -194,12 +175,6 @@ class MSDeformableAttention3D(nn.Module):
         attention_weights = attention_weights.view(bs, num_query, self.num_heads, self.num_levels, self.num_points)
 
         if reference_points.shape[-1] == 2:
-            """
-            For each BEV query, it owns `num_Z_anchors` in 3D space that having different heights.
-            After proejcting, each BEV query has `num_Z_anchors` reference points in each 2D image.
-            For each referent point, we sample `num_points` sampling points.
-            For `num_Z_anchors` reference points,  it has overall `num_points * num_Z_anchors` sampling points.
-            """
             offset_normalizer = torch.stack([spatial_shapes[..., 1], spatial_shapes[..., 0]], -1)
 
             bs, num_query, num_Z_anchors, xy = reference_points.shape

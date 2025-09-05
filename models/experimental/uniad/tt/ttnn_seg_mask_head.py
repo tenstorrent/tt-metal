@@ -286,8 +286,6 @@ class TtSegMaskHead:
             return tensor + pos
 
     def forward(self, memory, mask_memory, pos_memory, query_embed, mask_query, pos_query, hw_lvl):
-        # if mask_memory is not None and isinstance(mask_memory, torch.Tensor):
-        # mask_memory = mask_memory.to(torch.bool)
         masks = []
         inter_query = []
         for i, block in enumerate(self.blocks):

@@ -45,7 +45,6 @@ class MemoryBank(nn.Module):
             saved_idxes = scores > 0
         else:
             saved_idxes = (save_period == 0) & (scores > self.save_thresh)
-            # saved_idxes = (save_period == 0)
             save_period[save_period > 0] -= 1
             save_period[saved_idxes] = self.save_period
 

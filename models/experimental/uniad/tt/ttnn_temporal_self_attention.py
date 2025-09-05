@@ -18,7 +18,6 @@ class TtTemporalSelfAttention:
         num_points=4,
         num_bev_queue=2,
         im2col_step=64,
-        dropout=0.1,
         batch_first=True,
         norm_cfg=None,
         init_cfg=None,
@@ -33,18 +32,6 @@ class TtTemporalSelfAttention:
         self.batch_first = batch_first
         self.fp16_enabled = False
         self.params = params
-
-        def _is_power_of_2(n):
-            if not isinstance(n, int) or n < 0:
-                raise ValueError(f"invalid input for _is_power_of_2: {n} (type: {type(n)})")
-            return (n & (n - 1) == 0) and n != 0
-
-        if not _is_power_of_2(dim_per_head):
-            warnings.warn(
-                "For optimal performance with TTNN, embed_dims should be set "
-                "so that dimension of each attention head is a power of 2"
-            )
-
         self.im2col_step = im2col_step
         self.embed_dims = embed_dims
         self.num_levels = num_levels
@@ -77,7 +64,6 @@ class TtTemporalSelfAttention:
             identity = query
         if query_pos is not None:
             query = ttnn.add(query, query_pos)
-        # ttnn.deallocate(query_pos)
 
         if not self.batch_first:
             query = ttnn.permute(query, (1, 0, 2))

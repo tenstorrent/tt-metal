@@ -55,7 +55,6 @@ class SinePositionalEncoding(nn.Module):
         dim_t = self.temperature ** (2 * (dim_t // 2) / self.num_feats)
         pos_x = x_embed[:, :, :, None] / dim_t
         pos_y = y_embed[:, :, :, None] / dim_t
-        # use `view` instead of `flatten` for dynamically exporting to ONNX
         B, H, W = mask.size()
         pos_x = torch.stack((pos_x[:, :, :, 0::2].sin(), pos_x[:, :, :, 1::2].cos()), dim=4).view(B, H, W, -1)
         pos_y = torch.stack((pos_y[:, :, :, 0::2].sin(), pos_y[:, :, :, 1::2].cos()), dim=4).view(B, H, W, -1)
@@ -85,7 +84,6 @@ class PansegformerHead(nn.Module):
         stuff_transformer_head=dict(
             type="TransformerHead", d_model=256, nhead=8, num_decoder_layers=6  # mask decoder for stuff
         ),
-        loss_mask=dict(type="DiceLoss", weight=2.0),
         train_cfg=dict(
             assigner=dict(
                 type="HungarianAssigner",
@@ -116,7 +114,6 @@ class PansegformerHead(nn.Module):
         self.num_dec_stuff = 6
         super(PansegformerHead, self).__init__()
 
-        # self.loss_mask = build_loss(loss_mask)
         self.positional_encoding = SinePositionalEncoding(num_feats=128, normalize=True, scale=6.283185307179586)
         self.transformer = SegDeformableTransformer()
         self.as_two_stag = False
@@ -151,10 +148,8 @@ class PansegformerHead(nn.Module):
             return_intermediate_dec=False,
             self_attn=True,
         )
-        # self.count = 0
 
     def _init_layers(self):
-        """Initialize classification branch and regression branch of head."""
         if not self.as_two_stag:
             self.bev_embedding = nn.Embedding(50 * 50, self.embed_dims)
             # self.bev_embedding = nn.Embedding(self.bev_h * self.bev_w, self.embed_dims)
@@ -172,8 +167,6 @@ class PansegformerHead(nn.Module):
             return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
         self.transformer.decoder.num_layers = 6
-        # last reg_branch is used to generate proposal from
-        # encode feature map when as_two_stage is True.
         num_pred = (
             (self.transformer.decoder.num_layers + 1) if self.as_two_stage else self.transformer.decoder.num_layers
         )
@@ -192,7 +185,6 @@ class PansegformerHead(nn.Module):
         self.cls_stuff_branches = _get_clones(fc_cls_stuff, self.num_dec_stuff)  # used in mask deocder
 
     def init_weights(self):
-        """Initialize weights of the DeformDETR head."""
         self.transformer.init_weights()
         if self.loss_cls.use_sigmoid:
             bias_init = float(-np.log((1 - 0.01) / 0.01))
@@ -377,7 +369,6 @@ class PansegformerHead(nn.Module):
         return bbox_list
 
     def _get_bboxes_single(self, cls_score, bbox_pred, img_shape, scale_factor, rescale=False):
-        """ """
         assert len(cls_score) == len(bbox_pred)
         max_per_img = 100
         # exclude background
@@ -416,7 +407,6 @@ class PansegformerHead(nn.Module):
         img_metas,
         rescale=False,
     ):
-        """ """
         cls_scores = all_cls_scores[-1]
         bbox_preds = all_bbox_preds[-1]
         memory, memory_mask, memory_pos, query, _, query_pos, hw_lvl = args_tuple

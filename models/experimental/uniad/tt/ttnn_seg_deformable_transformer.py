@@ -53,7 +53,6 @@ class TtSegDeformableTransformer:
         return reference_points
 
     def get_valid_ratio(self, mask, device=None):
-        """Get the valid radios of feature maps of all  level."""
         _, H, W = mask.shape
         one_tensor = ttnn.ones(mask.shape, layout=ttnn.TILE_LAYOUT, device=self.device)
         neg_mask = ttnn.subtract(one_tensor, mask)

@@ -4,11 +4,7 @@
 
 
 import torch.nn as nn
-
-
 import torch.nn.functional as F
-
-
 from models.experimental.uniad.reference.utils import Instances
 
 
@@ -18,13 +14,11 @@ class QueryInteractionModule(nn.Module):
         dim_in=256,
         hidden_dim=256,
         dim_out=256,
-        random_drop=0.1,
         fp_ratio=0.3,
         update_query_pos=True,
     ):
         super(QueryInteractionModule, self).__init__()
         self._build_layers(dim_in, hidden_dim, dim_out)
-        self.random_drop = random_drop
         self.fp_ratio = fp_ratio
         self.update_query_pos = update_query_pos
 
@@ -70,7 +64,6 @@ class QueryInteractionModule(nn.Module):
         tgt = self.norm2(tgt)
 
         if self.update_query_pos:
-            # ffn: linear_pos2
             x = self.linear_pos1(tgt)
             x = self.activation(x)
             query_pos2 = self.linear_pos2(x)
@@ -82,8 +75,6 @@ class QueryInteractionModule(nn.Module):
         query_feat2 = self.linear_feat2(x)
         query_feat = self.norm_feat(query_feat)
         track_instances.query[:, dim // 2 :] = query_feat
-        # track_instances.ref_pts = inverse_sigmoid(track_instances.pred_boxes[:, :2].detach().clone())
-        # update ref_pts using track_instances.pred_boxes
         return track_instances
 
     def _select_active_tracks(self, data: dict) -> Instances:

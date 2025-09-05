@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import warnings
 import ttnn
 from models.experimental.uniad.tt.ttnn_utils import multi_scale_deformable_attn_pytorch
 
@@ -15,7 +14,6 @@ class TtSpatialCrossAttention:
         embed_dims=256,
         num_cams=6,
         pc_range=None,
-        dropout=0.1,
         init_cfg=None,
         batch_first=False,
         deformable_attention=dict(type="MSDeformableAttention3D", embed_dims=256, num_levels=4),
@@ -31,7 +29,6 @@ class TtSpatialCrossAttention:
         self.deformable_attention = TtMSDeformableAttention3D(device=self.device, params=params, num_levels=4)
         self.embed_dims = embed_dims
         self.num_cams = num_cams
-        # self.output_proj = nn.Linear(embed_dims, embed_dims)
         self.batch_first = batch_first
 
     def __call__(
@@ -79,7 +76,6 @@ class TtSpatialCrossAttention:
             indexes.append(index_query_per_img)
         max_len = max([each.shape[0] for each in indexes])
         query = ttnn.to_torch(query)
-        # each camera only interacts with its corresponding BEV queries. This step can  greatly save GPU memory.
         queries_rebatch = query.new_zeros([bs, self.num_cams, max_len, self.embed_dims])
         reference_points_rebatch = reference_points_cam.new_zeros([bs, self.num_cams, max_len, D, 2])
         # TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/25517>
@@ -143,7 +139,6 @@ class TtMSDeformableAttention3D:
         num_levels=4,
         num_points=8,
         im2col_step=64,
-        dropout=0.1,
         batch_first=True,
         norm_cfg=None,
         init_cfg=None,
@@ -158,22 +153,6 @@ class TtMSDeformableAttention3D:
         self.fp16_enabled = False
         self.device = device
         self.params = params
-
-        # you'd better set dim_per_head to a power of 2
-        # which is more efficient in the CUDA implementation
-        def _is_power_of_2(n):
-            if (not isinstance(n, int)) or (n < 0):
-                raise ValueError("invalid input for _is_power_of_2: {} (type: {})".format(n, type(n)))
-            return (n & (n - 1) == 0) and n != 0
-
-        if not _is_power_of_2(dim_per_head):
-            warnings.warn(
-                "You'd better set embed_dims in "
-                "MultiScaleDeformAttention to make "
-                "the dimension of each attention head a power of 2 "
-                "which is more efficient in our CUDA implementation."
-            )
-
         self.im2col_step = im2col_step
         self.embed_dims = embed_dims
         self.num_levels = num_levels
@@ -202,7 +181,6 @@ class TtMSDeformableAttention3D:
             query = query + query_pos
 
         if not self.batch_first:
-            # change to (bs, num_query ,embed_dims)
             query = ttnn.permute(query, (1, 0, 2))
             value = ttnn.permute(value, (1, 0, 2))
 

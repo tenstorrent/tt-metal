@@ -17,32 +17,16 @@ class MultiheadAttention(nn.Module):
         self,
         embed_dims=256,
         num_heads=8,
-        attn_drop=0.0,
-        proj_drop=0.0,
-        dropout_layer=dict(type="Dropout", drop_prob=0.0),
         init_cfg=None,
         batch_first=False,
         **kwargs,
     ):
         super(MultiheadAttention, self).__init__()
-        if "dropout" in kwargs:
-            warnings.warn(
-                "The arguments `dropout` in MultiheadAttention "
-                "has been deprecated, now you can separately "
-                "set `attn_drop`(float), proj_drop(float), "
-                "and `dropout_layer`(dict) "
-            )
-            attn_drop = kwargs["dropout"]
-            dropout_layer["drop_prob"] = kwargs.pop("dropout")
-
         self.embed_dims = embed_dims
         self.num_heads = num_heads
         self.batch_first = batch_first
 
-        self.attn = nn.MultiheadAttention(embed_dims, num_heads, attn_drop, **kwargs)
-
-        self.proj_drop = nn.Dropout(proj_drop)
-        self.dropout_layer = nn.Dropout(p=0.1)
+        self.attn = nn.MultiheadAttention(embed_dims, num_heads, **kwargs)
 
     def forward(
         self,
@@ -56,14 +40,6 @@ class MultiheadAttention(nn.Module):
         key_padding_mask=None,
         **kwargs,
     ):
-        """
-        Returns:
-            Tensor: forwarded results with shape
-                [num_queries, bs, embed_dims]
-                if self.batch_first is False, else
-                [bs, num_queries embed_dims].
-        """
-
         if key is None:
             key = query
         if value is None:
@@ -82,12 +58,6 @@ class MultiheadAttention(nn.Module):
         if key_pos is not None:
             key = key + key_pos
 
-        # Because the dataflow('key', 'query', 'value') of
-        # ``torch.nn.MultiheadAttention`` is (num_query, batch,
-        # embed_dims), We should adjust the shape of dataflow from
-        # batch_first (batch, num_query, embed_dims) to num_query_first
-        # (num_query ,batch, embed_dims), and recover ``attn_output``
-        # from num_query_first to batch_first.
         if self.batch_first:
             query = query.transpose(0, 1)
             key = key.transpose(0, 1)
@@ -97,7 +67,7 @@ class MultiheadAttention(nn.Module):
 
         if self.batch_first:
             out = out.transpose(0, 1)
-        return identity + self.dropout_layer(self.proj_drop(out))
+        return identity + out
 
 
 class DetrTransformerDecoderLayer(nn.Module):
@@ -109,7 +79,6 @@ class DetrTransformerDecoderLayer(nn.Module):
             embed_dims=256,
             feedforward_channels=1024,
             num_fcs=2,
-            ffn_drop=0.0,
             act_cfg=dict(type="ReLU", inplace=True),
         ),
         operation_order=None,
@@ -118,9 +87,7 @@ class DetrTransformerDecoderLayer(nn.Module):
         batch_first=False,
         **kwargs,
     ):
-        deprecated_args = dict(
-            feedforward_channels="feedforward_channels", ffn_dropout="ffn_drop", ffn_num_fcs="num_fcs"
-        )
+        deprecated_args = dict(feedforward_channels="feedforward_channels", ffn_num_fcs="num_fcs")
         for ori_name, new_name in deprecated_args.items():
             if ori_name in kwargs:
                 warnings.warn(
@@ -281,13 +248,6 @@ class DetrTransformerDecoderLayer(nn.Module):
 
 
 class DeformableDetrTransformerDecoder(nn.Module):
-    """Implements the decoder in DETR3D transformer.
-    Args:
-        return_intermediate (bool): Whether to return intermediate outputs.
-        coder_norm_cfg (dict): Config of last normalization layer. Default：
-            `LN`.
-    """
-
     def __init__(self, num_layers, embed_dim, num_heads, return_intermediate=True):
         super(DeformableDetrTransformerDecoder, self).__init__()
         self.return_intermediate = True
@@ -295,7 +255,7 @@ class DeformableDetrTransformerDecoder(nn.Module):
             [
                 DetrTransformerDecoderLayer(
                     attn_cfgs=[
-                        {"type": "MultiheadAttention", "embed_dims": embed_dim, "num_heads": num_heads, "dropout": 0.1},
+                        {"type": "MultiheadAttention", "embed_dims": embed_dim, "num_heads": num_heads},
                         {"type": "MultiScaleDeformableAttention", "embed_dims": embed_dim, "num_levels": 4},
                     ],
                     ffn_cfgs=dict(
@@ -303,7 +263,6 @@ class DeformableDetrTransformerDecoder(nn.Module):
                         embed_dims=embed_dim,
                         feedforward_channels=1024,
                         num_fcs=2,
-                        ffn_drop=0.0,
                         act_cfg=dict(type="ReLU", inplace=True),
                     ),
                     operation_order=("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
@@ -312,7 +271,6 @@ class DeformableDetrTransformerDecoder(nn.Module):
                     batch_first=False,
                     kwargs={
                         "feedforward_channels": 512,
-                        "ffn_dropout": 0.1,
                         "act_cfg": {"type": "ReLU", "inplace": True},
                         "ffn_num_fcs": 2,
                     },
@@ -340,7 +298,6 @@ class DeformableDetrTransformerDecoder(nn.Module):
         intermediate = []
         intermediate_reference_points = []
         for lid, layer in enumerate(self.layers):
-            # reference_points_input = reference_points[..., :2].squeeze(2)  # BS NUM_QUERY NUM_LEVEL
             if reference_points.shape[-1] == 4:
                 reference_points_input = (
                     reference_points[:, :, None] * torch.cat([valid_ratios, valid_ratios], -1)[:, None]

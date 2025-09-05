@@ -60,7 +60,7 @@ def test_run_time_tracker(
 
     tt_model = TtRuntimeTrackerBase(score_thresh=0.4, filter_score_thresh=0.35, miss_tolerance=5)
 
-    # ttnn_output = tt_model.update(data)
+    # ttnn_output = tt_model.update(data) #Outputs NoneType because it just modifies the track_instances object directly.
     # ttnn_out = ttnn.to_torch(ttnn_output)
 
     # assert_with_pcc(torch_output, ttnn_out, 0.99)

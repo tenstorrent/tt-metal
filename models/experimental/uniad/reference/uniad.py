@@ -8,12 +8,10 @@ import math
 import torch
 from torch import nn
 
-
 from models.experimental.uniad.reference.planning_head import PlanningHeadSingleMode
 from models.experimental.uniad.reference.pan_segformer_head import PansegformerHead
 from models.experimental.uniad.reference.motion_head import MotionHead
 from models.experimental.uniad.reference.occ_head import OccHead
-
 
 from einops import rearrange
 
@@ -28,10 +26,6 @@ from models.experimental.uniad.reference.detr_track_3d_coder import DETRTrack3DC
 
 
 class UniAD(nn.Module):
-    """
-    UniAD: Unifying Detection, Tracking, Segmentation, Motion Forecasting, Occupancy Prediction and Planning for Autonomous Driving
-    """
-
     def __init__(
         self,
         seg_head=None,
@@ -50,10 +44,8 @@ class UniAD(nn.Module):
         loss_cfg=None,
         qim_args=dict(
             qim_type="QIMBase",
-            merger_dropout=0,
             update_query_pos=False,
             fp_ratio=0.3,
-            random_drop=0.1,
         ),
         mem_args=dict(
             memory_bank_type="MemoryBank",
@@ -87,7 +79,6 @@ class UniAD(nn.Module):
         **kwargs,
     ):
         super().__init__()
-        # ------mvx starting
 
         if pts_bbox_head:
             pts_train_cfg = train_cfg.pts if train_cfg else None
@@ -176,13 +167,6 @@ class UniAD(nn.Module):
         else:
             raise ValueError(f"pretrained should be a dict, got {type(pretrained)}")
 
-        # if self.with_img_backbone:
-        #     if img_pretrained is not None:
-        #         warnings.warn("DeprecationWarning: pretrained is a deprecated " "key, please consider using init_cfg.")
-        #         self.img_backbone.init_cfg = dict(type="Pretrained", checkpoint=img_pretrained)
-
-        # -------------- mvx complte
-
         self.grid_mask = GridMask(True, True, rotate=1, offset=False, ratio=0.5, mode=1, prob=0.7)
         self.use_grid_mask = use_grid_mask
         self.fp16_enabled = False
@@ -253,7 +237,7 @@ class UniAD(nn.Module):
             memory_bank_len=mem_args["memory_bank_len"],
         )
         self.mem_bank_len = 0 if self.memory_bank is None else self.memory_bank.max_his_length
-        # self.criterion = build_loss(loss_cfg)
+
         self.test_track_instances = None
         self.l2g_r_mat = None
         self.l2g_t = None
@@ -330,7 +314,6 @@ class UniAD(nn.Module):
                             }
                         ],
                         "feedforward_channels": 512,
-                        "ffn_dropout": 0.1,
                         "operation_order": ("cross_attn", "norm", "ffn", "norm"),
                     },
                 },
@@ -363,9 +346,6 @@ class UniAD(nn.Module):
                 bev_h=50, bev_w=50, embed_dims=256, planning_steps=6, planning_eval=True
             )
 
-        self.task_loss_weight = task_loss_weight
-        assert set(task_loss_weight.keys()) == {"track", "occ", "motion", "map", "planning"}
-
     @property
     def with_planning_head(self):
         return hasattr(self, "planning_head") and self.planning_head is not None
@@ -382,25 +362,8 @@ class UniAD(nn.Module):
     def with_seg_head(self):
         return hasattr(self, "seg_head") and self.seg_head is not None
 
-    def forward_dummy(self, img):
-        dummy_metas = None
-        return self.forward_test(img=img, img_metas=[[dummy_metas]])
-
     def forward(self, return_loss=True, **kwargs):
-        """Calls either forward_train or forward_test depending on whether
-        return_loss=True.
-        Note this setting will change the expected inputs. When
-        `return_loss=True`, img and img_metas are single-nested (i.e.
-        torch.Tensor and list[dict]), and when `resturn_loss=False`, img and
-        img_metas should be double nested (i.e.  list[torch.Tensor],
-        list[list[dict]]), with the outer list indicating test time
-        augmentations.
-        """
-
-        if return_loss:
-            return self.forward_train(**kwargs)
-        else:
-            return self.forward_test(**kwargs)
+        return self.forward_test(**kwargs)
 
     def forward_test(
         self,
@@ -422,8 +385,6 @@ class UniAD(nn.Module):
         gt_occ_img_is_valid=None,
         **kwargs,
     ):
-        """Test function"""
-
         for var, name in [(img_metas, "img_metas")]:
             if not isinstance(var, list):
                 raise TypeError("{} must be a list, but got {}".format(name, type(var)))
@@ -532,7 +493,6 @@ class UniAD(nn.Module):
         return result
 
     def extract_img_feat(self, img, len_queue=None):
-        """Extract features of images."""
         if img is None:
             return None
         assert img.dim() == 5
@@ -688,11 +648,6 @@ class UniAD(nn.Module):
         l2g_t2=None,
         time_delta=None,
     ):
-        """
-        img: B, num_cam, C, H, W = img.shape
-        """
-
-        """ velo update """
         active_inst = track_instances[track_instances.obj_idxes >= 0]
         other_inst = track_instances[track_instances.obj_idxes < 0]
 
@@ -730,11 +685,8 @@ class UniAD(nn.Module):
             "bev_pos": bev_pos,
         }
 
-        """ update track instances with predict results """
         track_scores = output_classes[-1, 0, :].sigmoid().max(dim=-1).values
-        # each track will be assigned an unique global id by the track base.
         track_instances.scores = track_scores
-        # track_instances.track_scores = track_scores  # [300]
         track_instances.pred_logits = output_classes[-1, 0]  # [300, num_cls]
         track_instances.pred_boxes = output_coords[-1, 0]  # [300, box_dim]
         track_instances.output_embedding = query_feats[-1][0]  # [300, feat_dim]
@@ -750,11 +702,9 @@ class UniAD(nn.Module):
         out.update(self.select_active_track_query(track_instances, active_index, img_metas))
         out.update(self.select_sdc_track_query(track_instances[track_instances.obj_idxes == -2], img_metas))
 
-        """ update with memory_bank """
         if self.memory_bank is not None:
             track_instances = self.memory_bank(track_instances)
 
-        """  Update track instances using matcher """
         tmp = {}
         tmp["init_track_instances"] = self._generate_empty_tracks()
         tmp["track_instances"] = track_instances
@@ -772,12 +722,8 @@ class UniAD(nn.Module):
         img_metas=None,
         timestamp=None,
     ):
-        """only support bs=1 and sequential input"""
-
         bs = img.size(0)
-        # img_metas = img_metas[0]
 
-        """ init track instances for first frame """
         if self.test_track_instances is None or img_metas[0]["scene_token"] != self.scene_token:
             self.timestamp = timestamp
             self.scene_token = img_metas[0]["scene_token"]
@@ -792,13 +738,10 @@ class UniAD(nn.Module):
             l2g_r2 = l2g_r_mat
             l2g_t2 = l2g_t
 
-        """ get time_delta and l2g r/t infos """
-        """ update frame info for next frame"""
         self.timestamp = timestamp
         self.l2g_t = l2g_t
         self.l2g_r_mat = l2g_r_mat
 
-        """ predict and update """
         prev_bev = self.prev_bev
         frame_res = self._forward_single_frame_inference(
             img,
@@ -842,10 +785,9 @@ class UniAD(nn.Module):
             track_scores=track_instances.scores,
             obj_idxes=track_instances.obj_idxes,
         )
-        # bboxes_dict = self.bbox_coder.decode(bbox_dict, with_mask=with_mask)[0]
+
         bboxes_dict = self.bbox_coder.decode(bbox_dict, with_mask=with_mask, img_metas=img_metas)[0]
         bboxes = bboxes_dict["bboxes"]
-        # bboxes[:, 2] = bboxes[:, 2] - bboxes[:, 5] * 0.5
         bboxes = img_metas[0]["box_type_3d"](bboxes, 9)
         labels = bboxes_dict["labels"]
         scores = bboxes_dict["scores"]
@@ -868,22 +810,6 @@ class UniAD(nn.Module):
         return result_dict
 
     def _det_instances2results(self, instances, results, img_metas):
-        """
-        Outs:
-        active_instances. keys:
-        - 'pred_logits':
-        - 'pred_boxes': normalized bboxes
-        - 'scores'
-        - 'obj_idxes'
-        out_dict. keys:
-            - boxes_3d (torch.Tensor): 3D boxes.
-            - scores (torch.Tensor): Prediction scores.
-            - labels_3d (torch.Tensor): Box labels.
-            - attrs_3d (torch.Tensor, optional): Box attributes.
-            - track_ids
-            - tracking_score
-        """
-        # filter out sleep querys
         if instances.pred_logits.numel() == 0:
             return [None]
         bbox_dict = dict(
@@ -915,7 +841,6 @@ class UniAD(nn.Module):
 
 
 def pop_elem_in_result(task_result: dict, pop_list: list = None):
-    # assert False, "pop_elem_in_result"  # added by me
     all_keys = list(task_result.keys())
     for k in all_keys:
         if k.endswith("query") or k.endswith("query_pos") or k.endswith("embedding"):

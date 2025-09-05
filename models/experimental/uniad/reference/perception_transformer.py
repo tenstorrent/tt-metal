@@ -52,7 +52,6 @@ class PerceptionTransformer(nn.Module):
         self.rotate_center = rotate_center
 
     def init_layers(self):
-        """Initialize layers of the Detr3DTransformer."""
         self.level_embeds = nn.Parameter(torch.Tensor(self.num_feature_levels, self.embed_dims))
         self.cams_embeds = nn.Parameter(torch.Tensor(self.num_cams, self.embed_dims))
         self.can_bus_mlp = nn.Sequential(
@@ -63,25 +62,6 @@ class PerceptionTransformer(nn.Module):
         )
         if self.can_bus_norm:
             self.can_bus_mlp.add_module("norm", nn.LayerNorm(self.embed_dims))
-
-    # def init_weights(self):
-    #     """Initialize the transformer weights."""
-    #     for p in self.parameters():
-    #         if p.dim() > 1:
-    #             nn.init.xavier_uniform_(p)
-    #     for m in self.modules():
-    #         if (
-    #             isinstance(m, MSDeformableAttention3D)
-    #             or isinstance(m, TemporalSelfAttention)
-    #             or isinstance(m, CustomMSDeformableAttention)
-    #         ):
-    #             try:
-    #                 m.init_weight()
-    #             except AttributeError:
-    #                 m.init_weights()
-    #     normal_(self.level_embeds)
-    #     normal_(self.cams_embeds)
-    #     xavier_init(self.can_bus_mlp, distribution="uniform", bias=0.0)
 
     def get_bev_features(
         self,
@@ -94,10 +74,6 @@ class PerceptionTransformer(nn.Module):
         prev_bev=None,
         img_metas=None,
     ):
-        """
-        obtain bev features.
-        """
-
         bs = mlvl_feats[0].size(0)
         bev_queries = bev_queries.unsqueeze(1).repeat(1, bs, 1)
         bev_pos = bev_pos.flatten(2).permute(2, 0, 1)

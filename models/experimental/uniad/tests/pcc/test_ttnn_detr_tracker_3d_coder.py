@@ -82,7 +82,6 @@ img_metas = [
             "flip": False,
             "pcd_horizontal_flip": False,
             "pcd_vertical_flip": False,
-            # 'box_mode_3d': Box3DMode.LIDAR,
             "box_type_3d": LiDARInstance3DBoxes,
             "img_norm_cfg": {
                 "mean": np.array([103.53, 116.28, 123.675], dtype=np.float32),

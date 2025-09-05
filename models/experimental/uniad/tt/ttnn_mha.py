@@ -24,15 +24,15 @@ class TtMultiheadAttention:
         self.device = device
         self.batch_first = batch_first
         self.attn_in_proj__weight = params.in_proj_weight
-        self.attn_in_proj__weight = ttnn.to_layout(self.attn_in_proj__weight, layout=ttnn.TILE_LAYOUT)  # Changed here
+        self.attn_in_proj__weight = ttnn.to_layout(self.attn_in_proj__weight, layout=ttnn.TILE_LAYOUT)
         self.attn_in_proj__bias = params.in_proj_bias
-        self.attn_in_proj__bias = ttnn.to_layout(self.attn_in_proj__bias, layout=ttnn.TILE_LAYOUT)  # Changed here
+        self.attn_in_proj__bias = ttnn.to_layout(self.attn_in_proj__bias, layout=ttnn.TILE_LAYOUT)
         self.attn_in_proj__weight_permute = self.attn_in_proj__weight
         self.attn_in_proj__bias_squeeze = ttnn.squeeze(self.attn_in_proj__bias, 0)
         self.attn_out_proj_weight = params.out_proj.weight
-        self.attn_out_proj_weight = ttnn.to_layout(self.attn_out_proj_weight, layout=ttnn.TILE_LAYOUT)  # Changed here
+        self.attn_out_proj_weight = ttnn.to_layout(self.attn_out_proj_weight, layout=ttnn.TILE_LAYOUT)
         self.attn_out_proj_bias = params.out_proj.bias
-        self.attn_out_proj_bias = ttnn.to_layout(self.attn_out_proj_bias, layout=ttnn.TILE_LAYOUT)  # Changed here
+        self.attn_out_proj_bias = ttnn.to_layout(self.attn_out_proj_bias, layout=ttnn.TILE_LAYOUT)
 
     def __call__(
         self,
@@ -83,13 +83,13 @@ class TtMultiheadAttention:
         tgt_len, bsz, embed_dim = query.shape
         src_len, _, _ = key.shape
 
-        q_weight = in_proj_weight[: self.embed_dims, :]  # Query weights
-        k_weight = in_proj_weight[self.embed_dims : 2 * self.embed_dims, :]  # Key weights
-        v_weight = in_proj_weight[2 * self.embed_dims :, :]  # Value weights
+        q_weight = in_proj_weight[: self.embed_dims, :]
+        k_weight = in_proj_weight[self.embed_dims : 2 * self.embed_dims, :]
+        v_weight = in_proj_weight[2 * self.embed_dims :, :]
 
-        q_bias = in_proj_bias[: self.embed_dims]  # Query biases
-        k_bias = in_proj_bias[self.embed_dims : 2 * self.embed_dims]  # Key biases
-        v_bias = in_proj_bias[2 * self.embed_dims :]  # Value biases
+        q_bias = in_proj_bias[: self.embed_dims]
+        k_bias = in_proj_bias[self.embed_dims : 2 * self.embed_dims]
+        v_bias = in_proj_bias[2 * self.embed_dims :]
 
         q_batch_size, q_sequence_size, q_hidden_size = query.shape
         q_head_size = q_hidden_size // self.num_heads

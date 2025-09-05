@@ -5,10 +5,13 @@
 ### Python Package dependencies
     - MMCV : Use `pip install mmcv` command to install
     - Casadi: Use `pip install casadi` command to install
+    - mmcv-full: Use `pip install mmcv-full` command to install
+
+Note: UniAD model tests run successfully only on Python 3.10.12.
 
 ### Pretrained weights
-- To run UNIAD model sub_modules test, you should ensure that you have download pre-trained weights.
-- Use the following command to download the weights, `wget https://github.com/OpenDriveLab/UniAD/releases/download/v1.0.1/uniad_base_e2e.pth`. Place it in the following path `models/experimental/uniad/`.
+- The pre-trained weights will be downloaded automatically during sub-module testing.
+- If the weights are not downloaded automatically, you can manually fetch them using the command, `wget https://github.com/OpenDriveLab/UniAD/releases/download/v1.0.1/uniad_base_e2e.pth`. Place it in the following path `models/experimental/uniad/`.
 
 ## Branch
 - Checkout to the branch, https://github.com/tenstorrent/tt-metal/tree/punith/ttnn_uniad. Use the below command to checkout to the branch,

@@ -22,7 +22,6 @@ class TtDetrTransformerDecoderLayer:
             embed_dims=256,
             feedforward_channels=1024,
             num_fcs=2,
-            ffn_drop=0.0,
             act_cfg=dict(type="ReLU", inplace=True),
         ),
         operation_order=None,
@@ -33,9 +32,7 @@ class TtDetrTransformerDecoderLayer:
     ):
         self.params = params
 
-        deprecated_args = dict(
-            feedforward_channels="feedforward_channels", ffn_dropout="ffn_drop", ffn_num_fcs="num_fcs"
-        )
+        deprecated_args = dict(feedforward_channels="feedforward_channels", ffn_num_fcs="num_fcs")
         for ori_name, new_name in deprecated_args.items():
             if ori_name in kwargs:
                 warnings.warn(
@@ -169,11 +166,11 @@ class TtDetrTransformerDecoderLayer:
             elif layer == "norm":
                 query = ttnn.layer_norm(
                     query,
-                    weight=self.params.norms[norm_index].weight,  # Changed here
-                    bias=self.params.norms[norm_index].bias,  # Changed here
+                    weight=self.params.norms[norm_index].weight,
+                    bias=self.params.norms[norm_index].bias,
                 )
-                ttnn.deallocate(self.params.norms[norm_index].weight)  # Changed here
-                ttnn.deallocate(self.params.norms[norm_index].bias)  # Changed here
+                ttnn.deallocate(self.params.norms[norm_index].weight)
+                ttnn.deallocate(self.params.norms[norm_index].bias)
                 norm_index += 1
 
             elif layer == "cross_attn":

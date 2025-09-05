@@ -21,7 +21,6 @@ class TtTransformerEncoderLayer:
         d_model: int,
         nhead: int,
         dim_feedforward: int = 2048,
-        dropout: float = 0.1,
         activation: Union[str, Callable[[Tensor], Tensor]] = F.relu,
         layer_norm_eps: float = 1e-5,
         batch_first: bool = False,
@@ -35,7 +34,7 @@ class TtTransformerEncoderLayer:
         self.self_attn = TtMultiheadAttention(
             device, parameters.self_attn, embed_dim=d_model, num_heads=nhead, batch_first=batch_first
         )
-        # Implementation of Feedforward model
+
         self.linear1 = ttnn.linear
         self.linear2 = ttnn.linear
 
@@ -43,7 +42,6 @@ class TtTransformerEncoderLayer:
         self.norm1 = ttnn.layer_norm
         self.norm2 = ttnn.layer_norm
 
-        # Legacy string support for activation function.
         self.activation = ttnn.relu
 
     def __call__(
@@ -59,12 +57,7 @@ class TtTransformerEncoderLayer:
             x = x + self._ff_block(self.norm2(x))
         else:
             x = self.norm1(
-                x
-                + self.self_attn(
-                    x,
-                    x,
-                    x,
-                )[0],
+                x + self.self_attn(x, x, x)[0],
                 weight=self.parameters.norm1.weight,
                 bias=self.parameters.norm1.bias,
             )

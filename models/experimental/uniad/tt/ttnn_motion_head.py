@@ -61,35 +61,11 @@ class TtMotionHead:
         self.vehicle_id_list = vehicle_id_list
 
         self.use_nonlinear_optimizer = use_nonlinear_optimizer
-        # self._build_loss(loss_traj)
         self._load_anchors(anchor_info_path)
         self._build_layers(transformerlayers, det_layer_num)
         self._init_layers()
 
-    # def _build_loss(self, loss_traj):
-    #     """
-    #     Build the loss function for the motion prediction task.
-
-    #     Args:
-    #         loss_traj (dict): A dictionary containing the parameters for the loss function.
-
-    #     Returns:
-    #         None
-    #     """
-    #     # self.loss_traj = build_loss(loss_traj)
-    #     # self.unflatten_traj = nn.Unflatten(3, (self.predict_steps, 5))
-    #     self.log_softmax = nn.LogSoftmax(dim=2)
-
     def _load_anchors(self, anchor_info_path):
-        """
-        Load the anchor information from a file.
-
-        Args:
-            anchor_info_path (str): The path to the file containing the anchor information.
-
-        Returns:
-            None
-        """
         anchor_infos = pickle.load(open(anchor_info_path, "rb"))
         self.kmeans_anchors = ttnn.stack(
             [
@@ -125,7 +101,6 @@ class TtMotionHead:
                     }
                 ],
                 "feedforward_channels": 512,
-                "ffn_dropout": 0.1,
                 "operation_order": ("cross_attn", "norm", "ffn", "norm"),
             },
         )
@@ -157,7 +132,6 @@ class TtMotionHead:
         ]
 
     def _init_layers(self):
-        """Initialize classification branch and regression branch of head."""
         traj_cls_branch = []
         traj_cls_branch.append(ttnn.linear)
         traj_cls_branch.append(ttnn.layer_norm)
@@ -197,7 +171,6 @@ class TtMotionHead:
         return ttnn.stack(det_bbox_posembed, dim=0)
 
     def forward_test(self, bev_embed, outs_track={}, outs_seg={}):
-        """Test function"""
         track_query = ttnn.unsqueeze(ttnn.unsqueeze(outs_track["track_query_embeddings"], 0), 0)
         track_boxes = outs_track["track_bbox_results"]
 
@@ -233,8 +206,7 @@ class TtMotionHead:
         outs_motion = self(bev_embed, track_query, lane_query, lane_query_pos, track_boxes)
         traj_results = self.get_trajs(outs_motion, track_boxes)
         bboxes, scores, labels, bbox_index, mask = track_boxes[0]
-        outs_motion["track_scores"] = ttnn.unsqueeze(scores, 0)  # scores[None, :]
-        # labels[-1] = 0
+        outs_motion["track_scores"] = ttnn.unsqueeze(scores, 0)
         if len(labels.shape) == 1 and labels.shape[0] == 1:
             labels = ttnn.Tensor(np.array([0]), device=self.device, layout=ttnn.TILE_LAYOUT)
 
@@ -278,10 +250,7 @@ class TtMotionHead:
         device = track_query.device
         num_groups = self.kmeans_anchors.shape[0]
 
-        # extract the last frame of the track query
         track_query = track_query[:, -1]
-
-        # encode the center point of the track query
 
         reference_points_track = self._extract_tracking_centers(track_bbox_results, self.pc_range)
 
@@ -297,14 +266,9 @@ class TtMotionHead:
                     dtype=ttnn.bfloat16,
                 )
 
-        # construct the learnable query positional embedding
-        # split and stack according to groups
         learnable_query_pos = self.parameters["learnable_motion_query_embedding"].weight  # latent anchor (P*G, D)
         learnable_query_pos = ttnn.stack([learnable_query_pos[i : i + 6] for i in range(0, 24, 6)], dim=0)
 
-        # construct the agent level/scene-level query positional embedding
-        # (num_groups, num_anchor, 12, 2)
-        # to incorporate the information of different groups and coordinates, and embed the headding and location information
         agent_level_anchors = ttnn.reshape(self.kmeans_anchors, (num_groups, self.num_anchor, self.predict_steps, 2))
         scene_level_ego_anchors = anchor_coordinate_transform(
             agent_level_anchors, track_bbox_results, with_translation_transform=True
@@ -317,7 +281,6 @@ class TtMotionHead:
         scene_level_ego_norm = norm_points(scene_level_ego_anchors, self.pc_range)
         scene_level_offset_norm = norm_points(scene_level_offset_anchors, self.pc_range)
 
-        # we only use the last point of the anchor
         agent_level_embedding = pos2posemb2d(agent_level_norm[..., -1, :])
         for index, layer in enumerate(self.agent_level_embedding_layer):
             if layer == ttnn.relu:
@@ -358,23 +321,16 @@ class TtMotionHead:
         batch_size, num_agents = scene_level_ego_embedding.shape[0], scene_level_ego_embedding.shape[1]
         agent_level_embedding = ttnn.expand(
             ttnn.unsqueeze(ttnn.unsqueeze(agent_level_embedding, 0), 0), (batch_size, num_agents, -1, -1, -1)
-        )  # agent_level_embedding[None, None, ...].expand(batch_size, num_agents, -1, -1, -1)
+        )
         learnable_embed = ttnn.expand(
             ttnn.unsqueeze(ttnn.unsqueeze(learnable_query_pos, 0), 0), (batch_size, num_agents, -1, -1, -1)
-        )  # learnable_query_pos[None, None, ...].expand(batch_size, num_agents, -1, -1, -1)
+        )
 
-        # save for latter, anchors
-        # B, A, G, P ,12 ,2 -> B, A, P ,12 ,2
         scene_level_offset_anchors = self.group_mode_query_pos(track_bbox_results, scene_level_offset_anchors)
 
-        # select class embedding
-        # B, A, G, P , D-> B, A, P , D
         agent_level_embedding = self.group_mode_query_pos(track_bbox_results, agent_level_embedding)
-        scene_level_ego_embedding = self.group_mode_query_pos(
-            track_bbox_results, scene_level_ego_embedding
-        )  # B, A, G, P , D-> B, A, P , D
+        scene_level_ego_embedding = self.group_mode_query_pos(track_bbox_results, scene_level_ego_embedding)
 
-        # B, A, G, P , D -> B, A, P , D
         scene_level_offset_embedding = self.group_mode_query_pos(track_bbox_results, scene_level_offset_embedding)
         learnable_embed = self.group_mode_query_pos(track_bbox_results, learnable_embed)
 
@@ -409,7 +365,6 @@ class TtMotionHead:
         )
 
         for lvl in range(inter_states.shape[0]):
-            # outputs_class = self.traj_cls_branches[lvl](inter_states[lvl])
             outputs_class = ttnn.clone(inter_states[lvl])
             for index, layer in enumerate(self.traj_cls_branches[lvl]):
                 if layer == ttnn.relu:
@@ -429,7 +384,6 @@ class TtMotionHead:
                         epsilon=1e-12,
                     )
 
-            # tmp = self.traj_reg_branches[lvl](inter_states[lvl])
             tmp = ttnn.clone(inter_states[lvl])
             for index, layer in enumerate(self.traj_reg_branches[lvl]):
                 if layer == ttnn.relu:
@@ -442,9 +396,7 @@ class TtMotionHead:
                         dtype=ttnn.bfloat16,
                     )
 
-            tmp = ttnn.reshape(
-                tmp, (tmp.shape[0], tmp.shape[1], tmp.shape[2], self.predict_steps, 5)
-            )  # self.unflatten_traj = nn.Unflatten(3, (self.predict_steps, 5))
+            tmp = ttnn.reshape(tmp, (tmp.shape[0], tmp.shape[1], tmp.shape[2], self.predict_steps, 5))
 
             tmp_a = ttnn.clone(tmp[..., :2])
             tmp_b = ttnn.clone(tmp[..., 2:])
@@ -484,8 +436,6 @@ class TtMotionHead:
         agent_num = mode_query_pos.shape[1]
         batched_mode_query_pos = []
         self.cls2group = self.cls2group
-        # TODO: vectorize this
-        # group the embeddings based on the class
         for i in range(batch_size):
             bboxes, scores, labels, bbox_index, mask = bbox_results[i]
             label = ttnn.clone(labels)

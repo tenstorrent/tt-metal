@@ -24,18 +24,6 @@ Pose = Tuple[float, float, float]  # (x, y, yaw)
 
 
 def inverse_sigmoid(x, eps=1e-5):
-    """Inverse function of sigmoid.
-
-    Args:
-        x (Tensor): The tensor to do the
-            inverse.
-        eps (float): EPS avoid numerical
-            overflow. Defaults 1e-5.
-    Returns:
-        Tensor: The x has passed the inverse
-            function of sigmoid, has same
-            shape with input.
-    """
     x = x.clamp(min=0, max=1)
     x1 = x.clamp(min=eps)
     x2 = (1 - x).clamp(min=eps)
@@ -99,17 +87,6 @@ def multi_scale_deformable_attn_pytorch(
 def limit_period(
     val: Union[np.ndarray, Tensor], offset: float = 0.5, period: float = np.pi
 ) -> Union[np.ndarray, Tensor]:
-    """Limit the value into a period for periodic function.
-
-    Args:
-        val (np.ndarray or Tensor): The value to be converted.
-        offset (float): Offset to set the value range. Defaults to 0.5.
-        period (float): Period of the value. Defaults to np.pi.
-
-    Returns:
-        np.ndarray or Tensor: Value in the range of
-        [-offset * period, (1-offset) * period].
-    """
     limited_val = val - torch.floor(val / period + offset) * period
     return limited_val
 
@@ -153,14 +130,6 @@ from abc import ABCMeta, abstractmethod
 
 # taken from mmdet.models.task_modules import BaseBBoxCoder
 class BaseBBoxCoder(metaclass=ABCMeta):
-    """Base bounding box coder.
-
-    Args:
-        use_box_type (bool): Whether to warp decoded boxes with the
-            box type data structure. Defaults to False.
-    """
-
-    # The size of the last of dimension of the encoded tensor.
     encode_size = 4
 
     def __init__(self, use_box_type: bool = False, **kwargs):
@@ -177,56 +146,13 @@ class BaseBBoxCoder(metaclass=ABCMeta):
 
 
 def multi_apply(func, *args, **kwargs):
-    """Apply function to a list of arguments.
-
-    Note:
-        This function applies the ``func`` to multiple inputs and
-        map the multiple outputs of the ``func`` into different
-        list. Each list contains the same type of outputs corresponding
-        to different inputs.
-
-    Args:
-        func (Function): A function that will be applied to a list of
-            arguments
-
-    Returns:
-        tuple(list): A tuple containing multiple list, each list contains \
-            a kind of returned results by the function
-    """
     pfunc = partial(func, **kwargs) if kwargs else func
     map_results = map(pfunc, *args)
     return tuple(map(list, zip(*map_results)))
 
 
 class Instances:
-    """
-    This class represents a list of instances in an image.
-    It stores the attributes of instances (e.g., boxes, masks, labels, scores) as "fields".
-    All fields must have the same ``__len__`` which is the number of instances.
-    All other (non-field) attributes of this class are considered private:
-    they must start with '_' and are not modifiable by a user.
-    Some basic usage:
-    1. Set/get/check a field:
-       .. code-block:: python
-          instances.gt_boxes = Boxes(...)
-          print(instances.pred_masks)  # a tensor of shape (N, H, W)
-          print('gt_masks' in instances)
-    2. ``len(instances)`` returns the number of instances
-    3. Indexing: ``instances[indices]`` will apply the indexing on all the fields
-       and returns a new :class:`Instances`.
-       Typically, ``indices`` is a integer vector of indices,
-       or a binary mask of length ``num_instances``
-       .. code-block:: python
-          category_3_detections = instances[instances.pred_classes == 3]
-          confident_detections = instances[instances.scores > 0.9]
-    """
-
     def __init__(self, image_size: Tuple[int, int], **kwargs: Any):
-        """
-        Args:
-            image_size (height, width): the spatial size of the image.
-            kwargs: fields to add to this `Instances`.
-        """
         self._image_size = image_size
         self._fields: Dict[str, Any] = {}
         for k, v in kwargs.items():
@@ -234,10 +160,6 @@ class Instances:
 
     @property
     def image_size(self) -> Tuple[int, int]:
-        """
-        Returns:
-            tuple: height, width
-        """
         return self._image_size
 
     def __setattr__(self, name: str, val: Any) -> None:
@@ -252,11 +174,6 @@ class Instances:
         return self._fields[name]
 
     def set(self, name: str, value: Any) -> None:
-        """
-        Set the field named `name` to `value`.
-        The length of `value` must be the number of instances,
-        and must agree with other existing fields in this object.
-        """
         data_len = len(value)
         if len(self._fields):
             assert len(self) == data_len, "Adding a field of length {} to a Instances of length {}".format(
@@ -265,38 +182,19 @@ class Instances:
         self._fields[name] = value
 
     def has(self, name: str) -> bool:
-        """
-        Returns:
-            bool: whether the field called `name` exists.
-        """
         return name in self._fields
 
     def remove(self, name: str) -> None:
-        """
-        Remove the field called `name`.
-        """
         del self._fields[name]
 
     def get(self, name: str) -> Any:
-        """
-        Returns the field called `name`.
-        """
         return self._fields[name]
 
     def get_fields(self) -> Dict[str, Any]:
-        """
-        Returns:
-            dict: a dict which maps names (str) to data of the fields
-        Modifying the returned dict will modify this instance.
-        """
         return self._fields
 
     # Tensor-like methods
     def to(self, *args: Any, **kwargs: Any) -> "Instances":
-        """
-        Returns:
-            Instances: all fields are called with a `to(device)`, if the field has this method.
-        """
         ret = Instances(self._image_size)
         for k, v in self._fields.items():
             if hasattr(v, "to"):
@@ -313,13 +211,6 @@ class Instances:
         return ret
 
     def __getitem__(self, item: Union[int, slice, torch.BoolTensor]) -> "Instances":
-        """
-        Args:
-            item: an index-like object and will be used to index all the fields.
-        Returns:
-            If `item` is a string, return the data in the corresponding field.
-            Otherwise, returns an `Instances` where all fields are indexed by `item`.
-        """
         if type(item) == int:
             if item >= len(self) or item < -len(self):
                 raise IndexError("Instances index out of range!")
@@ -328,8 +219,6 @@ class Instances:
 
         ret = Instances(self._image_size)
         for k, v in self._fields.items():
-            # print(k, type(item), 'getitem', item.type(), item.dtype)
-            # if index by torch.BoolTensor
             if k == "kalman_models" and isinstance(item, torch.Tensor):
                 ret_list = []
                 for i, if_true in enumerate(item):
@@ -343,7 +232,6 @@ class Instances:
 
     def __len__(self) -> int:
         for v in self._fields.values():
-            # use __len__ because len() has to be int and is not friendly to tracing
             return v.__len__()
         raise NotImplementedError("Empty Instances does not support __len__!")
 
@@ -352,12 +240,6 @@ class Instances:
 
     @staticmethod
     def cat(instance_lists: List["Instances"]) -> "Instances":
-        """
-        Args:
-            instance_lists (list[Instances])
-        Returns:
-            Instances
-        """
         assert all(isinstance(i, Instances) for i in instance_lists)
         assert len(instance_lists) > 0
         if len(instance_lists) == 1:
@@ -454,8 +336,6 @@ class CollisionNonlinearOptimizer:
         self._optimizer.minimize(cost_stage + cost_collision)
 
     def _set_initial_guess(self, reference_trajectory: Sequence[Pose]) -> None:
-        """Set a warm-start for the solver based on the reference trajectory."""
-        # Initialize state guess based on reference
         self._optimizer.set_initial(self.state[:2, :], DM(reference_trajectory).T)  # (x, y, yaw)
 
 
@@ -473,48 +353,18 @@ def bivariate_gaussian_activation(ip):
 
 
 def rot_2d(yaw):
-    """
-    Compute 2D rotation matrix for a given yaw angle tensor.
-
-    Args:
-        yaw (torch.Tensor): Input yaw angle tensor.
-
-    Returns:
-        torch.Tensor: 2D rotation matrix tensor.
-    """
     sy, cy = torch.sin(yaw), torch.cos(yaw)
     out = torch.stack([torch.stack([cy, -sy]), torch.stack([sy, cy])]).permute([2, 0, 1])
     return out
 
 
 def norm_points(pos, pc_range):
-    """
-    Normalize the end points of a given position tensor.
-
-    Args:
-        pos (torch.Tensor): Input position tensor.
-        pc_range (List[float]): Point cloud range.
-
-    Returns:
-        torch.Tensor: Normalized end points tensor.
-    """
     x_norm = (pos[..., 0] - pc_range[0]) / (pc_range[3] - pc_range[0])
     y_norm = (pos[..., 1] - pc_range[1]) / (pc_range[4] - pc_range[1])
     return torch.stack([x_norm, y_norm], dim=-1)
 
 
 def pos2posemb2d(pos, num_pos_feats=128, temperature=10000):
-    """
-    Convert 2D position into positional embeddings.
-
-    Args:
-        pos (torch.Tensor): Input 2D position tensor.
-        num_pos_feats (int, optional): Number of positional features. Default is 128.
-        temperature (int, optional): Temperature factor for positional embeddings. Default is 10000.
-
-    Returns:
-        torch.Tensor: Positional embeddings tensor.
-    """
     scale = 2 * math.pi
     pos = pos * scale
     dim_t = torch.arange(num_pos_feats, dtype=torch.float32, device=pos.device)
@@ -530,17 +380,6 @@ def pos2posemb2d(pos, num_pos_feats=128, temperature=10000):
 def trajectory_coordinate_transform(
     trajectory, bbox_results, with_translation_transform=True, with_rotation_transform=True
 ):
-    """
-    Transform trajectory coordinates with respect to detected bounding boxes in the batch.
-    Args:
-        trajectory (torch.Tensor): predicted trajectory.
-        bbox_results (List[Tuple[torch.Tensor]]): A list of tuples containing the bounding box results for each image in the batch.
-        with_translate (bool, optional): Whether to perform translation transformation. Defaults to True.
-        with_rot (bool, optional): Whether to perform rotation transformation. Defaults to True.
-
-    Returns:
-        torch.Tensor: A tensor containing the transformed trajectory coordinates.
-    """
     batch_size = len(bbox_results)
     batched_trajectories = []
     for i in range(batch_size):
@@ -549,8 +388,6 @@ def trajectory_coordinate_transform(
         bbox_centers = bboxes.gravity_center.to(trajectory.device)
         transformed_trajectory = trajectory[i, ...]
         if with_rotation_transform:
-            # we take negtive here, to reverse the trajectory back to ego centric coordinate
-            # TODO(box3d): we have changed yaw to mmdet3d 1.0.0rc6 format, maybe we should change this.
             angle = -(yaw - 3.1415953)
             rot_yaw = rot_2d(angle)
             rot_yaw = rot_yaw[:, None, None, :, :]  # A, 1, 1, 2, 2
@@ -566,18 +403,6 @@ def trajectory_coordinate_transform(
 
 
 def anchor_coordinate_transform(anchors, bbox_results, with_translation_transform=True, with_rotation_transform=True):
-    """
-    Transform anchor coordinates with respect to detected bounding boxes in the batch.
-
-    Args:
-        anchors (torch.Tensor): A tensor containing the k-means anchor values.
-        bbox_results (List[Tuple[torch.Tensor]]): A list of tuples containing the bounding box results for each image in the batch.
-        with_translate (bool, optional): Whether to perform translation transformation. Defaults to True.
-        with_rot (bool, optional): Whether to perform rotation transformation. Defaults to True.
-
-    Returns:
-        torch.Tensor: A tensor containing the transformed anchor coordinates.
-    """
     batch_size = len(bbox_results)
     batched_anchors = []
     transformed_anchors = anchors[None, ...]  # expand num agents: num_groups, num_modes, 12, 2 -> 1, ...
@@ -586,7 +411,6 @@ def anchor_coordinate_transform(anchors, bbox_results, with_translation_transfor
         yaw = bboxes.yaw.to(transformed_anchors.device)
         bbox_centers = bboxes.gravity_center.to(transformed_anchors.device)
         if with_rotation_transform:
-            # TODO(box3d): we have changed yaw to mmdet3d 1.0.0rc6 format, maybe we should change this.
             angle = yaw - 3.1415953  # num_agents, 1
             rot_yaw = rot_2d(angle)  # num_agents, 2, 2
             rot_yaw = rot_yaw[:, None, None, :, :]  # num_agents, 1, 1, 2, 2
@@ -604,19 +428,6 @@ def anchor_coordinate_transform(anchors, bbox_results, with_translation_transfor
 
 
 def calculate_birds_eye_view_parameters(x_bounds, y_bounds, z_bounds):
-    """
-    Parameters
-    ----------
-        x_bounds: Forward direction in the ego-car.
-        y_bounds: Sides
-        z_bounds: Height
-
-    Returns
-    -------
-        bev_resolution: Bird's-eye view bev_resolution
-        bev_start_position Bird's-eye view first element
-        bev_dimension Bird's-eye view tensor spatial dimension
-    """
     bev_resolution = torch.tensor([row[2] for row in [x_bounds, y_bounds, z_bounds]])
     bev_start_position = torch.tensor([row[0] + row[2] / 2.0 for row in [x_bounds, y_bounds, z_bounds]])
     bev_dimension = torch.tensor(
@@ -628,28 +439,6 @@ def calculate_birds_eye_view_parameters(x_bounds, y_bounds, z_bounds):
 
 # taken from mmdet3d/structures/bbox_3d/base_box3d.py
 class BaseInstance3DBoxes:
-    """Base class for 3D Boxes.
-    Note:
-        The box is bottom centered, i.e. the relative position of origin in the
-        box is (0.5, 0.5, 0).
-    Args:
-        tensor (Tensor or np.ndarray or Sequence[Sequence[float]]): The boxes
-            data with shape (N, box_dim).
-        box_dim (int): Number of the dimension of a box. Each row is
-            (x, y, z, x_size, y_size, z_size, yaw). Defaults to 7.
-        with_yaw (bool): Whether the box is with yaw rotation. If False, the
-            value of yaw will be set to 0 as minmax boxes. Defaults to True.
-        origin (Tuple[float]): Relative position of the box origin.
-            Defaults to (0.5, 0.5, 0). This will guide the box be converted to
-            (0.5, 0.5, 0) mode.
-    Attributes:
-        tensor (Tensor): Float matrix with shape (N, box_dim).
-        box_dim (int): Integer indicating the dimension of a box. Each row is
-            (x, y, z, x_size, y_size, z_size, yaw, ...).
-        with_yaw (bool): If True, the value of yaw will be set to 0 as minmax
-            boxes.
-    """
-
     YAW_AXIS: int = 0
 
     def __init__(
@@ -665,8 +454,6 @@ class BaseInstance3DBoxes:
             device = torch.device("cpu")
         tensor = torch.as_tensor(tensor, dtype=torch.float32, device=device)
         if tensor.numel() == 0:
-            # Use reshape, so we don't end up creating a new tensor that does
-            # not depend on the inputs (and consequently confuses jit)
             tensor = tensor.reshape((-1, box_dim))
         assert tensor.dim() == 2 and tensor.size(-1) == box_dim, (
             "The box dimension must be 2 and the length of the last "
@@ -691,23 +478,6 @@ class BaseInstance3DBoxes:
             self.tensor[:, :3] += self.tensor[:, 3:6] * (dst - src)
 
     def __getitem__(self, item: Union[int, slice, np.ndarray, Tensor]) -> "BaseInstance3DBoxes":
-        """
-        Args:
-            item (int or slice or np.ndarray or Tensor): Index of boxes.
-        Note:
-            The following usage are allowed:
-            1. `new_boxes = boxes[3]`: Return a `Boxes` that contains only one
-               box.
-            2. `new_boxes = boxes[2:10]`: Return a slice of boxes.
-            3. `new_boxes = boxes[vector]`: Where vector is a
-               torch.BoolTensor with `length = len(boxes)`. Nonzero elements in
-               the vector will be selected.
-            Note that the returned Boxes might share storage with this Boxes,
-            subject to PyTorch's indexing semantics.
-        Returns:
-            :obj:`BaseInstance3DBoxes`: A new object of
-            :class:`BaseInstance3DBoxes` after indexing.
-        """
         original_type = type(self)
         if isinstance(item, int):
             return original_type(self.tensor[item].view(1, -1), box_dim=self.box_dim, with_yaw=self.with_yaw)
@@ -716,13 +486,6 @@ class BaseInstance3DBoxes:
         return original_type(b, box_dim=self.box_dim, with_yaw=self.with_yaw)
 
     def to(self, device: Union[str, torch.device], *args, **kwargs) -> "BaseInstance3DBoxes":
-        """Convert current boxes to a specific device.
-        Args:
-            device (str or :obj:`torch.device`): The name of the device.
-        Returns:
-            :obj:`BaseInstance3DBoxes`: A new boxes object on the specific
-            device.
-        """
         original_type = type(self)
         return original_type(self.tensor.to(device, *args, **kwargs), box_dim=self.box_dim, with_yaw=self.with_yaw)
 
@@ -731,12 +494,10 @@ class BaseInstance3DBoxes:
 
     @property
     def bottom_center(self):
-        """torch.Tensor: A tensor with center of each box in shape (N, 3)."""
         return self.tensor[:, :3]
 
     @property
     def yaw(self):
-        """torch.Tensor: A vector with yaw of each box in shape (N, )."""
         return self.tensor[:, 6]
 
 

@@ -36,7 +36,6 @@ class TtDetrTransformerDecoderLayer:
             embed_dims=256,
             feedforward_channels=1024,
             num_fcs=2,
-            ffn_drop=0.0,
             act_cfg=dict(type="ReLU", inplace=True),
         ),
         operation_order=None,
@@ -47,9 +46,7 @@ class TtDetrTransformerDecoderLayer:
     ):
         self.params = params
 
-        deprecated_args = dict(
-            feedforward_channels="feedforward_channels", ffn_dropout="ffn_drop", ffn_num_fcs="num_fcs"
-        )
+        deprecated_args = dict(feedforward_channels="feedforward_channels", ffn_num_fcs="num_fcs")
         for ori_name, new_name in deprecated_args.items():
             if ori_name in kwargs:
                 warnings.warn(
@@ -102,9 +99,7 @@ class TtDetrTransformerDecoderLayer:
                     attn_cfgs[index]["type"] = "MultiheadAttention"
                 elif attn_cfgs[index]["type"] == "MultiScaleDeformableAttention":
                     type = attn_cfgs[index].pop("type")
-                    attention = TtMultiScaleDeformableAttention(
-                        params.attentions[1], device, **attn_cfgs[index]
-                    )  # Changed here
+                    attention = TtMultiScaleDeformableAttention(params.attentions[1], device, **attn_cfgs[index])
                     attn_cfgs[index]["type"] = "MultiScaleDeformableAttention"
 
                 self.attentions.append(attention)
@@ -132,7 +127,7 @@ class TtDetrTransformerDecoderLayer:
         num_ffns = operation_order.count("ffn")
 
         for i in range(num_ffns):
-            self.ffns.append(TtFFN(params.ffns[0].ffn.ffn0, self.device))  # Changed here
+            self.ffns.append(TtFFN(params.ffns[0].ffn.ffn0, self.device))
 
     def __call__(
         self,
@@ -183,8 +178,8 @@ class TtDetrTransformerDecoderLayer:
             elif layer == "norm":
                 query = ttnn.layer_norm(
                     query,
-                    weight=self.params.norms[norm_index].weight,  # Changed here
-                    bias=self.params.norms[norm_index].bias,  # Changed here
+                    weight=self.params.norms[norm_index].weight,
+                    bias=self.params.norms[norm_index].bias,
                 )
                 norm_index += 1
 
@@ -218,7 +213,7 @@ class TtDeformableDetrTransformerDecoder:
         self.params_branches = params_branches
         self.layers = [
             TtDetrTransformerDecoderLayer(
-                params.layers[i],  # Changed here
+                params.layers[i],
                 self.device,
                 attn_cfgs=[
                     {
@@ -237,7 +232,6 @@ class TtDeformableDetrTransformerDecoder:
                     "embed_dims": embed_dim,
                     "feedforward_channels": 512,
                     "num_fcs": 2,
-                    "ffn_drop": 0.0,
                     "act_cfg": {"type": "ReLU", "inplace": True},
                 },
                 operation_order=("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
@@ -295,7 +289,6 @@ class TtDeformableDetrTransformerDecoder:
             output = ttnn.permute(output, (1, 0, 2))
 
             if reg_branches is not None:
-                # Select reg_branch layers for current lid
                 layers = self.params_branches[lid]
                 tmp = output
                 for i in range(0, 5, 2):
