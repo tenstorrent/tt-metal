@@ -31,7 +31,7 @@ void kernel_main() {
     constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(15);
     constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(16);
 
-    constexpr auto s_weight_args = TensorAccessorArgs<27>();
+    constexpr auto s_weight_args = TensorAccessorArgs<17>();
     constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
 
     uint32_t i = 0;
