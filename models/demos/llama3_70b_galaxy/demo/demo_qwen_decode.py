@@ -234,7 +234,7 @@ def run_qwen_demo(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
-        temperature=temperature,
+        # temperature=temperature,
         tt_ccl=tt_model.tt_ccl,
     )
     profiler.end("loading_weights_to_device")
@@ -318,7 +318,7 @@ def run_qwen_demo(
         )
 
         # Sampling
-        _ = tt_sampling(tt_out[0], top_k, top_p, seed, tt_out_tok=tt_out_tok)  # Compile once with setting the seed
+        tt_out_tok = tt_sampling(tt_out[0], seed)  # Compile once with setting the seed
         # logger.info(f"Sampling done")
 
     if not stress_test:
@@ -331,9 +331,7 @@ def run_qwen_demo(
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
 
-    _ = tt_sampling(
-        tt_out[0], top_k, top_p, tt_out_tok=tt_out_tok
-    )  # Compile again without seed to obtain random sampling
+    tt_out_tok = tt_sampling(tt_out[0])  # Compile again without seed to obtain random sampling
 
     # Capture Trace
     logger.info(f"Capturing model trace...")
@@ -345,6 +343,7 @@ def run_qwen_demo(
 
     # Get cos/sin matrices for the current position of each user
     rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
+    tt_decode_input = tt_embd(tt_out_tok)
     tt_out = tt_model(
         tt_decode_input,
         current_pos_tensor,
@@ -354,7 +353,7 @@ def run_qwen_demo(
     )
 
     # Sampling
-    _ = tt_sampling(tt_out[0], top_k, top_p, tt_out_tok=tt_out_tok)
+    _ = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)
 
     if not stress_test:
         ttnn.plus_one(
@@ -599,10 +598,11 @@ def run_qwen_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
-            2000,  # max_generated_tokens
+            # 2000,  # max_generated_tokens
+            5,
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
-            {"top_k": 32, "top_p": 0.9, "temperature": 0.7, "seed": 42},  # sampling_params
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params
             False,  # stress_test
             0,  # start_pos
         ),
