@@ -327,7 +327,6 @@ Tensor strided_reduce(
 
 ttnn::Tensor ExecuteAllReduceMinimalAsync::invoke(
     const ttnn::Tensor& input_tensor,
-    const std::vector<GlobalSemaphore>& barrier_semaphores,
     const std::vector<GlobalSemaphore>& rs_global_semaphores,
     const std::vector<GlobalSemaphore>& ag_global_semaphores,
     ttnn::operations::reduction::ReduceType math_op,
@@ -346,17 +345,13 @@ ttnn::Tensor ExecuteAllReduceMinimalAsync::invoke(
 
     if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim)) {
         // All reduce = all gather + local reduce
-        auto gather_tensor = ttnn::operations::experimental::ccl::all_gather_async(
+        auto gather_tensor = all_gather_composite(
             input_tensor,
             composite_dim,
-            ag_global_semaphores,
             num_preferred_links.value_or(1),
             out_memory_config,
-            topology,
             worker_subdevice_id_opt,
-            false,
-            false,
-            barrier_semaphores[0]);
+            std::nullopt);
         return ttnn::sum(
             gather_tensor,
             static_cast<int>(composite_dim),
@@ -370,8 +365,8 @@ ttnn::Tensor ExecuteAllReduceMinimalAsync::invoke(
         input_tensor,
         std::nullopt,
         dim,
-        rs_global_semaphores,   //
-        barrier_semaphores[0],  //
+        rs_global_semaphores,
+        true,  // do sync
         num_preferred_links.value_or(1),
         out_memory_config,
         std::nullopt,
@@ -381,20 +376,19 @@ ttnn::Tensor ExecuteAllReduceMinimalAsync::invoke(
         scattered_tensor,
         dim,
         ag_global_semaphores,
+        false,
         num_preferred_links.value_or(1),
         out_memory_config,
         topology,
         worker_subdevice_id_opt,
         false,
-        use_llama_sharded,
-        barrier_semaphores[1]);
+        use_llama_sharded);
 }
 
 ttnn::Tensor ExecuteAllReduceMinimalAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    const std::vector<GlobalSemaphore>& barrier_semaphores,
     const std::vector<GlobalSemaphore>& rs_global_semaphores,
     const std::vector<GlobalSemaphore>& ag_global_semaphores,
     ttnn::operations::reduction::ReduceType math_op,
@@ -430,24 +424,6 @@ ttnn::Tensor ExecuteAllReduceMinimalAsync::invoke(
             gather_tensor.logical_shape()[1],
             gather_tensor.logical_shape()[2],
             gather_tensor.logical_shape()[3]);
-        /*
-        auto gather_tensor = ttnn::operations::experimental::ccl::all_gather_async(
-            input_tensor,
-            dim,
-            cluster_axis,
-            mesh_device,
-            topology,
-            ag_global_semaphores,
-            std::nullopt,
-            out_memory_config,
-            num_preferred_links.value_or(1),
-            worker_subdevice_id_opt,
-            false,
-            false,
-            barrier_semaphores[0]);
-        */
-        // printf("gathered tensor shape: %u %u %u %u\n", gather_tensor.logical_shape()[0],
-        // gather_tensor.logical_shape()[1], gather_tensor.logical_shape()[2], gather_tensor.logical_shape()[3]);
 
         auto sum_tensor =
             strided_reduce(gather_tensor, static_cast<int>(composite_dim), devices.size(), out_memory_config);
@@ -474,8 +450,8 @@ ttnn::Tensor ExecuteAllReduceMinimalAsync::invoke(
         input_tensor,
         std::nullopt,
         dim,
-        rs_global_semaphores,   //
-        barrier_semaphores[0],  //
+        rs_global_semaphores,
+        true,  // do sync
         num_preferred_links.value_or(1),
         out_memory_config,
         std::nullopt,
@@ -489,13 +465,13 @@ ttnn::Tensor ExecuteAllReduceMinimalAsync::invoke(
         mesh_device,
         topology,
         ag_global_semaphores,
+        false,
         std::nullopt,
         out_memory_config,
         num_preferred_links.value_or(1),
         worker_subdevice_id_opt,
         false,
-        use_llama_sharded,
-        barrier_semaphores[1]);
+        use_llama_sharded);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

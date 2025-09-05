@@ -27,7 +27,6 @@ void bind_all_reduce_minimal_async(pybind11::module& module, const ccl_operation
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const std::vector<GlobalSemaphore>& barrier_semaphores,
                const std::vector<GlobalSemaphore>& rs_global_semaphores,
                const std::vector<GlobalSemaphore>& ag_global_semaphores,
                ttnn::operations::reduction::ReduceType math_op,
@@ -37,7 +36,6 @@ void bind_all_reduce_minimal_async(pybind11::module& module, const ccl_operation
                std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) -> ttnn::Tensor {
                 return self(
                     input_tensor,
-                    barrier_semaphores,
                     rs_global_semaphores,
                     ag_global_semaphores,
                     math_op,
@@ -47,7 +45,6 @@ void bind_all_reduce_minimal_async(pybind11::module& module, const ccl_operation
                     worker_subdevice_id_opt);
             },
             py::arg("input_tensor"),
-            py::arg("barrier_semaphores"),
             py::arg("rs_global_semaphores"),
             py::arg("ag_global_semaphores"),
             py::arg("math_op"),
@@ -62,7 +59,6 @@ void bind_all_reduce_minimal_async(pybind11::module& module, const ccl_operation
                const ttnn::Tensor& input_tensor,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
-               const std::vector<GlobalSemaphore>& barrier_semaphores,
                const std::vector<GlobalSemaphore>& rs_global_semaphores,
                const std::vector<GlobalSemaphore>& ag_global_semaphores,
                ttnn::operations::reduction::ReduceType math_op,
@@ -74,7 +70,6 @@ void bind_all_reduce_minimal_async(pybind11::module& module, const ccl_operation
                     input_tensor,
                     cluster_axis,
                     mesh_device,
-                    barrier_semaphores,
                     rs_global_semaphores,
                     ag_global_semaphores,
                     math_op,
@@ -86,7 +81,6 @@ void bind_all_reduce_minimal_async(pybind11::module& module, const ccl_operation
             py::arg("input_tensor"),
             py::arg("cluster_axis"),
             py::arg("mesh_device"),
-            py::arg("barrier_semaphores"),
             py::arg("rs_global_semaphores"),
             py::arg("ag_global_semaphores"),
             py::arg("math_op"),

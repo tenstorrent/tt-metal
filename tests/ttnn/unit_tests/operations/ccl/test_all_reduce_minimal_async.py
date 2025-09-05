@@ -43,7 +43,6 @@ def run_all_reduce_with_mesh_tensor_along_row(
     # create global semaphore handles
     rs_global_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(3)]
     ag_global_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
-    barrier_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
     try:
         debug = False
 
@@ -96,7 +95,6 @@ def run_all_reduce_with_mesh_tensor_along_row(
                 input_tensor_mesh,
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
-                barrier_semaphores=barrier_semaphores,
                 rs_global_semaphores=rs_global_semaphores,
                 ag_global_semaphores=ag_global_semaphores,
                 math_op=math_op,
