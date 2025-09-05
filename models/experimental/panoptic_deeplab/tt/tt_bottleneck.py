@@ -6,7 +6,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from .tt_conv2d_wrapper import (
+from models.experimental.panoptic_deeplab.tt.tt_conv2d_wrapper import (
     TtConv2d,
     TtConv2dParameters,
     SliceConfig,

@@ -2,7 +2,7 @@ from copy import deepcopy
 import torch
 from torch import nn
 from torch.nn import functional as F
-from .pytorch_conv2d_wrapper import Conv2d
+from models.experimental.panoptic_deeplab.reference.pytorch_conv2d_wrapper import Conv2d
 
 
 class LayerNorm(nn.Module):

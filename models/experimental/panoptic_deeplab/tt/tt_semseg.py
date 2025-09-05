@@ -4,11 +4,11 @@ from torch import nn
 import ttnn
 from loguru import logger
 
-from .tt_aspp import TtASPP, get_ttnn_norm, get_ttnn_activation
+from models.experimental.panoptic_deeplab.tt.tt_aspp import TtASPP, get_ttnn_norm, get_ttnn_activation
 
-from .tt_conv2d_wrapper import TtConv2d, TtConv2dParameters
-from .tt_upsample_wrapper import TtUpsample
-from ..reference.pytorch_semseg import ShapeSpec
+from models.experimental.panoptic_deeplab.tt.tt_conv2d_wrapper import TtConv2d, TtConv2dParameters
+from models.experimental.panoptic_deeplab.tt.tt_upsample_wrapper import TtUpsample
+from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 
 
 class TtDeepLabV3PlusHead(nn.Module):
