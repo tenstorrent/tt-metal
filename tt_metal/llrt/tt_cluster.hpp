@@ -31,7 +31,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/tt_io.hpp>
 #include <umd/device/tt_silicon_driver_common.hpp>
-#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/harvesting.h>

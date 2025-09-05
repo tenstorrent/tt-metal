@@ -23,7 +23,7 @@
 #include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt::tt_metal {
