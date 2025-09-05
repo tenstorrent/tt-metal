@@ -20,8 +20,8 @@ on:
       is-release-candidate:
         description: "If true, this is a release candidate, and some steps will be skipped"
         required: false
-        default: false
-        type: boolean
+        default: "false"
+        type: string
 
 permissions:
   actions: read
