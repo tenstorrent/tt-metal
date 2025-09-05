@@ -136,7 +136,7 @@ Create a kernel that will copy data from DRAM to L1 and back. Since we are only 
 
     Metalium will search for the kernel source file in order of the above. In this case the kernel will be found relative to ``TT_METAL_HOME``. If the file is not found, an error will be thrown.
 
-The kernel itself is simple. It takes the address and bank indices we just created. Copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using ``uint32_t`` instead of pointers for addresses. This is intended design as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V core directly access the L1 is not the most efficient way to move data around. Thus the L1 address is also an integer.
+The kernel itself is simple. It takes the buffer addresses and the number of tiles to copy. It copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using ``uint32_t`` instead of pointers for addresses. This is intended design as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V core directly access the L1 is not the most efficient way to move data around. Thus the L1 address is also an integer.
 
 The ``TensorAccessor`` object handles bank addressing and page size automatically, simplifying interleaved or sharded buffer access. Data transfers are asynchronous, allowing the kernel to issue multiple requests while transfers are in progress. This improves performance by utilizing on-core resources more efficiently. In this example, we use ``noc_async_read_barrier()`` and ``noc_async_write_barrier()`` after each operation to ensure data integrity before proceeding to the next loop iteration.
 
@@ -167,7 +167,7 @@ The ``TensorAccessor`` object handles bank addressing and page size automaticall
     }
 
 .. note::
-  ``TensorAccessor`` handles address generation for all kinds of buffers automatically. Without the helper, the kernel implementation would be:
+  ``TensorAccessor`` handles address generation for all kinds of buffers automatically, including the complexity of bank interleaving. Without the helper, the kernel implementation would need to manually calculate NoC addresses for each tile, taking into account how data is distributed across DRAM banks. The ``TensorAccessor`` abstraction greatly simplifies this by handling all the bank addressing and page size calculations internally. Here's what the manual implementation would look like:
 
   .. code-block:: cpp
 
