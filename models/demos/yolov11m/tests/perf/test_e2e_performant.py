@@ -10,8 +10,8 @@ from loguru import logger
 
 import ttnn
 from models.demos.utils.common_demo_utils import get_mesh_mappers
-from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE
-from models.demos.yolov11.runner.performant_runner import YOLOv11PerformantRunner
+from models.demos.yolov11m.common import YOLOV11_L1_SMALL_SIZE
+from models.demos.yolov11m.runner.performant_runner import YOLOv11PerformantRunner
 from models.utility_functions import run_for_wormhole_b0
 
 

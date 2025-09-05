@@ -11,19 +11,19 @@
 
 - After building metal, once you activate your python env. pip install the requirements on the server side:
   ```
-  pip install -r models/demos/yolov11/web_demo/server/requirements.txt
+  pip install -r models/demos/yolov11m/web_demo/server/requirements.txt
   ```
 
 - From the server run:
   ```
-  source models/demos/yolov8x/web_demo/server/run_uvicorn.sh
+  source models/demos/yolov11m/web_demo/server/run_uvicorn.sh
   ```
 
 ### Client side:
 
 - git clone metal repo locally/on client side as well.
   ```
-  cd models/demos/yolov11/web_demo/client
+  cd models/demos/yolov11m/web_demo/client
   ```
 - you may create a python virtual env and pip install the client side requirements.
 

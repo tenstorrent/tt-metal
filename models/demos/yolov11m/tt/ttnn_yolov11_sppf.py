@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.yolov11.tt.common import TtnnConv, deallocate_tensors, sharded_concat
+from models.demos.yolov11m.tt.common import TtnnConv, deallocate_tensors, sharded_concat
 
 
 class TtnnSPPF:

@@ -22,7 +22,7 @@ class Yolov11Conv2D:
         is_detect=False,
         is_dfl=False,
         config_override=None,
-        deallocate_activation=False,
+        deallocate_activation=False,  # Enable aggressive memory deallocation
     ):
         self.is_detect = is_detect
         self.activation = activation
@@ -49,8 +49,9 @@ class Yolov11Conv2D:
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
-            enable_act_double_buffer=False,
-            enable_split_reader=False,
+            enable_act_double_buffer=False,  # Disable to reduce circular buffer usage
+            enable_split_reader=True,       # Keep enabled to reduce L1 buffer conflicts
+            enable_weights_double_buffer=False,  # Disable to reduce circular buffer usage
             reshard_if_not_optimal=True if self.reshard else False,
             activation=self.activation,
         )
@@ -83,6 +84,7 @@ class Yolov11Conv2D:
         kernel_size = [self.kernel_size[0], self.kernel_size[1]]
         stride = [self.stride[0], self.stride[1]]
         padding = [self.padding[0], self.padding[1]]
+
         [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,

@@ -5,10 +5,10 @@
 import pytest
 
 import ttnn
-from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE
-from models.demos.yolov11.reference.yolov11 import PSABlock as torch_psa_block
-from models.demos.yolov11.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
-from models.demos.yolov11.tt.ttnn_yolov11_psa import TtnnPSABlock as ttnn_psa_block
+from models.demos.yolov11m.common import YOLOV11_L1_SMALL_SIZE
+from models.demos.yolov11m.reference.yolov11 import PSABlock as torch_psa_block
+from models.demos.yolov11m.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
+from models.demos.yolov11m.tt.ttnn_yolov11_psa import TtnnPSABlock as ttnn_psa_block
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -16,14 +16,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "in_channel, out_channel, kernel, stride, padding, dilation, groups,fwd_input_shape",
     [
         (
-            [128, 128, 128, 128, 256],
-            [256, 128, 128, 256, 128],
+            [256, 256, 256, 256, 256],
+            [512, 256, 256, 256, 256],
             [1, 1, 3, 1, 1],
             [1, 1, 1, 1, 1],
             [0, 0, 1, 0, 0],
             [1, 1, 1, 1, 1],
             [1, 1, 128, 1, 1],
-            [1, 128, 7, 7],
+            [1, 256, 7, 7],
         ),
     ],
 )
