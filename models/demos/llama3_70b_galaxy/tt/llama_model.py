@@ -617,25 +617,25 @@ class TtTransformer(LightweightModule):
         if mode == "prefill":
             return x
         # Output norm
-        # x, res = self.norm(x, res=None, mode=mode)
-        # x = ttnn.to_memory_config(x, self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"])
-        inp_torch = ttnn.to_torch(
-            x, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4))
-        )[:, :1, :, :]
-        x_torch = inp_torch * torch.rsqrt(inp_torch.pow(2).mean(-1, keepdim=True) + self.norm.norm.eps)
-        x_torch = x_torch * self.norm_weight
-        x = ttnn.from_torch(
-            x_torch,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                dims=(None, 3),
-                mesh_shape=(8, 4),
-            ),
-            memory_config=self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"],
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-        )
+        x, res = self.norm(x, res=None, mode=mode)
+        x = ttnn.to_memory_config(x, self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"])
+        # inp_torch = ttnn.to_torch(
+        #     x, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4))
+        # )[:, :1, :, :]
+        # x_torch = inp_torch * torch.rsqrt(inp_torch.pow(2).mean(-1, keepdim=True) + self.norm.norm.eps)
+        # x_torch = x_torch * self.norm_weight
+        # x = ttnn.from_torch(
+        #     x_torch,
+        #     mesh_mapper=ttnn.ShardTensor2dMesh(
+        #         self.mesh_device,
+        #         dims=(None, 3),
+        #         mesh_shape=(8, 4),
+        #     ),
+        #     memory_config=self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"],
+        #     dtype=ttnn.bfloat8_b,
+        #     layout=ttnn.TILE_LAYOUT,
+        #     device=self.mesh_device,
+        # )
 
         if get_last_token != -1:
             x = x[:, :, get_last_token:, :]

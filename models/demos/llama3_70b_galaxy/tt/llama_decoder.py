@@ -149,54 +149,56 @@ class TtTransformerBlock(LightweightModule):
             # In the first layer we "make" the h tensor from the original x keeping it alive
             # Note this works because layer 0 has a bfloat16 input while other layers use bfloat8
             # since we want residual to be bfloat16
-            # attn_in_sharded, _ = self.attention_norm(x, None, mode)
-            # attn_in_sharded = ttnn.to_memory_config(attn_in_sharded, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"])
-            inp_torch = ttnn.to_torch(
-                x, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4))
-            )[:, :1, :, :]
-            attn_in_torch = inp_torch * torch.rsqrt(
-                inp_torch.pow(2).mean(-1, keepdim=True) + self.attention_norm.norm.eps
+            attn_in_sharded, _ = self.attention_norm(x, None, mode)
+            attn_in_sharded = ttnn.to_memory_config(
+                attn_in_sharded, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
             )
-            attn_in_torch = attn_in_torch * self.attn_norm_weight
-            if mode == "decode":
-                attn_in_sharded = ttnn.from_torch(
-                    attn_in_torch,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(
-                        self.mesh_device,
-                        dims=(None, 3),
-                        mesh_shape=(8, 4),
-                    ),
-                    memory_config=self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"],
-                    # dtype=ttnn.bfloat8_b,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.mesh_device,
-                )
-            else:
-                attn_in_sharded = ttnn.from_torch(
-                    attn_in_torch,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(
-                        self.mesh_device,
-                        dims=(None, 3),
-                        mesh_shape=(8, 4),
-                    ),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.mesh_device,
-                )
+            # inp_torch = ttnn.to_torch(
+            #     x, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4))
+            # )[:, :1, :, :]
+            # attn_in_torch = inp_torch * torch.rsqrt(
+            #     inp_torch.pow(2).mean(-1, keepdim=True) + self.attention_norm.norm.eps
+            # )
+            # attn_in_torch = attn_in_torch * self.attn_norm_weight
+            # if mode == "decode":
+            #     attn_in_sharded = ttnn.from_torch(
+            #         attn_in_torch,
+            #         mesh_mapper=ttnn.ShardTensor2dMesh(
+            #             self.mesh_device,
+            #             dims=(None, 3),
+            #             mesh_shape=(8, 4),
+            #         ),
+            #         memory_config=self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"],
+            #         # dtype=ttnn.bfloat8_b,
+            #         dtype=ttnn.bfloat16,
+            #         layout=ttnn.TILE_LAYOUT,
+            #         device=self.mesh_device,
+            #     )
+            # else:
+            #     attn_in_sharded = ttnn.from_torch(
+            #         attn_in_torch,
+            #         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            #         mesh_mapper=ttnn.ShardTensor2dMesh(
+            #             self.mesh_device,
+            #             dims=(None, 3),
+            #             mesh_shape=(8, 4),
+            #         ),
+            #         dtype=ttnn.bfloat16,
+            #         layout=ttnn.TILE_LAYOUT,
+            #         device=self.mesh_device,
+            #     )
             h = x
 
         else:
             # In subsequent Layers we take the h tensor from before and modify it in place
             h = ttnn.add(x, h, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
-            attn_in_sharded, _ = self.attention_norm(x, h, mode)
+            attn_in_sharded, _ = self.attention_norm(h, h, mode)
             # attn_in_sharded, _ = self.attention_norm(x, h, mode)
             attn_in_sharded = ttnn.to_memory_config(
                 attn_in_sharded, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
             )
+            # print(x.dtype == ttnn.bfloat16, attn_in_sharded.dtype == ttnn.bfloat16, h.dtype == ttnn.bfloat16)
 
-            # h = ttnn.add(x, h, memory_config=skip_mem_cfg)
             # inp_torch = ttnn.to_torch(
             #     h, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4))
             # )[:, :1, :, :]
@@ -212,7 +214,8 @@ class TtTransformerBlock(LightweightModule):
             #         mesh_shape=(8, 4),
             #     ),
             #     memory_config=self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"],
-            #     dtype=ttnn.bfloat8_b,
+            #     # dtype=ttnn.bfloat8_b,
+            #     dtype=ttnn.bfloat16,
             #     layout=ttnn.TILE_LAYOUT,
             #     device=self.mesh_device,
             # )
@@ -229,7 +232,7 @@ class TtTransformerBlock(LightweightModule):
             kv_cache=kv_cache,
         )
         if mode == "prefill":
-            h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
+            h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)  # , dtype=ttnn.bfloat16)
             x.deallocate(True)
             # ff_in_sharded, _ = self.ff_norm(h, None, mode)
             inp_torch = ttnn.to_torch(
@@ -252,35 +255,35 @@ class TtTransformerBlock(LightweightModule):
 
         if mode == "decode":
             # ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
-            h = ttnn.add(attn_out, h, memory_config=skip_mem_cfg)
-            # ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
-            # ff_in_sharded = ttnn.to_memory_config(ff_in_sharded, self.model_config["SHARDED_FF12_RING_MEMCFG"])
-            inp_torch = ttnn.to_torch(
-                h, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4))
-            )[:, :1, :, :]
-            ff_in_torch = inp_torch * torch.rsqrt(inp_torch.pow(2).mean(-1, keepdim=True) + self.ff_norm.norm.eps)
-            ff_in_torch = ff_in_torch * self.ff_norm_weight
-            ff_in_sharded = ttnn.from_torch(
-                ff_in_torch,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device,
-                    dims=(None, 3),
-                    mesh_shape=(8, 4),
-                ),
-                memory_config=self.model_config["SHARDED_FF12_RING_MEMCFG"],
-                # dtype=ttnn.bfloat8_b,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-            )
-            attn_out.deallocate(True)
+            h = ttnn.add(attn_out, h, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
+            ff_in_sharded, _ = self.ff_norm(h, h, mode)
+            ff_in_sharded = ttnn.to_memory_config(ff_in_sharded, self.model_config["SHARDED_FF12_RING_MEMCFG"])
+            # inp_torch = ttnn.to_torch(
+            #     h, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4))
+            # )[:, :1, :, :]
+            # ff_in_torch = inp_torch * torch.rsqrt(inp_torch.pow(2).mean(-1, keepdim=True) + self.ff_norm.norm.eps)
+            # ff_in_torch = ff_in_torch * self.ff_norm_weight
+            # ff_in_sharded = ttnn.from_torch(
+            #     ff_in_torch,
+            #     mesh_mapper=ttnn.ShardTensor2dMesh(
+            #         self.mesh_device,
+            #         dims=(None, 3),
+            #         mesh_shape=(8, 4),
+            #     ),
+            #     memory_config=self.model_config["SHARDED_FF12_RING_MEMCFG"],
+            #     # dtype=ttnn.bfloat8_b,
+            #     dtype=ttnn.bfloat16,
+            #     layout=ttnn.TILE_LAYOUT,
+            #     device=self.mesh_device,
+            # )
+            # attn_out.deallocate(True)
 
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in_sharded, mode)
         if self.layer_num == self.n_layers - 1 or mode == "prefill":
             if self.args.qk_norm:
                 h = ttnn.to_memory_config(h, skip_mem_cfg)
-            out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
+            out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)  # , dtype=ttnn.bfloat16)
             # if mode == "decode":
             #     ff_out.deallocate(True)
             if mode == "prefill":

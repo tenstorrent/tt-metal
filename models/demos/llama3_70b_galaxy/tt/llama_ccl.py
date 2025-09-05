@@ -236,6 +236,7 @@ class TT_CCL:
             if not self.use_qwen_mlp
             else ttnn.from_torch(
                 torch.zeros((1, 1, M, 64)),
+                # torch.zeros((1, 1, M, 128)),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat16,
@@ -1204,8 +1205,9 @@ def tt_distributed_rmsnorm(
 ):
     use_2d_grid = inp.shape[-2] == 128
     # Run distributed rmsnorm part 1
-    if program_config is not None:
+    if program_config is not None and inp.dtype == ttnn.bfloat8_b:
         core_grid_ln, grid_offset = (10, 2), ttnn.CoreCoord(1, 0)
+        # core_grid_ln, grid_offset = (4, 2), ttnn.CoreCoord(1, 0)
         core_range = ttnn.CoreRange(
             grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
         )
@@ -1213,13 +1215,13 @@ def tt_distributed_rmsnorm(
         inp = ttnn.to_memory_config(inp, ttnn.DRAM_MEMORY_CONFIG)
         inp = ttnn.typecast(inp, ttnn.bfloat16, sub_core_grids=ttnn.CoreRangeSet({core_range}))
         inp = ttnn.to_memory_config(inp, inp_mem_config)
+
     tt_stats = (
         ttnn.rms_norm_pre_all_gather(
             inp,
             compute_kernel_config=compute_kernel_config,
             program_config=program_config,
             dtype=ttnn.bfloat16,
-            use_2d_core_grid=use_2d_grid,
         )
         if program_config is not None
         else ttnn.rms_norm_pre_all_gather(
@@ -1245,7 +1247,6 @@ def tt_distributed_rmsnorm(
             tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="LAYERNORM"
         )
     )
-
     tt_stats.deallocate(True)
 
     # Run distributed rmsnorm part 2
@@ -1268,7 +1269,6 @@ def tt_distributed_rmsnorm(
             compute_kernel_config=compute_kernel_config,
         )
     )
-
     # tt_stats_gathered.deallocate(True)
     # inp.deallocate(True)
 
