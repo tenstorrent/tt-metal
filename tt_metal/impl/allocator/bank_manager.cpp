@@ -254,19 +254,18 @@ const std::vector<std::pair<DeviceAddr, DeviceAddr>>& BankManager::compute_merge
         return allocated_ranges_cache_[state.value].value();
     }
 
-    const auto& neighbors = state_dependencies_.dependencies[state.value];
-
-    // Collect occupied ranges per neighbor: from allocator's allocated addresses
+    // Collect allocated address ranges per dependent state
+    const auto& dependent_states = state_dependencies_.dependencies[state.value];
     std::vector<std::pair<DeviceAddr, DeviceAddr>> all_used;
     size_t total_pairs = 0;
-    for (const auto dep_state : neighbors) {
+    for (const auto dep_state : dependent_states) {
         auto* dep_alloc = this->get_allocator_for_state(dep_state);
         TT_ASSERT(bool(dep_alloc), "Allocator not initialized!");
         const auto allocated = dep_alloc->allocated_addresses();
         total_pairs += allocated.size();
     }
     all_used.reserve(total_pairs);
-    for (const auto dep_state : neighbors) {
+    for (const auto dep_state : dependent_states) {
         auto* dep_alloc = this->get_allocator_for_state(dep_state);
         const auto allocated = dep_alloc->allocated_addresses();
         for (const auto& [addr, sz] : allocated) {
@@ -279,7 +278,7 @@ const std::vector<std::pair<DeviceAddr, DeviceAddr>>& BankManager::compute_merge
     // Sort by start address
     std::sort(all_used.begin(), all_used.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
-    // Coalesce overlaps across all neighbors
+    // Coalesce overlaps across all dependent states
     std::vector<std::pair<DeviceAddr, DeviceAddr>> coalesced;
     coalesced.reserve(all_used.size());
     for (const auto& r : all_used) {
@@ -300,6 +299,7 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_ad
     TT_ASSERT(bool(alloc), "Allocator not initialized!");
 
     // Clamp helper for ranges according to address_limit
+    // This is needed because the allocator's available_addresses method does not clamp to address_limit
     auto clamp_ranges = [address_limit](std::vector<std::pair<DeviceAddr, DeviceAddr>> ranges) {
         if (address_limit == 0) {
             return ranges;
@@ -389,8 +389,8 @@ uint64_t BankManager::allocate_buffer(
     }
 
     // If there are no dependent states, fall back to allocator's single state strategy
-    const auto& neighbors = state_dependencies_.dependencies[state.value];
-    if (neighbors.empty()) {
+    const auto& dependent_states = state_dependencies_.dependencies[state.value];
+    if (dependent_states.empty()) {
         auto address = alloc->allocate(size_per_bank, bottom_up, address_limit);
         TT_FATAL(
             address.has_value(),
