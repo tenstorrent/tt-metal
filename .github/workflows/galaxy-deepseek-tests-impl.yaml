@@ -1,4 +1,4 @@
-name: "[internal] TG DeepSeek tests impl"
+name: "[internal] Galaxy DeepSeek tests impl"
 
 on:
   workflow_call:
@@ -19,10 +19,10 @@ on:
       topology:
         required: false
         type: string
-        default: "config-tg"
+        default: "topology-6u"
 
 jobs:
-  tg-deepseek-tests:
+  galaxy-deepseek-tests:
     strategy:
       fail-fast: false
       matrix:
