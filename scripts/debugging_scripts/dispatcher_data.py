@@ -88,6 +88,23 @@ class DispatcherData:
                 "TRISC1": self._brisc_elf.enumerators["TensixProcessorTypes::MATH1"].value,
                 "TRISC2": self._brisc_elf.enumerators["TensixProcessorTypes::MATH2"].value,
             },
+            "dispatch_core_processor_classes": {
+                "BRISC": self._brisc_elf.enumerators[
+                    "dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_DM0"
+                ].value,
+                "NCRISC": self._brisc_elf.enumerators[
+                    "dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_DM1"
+                ].value,
+                "TRISC0": self._brisc_elf.enumerators[
+                    "dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"
+                ].value,
+                "TRISC1": self._brisc_elf.enumerators[
+                    "dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"
+                ].value,
+                "TRISC2": self._brisc_elf.enumerators[
+                    "dispatch_core_processor_classes::DISPATCH_CLASS_TENSIX_COMPUTE"
+                ].value,
+            },
         }
 
         # Enumerators for eth block
@@ -95,6 +112,17 @@ class DispatcherData:
             "ProcessorTypes": {
                 "ERISC": self._idle_erisc_elf.enumerators["EthProcessorTypes::DM0"].value,
                 "ERISC0": self._idle_erisc_elf.enumerators["EthProcessorTypes::DM0"].value,
+            },
+            "dispatch_core_processor_classes": {
+                "ERISC": self._idle_erisc_elf.enumerators[
+                    "dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM0"
+                ].value,
+                "ERISC0": self._idle_erisc_elf.enumerators[
+                    "dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM0"
+                ].value,
+                "ERISC1": self._idle_erisc_elf.enumerators[
+                    "dispatch_core_processor_classes::DISPATCH_CLASS_ETH_DM1"
+                ].value,
             },
         }
 
@@ -121,6 +149,7 @@ class DispatcherData:
 
         proc_name = risc_name.upper()
         proc_type = enum_values["ProcessorTypes"][proc_name]
+        proc_class = enum_values["dispatch_core_processor_classes"][proc_name]
 
         # Refer to tt_metal/api/tt-metalium/dev_msgs.h for struct kernel_config_msg_t
         launch_msg_rd_ptr = mem_access(fw_elf, "mailboxes->launch_msg_rd_ptr", loc_mem_reader)[0][0]
@@ -157,7 +186,7 @@ class DispatcherData:
             watcher_kernel_id = (
                 mem_access(
                     fw_elf,
-                    f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.watcher_kernel_ids[{proc_type}]",
+                    f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.watcher_kernel_ids[{proc_class}]",
                     loc_mem_reader,
                 )[0][0]
                 & 0xFFFF

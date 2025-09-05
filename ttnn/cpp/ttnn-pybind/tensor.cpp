@@ -403,6 +403,19 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def(py::self == py::self)
         .def(py::self != py::self);
 
+    m_tensor.def(
+        "dump_memory_config",
+        py::overload_cast<const std::string&, const MemoryConfig&>(&dump_memory_config),
+        R"doc(
+            Dump memory config to file
+        )doc");
+    m_tensor.def(
+        "load_memory_config",
+        py::overload_cast<const std::string&>(&load_memory_config),
+        R"doc(
+            Load memory config to file
+        )doc");
+
     auto pyCoreRange = static_cast<py::class_<CoreRange>>(m_tensor.attr("CoreRange"));
     pyCoreRange.def(py::init<>([](const CoreCoord& start, const CoreCoord& end) { return CoreRange{start, end}; }))
         .def_readonly("start", &CoreRange::start_coord)

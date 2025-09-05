@@ -67,7 +67,6 @@ public:
 
 namespace py = pybind11;
 
-// NOLINTBEGIN(bugprone-unused-raii)
 void py_module_types(py::module& module) {
     py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>(module, "CppMeshToTensor");
     py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>(module, "CppTensorToMesh");
@@ -88,7 +87,6 @@ void py_module_types(py::module& module) {
     py::class_<DistributedHostBuffer>(module, "DistributedHostBuffer");
     py::class_<TensorTopology>(module, "TensorTopology");
 }
-// NOLINTEND(bugprone-unused-raii)
 
 void py_module(py::module& module) {
     static_cast<py::class_<MeshShape>>(module.attr("MeshShape"))

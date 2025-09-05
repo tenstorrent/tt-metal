@@ -195,12 +195,15 @@ Program create_simple_unary_program(Buffer& input, Buffer& output, Buffer* cb_in
 
     CoreRange core_range({0, 0});
     CreateCircularBuffer(program, core_range, input_cb_config);
+    std::shared_ptr<RuntimeArgs> writer_runtime_args = std::make_shared<RuntimeArgs>();
+    std::shared_ptr<RuntimeArgs> reader_runtime_args = std::make_shared<RuntimeArgs>();
 
-    auto writer_runtime_args = {output.address(), uint32_t(0), output.num_pages()};
-    auto reader_runtime_args = {input.address(), uint32_t(0), input.num_pages()};
+    *writer_runtime_args = {&output, (uint32_t)0, output.num_pages()};
 
-    SetRuntimeArgs(program, writer_kernel, worker, writer_runtime_args);
-    SetRuntimeArgs(program, reader_kernel, worker, reader_runtime_args);
+    *reader_runtime_args = {&input, (uint32_t)0, input.num_pages()};
+
+    SetRuntimeArgs(device, detail::GetKernel(program, writer_kernel), worker, writer_runtime_args);
+    SetRuntimeArgs(device, detail::GetKernel(program, reader_kernel), worker, reader_runtime_args);
 
     CircularBufferConfig output_cb_config = CircularBufferConfig(2048, {{tt::CBIndex::c_16, tt::DataFormat::Float16_b}})
                                                 .set_page_size(tt::CBIndex::c_16, 2048);

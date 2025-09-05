@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,45 +7,16 @@ from models.demos.ufld_v2.ttnn.common import TtnnUFLDV2Conv2D
 
 
 class TtnnBasicBlock:
-    def __init__(
-        self,
-        conv_args,
-        conv_pth,
-        device,
-        is_downsample=False,
-        blk_sharded=False,
-        precision=ttnn.bfloat16,
-        core_count=None,
-    ):
+    def __init__(self, conv_args, conv_pth, device, is_downsample=False, blk_sharded=False):
         self.is_downsample = is_downsample
 
         self.conv1 = TtnnUFLDV2Conv2D(
-            conv_args.conv1,
-            conv_pth.conv1,
-            device=device,
-            activation="relu",
-            is_blk=blk_sharded,
-            activation_dtype=ttnn.bfloat8_b,
-            core_count=core_count,
+            conv_args.conv1, conv_pth.conv1, device=device, activation="relu", is_blk=blk_sharded
         )
-        self.conv2 = TtnnUFLDV2Conv2D(
-            conv_args.conv2,
-            conv_pth.conv2,
-            device=device,
-            activation="",
-            is_blk=blk_sharded,
-            activation_dtype=precision,
-            core_count=core_count,
-        )
+        self.conv2 = TtnnUFLDV2Conv2D(conv_args.conv2, conv_pth.conv2, device=device, activation="", is_blk=blk_sharded)
         if is_downsample:
             self.downsample = TtnnUFLDV2Conv2D(
-                conv_args.downsample[0],
-                conv_pth.downsample,
-                device=device,
-                activation="",
-                is_blk=blk_sharded,
-                activation_dtype=ttnn.bfloat8_b,
-                core_count=core_count,
+                conv_args.downsample[0], conv_pth.downsample, device=device, activation="", is_blk=blk_sharded
             )
 
     def __call__(self, input):

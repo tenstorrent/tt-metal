@@ -41,6 +41,7 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/distributed/api.hpp"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"

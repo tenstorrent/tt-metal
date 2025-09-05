@@ -21,8 +21,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
-// NOLINTBEGIN(cppcoreguidelines-no-malloc)
-
 namespace tt {
 namespace tt_metal {
 class IDevice;
@@ -175,5 +173,3 @@ int main() {
     }
     return 0;
 }
-
-// NOLINTEND(cppcoreguidelines-no-malloc)
