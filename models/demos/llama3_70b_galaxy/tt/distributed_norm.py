@@ -17,8 +17,8 @@ class DistributedNorm(LightweightModule):
         self.ccl_topology = ccl_topology
 
         if TG:
-            # core_grid_ln, grid_offset = (8, 2) if not args.qk_norm else (10, 2), ttnn.CoreCoord(1, 0)
-            core_grid_ln, grid_offset = (8, 2) if not args.qk_norm else (5, 2), ttnn.CoreCoord(1, 0)
+            core_grid_ln, grid_offset = (8, 2) if not args.qk_norm else (10, 2), ttnn.CoreCoord(1, 0)
+            # core_grid_ln, grid_offset = (8, 2) if not args.qk_norm else (4, 2), ttnn.CoreCoord(1, 0)
             core_range = ttnn.CoreRange(
                 grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
             )
@@ -42,12 +42,12 @@ class DistributedNorm(LightweightModule):
                 block_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
                 inplace=False,
             )
-            self.ln_sharded_stats_memcfg = None
-            # self.ln_sharded_stats_memcfg = ttnn.create_sharded_memory_config(
-            #     shape=[1, 1, 32, 32 * 4],
-            #     core_grid=ttnn.CoreGrid(y=1, x=1),
-            #     strategy=ttnn.ShardStrategy.WIDTH,
-            # )
+            # self.ln_sharded_stats_memcfg = None
+            self.ln_sharded_stats_memcfg = ttnn.create_sharded_memory_config(
+                shape=[1, 1, 32, 32 * 4],
+                core_grid=ttnn.CoreGrid(y=1, x=1),
+                strategy=ttnn.ShardStrategy.WIDTH,
+            )
             # ttnn.create_sharded_memory_config(
             #     shape=[1, 1, 32, 32 * 4],
             #     core_grid=ttnn.CoreGrid(y=1, x=1),
@@ -87,7 +87,8 @@ class DistributedNorm(LightweightModule):
                     epsilon=self.norm.eps,
                     gamma=self.norm.weight_distributed,
                     mesh_device=self.args.mesh_device,
-                    # program_config=self.ln_prg_cfg,
+                    program_config=self.ln_prg_cfg,
+                    memory_config=self.ln_sharded_stats_memcfg,
                     compute_kernel_config=self.ln_cfg,
                     tt_ccl=self.tt_ccl,
                 )
