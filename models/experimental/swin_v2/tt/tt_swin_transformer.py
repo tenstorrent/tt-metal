@@ -106,7 +106,19 @@ class TtSwinTransformer:
             pass
 
         x = ttnn.permute(x, (0, 2, 1, 3), memory_config=ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.global_avg_pool2d(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Global average pooling: use avg_pool2d with kernel_size = input spatial dimensions
+        N, C, H, W = x.shape
+        x = ttnn.avg_pool2d(
+            x,
+            batch_size=N,
+            input_h=H,
+            input_w=W,
+            channels=C,
+            kernel_size=(H, W),
+            stride=(H, W),
+            padding=(0, 0),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
         x = ttnn.reshape(x, (x.shape[0], -1), memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.linear(
