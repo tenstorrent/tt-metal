@@ -3,7 +3,7 @@ training_config:
   model_type: "llama"
   seed: 5489
   model_save_interval: 500
-  batch_size: 1
+  batch_size: 8
   num_epochs: 1
   max_steps: 5000
   learning_rate: 0.0003
