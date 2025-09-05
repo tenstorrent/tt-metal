@@ -857,11 +857,31 @@ jobs:
       - name: List all downloaded files
         run: |
           ls -hal tests/sweep_framework/results_export
+      - name: Generate dynamic SFTP batchfile
+        run: |
+          # Create a dynamic batchfile with individual put commands
+          echo "# Dynamic batchfile for uploading oprun files" > dynamic_batchfile.txt
+          echo "# Generated at runtime to avoid wildcard limitations" >> dynamic_batchfile.txt
+          echo "" >> dynamic_batchfile.txt
+
+          # Add individual put commands for each file
+          for file in tests/sweep_framework/results_export/oprun_*.json; do
+            if [ -f "$file" ]; then
+              echo "put $file" >> dynamic_batchfile.txt
+            fi
+          done
+
+          echo "" >> dynamic_batchfile.txt
+          echo "# List files to verify upload" >> dynamic_batchfile.txt
+          echo "ls -hal" >> dynamic_batchfile.txt
+
+          echo "Generated batchfile contents:"
+          cat dynamic_batchfile.txt
       - name: Upload via SFTP
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
-          sftp-batchfile: .github/actions/upload-data-via-sftp/optest_batchfile.txt
+          sftp-batchfile: dynamic_batchfile.txt
           username: ml-kernel-op-test-writer
           hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
           path: ${{ github.workspace }}
