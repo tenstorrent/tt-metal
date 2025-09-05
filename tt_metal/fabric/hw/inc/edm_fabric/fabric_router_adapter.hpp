@@ -22,22 +22,22 @@
 namespace tt::tt_fabric {
 
 /*
- * The FabricToFabricSender acts as an adapter between the worker and the EDM, it hides details
- * of the communication between worker and EDM to provide flexibility for the implementation to change
- * over time without kernel updates. Additionally, details for adapter setup w.r.t runtime args is also hidden.
+ * The FabricToFabricSender acts as an adapter between two routers in the fabric. It hides details
+ * of the communication between the inbound (from Ethernet) and the downstream outbound (to Ethernet)
+ * routers.
  * The main functionality provided is:
- * - Opening a connection with the EDM
- * - Closing a connection with the EDM
- * - Flow control protocol between worker and EDM
+ * - Opening a connection with the router
+ * - Closing a connection with the router
+ * - Flow control protocol between the two routers
  *
  * ### Flow Control Protocol:
- * The flow control protocol is rd/wr ptr based and is implemented as follows (from the worker's perspective):
- * The adapter has a local write pointer (wrptr) which is used to track the next buffer slot to write to. The adapter
- * also has a local memory slot that holds the remote read pointer (rdptr) of the EDM. The adapter uses the difference
- * between these two pointers (where rdptr trails wrptr) to determine if the EDM has space to accept a new packet.
+ * The flow control protocol is not counter or pointer based. Instead, credits indicate a change in the number of
+ * slots consumed or freed.
+ * For example, the consumer tracks the number of free slots available. The producer, after writing a payload, will
+ * issue an atomic decrement to the consumer's free slots counter. The consumer will see its free slots count decrement
+ * and will understand that a new payload has been received.
  *
- * As the adapter writes into the EDM, it updates the local wrptr. As the EDM reads from its local L1 channel buffer,
- * it will notify the worker/adapter (here) by updating the worker remote_rdptr to carry the value of the EDM rdptr.
+ * The consumer when issuing an acknowledgement, will increment the producer's free slots counter.
  */
 template <uint8_t EDM_NUM_BUFFER_SLOTS>
 struct RouterElasticChannelWriterAdapter {
