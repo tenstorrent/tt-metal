@@ -296,8 +296,7 @@ class Generator:
 
         tt_tokens = []
         tt_current_pos = []
-        tt_rot_mat_idxs_global = []
-        tt_rot_mat_idxs_local = []
+        tt_rot_mat_idxs = []
         tt_page_table = []
 
         for i in range(self.data_parallel):
@@ -306,14 +305,12 @@ class Generator:
             (
                 tt_tokens_i,
                 tt_current_pos_i,
-                tt_rot_mat_idxs_global_i,
-                tt_rot_mat_idxs_local_i,
+                tt_rot_mat_idxs_i,
                 tt_page_table_i,
             ) = model_i.prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
             tt_tokens.append(tt_tokens_i)
             tt_current_pos.append(tt_current_pos_i)
-            tt_rot_mat_idxs_global.append(tt_rot_mat_idxs_global_i)
-            tt_rot_mat_idxs_local.append(tt_rot_mat_idxs_local_i)
+            tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
             tt_page_table.append(tt_page_table_i)
 
         for i in range(self.data_parallel):
@@ -321,8 +318,7 @@ class Generator:
             tt_logits_i = self.model[i].ttnn_decode_forward(
                 tt_tokens[i],
                 tt_current_pos[i],
-                rot_mat_idxs_global=tt_rot_mat_idxs_global[i],
-                rot_mat_idxs_local=tt_rot_mat_idxs_local[i],
+                rot_mat_idxs=tt_rot_mat_idxs[i],
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
                 argmax_on_device=argmax_on_device,

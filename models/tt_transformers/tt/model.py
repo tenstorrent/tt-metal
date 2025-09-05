@@ -78,6 +78,7 @@ class Transformer(LightweightModule):
             )
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
+        # self.trans_mats_local_dict = self.rope_local_setup.get_both_trans_mats() if self.rope_local_setup is not None else None
 
         self.layers = [
             TransformerBlock(
@@ -89,6 +90,7 @@ class Transformer(LightweightModule):
                 weight_cache_path=weight_cache_path,
                 layer_num=i,
                 transformation_mats=self.trans_mats_dict,
+                # transformation_mats=self.trans_mats_dict if args.layer_types[i] != "sliding_attention" else self.trans_mats_local_dict,
                 paged_attention_config=paged_attention_config,
                 use_paged_kv_cache=use_paged_kv_cache,
                 attention_class=attention_class,
@@ -223,11 +225,7 @@ class Transformer(LightweightModule):
         rot_current_pos = torch.maximum(
             current_pos, torch.tensor(0, dtype=torch.int64)
         )  # Ensure position indices are non-negative
-        rope_idxs_global = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
-        if hasattr(self, "rope_local_setup"):
-            rope_idxs_local = self.rope_local_setup.get_rot_idxs(rot_current_pos, on_host=True)
-        else:
-            rope_idxs_local = None
+        rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
 
         current_pos_tt = ttnn.from_torch(
             current_pos,
@@ -251,7 +249,7 @@ class Transformer(LightweightModule):
                     mesh_shape=self.args.cluster_shape,
                 ),
             )
-        return tokens, current_pos_tt, rope_idxs_global, rope_idxs_local, page_table
+        return tokens, current_pos_tt, rope_idxs, page_table
 
     def _transform_decode_inputs_device(self, tokens):
         """
@@ -336,7 +334,7 @@ class Transformer(LightweightModule):
             kv_cache=kv_cache,
         )
 
-    def _increment_decode_positions_device(self, current_pos, rot_mat_idxs_global, rot_mat_idxs_local):
+    def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
         # ttnn.ne currently requires the input to be in TILE_LAYOUT
         current_pos_tiled = ttnn.to_layout(current_pos, layout=ttnn.TILE_LAYOUT)
         # Update only active positions (current_pos != -1)
@@ -348,16 +346,13 @@ class Transformer(LightweightModule):
         )
         ttnn.copy(ttnn.to_layout(result, layout=ttnn.ROW_MAJOR_LAYOUT), current_pos)
 
-        ttnn.plus_one(rot_mat_idxs_global)
-        if rot_mat_idxs_local is not None:
-            ttnn.plus_one(rot_mat_idxs_local)
+        ttnn.plus_one(rot_mat_idxs)
 
     def ttnn_decode_forward(
         self,
         x,
         current_pos,
-        rot_mat_idxs_global=None,
-        rot_mat_idxs_local=None,
+        rot_mat_idxs=None,
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
@@ -366,9 +361,9 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
-        rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs_global)
+        rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs)
         rot_mats_local = (
-            self.rope_local_setup.get_rot_mats(rot_mat_idxs_local) if rot_mat_idxs_local is not None else None
+            self.rope_local_setup.get_rot_mats(rot_mat_idxs) if hasattr(self, "rope_local_setup") is not None else None
         )
         x_embed = self._transform_decode_inputs_device(x)
 
@@ -407,7 +402,7 @@ class Transformer(LightweightModule):
             tt_logits = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
 
             # Update device tensors for the next iteration
-            self._increment_decode_positions_device(current_pos, rot_mat_idxs_global, rot_mat_idxs_local)
+            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
 
             # Update input tokens with sampled tokens for the next iteration
             ttnn.copy(tt_logits.reshape(x.shape), x)
@@ -440,7 +435,6 @@ class Transformer(LightweightModule):
                 x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"], activation_dtype)
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
-
             x = layer(
                 x,
                 current_pos,
