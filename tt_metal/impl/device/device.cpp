@@ -5,11 +5,9 @@
 #include "device_impl.hpp"
 
 #include <core_descriptor.hpp>
-#include "dev_msgs.h"
 #include <device_pool.hpp>
 #include <host_api.hpp>
 #include <initializer_list>
-#include <limits>
 #include <persistent_kernel_cache.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
@@ -22,25 +20,18 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <set>
-#include <stdexcept>
-#include <string>
-#include <string_view>
 #include <tuple>
-#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "allocator.hpp"
 #include "allocator_types.hpp"
 #include "assert.hpp"
-#include "buffer_types.hpp"
 #include "command_queue.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
@@ -49,31 +40,23 @@
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "trace/trace.hpp"
-#include "dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
-#include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
-#include "multi_producer_single_consumer_queue.hpp"
-#include "profiler_types.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
-#include "trace/trace_buffer.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_memory.h"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
-#include "tt_metal/jit_build/build_env_manager.hpp"
-#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include <tt-metalium/control_plane.hpp>
 #include <umd/device/coordinate_manager.h>
 #include <umd/device/tt_core_coordinates.h>
@@ -788,8 +771,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
             tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(
                 this->id());
         bool dram_is_virtualized =
-            noc_translation_enabled && (hal.get_virtualized_core_types().find(AddressableCoreType::DRAM) !=
-                                        hal.get_virtualized_core_types().end());
+            noc_translation_enabled && (hal.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM));
         const metal_SocDescriptor& soc_d =
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id());
         std::vector<CoreCoord> dram_phy_coords;

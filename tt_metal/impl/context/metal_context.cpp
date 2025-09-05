@@ -744,8 +744,7 @@ void MetalContext::generate_device_bank_to_noc_tables(chip_id_t device_id) {
     bool noc_translation_enabled =
         cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     bool dram_is_virtualized =
-        noc_translation_enabled &&
-        (hal_->get_virtualized_core_types().find(AddressableCoreType::DRAM) != hal_->get_virtualized_core_types().end());
+        noc_translation_enabled && hal_->get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM);
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
             uint16_t noc_x, noc_y;
