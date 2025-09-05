@@ -165,7 +165,7 @@ for (int i = 0; i < input_vec.size(); i++) {
 }
 ```
 
-We use a blocking call this time because we want to get all the data before doing a comparison. We then iterate through each element to ensure the data matches.
+We use a blocking call this time because we want to get all the data before doing a comparison.
 
 ## Validation and teardown
 
