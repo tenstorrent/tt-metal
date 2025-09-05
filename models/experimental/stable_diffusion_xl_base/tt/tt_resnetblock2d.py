@@ -198,20 +198,6 @@ class TtResnetBlock2D(LightweightModule):
                 groups=self.groups,
             )
         else:
-            # Workaround for #25898
-            # Conv calls to_mem_cfg, which doesn't call reshard but calls s2i -> i2s with dram mem config.
-            # Do that here, as s2i -> i2s with L1 mem config is faster than dram mem config.
-            if (
-                self.conv1_config.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
-                and hidden_states.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
-            ):
-                if hidden_states.memory_config().shard_spec.shape[1] % 32 != 0 or (
-                    H == 64
-                    and W == 64
-                    and self.conv1_params["input_channels"] == 1280
-                    and self.conv1_params["output_channels"] == 640
-                ):
-                    hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
             [hidden_states, [H, W], [self.tt_conv1_weights, self.tt_conv1_bias]] = ttnn.conv2d(
                 input_tensor=hidden_states,
                 weight_tensor=self.tt_conv1_weights,
@@ -276,15 +262,6 @@ class TtResnetBlock2D(LightweightModule):
 
         hidden_states = ttnn.silu(hidden_states)
 
-        # Workaround for #25898
-        # Conv calls to_mem_cfg, which doesn't call reshard but calls s2i -> i2s with dram mem config.
-        # Do that here, as s2i -> i2s with L1 mem config is faster than dram mem config.
-        if (
-            self.conv2_config.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
-            and hidden_states.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
-        ):
-            if hidden_states.memory_config().shard_spec.shape[1] % 32 != 0:
-                hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         [hidden_states, [H, W], [self.tt_conv2_weights, self.tt_conv2_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv2_weights,
