@@ -148,7 +148,8 @@ TEST(ThrowOnMultipleMeshDeviceInitialization, UnitMeshes) {
             /*trace_region_size=*/DEFAULT_TRACE_REGION_SIZE,
             /*worker_l1_size=*/DEFAULT_WORKER_L1_SIZE,
             /*l1_bank_remap=*/{},
-            /*minimal=*/false));
+            /*minimal=*/false)
+        );
     }
 }
 

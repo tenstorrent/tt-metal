@@ -4485,3 +4485,43 @@ def test_conv2d_ch_split_dram_panoptic(
     else:
         pytest.skip("Not a split conv test, skipping.")
     signpost(header=f"ch_slice_conv_{split_input_channels_factor}_{split_output_channels_factor}_end.")
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "output_channels, input_channels",
+    (
+        (128, 128),  # larger input 8x8 vs 8x4
+        (256, 128),  # equal grids 8x8
+        (32, 128),  # single output column 8x1
+        (128, 8),  # single input column 8x1 vs 8x4 output
+        (128, 16),  # input 8x2 vs 8x4 output
+        (768, 32),  # input 8x2 vs 8x4 output
+    ),
+)
+def test_conv_bs_grid(
+    device,
+    torch_tensor_map,
+    output_channels,
+    input_channels,
+):
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.HiFi4,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        1,
+        output_channels,
+        input_channels,
+        33,
+        33,
+        3,
+        3,
+        1,
+        1,
+        0,
+        None,
+        shard_layout=BS,
+        has_bias=False,
+        input_dtype=ttnn.bfloat16,
+    )
