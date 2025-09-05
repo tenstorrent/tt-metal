@@ -23,26 +23,26 @@ NUM_DEVICES = ttnn.get_num_devices()
 
 # Define the parameter space for the sweep test
 parameters = {
-    "suite_1": {
+    "generality_suite": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
-        "fabric_config": [
-            # ttnn.FabricConfig.FABRIC_1D,
-            ttnn.FabricConfig.FABRIC_1D_RING,
-        ],  # default is ring for this one
+        "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
         "num_links": [1],
         "input_shape": [
-            # [1, 1, 44544, 3072],
-            [1, 1, 4096, 2048],
+            [1, 1, 32, 32],
+            [1, 1, 32, 1280],
+            [1, 1, 32, 31],
+            [1, 1, 1, 32, 32],
+            [2, 32, 32],
+            [1, 1, 32, 16384],
+            [1, 1, 1, 2048],
         ],
-        "in_dim": [2, 3],  # [0, 1, 2, 3, 4],  # only 2 and 3 are supported
-        "out_dim": [2, 3],  # [0, 1, 2, 3, 4],  # only 2 and 3 are supported
-        "layout": [ttnn.TILE_LAYOUT],  # , ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],  # , ttnn.bfloat8_b, ttnn.uint32],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-            # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
-        ],
-        "topology": [ttnn.Topology.Ring],  # ttnn.Topology.Linear],
+        "in_dim": [0, 1, 2, 3, 4],
+        "out_dim": [0, 1, 2, 3, 4],
+        "cluster_axis": [0, 1, None],
+        "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16],
+        "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
+        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
         "num_iters": [1],
     },
 }
