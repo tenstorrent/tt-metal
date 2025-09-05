@@ -8,17 +8,11 @@ from helpers.device import write_stimuli_to_l1
 from helpers.format_arg_mapping import DestAccumulation
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.perf import (
-    PerfReport,
     PerfRunType,
-    delete_benchmark_dir,
-    dump_report,
-    dump_scatter,
     perf_benchmark,
     update_report,
 )
 from helpers.stimuli_generator import generate_stimuli
-
-TEST_NAME = "fast_tilize_test"
 
 
 def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
@@ -54,17 +48,6 @@ def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
     return dimensions
 
 
-report = PerfReport()
-
-
-@pytest.fixture(scope="module")
-def report_fixture():
-    delete_benchmark_dir(TEST_NAME)
-    yield
-    dump_report(TEST_NAME, report)
-    dump_scatter(TEST_NAME, report)
-
-
 @skip_for_blackhole
 @pytest.mark.perf
 @pytest.mark.parametrize("input_format", [DataFormat.Float32, DataFormat.Float16_b])
@@ -74,7 +57,7 @@ def report_fixture():
 @pytest.mark.parametrize("fp32_dest", [DestAccumulation.Yes, DestAccumulation.No])
 @pytest.mark.parametrize("input_width, input_height", generate_input_dimensions(16))
 def test_fast_tilize_perf(
-    report_fixture, input_format, output_format, fp32_dest, input_width, input_height
+    perf_report, input_format, output_format, fp32_dest, input_width, input_height
 ):
 
     input_dimensions = [input_height * 32, input_width * 32]
@@ -87,7 +70,7 @@ def test_fast_tilize_perf(
 
     test_config = {
         "formats": formats,
-        "testname": TEST_NAME,
+        "testname": "fast_tilize_test",
         "loop_factor": 1024,
         "tile_cnt": input_height * input_width,
         "input_A_dimensions": input_dimensions,
@@ -106,4 +89,4 @@ def test_fast_tilize_perf(
     )
 
     results = perf_benchmark(test_config, [PerfRunType.L1_TO_L1], 2)
-    update_report(report, test_config, results)
+    update_report(perf_report, test_config, results)
