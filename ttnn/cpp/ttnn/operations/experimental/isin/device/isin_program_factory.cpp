@@ -16,24 +16,6 @@ namespace ttnn::operations::experimental::isin {
 
 using namespace common;
 
-namespace {
-constexpr uint32_t BIT_MASK_32 = 32 - 1;
-
-inline uint64_t ceil32(const uint64_t& number) {
-    return ((number & BIT_MASK_32) == 0) ? number : ((number | BIT_MASK_32) + 1);
-}
-
-inline bool is_pow2_min32(const uint64_t& number) { return ((number & (number - 1)) == 0) && number >= 32; }
-
-// inline std::vector<CoreCoord> get_worker_cores(const CoreCoord& compute_grid_size) {
-//     //
-//     // const CoreRange all_cores_range{
-//     //     CoreCoord(0, 0), CoreCoord(compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1)};
-//     // const CoreRangeSet all_cores = std::set<CoreRange>({all_cores_range});
-// }
-
-}  // namespace
-
 IsInProgramFactory::cached_program_t IsInProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     using namespace tt::tt_metal;
@@ -88,6 +70,10 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
     TensorAccessorArgs(*test_elements_buffer).append_to(compile_time_args);
     TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
 
+    // The final tensor to be dealt with by the isin device operation is flattened to 1D and the number of subchunks
+    // (each of elements, test_elements and output) that they have to be split into depends on the L1 available size per
+    // core (to hold elements, test_elements and output subchunks at the same time). The number of cores utilizee is at
+    // least the number of subchunks work has been split into.
     const uint32_t subchunks_num =
         (elements_tensor.logical_volume() + single_fetch_subchunk_size - 1) / single_fetch_subchunk_size;
     const auto core_grid = device->compute_with_storage_grid_size();
@@ -103,6 +89,11 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
     create_cb(program, elements_dtype, IsInCB::ELEMENTS, all_cores, elements_subchunk_size_bytes);
     create_cb(program, test_elements_dtype, IsInCB::TEST_ELEMENTS, all_cores, test_elements_subchunk_size_bytes);
     create_cb(program, OUTPUT_TENSOR_DATA_TYPE, IsInCB::OUTPUT, all_cores, output_subchunk_size_bytes);
+
+    constexpr const char* READER_KERNEL_PATH =
+        "ttnn/cpp/ttnn/operations/experimental/isin/device/kernels/dataflow/isin_reader.cpp";
+    constexpr const char* WRITER_KERNEL_PATH =
+        "ttnn/cpp/ttnn/operations/experimental/isin/device/kernels/dataflow/isin_writer.cpp";
 
     auto reader_kernel_id =
         create_kernel(program, READER_KERNEL_PATH, all_cores, ReaderDataMovementConfig{compile_time_args});
