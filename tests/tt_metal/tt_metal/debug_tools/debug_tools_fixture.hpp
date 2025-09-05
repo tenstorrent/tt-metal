@@ -34,6 +34,7 @@ public:
         // up after running a test.
         DebugToolsMeshFixture::RunProgram(mesh_device, workload);
         MetalContext::instance().dprint_server()->await();
+        MetalContext::instance().dprint_server()->clear_formatting();
     }
 
 protected:
@@ -90,6 +91,7 @@ protected:
         DebugToolsMeshFixture::RunTestOnDevice(run_function, mesh_device);
         MetalContext::instance().dprint_server()->clear_log_file();
         MetalContext::instance().dprint_server()->clear_signals();
+        MetalContext::instance().dprint_server()->clear_formatting();
     }
 
     // Override this function in child classes for additional setup commands between DPRINT setup
