@@ -5,7 +5,12 @@ import torch.nn as nn
 import torch
 import ttnn
 
-from models.experimental.panoptic_deeplab.tt.tt_conv2dWrapper import TtConv2d, TtConv2dParameters
+from models.experimental.panoptic_deeplab.tt.tt_conv2dWrapper import (
+    TtConv2d,
+    TtConv2dParameters,
+    SliceConfig,
+    SliceMode,
+)
 
 
 class TtStem(nn.Module):
@@ -35,21 +40,23 @@ class TtStem(nn.Module):
         conv2_state = {k.replace("conv2.", ""): v for k, v in state_dict.items() if k.startswith("conv2.")}
         conv3_state = {k.replace("conv3.", ""): v for k, v in state_dict.items() if k.startswith("conv3.")}
 
-        # Initialize conv layers
+        # Initialize conv layers with width slicing (4 slices)
+        width_slice_config = SliceConfig(mode=SliceMode.WIDTH, num_slices=4)
+
         self.conv1 = TtConv2d(
-            TtConv2dParameters.from_torch(conv1_state, device=device, dtype=dtype),
+            TtConv2dParameters.from_torch(conv1_state, device=device, dtype=dtype, slice_config=width_slice_config),
             stride=(2, 2),
             padding=(1, 1),
         )
 
         self.conv2 = TtConv2d(
-            TtConv2dParameters.from_torch(conv2_state, device=device, dtype=dtype),
+            TtConv2dParameters.from_torch(conv2_state, device=device, dtype=dtype, slice_config=width_slice_config),
             stride=(1, 1),
             padding=(1, 1),
         )
 
         self.conv3 = TtConv2d(
-            TtConv2dParameters.from_torch(conv3_state, device=device, dtype=dtype),
+            TtConv2dParameters.from_torch(conv3_state, device=device, dtype=dtype, slice_config=width_slice_config),
             stride=(1, 1),
             padding=(1, 1),
         )
@@ -252,7 +259,7 @@ class TtStem(nn.Module):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # Conv1 + BatchNorm + ReLU
-        x = self.conv1(x, slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dSliceWidth, num_slices=4))
+        x = self.conv1(x)
         # Convert NHWC to NCHW for batch_norm
         x_permuted = ttnn.permute(x, (0, 3, 1, 2))
         ttnn.deallocate(x)
@@ -275,7 +282,7 @@ class TtStem(nn.Module):
         ttnn.deallocate(x_permuted)
 
         # Conv2 + BatchNorm + ReLU
-        x = self.conv2(x_relued, slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dSliceWidth, num_slices=4))
+        x = self.conv2(x_relued)
         ttnn.deallocate(x_relued)
         # Convert NHWC to NCHW for batch_norm
         x_permuted = ttnn.permute(x, (0, 3, 1, 2))
@@ -298,7 +305,7 @@ class TtStem(nn.Module):
         ttnn.move(x_relued)
 
         # Conv3 + BatchNorm + ReLU
-        x = self.conv3(x_relued, slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dSliceWidth, num_slices=4))
+        x = self.conv3(x_relued)
         ttnn.deallocate(x_relued)
         # Convert NHWC to NCHW for batch_norm
         x_permuted = ttnn.permute(x, (0, 3, 1, 2))
