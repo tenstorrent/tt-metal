@@ -27,11 +27,14 @@ import torch
 import torch.nn as nn
 import transformers
 from PIL import Image
+from safetensors import safe_open
 from timm.models.vision_transformer import LayerScale
 from transformers import AutoModelForCausalLM, AutoProcessor, GenerationMixin, PretrainedConfig, PreTrainedModel
 from transformers.modeling_outputs import ModelOutput
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.demos.vit.tt import ttnn_optimized_vit_highres_gs as ttnn_optimized_vit_highres
 from models.tt_transformers.demo.simple_text_demo import prepare_generator_args
 from models.tt_transformers.tt.common import (
     create_tt_model,
@@ -84,54 +87,126 @@ VALID_LLM_BACKBONES = set(LLM_BACKBONE_TO_HF_PATH)
 # fmt: on
 
 
-class LLama2OpenVLAArgs(ModelArgs):
-    def __init__(self, *args, **kwargs):
-        HF_MODEL = os.getenv("HF_MODEL")
-        assert (
-            HF_MODEL == "meta-llama/Llama-2-7b-hf"
-        ), f"When LLama2OpenVLAArgs is used, HF_MODEL must be meta-llama/Llama-2-7b-hf"
-        super().__init__(*args, **kwargs)
+def map_openvla_hf_to_meta_keys(loaded_weights):
+    hf_to_meta = {
+        # Top level mappings
+        "language_model.model.embed_tokens.weight": "tok_embeddings.weight",
+        "language_model.model.norm.weight": "norm.weight",
+        "language_model.lm_head.weight": "output.weight",
+        # Layer level mappings
+        "input_layernorm.weight": "attention_norm.weight",
+        "post_attention_layernorm.weight": "ffn_norm.weight",
+        # Attention module mappings
+        "self_attn.q_proj.weight": "attention.wq.weight",
+        "self_attn.k_proj.weight": "attention.wk.weight",
+        "self_attn.v_proj.weight": "attention.wv.weight",
+        "self_attn.o_proj.weight": "attention.wo.weight",
+        "self_attn.q_proj.bias": "attention.wq.bias",
+        "self_attn.k_proj.bias": "attention.wk.bias",
+        "self_attn.v_proj.bias": "attention.wv.bias",
+        # Feed forward module mappings
+        "mlp.gate_proj.weight": "feed_forward.w1.weight",
+        "mlp.up_proj.weight": "feed_forward.w3.weight",
+        "mlp.down_proj.weight": "feed_forward.w2.weight",
+        # Direct module mappings
+        "gate_proj.weight": "w1.weight",
+        "down_proj.weight": "w2.weight",
+        "up_proj.weight": "w3.weight",
+        "q_proj.weight": "wq.weight",
+        "k_proj.weight": "wk.weight",
+        "v_proj.weight": "wv.weight",
+        "o_proj.weight": "wo.weight",
+        "q_proj.bias": "wq.bias",
+        "k_proj.bias": "wk.bias",
+        "v_proj.bias": "wv.bias",
+        "weight": "emb.weight",  # For host embeddings
+        # Full path layer mappings
+        "language_model.model.layers.{layer}.input_layernorm.weight": "layers.{layer}.attention_norm.weight",
+        "language_model.model.layers.{layer}.post_attention_layernorm.weight": "layers.{layer}.ffn_norm.weight",
+        "language_model.model.layers.{layer}.self_attn.q_proj.weight": "layers.{layer}.attention.wq.weight",
+        "language_model.model.layers.{layer}.self_attn.k_proj.weight": "layers.{layer}.attention.wk.weight",
+        "language_model.model.layers.{layer}.self_attn.v_proj.weight": "layers.{layer}.attention.wv.weight",
+        "language_model.model.layers.{layer}.self_attn.o_proj.weight": "layers.{layer}.attention.wo.weight",
+        "language_model.model.layers.{layer}.self_attn.q_proj.bias": "layers.{layer}.attention.wq.bias",
+        "language_model.model.layers.{layer}.self_attn.k_proj.bias": "layers.{layer}.attention.wk.bias",
+        "language_model.model.layers.{layer}.self_attn.v_proj.bias": "layers.{layer}.attention.wv.bias",
+        "language_model.model.layers.{layer}.mlp.gate_proj.weight": "layers.{layer}.feed_forward.w1.weight",
+        "language_model.model.layers.{layer}.mlp.up_proj.weight": "layers.{layer}.feed_forward.w3.weight",
+        "language_model.model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
+    }
 
-    def _set_params_from_dict(self, config, is_hf=False):
-        new_config = {
-            "attention_bias": False,
-            "attention_dropout": 0.0,
-            "bos_token_id": 1,
-            "eos_token_id": 2,
-            "hidden_act": "silu",
-            "hidden_size": 4096,
-            "initializer_range": 0.02,
-            "intermediate_size": 11008,
-            "max_position_embeddings": 2048,
-            "model_type": "llama",
-            "num_attention_heads": 32,
-            "num_hidden_layers": 32,
-            "num_key_value_heads": 32,
-            "pad_token_id": 32000,
-            "pretraining_tp": 1,
-            "rms_norm_eps": 1e-06,
-            "rope_scaling": None,
-            "rope_theta": 10000.0,
-            "tie_word_embeddings": False,
-            "torch_dtype": "float16",
-            "transformers_version": "4.38.0",
-            "use_cache": True,
-            # TODO: change vocab size to 32064 when integrating openVLA weights
-            "vocab_size": 32000,
-        }
-        text_config = config.get("text_config", config)
-        for key, value in text_config.items():
-            if key not in new_config:
-                new_config[key] = value
+    meta_state_dict = {}
+    for key, tensor in loaded_weights.items():
+        if key in hf_to_meta:
+            # Direct match for top-level keys
+            meta_state_dict[hf_to_meta[key]] = tensor
+        elif "language_model.model.layers." in key:
+            # Extract layer number and form a template key
+            parts = key.split(".")
+            layer_num = parts[3]  # e.g. "0" in "model.layers.0.input_layernorm.weight"
+            template_key = "language_model.model.layers.{layer}." + ".".join(parts[4:])
+            if template_key in hf_to_meta:
+                meta_state_dict[hf_to_meta[template_key].format(layer=layer_num)] = tensor
 
-        return super()._set_params_from_dict(
-            new_config,
-            is_hf,
-        )
+    return meta_state_dict
+
+
+def get_LLama2OpenVLAArgs(state_dict):
+    class LLama2OpenVLAArgs(ModelArgs):
+        def __init__(self, *args, **kwargs):
+            HF_MODEL = os.getenv("HF_MODEL")
+            assert (
+                HF_MODEL == "meta-llama/Llama-2-7b-hf"
+            ), f"When LLama2OpenVLAArgs is used, HF_MODEL must be meta-llama/Llama-2-7b-hf"
+            super().__init__(*args, **kwargs)
+
+        def _set_params_from_dict(self, config, is_hf=False):
+            new_config = {
+                "attention_bias": False,
+                "attention_dropout": 0.0,
+                "bos_token_id": 1,
+                "eos_token_id": 2,
+                "hidden_act": "silu",
+                "hidden_size": 4096,
+                "initializer_range": 0.02,
+                "intermediate_size": 11008,
+                "max_position_embeddings": 2048,
+                "model_type": "llama",
+                "num_attention_heads": 32,
+                "num_hidden_layers": 32,
+                "num_key_value_heads": 32,
+                "pad_token_id": 32000,
+                "pretraining_tp": 1,
+                "rms_norm_eps": 1e-06,
+                "rope_scaling": None,
+                "rope_theta": 10000.0,
+                "tie_word_embeddings": False,
+                "torch_dtype": "float16",
+                "transformers_version": "4.38.0",
+                "use_cache": True,
+                "vocab_size": 32000 if state_dict is None else 32064,
+            }
+            text_config = config.get("text_config", config)
+            for key, value in text_config.items():
+                if key not in new_config:
+                    new_config[key] = value
+
+            return super()._set_params_from_dict(
+                new_config,
+                is_hf,
+            )
+
+        def load_state_dict(self):
+            if state_dict is None:
+                return super().load_state_dict()
+            new_state_dict = map_openvla_hf_to_meta_keys(state_dict)
+            return new_state_dict
+
+    return LLama2OpenVLAArgs
 
 
 class OpenVLALanguageModel(GenerationMixin):
-    def __init__(self, device):
+    def __init__(self, device, local_state_dict=None):
         self.generator_args_config = {
             "num_devices": device.get_num_devices() if isinstance(device, ttnn.MeshDevice) else 1,
             "data_parallel": 1,
@@ -145,7 +220,9 @@ class OpenVLALanguageModel(GenerationMixin):
         }
         self.model_args, self.model, self.page_table, self.tt_kv_cache, self.tokenizer = prepare_generator_args(
             **self.generator_args_config,
-            model_factory_fn=lambda *args, **kwargs: create_tt_model(*args, **kwargs, ModelArgsClass=LLama2OpenVLAArgs),
+            model_factory_fn=lambda *args, **kwargs: create_tt_model(
+                *args, **kwargs, ModelArgsClass=get_LLama2OpenVLAArgs(local_state_dict)
+            ),
         )
         self.generator = Generator(self.model, self.model_args, device, self.tokenizer)
 
@@ -334,7 +411,16 @@ class OpenVLALanguageModel(GenerationMixin):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(inputs_embeds.device()),
         )
-
+        device = inputs_embeds.device()
+        # TODO: Find a workaround for ttnn.aggregate_tensor bug
+        inputs_embeds = ttnn.aggregate_tensor(inputs_embeds, ttnn.ConcatMeshToTensor(device, dim=3))[
+            :, :, :, : inputs_embeds.shape[-1]
+        ]
+        inputs_embeds = ttnn.distribute_tensor(
+            inputs_embeds,
+            mapper=ttnn.ShardTensorToMesh(device, dim=3),
+            mesh_device=device,
+        )
         tt_logits = self.model[0].forward(
             inputs_embeds,
             None,
@@ -453,6 +539,13 @@ def ls_apply_patch(ls_module: LayerScale):
     del ls_module.gamma
 
 
+def ttnn_featurizer(embedding, encoder, pixel):
+    embd = embedding(pixel)
+    tiled_hidden_states = ttnn.to_layout(embd, layout=ttnn.TILE_LAYOUT)
+    encoder = encoder(tiled_hidden_states)
+    return encoder
+
+
 # === Prismatic Vision Backbone (nn.Module) Definitions (w/ Fused Backbone Support) ===
 class PrismaticVisionBackbone(nn.Module):
     def __init__(
@@ -461,15 +554,17 @@ class PrismaticVisionBackbone(nn.Module):
         image_sizes: List[int],
         timm_model_ids: List[str],
         timm_override_act_layers: List[Optional[str]],
+        ttnn_device: Optional[Any] = None,
+        local_state_dict=None,
     ) -> None:
         super().__init__()
         self.use_fused_vision_backbone = use_fused_vision_backbone
-
+        self.ttnn_device = ttnn_device
+        self.local_state_dict = local_state_dict
         # [Contract] Validate number of (fused) vision backbones, create "alpha" featurizer and Instantiate
         #   =>> Note :: Monkey-Patch the `forward()` function of the backbone to ensure FSDP-compatibility
         #               Hardcodes `get_intermediate_layers` to return the **SECOND-TO-LAST** layer patches!
         assert len(timm_model_ids) <= 2, "Prismatic models only support up to 2 (fused) vision backbones!"
-        ## TODO: INSERT TT VISION MODEL HERE
         self.featurizer = timm.create_model(
             timm_model_ids[0],
             pretrained=False,
@@ -480,7 +575,47 @@ class PrismaticVisionBackbone(nn.Module):
         self.featurizer.forward = unpack_tuple(
             partial(self.featurizer.get_intermediate_layers, n={len(self.featurizer.blocks) - 2})
         )
+        # Patch `vision_backbone.featurizer` and `vision_backbone.fused_featurizer` with HF-Compatible LayerScale
+        for module in self.featurizer.modules():
+            if isinstance(module, LayerScale):
+                ls_apply_patch(module)
+        if self.local_state_dict is not None:
+            featurizer_state_dict = {
+                k.replace("vision_backbone.featurizer.", ""): v
+                for k, v in self.local_state_dict.items()
+                if k.startswith("vision_backbone.featurizer.")
+            }
+            self.featurizer.load_state_dict(featurizer_state_dict, strict=True)
+            logger.info("Loaded local state dict into PrismaticVisionBackbone.featurizer")
         self.embed_dim = self.featurizer.embed_dim
+        if self.ttnn_device is not None:
+            # TODO: fix DINOv2 here.
+            self.featurize_parameters = preprocess_model_parameters(
+                initialize_model=lambda: self.featurizer.to(torch.bfloat16),
+                device=self.ttnn_device,
+                custom_preprocessor=ttnn_optimized_vit_highres.custom_preprocessor_siglip,
+            )
+
+            self.head_masks = [
+                ttnn.from_torch(
+                    torch.zeros(1, 1, 1, 1, dtype=torch.float32),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.ttnn_device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                for _ in self.featurize_parameters.blocks
+            ]
+            self.ttnn_featurizer = lambda x2: ttnn_featurizer(
+                embedding=lambda x: ttnn_optimized_vit_highres.siglip_patch_embeddings(
+                    x,
+                    parameters=self.featurize_parameters.patch_embed.patch_embeddings,
+                ),
+                encoder=lambda x: ttnn_optimized_vit_highres.siglip_encoder(
+                    x, self.head_masks, parameters=self.featurize_parameters.blocks
+                ),
+                pixel=x2,
+            )
 
         # If `use_fused_vision_backbone` =>> create "beta" featurizer
         if self.use_fused_vision_backbone:
@@ -496,16 +631,44 @@ class PrismaticVisionBackbone(nn.Module):
                 partial(self.fused_featurizer.get_intermediate_layers, n={len(self.fused_featurizer.blocks) - 2})
             )
             self.embed_dim += self.fused_featurizer.embed_dim
-
-        # Patch `vision_backbone.featurizer` and `vision_backbone.fused_featurizer` with HF-Compatible LayerScale
-        for module in self.featurizer.modules():
-            if isinstance(module, LayerScale):
-                ls_apply_patch(module)
-
-        if self.use_fused_vision_backbone:
+            if self.local_state_dict is not None:
+                fused_featurizer_state_dict = {
+                    k.replace("vision_backbone.fused_featurizer.", ""): v
+                    for k, v in self.local_state_dict.items()
+                    if k.startswith("vision_backbone.fused_featurizer.")
+                }
+                self.fused_featurizer.load_state_dict(fused_featurizer_state_dict, strict=True)
+                logger.info("Loaded local state dict into PrismaticVisionBackbone.fused_featurizer")
             for module in self.fused_featurizer.modules():
                 if isinstance(module, LayerScale):
                     ls_apply_patch(module)
+            if self.ttnn_device is not None:
+                self.featurize_parameters_2 = preprocess_model_parameters(
+                    initialize_model=lambda: self.featurizer.to(torch.bfloat16),
+                    device=self.ttnn_device,
+                    custom_preprocessor=ttnn_optimized_vit_highres.custom_preprocessor_siglip,
+                )
+
+                self.head_masks_2 = [
+                    ttnn.from_torch(
+                        torch.zeros(1, 1, 1, 1, dtype=torch.float32),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.ttnn_device,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                    )
+                    for _ in self.featurize_parameters_2.blocks
+                ]
+                self.ttnn_fused_featurizer = lambda x2: ttnn_featurizer(
+                    embedding=lambda x: ttnn_optimized_vit_highres.siglip_patch_embeddings(
+                        x,
+                        parameters=self.featurize_parameters_2.patch_embed.patch_embeddings,
+                    ),
+                    encoder=lambda x: ttnn_optimized_vit_highres.siglip_encoder(
+                        x, self.head_masks_2, parameters=self.featurize_parameters_2.blocks
+                    ),
+                    pixel=x2,
+                )
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
         """Run image (`pixel_values`) through featurizer; if channel-stacked, then dispatch and sequence stack."""
@@ -513,21 +676,31 @@ class PrismaticVisionBackbone(nn.Module):
             return self.featurizer(pixel_values)
 
         # Split `pixel_values :: [bsz, 2 * 3, resolution, resolution]` =>> featurize =>> channel stack
-        img, img_fused = torch.split(pixel_values, [3, 3], dim=1)
-        patches, patches_fused = self.featurizer(img), self.fused_featurizer(img_fused)
+        if self.ttnn_device is None:
+            img, img_fused = torch.split(pixel_values, [3, 3], dim=1)
+            patches, patches_fused = self.featurizer(img), self.fused_featurizer(img_fused)
+        else:
+            img, img_fused = pixel_values
+            patches, patches_fused = self.ttnn_featurizer(img), self.ttnn_fused_featurizer(img_fused)
 
-        return torch.cat([patches, patches_fused], dim=2)
+        if self.ttnn_device is None:
+            return torch.cat([patches, patches_fused], dim=2)
+        return ttnn.concat([patches, patches_fused], dim=2)
 
 
 # === Prismatic Projector (nn.Module) Definitions ===
 class PrismaticProjector(nn.Module):
-    def __init__(self, use_fused_vision_backbone: bool, vision_dim: int, llm_dim: int) -> None:
+    def __init__(
+        self,
+        use_fused_vision_backbone: bool,
+        vision_dim: int,
+        llm_dim: int,
+    ) -> None:
         super().__init__()
         self.use_fused_vision_backbone = use_fused_vision_backbone
         self.vision_dim, self.llm_dim = vision_dim, llm_dim
 
         # Switch on `use_fused_vision_backbone` =>> use slightly different MLPs and projection factors!
-        # TODO: Insert TT MODULES HERE
         if not self.use_fused_vision_backbone:
             self.fc1 = nn.Linear(self.vision_dim, self.llm_dim, bias=True)
             self.fc2 = nn.Linear(self.llm_dim, self.llm_dim, bias=True)
@@ -551,6 +724,52 @@ class PrismaticProjector(nn.Module):
             projected_features = self.fc2(projected_features)
             projected_features = self.act_fn2(projected_features)
             projected_features = self.fc3(projected_features)
+
+        return projected_features
+
+
+class TTNNPrismaticProjector:
+    def __init__(
+        self,
+        use_fused_vision_backbone: bool,
+        vision_dim: int,
+        llm_dim: int,
+        ttnn_device: Optional[Any] = None,
+        params=None,
+    ) -> None:
+        super().__init__()
+        self.use_fused_vision_backbone = use_fused_vision_backbone
+        self.vision_dim, self.llm_dim = vision_dim, llm_dim
+        self.ttnn_device = ttnn_device
+        self.params = params
+        assert self.ttnn_device is not None, "TTNNPrismaticProjector requires a ttnn_device"
+        assert self.use_fused_vision_backbone, "TTNNPrismaticProjector only supports fused vision backbones"
+        assert self.params is not None, "TTNNPrismaticProjector requires params for TTNN linear layers"
+
+    def forward(self, img_patches):
+        projected_features = ttnn.linear(
+            img_patches,
+            self.params.fc1.weight[:2048, :],  # TODO: update this after dinov2 is added
+            bias=self.params.fc1.bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+            activation="gelu",
+        )
+        projected_features = ttnn.linear(
+            projected_features,
+            self.params.fc2.weight,
+            bias=self.params.fc2.bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+            activation="gelu",
+        )
+        projected_features = ttnn.linear(
+            projected_features,
+            self.params.fc3.weight,
+            bias=self.params.fc3.bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+        )
 
         return projected_features
 
@@ -608,8 +827,8 @@ class PrismaticPreTrainedModel(PreTrainedModel):
 
 
 class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
-    def __init__(self, config: PrismaticConfig, ttnn_device=None) -> None:
-        super().__init__(config, ttnn_device=ttnn_device)
+    def __init__(self, config: PrismaticConfig, ttnn_device=None, local_state_dict=None) -> None:
+        super().__init__(config, ttnn_device=ttnn_device, local_state_dict=local_state_dict)
 
         # [Validation] Lightweight Validate on `config` Fields + Dependency Versions
         if config.use_fused_vision_backbone is None:
@@ -631,7 +850,12 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
 
         # Instantiate PrismaticVisionBackbone (w/ Potential Fused Backbone)
         self.vision_backbone = PrismaticVisionBackbone(
-            config.use_fused_vision_backbone, config.image_sizes, config.timm_model_ids, config.timm_override_act_layers
+            config.use_fused_vision_backbone,
+            config.image_sizes,
+            config.timm_model_ids,
+            config.timm_override_act_layers,
+            ttnn_device,
+            local_state_dict=local_state_dict,
         )
 
         # Create Multimodal Projector
@@ -640,11 +864,27 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
             vision_dim=self.vision_backbone.embed_dim,
             llm_dim=config.text_config.hidden_size,
         )
+        if local_state_dict is not None:
+            self.projector.load_state_dict(
+                {k.replace("projector.", ""): v for k, v in local_state_dict.items() if k.startswith("projector.")},
+                strict=True,
+            )
+        if ttnn_device is not None:
+            projector_params = preprocess_model_parameters(
+                initialize_model=lambda: self.projector.to(torch.bfloat16),
+                device=ttnn_device,
+            )
+            self.ttnn_projector = TTNNPrismaticProjector(
+                config.use_fused_vision_backbone,
+                vision_dim=self.vision_backbone.embed_dim,
+                llm_dim=config.text_config.hidden_size,
+                ttnn_device=ttnn_device,
+                params=projector_params,
+            )
 
         # Instantiate LLM Backbone
-        # TODO: Insert TT LLM HERE
         if ttnn_device is not None:
-            self.language_model = OpenVLALanguageModel(ttnn_device)
+            self.language_model = OpenVLALanguageModel(ttnn_device, local_state_dict=local_state_dict)
         else:
             self.language_model = AutoModelForCausalLM.from_config(
                 config.text_config, attn_implementation=config._attn_implementation
@@ -762,12 +1002,27 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
         # === Handle Multimodal Forward ===
         elif (input_ids.shape[0] == pixel_values.shape[0]) or (inputs_embeds.shape[0] == pixel_values.shape[0]):
             assert past_key_values is None, "Unexpected key `past_key_values` provided during language-only forward!"
+            assert labels is None
 
             # Visual Feature Extraction
-            patch_features = self.vision_backbone(pixel_values)
-
-            # Projection Logic =>> Update Attention Mask
-            projected_patch_embeddings = self.projector(patch_features)
+            if self.ttnn_device is not None:
+                pixel_values = torch.permute(pixel_values, (0, 2, 3, 1))
+                img, img_fused = torch.split(pixel_values, [3, 3], dim=3)
+                pixel_values1 = torch.nn.functional.pad(img, (0, 1, 0, 0, 0, 0, 0, 0))
+                pixel_values2 = torch.nn.functional.pad(img_fused, (0, 1, 0, 0, 0, 0, 0, 0))
+                pixel_values1 = ttnn.from_torch(
+                    pixel_values1, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.ttnn_device
+                )
+                pixel_values2 = ttnn.from_torch(
+                    pixel_values2, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.ttnn_device
+                )
+                pixel_values = [pixel_values1, pixel_values2]
+                ttnn_patch_features = self.vision_backbone(pixel_values)
+                projected_patch_embeddings = self.ttnn_projector.forward(ttnn_patch_features)
+            else:
+                patch_features = self.vision_backbone(pixel_values)
+                # Projection Logic =>> Update Attention Mask
+                projected_patch_embeddings = self.projector(patch_features)
             projected_patch_attention_mask = None
             if attention_mask is not None:
                 projected_patch_attention_mask = torch.full(
@@ -776,6 +1031,13 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                     dtype=attention_mask.dtype,
                     device=attention_mask.device,
                 )
+                if self.ttnn_device is not None:
+                    projected_patch_attention_mask = ttnn.from_torch(
+                        projected_patch_attention_mask,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=self.ttnn_device,
+                    )
 
             # Get Input Embeddings (from Language Model Embeddings)
             if self.ttnn_device is not None:
@@ -783,54 +1045,52 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
                     input_ids, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.ttnn_device
                 )
                 input_embeddings = self.get_input_embeddings()(ttnn_input_ids)
-                input_embeddings = ttnn.to_torch(
-                    input_embeddings, mesh_composer=ttnn.ConcatMeshToTensor(self.ttnn_device, dim=2)
+                input_embeddings = ttnn.aggregate_tensor(
+                    input_embeddings, ttnn.ConcatMeshToTensor(self.ttnn_device, dim=2)
                 )
+                input_embeddings = ttnn.distribute_tensor(
+                    input_embeddings,
+                    mapper=ttnn.replicate_tensor_to_mesh_mapper(self.ttnn_device),
+                    mesh_device=self.ttnn_device,
+                )
+
             else:
                 input_embeddings = self.get_input_embeddings()(input_ids)
 
-            # Build Multimodal Embeddings & Attention Mask =>> Prismatic defaults to inserting after <BOS> token (1:)
-            multimodal_embeddings = torch.cat(
-                [input_embeddings[:, :1, :], projected_patch_embeddings, input_embeddings[:, 1:, :]], dim=1
-            )
+            if self.ttnn_device is not None:
+                multimodal_embeddings = ttnn.concat(
+                    [input_embeddings[:, :1, :], projected_patch_embeddings, input_embeddings[:, 1:, :]], dim=1
+                )
+                multimodal_embeddings = ttnn.unsqueeze(multimodal_embeddings, dim=0)
+                multimodal_embeddings = ttnn.to_layout(multimodal_embeddings, layout=ttnn.TILE_LAYOUT)
+            else:
+                # Build Multimodal Embeddings & Attention Mask =>> Prismatic defaults to inserting after <BOS> token (1:)
+                multimodal_embeddings = torch.cat(
+                    [input_embeddings[:, :1, :], projected_patch_embeddings, input_embeddings[:, 1:, :]], dim=1
+                )
             multimodal_attention_mask = None
             if attention_mask is not None:
-                multimodal_attention_mask = torch.cat(
-                    [attention_mask[:, :1], projected_patch_attention_mask, attention_mask[:, 1:]], dim=1
-                )
+                if self.ttnn_device is not None:
+                    attention_mask = ttnn.from_torch(
+                        attention_mask, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.ttnn_device
+                    )
+                    multimodal_attention_mask = ttnn.concat(
+                        [attention_mask[:, :1], projected_patch_attention_mask, attention_mask[:, 1:]], dim=1
+                    )
+                    multimodal_attention_mask = ttnn.unsqueeze(multimodal_attention_mask, dim=0)
+                    multimodal_attention_mask = ttnn.to_layout(multimodal_attention_mask, layout=ttnn.TILE_LAYOUT)
+                else:
+                    multimodal_attention_mask = torch.cat(
+                        [attention_mask[:, :1], projected_patch_attention_mask, attention_mask[:, 1:]], dim=1
+                    )
 
-            # Build Labels (if specified) =>> Ignore Labels for Patch Embeddings
-            multimodal_labels = None
-            if labels is not None:
-                projected_patch_labels = torch.full(
-                    (projected_patch_embeddings.shape[0], projected_patch_embeddings.shape[1]),
-                    fill_value=IGNORE_INDEX,
-                    dtype=labels.dtype,
-                    device=labels.device,
-                )
-                multimodal_labels = torch.cat([labels[:, :1], projected_patch_labels, labels[:, 1:]], dim=1)
-
-            # Dispatch to Language Model
-            if self.ttnn_device is not None:
-                multimodal_attention_mask = torch.unsqueeze(multimodal_attention_mask, dim=0)
-                multimodal_attention_mask = ttnn.from_torch(
-                    multimodal_attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.ttnn_device
-                )
-                multimodal_embeddings = torch.unsqueeze(multimodal_embeddings, dim=0)
-                multimodal_embeddings = ttnn.from_torch(
-                    multimodal_embeddings,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.ttnn_device,
-                    mesh_mapper=ttnn.ShardTensorToMesh(self.ttnn_device, dim=3),
-                )
             language_model_output = self.language_model(
                 input_ids=None,
                 attention_mask=multimodal_attention_mask,
                 position_ids=None,
                 past_key_values=None,
                 inputs_embeds=multimodal_embeddings,
-                labels=multimodal_labels,
+                labels=None,
                 use_cache=use_cache,
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
@@ -920,17 +1180,35 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
         return self.language_model._reorder_cache(*args, **kwargs)
 
 
+def get_final_action(generated_ids, action_dims, bin_centers, vocab_size, action_norm_stats):
+    # Extract predicted action tokens and translate into (normalized) continuous actions
+    predicted_action_token_ids = generated_ids[0, -action_dims:].cpu().numpy()
+    discretized_actions = vocab_size - predicted_action_token_ids
+    discretized_actions = np.clip(discretized_actions - 1, a_min=0, a_max=bin_centers.shape[0] - 1)
+    normalized_actions = bin_centers[discretized_actions]
+
+    # Unnormalize actions
+    mask = action_norm_stats.get("mask", np.ones_like(action_norm_stats["q01"], dtype=bool))
+    action_high, action_low = np.array(action_norm_stats["q99"]), np.array(action_norm_stats["q01"])
+    actions = np.where(
+        mask,
+        0.5 * (normalized_actions + 1) * (action_high - action_low) + action_low,
+        normalized_actions,
+    )
+    return actions
+
+
 class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration):
     config_class: PretrainedConfig = OpenVLAConfig
 
-    def __init__(self, config: OpenVLAConfig, ttnn_device=None) -> None:
-        super().__init__(config, ttnn_device=ttnn_device)
+    def __init__(self, config: OpenVLAConfig, ttnn_device=None, local_state_dict=None) -> None:
+        super().__init__(config, ttnn_device=ttnn_device, local_state_dict=local_state_dict)
         self.norm_stats = config.norm_stats
-
+        self.ttnn_device = ttnn_device
         # Compute action bins
         self.bins = np.linspace(-1, 1, config.n_action_bins)
         self.bin_centers = (self.bins[:-1] + self.bins[1:]) / 2.0
-
+        self.local_state_dict = local_state_dict
         # Compute vocab size for de-tokenization -- revert added "multiple of"
         self.vocab_size = self.config.text_config.vocab_size - self.config.pad_to_multiple_of
 
@@ -948,20 +1226,13 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration):
         # Run VLA inference
         generated_ids = self.generate(input_ids, max_new_tokens=self.get_action_dim(unnorm_key), **kwargs)
 
-        # Extract predicted action tokens and translate into (normalized) continuous actions
-        predicted_action_token_ids = generated_ids[0, -self.get_action_dim(unnorm_key) :].cpu().numpy()
-        discretized_actions = self.vocab_size - predicted_action_token_ids
-        discretized_actions = np.clip(discretized_actions - 1, a_min=0, a_max=self.bin_centers.shape[0] - 1)
-        normalized_actions = self.bin_centers[discretized_actions]
-
-        # Unnormalize actions
-        action_norm_stats = self.get_action_stats(unnorm_key)
-        mask = action_norm_stats.get("mask", np.ones_like(action_norm_stats["q01"], dtype=bool))
-        action_high, action_low = np.array(action_norm_stats["q99"]), np.array(action_norm_stats["q01"])
-        actions = np.where(
-            mask,
-            0.5 * (normalized_actions + 1) * (action_high - action_low) + action_low,
-            normalized_actions,
+        # get final actions
+        actions = get_final_action(
+            generated_ids,
+            self.get_action_dim(unnorm_key),
+            self.bin_centers,
+            self.vocab_size,
+            self.get_action_stats(unnorm_key),
         )
 
         return actions
@@ -1049,6 +1320,33 @@ def test_language_model(mesh_device, prompt):
     indirect=True,
 )
 def test_openvla_model(mesh_device):
+    ##  Download model checkpoints HuggingFace
+    #   ```
+    #   huggingface-cli download openvla/openvla-7b model.safetensors.index.json
+    #   huggingface-cli download openvla/openvla-7b model-00001-of-00003.safetensors
+    #   huggingface-cli download openvla/openvla-7b model-00002-of-00003.safetensors
+    #   huggingface-cli download openvla/openvla-7b model-00003-of-00003.safetensors
+    #   export OPENVLA_WEIGHTS="<path_to_downloaded_files>/"
+    #   ```
+    # Load all tensors
+
+    # List all shard files you want to load
+    weight_path = os.getenv("OPENVLA_WEIGHTS", None)
+    merged_tensors = None
+    if weight_path is not None and os.path.exists(weight_path):
+        shard_files = [
+            "model-00001-of-00003.safetensors",
+            "model-00002-of-00003.safetensors",
+            "model-00003-of-00003.safetensors",
+        ]
+        merged_tensors = {}
+        for path in shard_files:
+            assert os.path.exists(
+                weight_path + path
+            ), f"Provided OPENVLA_WEIGHTS path {weight_path + path} does not exist!"
+            with safe_open(weight_path + path, framework="pt", device="cpu") as f:
+                for key in f.keys():
+                    merged_tensors[key] = f.get_tensor(key)
     processor = AutoProcessor.from_pretrained("openvla/openvla-7b", trust_remote_code=True)
 
     # Create random init image
@@ -1063,7 +1361,9 @@ def test_openvla_model(mesh_device):
     }
     config_dict, kwargs = OpenVLAConfig.get_config_dict(**kwargs)
     vla_config, kwargs = OpenVLAConfig.from_dict(config_dict, **kwargs)
-    vla = TTOpenVLAForActionPrediction(vla_config, ttnn_device=mesh_device).to("cpu", dtype=torch.bfloat16)
+    vla = TTOpenVLAForActionPrediction(vla_config, ttnn_device=None, local_state_dict=merged_tensors).to(
+        "cpu", dtype=torch.bfloat16
+    )
     # Predict Action (7-DoF; un-normalize for BridgeData V2)
     inputs = processor(prompt, image).to("cpu", dtype=torch.bfloat16)
     action = vla.predict_action(**inputs, unnorm_key="bridge_orig", do_sample=False)
