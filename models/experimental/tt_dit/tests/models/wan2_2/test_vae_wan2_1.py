@@ -4,6 +4,7 @@
 
 import pytest
 import torch
+import time
 from loguru import logger
 from collections import defaultdict
 from diffusers import AutoencoderKLWan
@@ -14,6 +15,7 @@ from ....layers.normalization import RMSNorm
 from ....models.vae.vae_wan2_1 import (
     WanAttentionBlock,
     WanDecoder3d,
+    WanDecoder,
     WanCausalConv3d,
     WanResidualBlock,
     WanMidBlock,
@@ -811,3 +813,82 @@ def test_wan_decoder3d(device, B, C, T, H, W, mean, std):
                 tt_feat_cache[i] = ttnn.from_torch(
                     tt_feat_cache_host[i], device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
                 )
+
+
+@pytest.mark.parametrize(
+    ("B, C, T, H, W"),
+    [
+        (1, 16, 10, 60, 104),  # 480p, 10 frames
+        (1, 16, 10, 90, 160),  # 720p, 10 frames
+    ],
+    ids=[
+        "480p",
+        "720p",
+    ],
+)
+@pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, 3)])
+def test_wan_decoder(device, B, C, T, H, W, mean, std):
+    from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
+
+    torch_dtype = torch.float32
+    base_dim = 96
+    z_dim = 16
+    dim_mult = [1, 2, 4, 4]
+    num_res_blocks = 2
+    attn_scales = []
+    temperal_downsample = [False, True, True]
+    dropout = 0.0
+    out_channels = 3
+    is_residual = False
+
+    torch_model = TorchAutoencoderKLWan(
+        base_dim=base_dim,
+        z_dim=z_dim,
+        dim_mult=dim_mult,
+        num_res_blocks=num_res_blocks,
+        attn_scales=attn_scales,
+        temperal_downsample=temperal_downsample,
+        dropout=dropout,
+        out_channels=out_channels,
+        is_residual=is_residual,
+    )
+    torch_model.eval()
+
+    tt_model = WanDecoder(
+        base_dim=base_dim,
+        z_dim=z_dim,
+        dim_mult=dim_mult,
+        num_res_blocks=num_res_blocks,
+        attn_scales=attn_scales,
+        temperal_downsample=temperal_downsample,
+        out_channels=out_channels,
+        is_residual=is_residual,
+        mesh_device=device,
+    )
+    tt_model.load_state_dict(torch_model.state_dict())
+
+    torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
+    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
+    tt_input_tensor = ttnn.from_torch(tt_input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+
+    logger.info(f"running tt model")
+    start = time.time()
+    tt_output = tt_model(
+        tt_input_tensor,
+    )[0]
+
+    tt_output_torch = ttnn.to_torch(tt_output)
+    logger.info(f"tt time taken: {time.time() - start}")
+    logger.info(f"tt output shape: {tt_output_torch.shape}")
+
+    logger.info(f"running torch model")
+    start = time.time()
+    torch_output = torch_model.decode(
+        torch_input_tensor,
+        return_dict=False,
+    )[0]
+    logger.info(f"torch time taken: {time.time() - start}")
+    logger.info(f"torch output shape: {torch_output.shape}")
+
+    logger.info(f"checking output")
+    assert_quality(torch_output, tt_output_torch, pcc=0.998_000, relative_rmse=0.08)
