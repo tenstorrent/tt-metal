@@ -40,7 +40,7 @@
 #include "tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/wormhole_implementation.h>
 #include <tt-metalium/device_pool.hpp>

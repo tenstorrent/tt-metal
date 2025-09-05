@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 #include <cstdint>
 #include "fabric_types.hpp"
 #include "gtest/gtest.h"

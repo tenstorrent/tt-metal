@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include <umd/device/types/arch.h>  // tt::ARCH
+#include <umd/device/types/arch.hpp>  // tt::ARCH
 #include <vector>
 
 #include "core_coord.hpp"

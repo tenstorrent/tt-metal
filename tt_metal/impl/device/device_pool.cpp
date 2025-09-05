@@ -8,7 +8,7 @@
 #include <sched.h>
 #include <tracy/Tracy.hpp>
 #include <tt_metal.hpp>
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 #include <unistd.h>  // Warning Linux Only, needed for _SC_NPROCESSORS_ONLN
 #include <algorithm>
 #include <cstdlib>
