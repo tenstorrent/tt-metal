@@ -13,10 +13,12 @@ from ....utils.check import assert_quality
 from ....layers.normalization import RMSNorm
 from ....models.vae.vae_wan2_1 import (
     WanAttentionBlock,
+    WanDecoder3d,
     WanCausalConv3d,
     WanResidualBlock,
     WanMidBlock,
     WanResample,
+    WanUpBlock,
 )
 from ....utils.conv3d import count_convs
 
@@ -226,6 +228,11 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std):
     ("B, C, T, H, W"),
     [
         (1, 384, 1, 90, 160),  # decoder.mid_block.resnets.0.norm1
+        (1, 384, 1, 60, 104),  # decoder.mid_block.resnets.0.norm1
+    ],
+    ids=[
+        "720p",
+        "480p",
     ],
 )
 @pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, -3)])
@@ -580,3 +587,227 @@ def test_wan_resample(device, B, dim, T, H, W, mode, upsample_out_dim, cache_len
         tt_feat_cache[i] = ttnn.to_torch(tt_feat_cache[i])
         tt_feat_cache[i] = tt_feat_cache[i].permute(0, 4, 1, 2, 3)
         assert_quality(torch_feat_cache[i], tt_feat_cache[i], pcc=0.999_000, relative_rmse=0.016)
+
+
+@pytest.mark.parametrize(
+    ("B, in_dim, out_dim, T, H, W, mode, num_res_blocks"),
+    [
+        (1, 384, 384, 1, 90, 160, "upsample3d", 2),  # decoder.up_blocks.0
+        (1, 192, 384, 2, 180, 320, "upsample3d", 2),  # decoder.up_blocks.1
+        (1, 192, 192, 4, 360, 640, "upsample2d", 2),  # decoder.up_blocks.2
+        # (1, 192, 192, 4, 720, 1280, None, 2),  # decoder.up_blocks.3 # OOM on 720p input
+        (1, 192, 192, 4, 480, 832, None, 2),  # decoder.up_blocks.3 on 480p input
+    ],
+    ids=[
+        "upblock_0",
+        "upblock_1",
+        "upblock_2",
+        "upblock_3",
+    ],
+)
+@pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, 3)])
+def test_wan_upblock(device, B, in_dim, out_dim, T, H, W, mode, num_res_blocks, mean, std):
+    from diffusers.models.autoencoders.autoencoder_kl_wan import WanUpBlock as TorchWanUpBlock
+
+    torch_dtype = torch.float32
+    torch_model = TorchWanUpBlock(
+        in_dim=in_dim,
+        out_dim=out_dim,
+        num_res_blocks=num_res_blocks,
+        upsample_mode=mode,
+    )
+    torch_model.eval()
+
+    tt_model = WanUpBlock(
+        in_dim=in_dim,
+        out_dim=out_dim,
+        num_res_blocks=num_res_blocks,
+        upsample_mode=mode,
+        mesh_device=device,
+    )
+    tt_model.load_state_dict(torch_model.state_dict())
+
+    num_convs = count_convs(tt_model)
+
+    torch_feat_cache = [None for _ in range(num_convs)]
+    tt_feat_cache = [None for _ in range(num_convs)]
+
+    # Run 4 times to get models to create their own caches
+    for i in range(4):
+        torch_feat_idx = [0]
+        tt_feat_idx = [0]
+        logger.info(f"running test iteration {i}")
+
+        torch_input_tensor = torch.randn(B, in_dim, T, H, W, dtype=torch_dtype) * std + mean
+        tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
+        tt_input_tensor = ttnn.from_torch(
+            tt_input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
+        )
+
+        logger.info(f"running torch model")
+        torch_output = torch_model(
+            torch_input_tensor,
+            feat_cache=torch_feat_cache,
+            feat_idx=torch_feat_idx,
+        )
+
+        logger.info(f"running tt model")
+        tt_output = tt_model(
+            tt_input_tensor,
+            feat_cache=tt_feat_cache,
+            feat_idx=tt_feat_idx,
+        )
+
+        tt_output_torch = ttnn.to_torch(tt_output)
+        tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
+
+        logger.info(f"checking output")
+        assert_quality(torch_output, tt_output_torch, pcc=0.999_000, relative_rmse=0.02)
+
+        for i in range(len(tt_feat_cache)):
+            logger.info(f"checking feat_cache {i}")
+            if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
+                logger.info(f"feat_cache {i} is Rep")
+                assert torch_feat_cache[i] == "Rep"
+                continue
+            tt_feat_cache_back = ttnn.to_torch(tt_feat_cache[i])
+            tt_feat_cache_back = tt_feat_cache_back.permute(0, 4, 1, 2, 3)
+            assert_quality(torch_feat_cache[i], tt_feat_cache_back, pcc=0.999_000, relative_rmse=0.03)
+
+        # Defrag the cache
+        tt_feat_cache_host = []
+        for i in range(len(tt_feat_cache)):
+            if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
+                tt_feat_cache_host.append(tt_feat_cache[i])
+            else:
+                tt_feat_cache_host.append(ttnn.to_torch(tt_feat_cache[i]))
+                ttnn.deallocate(tt_feat_cache[i])
+        for i in range(len(tt_feat_cache)):
+            if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
+                tt_feat_cache[i] = tt_feat_cache_host[i]
+            else:
+                tt_feat_cache[i] = ttnn.from_torch(
+                    tt_feat_cache_host[i], device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
+                )
+
+
+@pytest.mark.parametrize(
+    ("B, C, T, H, W"),
+    [
+        (1, 16, 1, 60, 104),  # 480p
+        (1, 16, 1, 90, 160),  # 720p
+    ],
+    ids=[
+        "480p",
+        "720p",
+    ],
+)
+@pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, 3)])
+def test_wan_decoder3d(device, B, C, T, H, W, mean, std):
+    from diffusers.models.autoencoders.autoencoder_kl_wan import WanDecoder3d as TorchWanDecoder3d
+
+    torch_dtype = torch.float32
+    base_dim = 96
+    z_dim = 16
+    dim_mult = [1, 2, 4, 4]
+    num_res_blocks = 2
+    attn_scales = []
+    temperal_downsample = [False, True, True]
+    temperal_upsample = temperal_downsample[::-1]
+    dropout = 0.0
+    out_channels = 3
+    is_residual = False
+
+    torch_model = TorchWanDecoder3d(
+        dim=base_dim,
+        z_dim=z_dim,
+        dim_mult=dim_mult,
+        num_res_blocks=num_res_blocks,
+        attn_scales=attn_scales,
+        temperal_upsample=temperal_upsample,
+        dropout=dropout,
+        out_channels=out_channels,
+        is_residual=is_residual,
+    )
+    torch_model.eval()
+
+    tt_model = WanDecoder3d(
+        dim=base_dim,
+        z_dim=z_dim,
+        dim_mult=dim_mult,
+        num_res_blocks=num_res_blocks,
+        attn_scales=attn_scales,
+        temperal_upsample=temperal_upsample,
+        out_channels=out_channels,
+        is_residual=is_residual,
+        mesh_device=device,
+    )
+    tt_model.load_state_dict(torch_model.state_dict())
+
+    num_convs = count_convs(tt_model)
+
+    torch_feat_cache = [None for _ in range(num_convs)]
+    tt_feat_cache = [None for _ in range(num_convs)]
+
+    # Run 4 times to get models to create their own caches
+    for i in range(4):
+        torch_feat_idx = [0]
+        tt_feat_idx = [0]
+        logger.info(f"running test iteration {i}")
+
+        torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
+        tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
+        tt_input_tensor = ttnn.from_torch(
+            tt_input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
+        )
+
+        logger.info(f"running torch model")
+        torch_output = torch_model(
+            torch_input_tensor,
+            feat_cache=torch_feat_cache,
+            feat_idx=torch_feat_idx,
+        )
+        logger.info(f"torch output shape: {torch_output.shape}")
+
+        logger.info(f"running tt model")
+        tt_output = tt_model(
+            tt_input_tensor,
+            feat_cache=tt_feat_cache,
+            feat_idx=tt_feat_idx,
+        )
+
+        tt_output_torch = ttnn.to_torch(tt_output)
+        tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
+        # Trim padding on output channels
+        # DEBUG: REMOVING
+        logger.info(f"trimming output channels from {tt_output_torch.shape} to {out_channels}")
+        tt_output_torch = tt_output_torch[:, :out_channels]
+
+        logger.info(f"checking output")
+        assert_quality(torch_output, tt_output_torch, pcc=0.998_000, relative_rmse=0.08)
+
+        for i in range(len(tt_feat_cache)):
+            logger.info(f"checking feat_cache {i}")
+            if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
+                logger.info(f"feat_cache {i} is Rep")
+                assert torch_feat_cache[i] == "Rep"
+                continue
+            tt_feat_cache_back = ttnn.to_torch(tt_feat_cache[i])
+            tt_feat_cache_back = tt_feat_cache_back.permute(0, 4, 1, 2, 3)
+            assert_quality(torch_feat_cache[i], tt_feat_cache_back, pcc=0.998_000, relative_rmse=0.08)
+
+        # Defrag the cache
+        tt_feat_cache_host = []
+        for i in range(len(tt_feat_cache)):
+            if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
+                tt_feat_cache_host.append(tt_feat_cache[i])
+            else:
+                tt_feat_cache_host.append(ttnn.to_torch(tt_feat_cache[i]))
+                ttnn.deallocate(tt_feat_cache[i])
+        for i in range(len(tt_feat_cache)):
+            if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
+                tt_feat_cache[i] = tt_feat_cache_host[i]
+            else:
+                tt_feat_cache[i] = ttnn.from_torch(
+                    tt_feat_cache_host[i], device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
+                )
