@@ -120,4 +120,5 @@ enum class SfpuType {
     where,
     softsign,
     celu,
+    hardmish
 };
