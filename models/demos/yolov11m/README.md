@@ -4,7 +4,7 @@
     Wormhole (n150, n300)
 
 ## Introduction
-**YOLOv11n** is the smallest variant in the YOLOV11 series, it offers improvements in accuracy, speed, and efficiency for real-time object detection. It features enhanced architecture and optimized training methods, suitable for various computer vision tasks.
+**YOLOv11m** is the medium-size variant in the YOLOV11 series, it offers improvements in accuracy, speed, and efficiency for real-time object detection. It features enhanced architecture and optimized training methods, suitable for various computer vision tasks.
 
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
@@ -66,12 +66,12 @@ Note: Output images will be saved in the `models/demos/yolov11/demo/runs` folder
 ### Performant evaluation with Trace+2CQ
 Use the following command to run the performant evaluation with Trace+2CQs:
 ```
-pytest models/experimental/yolo_eval/evaluate.py::test_yolov11n[res0-device_params0-tt_model]
+pytest models/experimental/yolo_eval/evaluate.py::test_yolov11m[res0-device_params0-tt_model]
 ```
 Note: The model is evaluated with 500 samples.
 
 ## Details
-- The entry point to the `yolov11` is located at : `models/demos/yolov11/tt/ttnn_yolov11.py`
+- The entry point to the `yolov11` is located at : `models/demos/yolov11m/tt/ttnn_yolov11.py`
 - Batch Size : `1` (Single Device), `2` (Multi Device).
 - Supported Input Resolution : `(640, 640)` - (Height, Width).
 - Dataset used for evaluation : **COCO-2017**
