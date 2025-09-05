@@ -64,8 +64,90 @@ Mesh: [
   board: 2x4,
   device_topology: [2, 4],
   host_topology: [1, 1],
+},
+{
+  id: 8,
+  board: 2x4,
+  device_topology: [2, 4],
+  host_topology: [1, 1],
+},
+{
+  id: 9,
+  board: 2x4,
+  device_topology: [2, 4],
+  host_topology: [1, 1],
+},
+{
+  id: 10,
+  board: 2x4,
+  device_topology: [2, 4],
+  host_topology: [1, 1],
+},
+{
+  id: 11,
+  board: 2x4,
+  device_topology: [2, 4],
+  host_topology: [1, 1],
+},
+{
+  id: 12,
+  board: 2x4,
+  device_topology: [2, 4],
+  host_topology: [1, 1],
+},
+{
+  id: 13,
+  board: 2x4,
+  device_topology: [2, 4],
+  host_topology: [1, 1],
+},
+{
+  id: 14,
+  board: 2x4,
+  device_topology: [2, 4],
+  host_topology: [1, 1],
+},
+{
+  id: 15,
+  board: 2x4,
+  device_topology: [2, 4],
+  host_topology: [1, 1],
 }
 ]
 
-Graph: [
+RelaxedGraph: [
+  [M0, M1, 2],
+  [M0, M2, 2],
+  [M0, M3, 2],
+  [M1, M2, 2],
+  [M1, M3, 2],
+  [M2, M3, 2],
+
+  [M4, M5, 2],
+  [M4, M6, 2],
+  [M4, M7, 2],
+  [M5, M6, 2],
+  [M5, M7, 2],
+  [M6, M7, 2],
+
+  [M8, M9, 2],
+  [M8, M10, 2],
+  [M8, M11, 2],
+  [M9, M10, 2],
+  [M9, M11, 2],
+  [M10, M11, 2],
+
+  [M12, M13, 2],
+  [M12, M14, 2],
+  [M12, M15, 2],
+  [M13, M14, 2],
+  [M13, M15, 2],
+  [M14, M15, 2],
+
+  [M0, M8, 2],
+  [M2, M5, 2],
+  [M3, M12, 2],
+  [M4, M11, 2],
+  [M7, M15, 2],
+  [M10, M13, 2]
 ]

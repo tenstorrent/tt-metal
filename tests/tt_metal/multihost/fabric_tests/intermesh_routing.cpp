@@ -170,7 +170,7 @@ TEST_F(InterMeshDual2x4FabricFixture, MultiMeshNorthMulticast_1) {
 
 // ========= Data-Movement Tests for NanoExabox Machines  =========
 
-TEST_F(IntermeshNanoExabox1x8FabricFixture, RandomizedIntermeshUnicastBwd) {
+TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastBwd) {
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     constexpr uint32_t num_iterations = 100;
