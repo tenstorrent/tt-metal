@@ -24,16 +24,16 @@ using BufferPtr = NamedType<uint8_t, struct BufferPtrType>;
 // Increments val and wraps to 0 if it reaches limit
 template <size_t LIMIT = 0, typename T>
 FORCE_INLINE auto wrap_increment(T val) -> T {
-    constexpr bool is_pow2 = LIMIT != 0 && is_power_of_2(LIMIT);
-    if constexpr (LIMIT == 1) {
-        return val;
-    } else if constexpr (LIMIT == 2) {
-        return 1 - val;
-    } else if constexpr (is_pow2) {
-        return (val + 1) & (static_cast<T>(LIMIT - 1));
-    } else {
-        return (val == static_cast<T>(LIMIT - 1)) ? static_cast<T>(0) : static_cast<T>(val + 1);
-    }
+    // constexpr bool is_pow2 = LIMIT != 0 && is_power_of_2(LIMIT);
+    // if constexpr (LIMIT == 1) {
+    //     return val;
+    // } else if constexpr (LIMIT == 2) {
+    //     return 1 - val;
+    // } else if constexpr (is_pow2) {
+    //     return (val + 1) & (static_cast<T>(LIMIT - 1));
+    // } else {
+    return (val == static_cast<T>(LIMIT - 1)) ? static_cast<T>(0) : static_cast<T>(val + 1);
+    // }
 }
 
 // Increments val and wraps to 0 if it reaches limit
@@ -44,18 +44,18 @@ FORCE_INLINE auto wrap_increment(T val, T limit) -> T {
 
 template <size_t LIMIT, typename T>
 FORCE_INLINE auto wrap_increment_n(T val, uint8_t increment) -> T {
-    constexpr bool is_pow2 = LIMIT != 0 && is_power_of_2(LIMIT);
-    if constexpr (LIMIT == 1) {
-        return val;
-    } else if constexpr (LIMIT == 2) {
-        return 1 - val;
-    } else if constexpr (is_pow2) {
-        return (val + increment) & (LIMIT - 1);
-    } else {
-        T new_unadjusted_val = val + increment;
-        bool wraps = new_unadjusted_val >= LIMIT;
-        return wraps ? static_cast<T>(new_unadjusted_val - LIMIT) : static_cast<T>(new_unadjusted_val);
-    }
+    // constexpr bool is_pow2 = LIMIT != 0 && is_power_of_2(LIMIT);
+    // if constexpr (LIMIT == 1) {
+    //     return val;
+    // } else if constexpr (LIMIT == 2) {
+    //     return 1 - val;
+    // } else if constexpr (is_pow2) {
+    //     return (val + increment) & (LIMIT - 1);
+    // } else {
+    T new_unadjusted_val = val + increment;
+    bool wraps = new_unadjusted_val >= LIMIT;
+    return wraps ? static_cast<T>(new_unadjusted_val - LIMIT) : static_cast<T>(new_unadjusted_val);
+    // }
 }
 
 FORCE_INLINE
@@ -75,18 +75,18 @@ FORCE_INLINE auto normalize_ptr(BufferPtr ptr) -> BufferIndex {
     constexpr bool is_size_2 = NUM_BUFFERS == 2;
     constexpr bool is_size_1 = NUM_BUFFERS == 1;
     constexpr uint8_t wrap_mask = NUM_BUFFERS - 1;
-    if constexpr (is_size_pow2) {
-        return BufferIndex{static_cast<uint8_t>(ptr.get() & wrap_mask)};
-    } else if constexpr (is_size_2) {
-        return BufferIndex{(uint8_t)1 - ptr.get()};
-    } else if constexpr (is_size_1) {
-        return BufferIndex{0};
-    } else {
-        // note it may make sense to calculate this only when we increment
-        // which will save calculations overall (but may add register pressure)
-        // and introduce undesirable loads
-        return normalize_ptr(ptr, NUM_BUFFERS);
-    }
+    // if constexpr (is_size_pow2) {
+    //     return BufferIndex{static_cast<uint8_t>(ptr.get() & wrap_mask)};
+    // } else if constexpr (is_size_2) {
+    //     return BufferIndex{(uint8_t)1 - ptr.get()};
+    // } else if constexpr (is_size_1) {
+    //     return BufferIndex{0};
+    // } else {
+    // note it may make sense to calculate this only when we increment
+    // which will save calculations overall (but may add register pressure)
+    // and introduce undesirable loads
+    return normalize_ptr(ptr, NUM_BUFFERS);
+    // }
 }
 
 FORCE_INLINE uint8_t
@@ -100,11 +100,11 @@ FORCE_INLINE uint8_t distance_behind(const BufferPtr& trailing_ptr, const Buffer
     constexpr bool is_size_pow2 = is_power_of_2(NUM_BUFFERS);
     constexpr uint8_t ptr_wrap_mask = (2 * NUM_BUFFERS) - 1;
     constexpr uint8_t ptr_wrap_size = 2 * NUM_BUFFERS;
-    if constexpr (is_size_pow2) {
-        return (leading_ptr - trailing_ptr) & ptr_wrap_mask;
-    } else {
-        return distance_behind(trailing_ptr, leading_ptr, ptr_wrap_size);
-    }
+    // if constexpr (is_size_pow2) {
+    //     return (leading_ptr - trailing_ptr) & ptr_wrap_mask;
+    // } else {
+    return distance_behind(trailing_ptr, leading_ptr, ptr_wrap_size);
+    // }
 }
 
 template <uint8_t NUM_BUFFERS>

@@ -139,7 +139,7 @@ FORCE_INLINE
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto dest_address = header.command_fields.unicast_write.noc_address;
-            noc_async_write_one_packet_with_trid<false, false>(
+            noc_async_write_one_packet_with_trid(
                 payload_start_address,
                 dest_address,
                 payload_size_bytes,
@@ -155,7 +155,7 @@ FORCE_INLINE
             if (header.command_fields.unicast_seminc.flush) {
                 flush_write_to_noc_pipeline(rx_channel_id);
             }
-            noc_semaphore_inc<true>(
+            noc_semaphore_inc(
                 dest_address,
                 increment,
                 tt::tt_fabric::edm_to_local_chip_noc,
@@ -166,7 +166,7 @@ FORCE_INLINE
         case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
             const auto dest_address = header.command_fields.unicast_inline_write.noc_address;
             const auto value = header.command_fields.unicast_inline_write.value;
-            noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
+            noc_inline_dw_write(
                 dest_address,
                 value,
                 0xF,
@@ -176,7 +176,7 @@ FORCE_INLINE
 
         case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
             const auto dest_address = header.command_fields.unicast_seminc_fused.noc_address;
-            noc_async_write_one_packet_with_trid<false, false>(
+            noc_async_write_one_packet_with_trid(
                 payload_start_address,
                 dest_address,
                 payload_size_bytes,
@@ -190,7 +190,7 @@ FORCE_INLINE
             if (header.command_fields.unicast_seminc_fused.flush) {
                 flush_write_to_noc_pipeline(rx_channel_id);
             }
-            noc_semaphore_inc<true>(
+            noc_semaphore_inc(
                 semaphore_dest_address,
                 increment,
                 tt::tt_fabric::edm_to_local_chip_noc,
@@ -207,7 +207,7 @@ FORCE_INLINE
                     chunk_size = header.command_fields.unicast_scatter_write.chunk_size[i];
                 }
                 const auto dest_address = header.command_fields.unicast_scatter_write.noc_address[i];
-                noc_async_write_one_packet_with_trid<false, false>(
+                noc_async_write_one_packet_with_trid(
                     payload_start_address + offset,
                     dest_address,
                     chunk_size,

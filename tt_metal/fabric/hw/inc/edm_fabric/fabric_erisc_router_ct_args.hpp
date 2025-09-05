@@ -56,10 +56,13 @@ constexpr uint32_t sender_channel_2_free_slots_stream_id = get_compile_time_arg_
 constexpr uint32_t sender_channel_3_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 19);
 constexpr uint32_t sender_channel_4_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 20);
 constexpr uint32_t vc1_sender_channel_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 21);
-constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 22);
+constexpr uint32_t to_receiver_0_sender_ch1_pkts_sent_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 22);
+constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 23);
+
+static_assert(to_receiver_0_sender_ch1_pkts_sent_id == 23, "to_receiver_0_sender_ch1_pkts_sent_id must be 23");
 
 // Special marker after stream IDs
-constexpr size_t STREAM_IDS_END_MARKER_IDX = STREAM_ID_ARGS_START_IDX + 23;
+constexpr size_t STREAM_IDS_END_MARKER_IDX = STREAM_ID_ARGS_START_IDX + 24;
 constexpr size_t STREAM_IDS_END_MARKER = 0xFFEE0001;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(STREAM_IDS_END_MARKER_IDX) == STREAM_IDS_END_MARKER,
@@ -87,12 +90,12 @@ static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
 static_assert(
-    wait_for_host_signal_IDX == 27, "wait_for_host_signal_IDX must be 27 (23 stream IDs + 1 marker + 3 config args)");
+    wait_for_host_signal_IDX == 28, "wait_for_host_signal_IDX must be 28 (24 stream IDs + 1 marker + 3 config args)");
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
 static_assert(
-    MAIN_CT_ARGS_START_IDX == 28, "MAIN_CT_ARGS_START_IDX must be 28 (23 stream IDs + 1 marker + 4 config args)");
+    MAIN_CT_ARGS_START_IDX == 29, "MAIN_CT_ARGS_START_IDX must be 29 (24 stream IDs + 1 marker + 4 config args)");
 
 constexpr uint32_t SWITCH_INTERVAL =
 #ifndef DEBUG_PRINT_ENABLED
@@ -232,6 +235,10 @@ constexpr size_t sender_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 3
 constexpr size_t receiver_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 4);
 constexpr bool multi_txq_enabled = sender_txq_id != receiver_txq_id;
 
+static_assert(sender_txq_id == 0, "Multi-TXQ mode is not supported.");
+static_assert(receiver_txq_id == 0, "Multi-TXQ mode is not supported.");
+static_assert(!multi_txq_enabled, "Multi-TXQ mode is not supported.");
+
 constexpr size_t iterations_between_ctx_switch_and_teardown_checks = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 5);
 constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 6);
 constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 7);
@@ -321,6 +328,13 @@ static_assert(
 
 constexpr size_t TO_SENDER_CREDIT_COUNTERS_START_IDX = SPECIAL_MARKER_2_IDX + SPECIAL_MARKER_CHECK_ENABLED;
 
+constexpr std::array<size_t, 4> to_receiver_sent_addrs =
+    fill_array_with_next_n_args<size_t, TO_SENDER_CREDIT_COUNTERS_START_IDX, 4>();
+constexpr size_t to_receiver_sent_addr = to_receiver_sent_addrs[0];
+constexpr size_t to_receiver_receive_addr = to_receiver_sent_addrs[1];
+constexpr size_t to_receiver_sent_addr_ch1 = to_receiver_sent_addrs[2];
+constexpr size_t to_receiver_receive_addr_ch1 = to_receiver_sent_addrs[3];
+
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> to_sender_remote_ack_counter_addrs =
     conditional_get_next_n_args<multi_txq_enabled, size_t, TO_SENDER_CREDIT_COUNTERS_START_IDX, NUM_SENDER_CHANNELS>();
 
@@ -367,7 +381,7 @@ static_assert(
     "local_receiver_completion_counter_ptrs must be valid");
 
 constexpr size_t SPECIAL_MARKER_3_IDX =
-    TO_SENDER_CREDIT_COUNTERS_START_IDX + (multi_txq_enabled ? 2 * (NUM_SENDER_CHANNELS + NUM_RECEIVER_CHANNELS) : 0);
+    TO_SENDER_CREDIT_COUNTERS_START_IDX + 2 * (NUM_SENDER_CHANNELS + NUM_RECEIVER_CHANNELS) + 4;
 constexpr size_t SPECIAL_MARKER_3 = 0x30c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_3_IDX) == SPECIAL_MARKER_3,

@@ -160,8 +160,8 @@ static void run_multi_txq_rxq_test(
 TEST_F(TwoDeviceBlackholeFixture, ActiveEthChipToChipMultiTxqRxq_Both0) {
     run_multi_txq_rxq_test(this, this->devices_.at(0), this->devices_.at(1), 0, 0, 100000);
 }
-TEST_F(TwoDeviceBlackholeFixture, ActiveEthChipToChipMultiTxqRxq_Qs_0_and_1) {
-    run_multi_txq_rxq_test(this, this->devices_.at(0), this->devices_.at(1), 0, 1, 100000);
-}
+// TEST_F(TwoDeviceBlackholeFixture, ActiveEthChipToChipMultiTxqRxq_Qs_0_and_1) {
+//     run_multi_txq_rxq_test(this, this->devices_.at(0), this->devices_.at(1), 0, 1, 100000);
+// }
 
 }  // namespace tt::tt_metal

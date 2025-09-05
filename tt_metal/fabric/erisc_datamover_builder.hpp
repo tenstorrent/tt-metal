@@ -170,6 +170,8 @@ struct StreamRegAssignments {
     static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
     static constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
     static constexpr uint32_t vc1_sender_channel_free_slots_stream_id = 22;
+
+    static constexpr uint32_t to_receiver_0_sender_ch1_pkts_sent_id = 23;
     // Multi-RISC teardown synchronization stream ID
     static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
 
@@ -197,6 +199,7 @@ struct StreamRegAssignments {
             sender_channel_3_free_slots_stream_id,
             sender_channel_4_free_slots_stream_id,
             vc1_sender_channel_free_slots_stream_id,
+            to_receiver_0_sender_ch1_pkts_sent_id,
             multi_risc_teardown_sync_stream_id};
         return stream_ids;
     }

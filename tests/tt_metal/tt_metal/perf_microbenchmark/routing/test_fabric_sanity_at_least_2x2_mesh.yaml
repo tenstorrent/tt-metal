@@ -103,7 +103,7 @@ Tests:
     defaults:
       ftype: unicast
       size: 1024
-      num_packets: 2000
+      num_packets: 20000
 
     patterns:
       - type: half_ring

@@ -21,6 +21,8 @@
 #include <cstdint>
 #include <array>
 
+#include "debug/ring_buffer.h"
+
 namespace tt::tt_fabric {
 
 inline constexpr uint8_t edm_fabric_write_noc_index = 0;
@@ -255,18 +257,50 @@ struct WorkerToFabricEdmSenderImpl {
     template <uint8_t EDM_TO_DOWNSTREAM_NOC = noc_index, uint8_t EDM_TO_DOWNSTREAM_NOC_VC = NOC_UNICAST_WRITE_VC>
     FORCE_INLINE void setup_edm_noc_cmd_buf() const {
         uint64_t edm_noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, EDM_TO_DOWNSTREAM_NOC);
-        noc_async_write_one_packet_with_trid_set_state<true>(
+        noc_async_write_one_packet_with_trid_set_state(
             edm_noc_addr, this->data_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC, EDM_TO_DOWNSTREAM_NOC_VC);
         const uint64_t noc_sem_addr = get_noc_addr(
             this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, EDM_TO_DOWNSTREAM_NOC);
         noc_sem_addr_ = noc_sem_addr;
-        noc_inline_dw_write_set_state<true, true>(
-            noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xF, this->sync_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC, EDM_TO_DOWNSTREAM_NOC_VC);
+        noc_inline_dw_write_set_state(
+            noc_sem_addr,
+            (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC,
+            0xF,
+            this->sync_noc_cmd_buf,
+            EDM_TO_DOWNSTREAM_NOC,
+            EDM_TO_DOWNSTREAM_NOC_VC);
     }
 
     FORCE_INLINE bool edm_has_space_for_packet() const {
         invalidate_l1_cache();
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
+            // if (this->edm_noc_x == 24 && this->edm_noc_y == 25) {
+            //     WATCHER_RING_BUFFER_PUSH((uint)0xAAAAAAAA);
+            //     WATCHER_RING_BUFFER_PUSH((uint)(this->buffer_slot_write_counter.counter));
+            //     WATCHER_RING_BUFFER_PUSH((uint)*this->edm_buffer_local_free_slots_read_ptr);
+            //     WATCHER_RING_BUFFER_PUSH((uint)0xBBBBBBBB);
+            // }
+            // ASSERT(this->buffer_slot_write_counter.counter >= *this->edm_buffer_local_free_slots_read_ptr);
+            bool has_space = (this->buffer_slot_write_counter.counter - *this->edm_buffer_local_free_slots_read_ptr) <
+                             this->num_buffers_per_channel;
+
+            // if (this->edm_noc_x == 24 && this->edm_noc_y == 25 && !has_space) {
+            //     WATCHER_RING_BUFFER_PUSH((uint)0xAAAAAAAA);
+            //     WATCHER_RING_BUFFER_PUSH((uint)(this->buffer_slot_write_counter.counter));
+            // //     // WATCHER_RING_BUFFER_PUSH((uint)packet_count);
+            //     WATCHER_RING_BUFFER_PUSH((uint)*this->edm_buffer_local_free_slots_read_ptr);
+            // //     // WATCHER_RING_BUFFER_PUSH((uint)this->num_buffers_per_channel);
+            //     WATCHER_RING_BUFFER_PUSH((uint)0xBBBBBBBB);
+            // //     for (int i=0; i<1000; ++i) {
+            // //         asm volatile("nop");
+            // //     }
+            // }
+
+            // if(this->edm_buffer_local_free_slots_read_ptr == reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0x7200))
+            // {
+            //     return true;
+            // }
+
             return (this->buffer_slot_write_counter.counter - *this->edm_buffer_local_free_slots_read_ptr) <
                    this->num_buffers_per_channel;
         } else {
@@ -395,13 +429,13 @@ struct WorkerToFabricEdmSenderImpl {
                 offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, worker_semaphore_address));
         // write the address of our local copy of read counter (that EDM is supposed to update)
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
-            noc_inline_dw_write<InlineWriteDst::DEFAULT, posted>(
+            noc_inline_dw_write(
                 dest_edm_location_info_addr,
                 reinterpret_cast<size_t>(edm_buffer_local_free_slots_update_ptr),
                 0xf,
                 WORKER_HANDSHAKE_NOC);
         } else {
-            noc_inline_dw_write<InlineWriteDst::DEFAULT, posted>(
+            noc_inline_dw_write(
                 dest_edm_location_info_addr,
                 reinterpret_cast<size_t>(edm_buffer_local_free_slots_update_ptr),
                 0xf,
@@ -411,7 +445,7 @@ struct WorkerToFabricEdmSenderImpl {
             dest_noc_addr_coord_only |
             reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_teardown_semaphore_address));
         // Write our local teardown ack address to EDM
-        noc_inline_dw_write<InlineWriteDst::DEFAULT, posted>(
+        noc_inline_dw_write(
             edm_teardown_semaphore_address_address,
             reinterpret_cast<size_t>(worker_teardown_addr),
             0xf,
@@ -419,7 +453,7 @@ struct WorkerToFabricEdmSenderImpl {
         // Write out core noc-xy coord to EDM
         const uint64_t connection_worker_xy_address =
             dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_xy));
-        noc_inline_dw_write<InlineWriteDst::DEFAULT, posted>(
+        noc_inline_dw_write(
             connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32(), 0xf, WORKER_HANDSHAKE_NOC);
     }
 
@@ -444,8 +478,7 @@ struct WorkerToFabricEdmSenderImpl {
             this->buffer_slot_index = BufferIndex(0);
         }
 
-        noc_inline_dw_write<InlineWriteDst::DEFAULT, posted>(
-            edm_connection_handshake_noc_addr, open_connection_value, 0xf, WORKER_HANDSHAKE_NOC);
+        noc_inline_dw_write(edm_connection_handshake_noc_addr, open_connection_value, 0xf, WORKER_HANDSHAKE_NOC);
         *this->worker_teardown_addr = 0;
         if constexpr (!USER_DEFINED_NUM_BUFFER_SLOTS) {
             this->edm_buffer_addr =
@@ -545,28 +578,13 @@ private:
         bool vc1_has_different_downstream_dest = false>
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = noc_index) {
         if constexpr (stateful_api) {
-            if constexpr (enable_deadlock_avoidance) {
-                if constexpr (vc1_has_different_downstream_dest) {
-                    noc_inline_dw_write<InlineWriteDst::REG>(
-                        noc_sem_addr_, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
-                } else {
-                    noc_inline_dw_write_with_state<true, false, true>(
-                        0,  // val unused
-                        this->edm_buffer_remote_free_slots_update_addr,
-                        this->sync_noc_cmd_buf,
-                        noc);
-                }
-            } else {
-                noc_inline_dw_write_with_state<false, false, true>(
-                    0,  // val unused
-                    0,  // addr unused
-                    this->sync_noc_cmd_buf,
-                    noc);
-            }
+            const uint64_t noc_sem_addr =
+                get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
+            noc_inline_dw_write(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
         } else {
             const uint64_t noc_sem_addr =
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
-            noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
+            noc_inline_dw_write(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
         }
         if constexpr (I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             // Write to the atomic increment stream register (write of -1 will subtract 1)

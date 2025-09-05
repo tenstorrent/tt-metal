@@ -300,7 +300,12 @@ bool did_something;
 /////////////////////////////////////////////
 //   SENDER SIDE HELPERS
 /////////////////////////////////////////////
-
+static uint32_t prev_dest_addr = 0;
+static uint8_t prev_remote_receiver_buffer_index = 255;
+static uint8_t test_remote_receiver_buffer_index = 0;
+static uint32_t senedr_send_counter = 0;
+static uint32_t senedr_send_counter_ch0 = 0;
+static uint32_t senedr_send_counter_ch1 = 0;
 template <
     uint8_t sender_channel_index,
     uint8_t to_receiver_pkts_sent_id,
@@ -315,6 +320,32 @@ FORCE_INLINE void send_next_data(
     tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, RECEIVER_NUM_BUFFERS>& receiver_buffer_channel,
     PerfTelemetryRecorder& perf_telemetry_recorder) {
     auto& remote_receiver_buffer_index = outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
+
+    senedr_send_counter++;
+    if (sender_channel_index == 0) {
+        senedr_send_counter_ch0++;
+    } else if (sender_channel_index == 1) {
+        senedr_send_counter_ch1++;
+    }
+
+    if (sender_channel_index != 2) {
+        static_assert(RECEIVER_NUM_BUFFERS != 0);
+        ASSERT(test_remote_receiver_buffer_index == remote_receiver_buffer_index.get());
+        test_remote_receiver_buffer_index =
+            BufferIndex{wrap_increment<RECEIVER_NUM_BUFFERS>(test_remote_receiver_buffer_index)};
+    }
+
+    if (sender_channel_index != 2) {
+        if (prev_remote_receiver_buffer_index == 255) {
+            // skip
+        } else if (prev_remote_receiver_buffer_index == RECEIVER_NUM_BUFFERS - 1) {  // last slot
+            ASSERT(remote_receiver_buffer_index.get() == 0);
+        } else {
+            ASSERT(prev_remote_receiver_buffer_index == remote_receiver_buffer_index.get() - 1);
+        }
+        prev_remote_receiver_buffer_index = remote_receiver_buffer_index.get();
+    }
+
     auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
     auto& local_sender_write_counter = sender_worker_interface.local_write_counter;
 
@@ -330,12 +361,32 @@ FORCE_INLINE void send_next_data(
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
     size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
     auto dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
-    pkt_header->src_ch_id = sender_channel_index;
+
+    ASSERT(dest_addr == receiver_buffer_channel.get_buffer_address(remote_receiver_buffer_index));
+    ASSERT(prev_dest_addr != dest_addr);
+
+    prev_dest_addr = dest_addr;
+
+    if (sender_channel_index == 0) {
+        pkt_header->src_ch_id = 7;
+    } else if (sender_channel_index == 1) {
+        pkt_header->src_ch_id = 31;
+    } else if (sender_channel_index == 2) {
+        pkt_header->src_ch_id = 65;
+    } else {
+        ASSERT(false);
+    }
+    for (int i = 0; i < 1000; ++i) {
+        asm volatile("nop");
+    }
+
+    volatile auto ch_id = pkt_header->src_ch_id;
 
     if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         while (internal_::eth_txq_is_busy(sender_txq_id)) {
         };
     }
+    asm volatile("fence" ::: "memory");
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
@@ -362,9 +413,43 @@ FORCE_INLINE void send_next_data(
 
     record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
-    while (internal_::eth_txq_is_busy(sender_txq_id)) {
-    };
-    remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(packets_to_forward);
+    // while (internal_::eth_txq_is_busy(sender_txq_id)) {
+    // };
+    // asm volatile ("fence" ::: "memory");
+    // remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(packets_to_forward);
+
+    if (to_receiver_pkts_sent_id == 0) {
+        volatile uint32_t* to_receiver_sent_addr_ptr = reinterpret_cast<volatile uint32_t*>(to_receiver_sent_addr);
+        to_receiver_sent_addr_ptr[0] += 1;  // Increment the address pointer
+        volatile auto dummy = *to_receiver_sent_addr_ptr;
+
+        if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
+            while (internal_::eth_txq_is_busy(sender_txq_id)) {
+            };
+        }
+        for (int i = 0; i < 100; ++i) {
+            asm volatile("nop");
+        }
+        asm volatile("fence" ::: "memory");
+        internal_::eth_send_packet_bytes_unsafe(sender_txq_id, to_receiver_sent_addr, to_receiver_receive_addr, 16);
+    } else if (to_receiver_pkts_sent_id == 1) {
+        volatile uint32_t* to_receiver_sent_addr_ptr = reinterpret_cast<volatile uint32_t*>(to_receiver_sent_addr_ch1);
+        to_receiver_sent_addr_ptr[0] += 1;  // Increment the address pointer
+        volatile auto dummy = *to_receiver_sent_addr_ptr;
+
+        if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
+            while (internal_::eth_txq_is_busy(sender_txq_id)) {
+            };
+        }
+        for (int i = 0; i < 100; ++i) {
+            asm volatile("nop");
+        }
+        asm volatile("fence" ::: "memory");
+        internal_::eth_send_packet_bytes_unsafe(
+            sender_txq_id, to_receiver_sent_addr_ch1, to_receiver_receive_addr_ch1, 16);
+    } else {
+        ASSERT(false);
+    }
 }
 
 /////////////////////////////////////////////
@@ -1426,6 +1511,7 @@ FORCE_INLINE void establish_edm_connection(
 //  Main Control Loop
 ////////////////////////////////////
 ////////////////////////////////////
+static uint32_t senedr_ack_counter = 0;
 template <
     bool enable_packet_header_recording,
     uint8_t sender_channel_index,
@@ -1467,6 +1553,10 @@ void run_sender_channel_step_impl(
             tt::tt_fabric::validate(*packet_header);
             packet_header_recorder.record_packet_header(reinterpret_cast<volatile uint32_t*>(packet_header));
         }
+        // WATCHER_RING_BUFFER_PUSH((uint)0xAAAAAAAA);
+        // WATCHER_RING_BUFFER_PUSH((uint)sender_channel_index);
+        // WATCHER_RING_BUFFER_PUSH((uint)to_receiver_pkts_sent_id);
+        // WATCHER_RING_BUFFER_PUSH((uint)0xBBBBBBBB);
         send_next_data<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
             local_sender_channel,
             local_sender_channel_worker_interface,
@@ -1480,6 +1570,12 @@ void run_sender_channel_step_impl(
     int32_t completions_since_last_check =
         sender_channel_from_receiver_credits.get_num_unprocessed_completions_from_receiver();
     if (completions_since_last_check) {
+        senedr_ack_counter += completions_since_last_check;
+        // WATCHER_RING_BUFFER_PUSH((uint)0xCCCCCCCC);
+        // WATCHER_RING_BUFFER_PUSH((uint)senedr_ack_counter);
+        // WATCHER_RING_BUFFER_PUSH((uint)my_direction);
+        // WATCHER_RING_BUFFER_PUSH((uint)0xDDDDDDDD);
+
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
         if constexpr (!enable_first_level_ack) {
@@ -1501,33 +1597,6 @@ void run_sender_channel_step_impl(
                     // is more likely to see space available as soon as it tries connecting
                 }
             }
-        }
-    }
-
-    // Process ACKs from receiver
-    // ACKs are processed second to avoid any sort of races. If we process acks second,
-    // we are guaranteed to see equal to or greater the number of acks than completions
-    if constexpr (enable_first_level_ack) {
-        ASSERT(false);
-        auto acks_since_last_check = sender_channel_from_receiver_credits.get_num_unprocessed_acks_from_receiver();
-        if (acks_since_last_check > 0) {
-            if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
-                local_sender_channel_worker_interface
-                    .template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>();
-            } else {
-                if (channel_connection_established) {
-                    local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
-                } else {
-                    ASSERT(
-                        local_sender_channel_worker_interface.local_write_counter.counter >
-                        (SENDER_NUM_BUFFERS - get_ptr_val(sender_channel_free_slots_stream_id)));
-                    ASSERT(SENDER_NUM_BUFFERS >= get_ptr_val(sender_channel_free_slots_stream_id));
-                    auto new_val = local_sender_channel_worker_interface.local_write_counter.counter -
-                                   (SENDER_NUM_BUFFERS - get_ptr_val(sender_channel_free_slots_stream_id));
-                    local_sender_channel_worker_interface.worker_location_info_ptr->edm_local_write_counter = new_val;
-                }
-            }
-            sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
         }
     }
 
@@ -1584,6 +1653,64 @@ FORCE_INLINE void run_sender_channel_step(
 
 template <
     uint8_t receiver_channel,
+    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>
+FORCE_INLINE bool determine_can_send_to_all_local_chip_receivers(
+    tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    ROUTING_FIELDS_TYPE cached_routing_fields,
+    std::array<tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
+        downstream_edm_interfaces_vc0,
+    tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_interface_vc1,
+    std::array<uint8_t, num_eth_ports>& port_direction_table) {
+    uint32_t hop_cmd;
+    if constexpr (is_2d_fabric) {
+        // read in the hop command from route buffer.
+        // Hop command is 4 bits. Each of the 4 bits signal one of the 4 possible outcomes for a packet.
+        // [0]->Forward East
+        // [1]->Forward West
+        // [2]->Forward North
+        // [3]->Forward South
+        // The hop command (4-bits) gets decoded as a local write and/or forward to the "other" 3 directions.
+        // Other 3 directions depend on the direction of fabric router.
+        // For example, a router that is connected West can write locally or forard East, North or South.
+        // A local write is encoded by setting the bit corresponding to fabric router's own direction to 1.
+        // For a West facing fabric router:
+        //  - Hop command of [0010] instructs fabric router to write the packet locally.
+        //  - Hop command of [0011] instructs fabric router to write the packet locally AND forward East (a line
+        //  mcast)
+#if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
+        // need this ifdef since the 2D dynamic routing packet header contains unique fields
+        return can_forward_packet_completely<receiver_channel>(
+            packet_header, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1, port_direction_table);
+#elif defined(FABRIC_2D)
+        // need this ifdef since the packet header for 1D does not have router_buffer field in it.
+        hop_cmd = packet_header->route_buffer[cached_routing_fields.hop_index];
+        return can_forward_packet_completely<receiver_channel>(
+            hop_cmd, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+#endif
+    } else {
+#if !defined(FABRIC_2D)
+        if constexpr (receiver_channel == 0) {
+            return can_forward_packet_completely(
+                cached_routing_fields, downstream_edm_interfaces_vc0[receiver_channel]);
+        } else {
+            return can_forward_packet_completely(cached_routing_fields, downstream_edm_interface_vc1);
+        }
+#endif
+    }
+
+    // This should never be reached due to the compile-time conditions above
+    return false;
+}
+
+static uint32_t receiver_ack_count = 0;
+static uint32_t receiver_ack_count_ch0 = 0;
+static uint32_t receiver_ack_count_ch1 = 0;
+
+static uint32_t receiver_received_counter = 0;
+static uint32_t receiver_received_counter_ch1 = 0;
+template <
+    uint8_t receiver_channel,
     uint8_t to_receiver_pkts_sent_id,
     typename WriteTridTracker,
     uint8_t RECEIVER_NUM_BUFFERS,
@@ -1598,25 +1725,26 @@ void run_receiver_channel_step_impl(
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender) {
-    auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
-    auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
-    bool unwritten_packets;
-    if constexpr (enable_first_level_ack) {
-        auto& ack_counter = receiver_channel_pointers.ack_counter;
-        bool pkts_received = pkts_received_since_last_check > 0;
-        ASSERT(receiver_channel_pointers.completion_counter - ack_counter < RECEIVER_NUM_BUFFERS);
-        if (pkts_received) {
-            // currently only support processing one packet at a time, so we only decrement by 1
-            increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
-            receiver_send_received_ack(
-                receiver_channel_response_credit_sender, ack_counter.get_buffer_index(), local_receiver_channel);
-            ack_counter.increment();
-        }
-        unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
+    invalidate_l1_cache();
+    bool unwritten_packets = false;
+    uint32_t current_sender_count = 0;
+
+    if (to_receiver_pkts_sent_id == 0) {
+        volatile uint32_t* to_receiver_sent_addr_ptr = reinterpret_cast<volatile uint32_t*>(to_receiver_receive_addr);
+        current_sender_count = *to_receiver_sent_addr_ptr;
+        unwritten_packets = ((int32_t)(current_sender_count - receiver_received_counter)) > 0;
+    } else if (to_receiver_pkts_sent_id == 1) {
+        volatile uint32_t* to_receiver_sent_addr_ptr =
+            reinterpret_cast<volatile uint32_t*>(to_receiver_receive_addr_ch1);
+        current_sender_count = *to_receiver_sent_addr_ptr;
+        unwritten_packets = ((int32_t)(current_sender_count - receiver_received_counter_ch1)) > 0;
     } else {
-        unwritten_packets = pkts_received_since_last_check != 0;
+        ASSERT(false);
     }
 
+    auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
+    auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
+    // bool unwritten_packets = pkts_received_since_last_check != 0;
     if (unwritten_packets) {
         invalidate_l1_cache();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
@@ -1628,45 +1756,44 @@ void run_receiver_channel_step_impl(
         cached_routing_fields = packet_header->routing_fields;
 #endif
 
-        receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
-        uint32_t hop_cmd;
-        bool can_send_to_all_local_chip_receivers;
-        if constexpr (is_2d_fabric) {
-            // read in the hop command from route buffer.
-            // Hop command is 4 bits. Each of the 4 bits signal one of the 4 possible outcomes for a packet.
-            // [0]->Forward East
-            // [1]->Forward West
-            // [2]->Forward North
-            // [3]->Forward South
-            // The hop command (4-bits) gets decoded as a local write and/or forward to the "other" 3 directions.
-            // Other 3 directions depend on the direction of fabric router.
-            // For example, a router that is connected West can write locally or forard East, North or South.
-            // A local write is encoded by setting the bit corresponding to fabric router's own direction to 1.
-            // For a West facing fabric router:
-            //  - Hop command of [0010] instructs fabric router to write the packet locally.
-            //  - Hop command of [0011] instructs fabric router to write the packet locally AND forward East (a line
-            //  mcast)
-#if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
-            // need this ifdef since the 2D dynamic routing packet header contains unique fields
-            can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel>(
-                packet_header, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1, port_direction_table);
-#elif defined(FABRIC_2D)
-            // need this ifdef since the packet header for 1D does not have router_buffer field in it.
-            hop_cmd = packet_header->route_buffer[cached_routing_fields.hop_index];
-            can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel>(
-                hop_cmd, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
-#endif
-        } else {
-#if !defined(FABRIC_2D)
-            if constexpr (receiver_channel == 0) {
-                can_send_to_all_local_chip_receivers = can_forward_packet_completely(
-                    cached_routing_fields, downstream_edm_interfaces_vc0[receiver_channel]);
-            } else {
-                can_send_to_all_local_chip_receivers =
-                    can_forward_packet_completely(cached_routing_fields, downstream_edm_interface_vc1);
-            }
-#endif
+        uint8_t ch_id = -1;
+        for (int i = 0; i < 1000; ++i) {
+            asm volatile("nop");
         }
+
+        invalidate_l1_cache();
+
+        if (to_receiver_pkts_sent_id == 0) {
+            receiver_received_counter++;
+        } else if (to_receiver_pkts_sent_id == 1) {
+            receiver_received_counter_ch1++;
+        }
+
+        if (packet_header->src_ch_id == 7) {
+            ch_id = 0;
+        } else if (packet_header->src_ch_id == 31) {
+            ch_id = 1;
+        } else if (packet_header->src_ch_id == 65) {
+            ch_id = 2;
+        } else {
+            // if (receiver_channel == 0)
+            // ASSERT(false);
+        }
+
+        bool can_send_to_all_local_chip_receivers = false;
+        while (!can_send_to_all_local_chip_receivers) {
+            invalidate_l1_cache();
+            can_send_to_all_local_chip_receivers = determine_can_send_to_all_local_chip_receivers<
+                receiver_channel,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                packet_header,
+                cached_routing_fields,
+                downstream_edm_interfaces_vc0,
+                downstream_edm_interface_vc1,
+                port_direction_table);
+        }
+
         if constexpr (enable_trid_flush_check_on_noc_txn) {
             bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
             can_send_to_all_local_chip_receivers &= trid_flushed;
@@ -1704,55 +1831,46 @@ void run_receiver_channel_step_impl(
                 }
 #endif
             }
-            wr_sent_counter.increment();
-            // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
-            increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
-        }
-    }
 
-    if constexpr (!fuse_receiver_flush_and_completion_ptr) {
-        auto& wr_flush_counter = receiver_channel_pointers.wr_flush_counter;
-        bool unflushed_writes = !wr_flush_counter.is_caught_up_to(wr_sent_counter);
-        if (unflushed_writes) {
-            auto receiver_buffer_index = wr_flush_counter.get_buffer_index();
-            bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
-            if (next_trid_flushed) {
-                wr_flush_counter.increment();
-                receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
+            for (int i = 0; i < 10000; ++i) {
+                asm volatile("nop");
             }
-        }
 
-        auto& completion_counter = receiver_channel_pointers.completion_counter;
-        bool unsent_completions = !completion_counter.is_caught_up_to(completion_counter, wr_flush_counter);
-        if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            unsent_completions = unsent_completions && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
-        }
-        if (unsent_completions) {
-            // completion ptr incremented in callee
-            auto receiver_buffer_index = wr_flush_counter.get_buffer_index();
+            noc_async_write_barrier(0);
+            noc_async_write_barrier(1);
+
+            packet_header->src_ch_id = 255;
+
+            if (!ncrisc_noc_nonposted_writes_flushed(1)) {
+                ASSERT(false);
+                while (1);
+            }
+            if (!ncrisc_noc_nonposted_writes_flushed(0)) {
+                ASSERT(false);
+                while (1);
+            }
+
+            wr_sent_counter.increment();
+
+            receiver_ack_count++;
+            if (ch_id == 0) {
+                receiver_ack_count_ch0++;
+            } else if (ch_id == 1) {
+                receiver_ack_count_ch1++;
+            }
+            WATCHER_RING_BUFFER_PUSH((uint)0xAAAAAAAA);
+            WATCHER_RING_BUFFER_PUSH((uint)receiver_ack_count_ch1);
+            WATCHER_RING_BUFFER_PUSH((uint)ch_id);
+            WATCHER_RING_BUFFER_PUSH((uint)0xBBBBBBBB);
+
+            // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
+            // increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+
+            while (internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ));
+
             receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                receiver_channel_response_credit_sender,
-                receiver_channel_pointers.get_src_chan_id(receiver_buffer_index));
-            completion_counter.increment();
-        }
-    } else {
-        // flush and completion are fused, so we only need to update one of the counters
-        // update completion since other parts of the code check against completion
-        auto& completion_counter = receiver_channel_pointers.completion_counter;
-        // Currently unclear if it's better to loop here or not...
-        bool unflushed_writes = !completion_counter.is_caught_up_to(wr_sent_counter);
-        auto receiver_buffer_index = completion_counter.get_buffer_index();
-        bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
-        bool can_send_completion = unflushed_writes && next_trid_flushed;
-        if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
-        }
-        if (can_send_completion) {
-            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                receiver_channel_response_credit_sender,
-                receiver_channel_pointers.get_src_chan_id(receiver_buffer_index));
+                receiver_channel_response_credit_sender, ch_id);
             receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
-            completion_counter.increment();
         }
     }
 };
@@ -2254,6 +2372,12 @@ void kernel_main() {
     // Initialize stream register state for credit management across the Ethernet link.
     // We make sure to do this before we handshake to guarantee that the registers are
     // initialized before the other side has any possibility of modifying them.
+
+    *reinterpret_cast<volatile uint32_t*>(to_receiver_sent_addrs[0]) = 0;
+    *reinterpret_cast<volatile uint32_t*>(to_receiver_sent_addrs[1]) = 0;
+    *reinterpret_cast<volatile uint32_t*>(to_receiver_sent_addrs[2]) = 0;
+    *reinterpret_cast<volatile uint32_t*>(to_receiver_sent_addrs[3]) = 0;
+    init_ptr_val<to_receiver_0_sender_ch1_pkts_sent_id>(0);
     init_ptr_val<to_receiver_packets_sent_streams[0]>(0);
     init_ptr_val<to_receiver_packets_sent_streams[1]>(0);
     init_ptr_val<to_sender_packets_acked_streams[0]>(0);
