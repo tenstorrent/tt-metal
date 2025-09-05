@@ -462,42 +462,6 @@ void py_bind_conv2d(py::module& module) {
         )doc");
 
     py_conv_config.def("__repr__", [](const Conv2dConfig& config) { return fmt::format("{}", config); });
-
-    py::class_<OptimizedConvParallelizationConfig>(module, "OptimizedConvParallelizationConfig")
-        .def(
-            py::init<CoreCoord, uint32_t, uint32_t, uint32_t, uint32_t>(),
-            py::kw_only(),
-            py::arg("grid_size"),
-            py::arg("num_cores_nhw") = 1,
-            py::arg("num_cores_c") = 1,
-            py::arg("per_core_out_matrix_height_ntiles").noconvert(),
-            py::arg("per_core_out_matrix_width_ntiles").noconvert())
-        .def_property_readonly("grid_size", [](const OptimizedConvParallelizationConfig& c) { return c.grid_size; })
-        .def_property_readonly(
-            "num_cores_nhw", [](const OptimizedConvParallelizationConfig& c) { return c.num_cores_nhw; })
-        .def_property_readonly(
-            "per_core_out_matrix_height_ntiles",
-            [](const OptimizedConvParallelizationConfig& c) { return c.per_core_out_matrix_height_ntile; })
-        .def_property_readonly("per_core_out_matrix_width_ntiles", [](const OptimizedConvParallelizationConfig& c) {
-            return c.per_core_out_matrix_width_ntile;
-        });
-
-    py::class_<OptimizedConvBlockConfig>(module, "OptimizedConvBlockConfig")
-        .def(
-            py::init<uint32_t, uint32_t, uint32_t, uint32_t>(),
-            py::kw_only(),
-            py::arg("act_block_h_ntiles").noconvert(),
-            py::arg("act_block_w_ntiles").noconvert(),
-            py::arg("out_subblock_h_ntiles").noconvert(),
-            py::arg("out_subblock_w_ntiles").noconvert())
-        .def_property_readonly(
-            "act_block_h_ntiles", [](const OptimizedConvBlockConfig& c) { return c.act_block_h_ntiles; })
-        .def_property_readonly(
-            "act_block_w_ntiles", [](const OptimizedConvBlockConfig& c) { return c.act_block_w_ntiles; })
-        .def_property_readonly(
-            "out_subblock_h_ntiles", [](const OptimizedConvBlockConfig& c) { return c.out_subblock_h_ntiles; })
-        .def_property_readonly(
-            "out_subblock_w_ntiles", [](const OptimizedConvBlockConfig& c) { return c.out_subblock_w_ntiles; });
 }
 
 }  // namespace ttnn::operations::conv::conv2d

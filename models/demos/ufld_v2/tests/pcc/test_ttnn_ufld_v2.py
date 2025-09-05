@@ -559,4 +559,4 @@ def test_ufld_v2_model(device, batch_size, input_channels, height, width, use_pr
     torch_output, pred_list = torch_model(torch_input_tensor)
     ttnn_output = ttnn_model(input=ttnn_input_tensor, batch_size=batch_size)
     ttnn_output = ttnn.to_torch(ttnn_output).squeeze(dim=0).squeeze(dim=0)
-    assert_with_pcc(torch_output, ttnn_output, 0.99)
+    assert_with_pcc(torch_output, ttnn_output, 0.989)

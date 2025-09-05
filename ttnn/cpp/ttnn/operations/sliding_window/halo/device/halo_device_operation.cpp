@@ -55,9 +55,12 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     log_debug(tt::LogOp, "num_cores_nhw: {}", config_.num_cores_nhw);
 
     const auto& input_tensor = input_tensors.at(0);
-    DataType output_dtype = (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32)
-                                ? tt::tt_metal::DataType::FLOAT32
-                                : tt::tt_metal::DataType::BFLOAT16;
+    tt::tt_metal::DataType output_dtype;
+    switch (input_tensor.dtype()) {
+        case tt::tt_metal::DataType::FLOAT32: output_dtype = tt::tt_metal::DataType::FLOAT32; break;
+        case tt::tt_metal::DataType::UINT16: output_dtype = tt::tt_metal::DataType::UINT16; break;
+        default: output_dtype = tt::tt_metal::DataType::BFLOAT16; break;
+    }
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == output_memory_config_.memory_layout(),
@@ -70,7 +73,9 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
         auto output_core_range = *(output_memory_config_.shard_spec()->grid.ranges().begin());
         auto input_core_w = input_core_range.end_coord.y - input_core_range.start_coord.y + 1;
         auto output_core_w = output_core_range.end_coord.y - output_core_range.start_coord.y + 1;
-        TT_FATAL(input_core_w == output_core_w, "Error");
+
+        TT_FATAL(
+            input_core_w == output_core_w, "Input core width {} != Output core width {}", input_core_w, output_core_w);
     }
 
     if (this->in_place_) {
@@ -83,6 +88,7 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     std::array<uint32_t, 2> shard_shape = {
         tt::div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw),
         input_tensor.memory_config().shard_spec()->shape[1]};
+
     auto out_mem_config = output_memory_config_.with_shard_spec(ShardSpec{
         output_memory_config_.shard_spec()->grid,
         shard_shape,
@@ -110,7 +116,9 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
 
     if (this->in_place_) {
         // after untilize bfloat8 is converted to bfloat16
-        const DataType dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
+        const tt::tt_metal::DataType dtype = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B
+                                                 ? tt::tt_metal::DataType::BFLOAT16
+                                                 : input_tensor.dtype();
         const tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
         const uint32_t nbytes = datum_size(data_format);
         const uint32_t input_shard_width = input_tensor.memory_config().shard_spec()->shape[1];
