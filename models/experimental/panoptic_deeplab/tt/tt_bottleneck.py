@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch
 import ttnn
 
-from .tt_conv2dWrapper import (
+from .tt_conv2d_wrapper import (
     TtConv2d,
     TtConv2dParameters,
     SliceConfig,

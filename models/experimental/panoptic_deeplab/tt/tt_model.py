@@ -23,7 +23,7 @@ from .tt_semseg import TtPanopticDeepLabSemSegHead
 from .tt_insemb import TtPanopticDeepLabInsEmbedHead
 from .common import create_real_resnet_state_dict, create_full_resnet_state_dict
 from ..reference.pytorch_postprocessing import get_panoptic_segmentation
-from ..reference.pytorch_semSeg import ShapeSpec
+from ..reference.pytorch_semseg import ShapeSpec
 
 
 class TtPanopticDeepLab:

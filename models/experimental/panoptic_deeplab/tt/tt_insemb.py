@@ -3,10 +3,10 @@ from typing import Dict, List, Optional, Tuple
 import ttnn
 
 from .tt_aspp import get_ttnn_norm
-from .tt_conv2dWrapper import TtConv2d, TtConv2dParameters
+from .tt_conv2d_wrapper import TtConv2d, TtConv2dParameters
 from .tt_upsample_wrapper import TtUpsample
 from .tt_semseg import TtDeepLabV3PlusHead
-from ..reference.pytorch_semSeg import ShapeSpec
+from ..reference.pytorch_semseg import ShapeSpec
 
 
 class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):

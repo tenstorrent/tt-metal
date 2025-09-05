@@ -12,7 +12,7 @@ import torch
 from typing import Dict, List, Optional, Tuple, Any, Set
 from torch import nn
 
-from .pytorch_semSeg import PanopticDeepLabSemSegHead, ShapeSpec
+from .pytorch_semseg import PanopticDeepLabSemSegHead, ShapeSpec
 from .pytorch_insemb import PanopticDeepLabInsEmbedHead
 from .pytorch_postprocessing import get_panoptic_segmentation
 from .pytorch_resnet import ResNet

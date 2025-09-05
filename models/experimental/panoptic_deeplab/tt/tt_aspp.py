@@ -7,7 +7,7 @@ import torch
 
 import ttnn
 
-from models.experimental.panoptic_deeplab.tt.tt_conv2dWrapper import (
+from models.experimental.panoptic_deeplab.tt.tt_conv2d_wrapper import (
     TtConv2d,
     TtConv2dParameters,
     SliceConfig,
