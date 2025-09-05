@@ -6,6 +6,7 @@ import ttnn
 from .tt_aspp import TtASPP, get_ttnn_norm, get_ttnn_activation
 
 from .tt_conv2dWrapper import TtConv2d, TtConv2dParameters
+from .tt_upsample_wrapper import TtUpsample
 from .tt_pytorch_semSeg import ShapeSpec
 
 
@@ -131,6 +132,12 @@ class TtDeepLabV3PlusHead(nn.Module):
 
             self.decoder[feature_name] = decoder_stage
 
+        # Initialize upsample operations for decoder
+        self.upsample_standard = TtUpsample.create(device=device, scale_factor=(1, 1), mode="bilinear")
+        self.upsample_with_slicing = TtUpsample.create_with_channel_slicing(
+            device=device, scale_factor=(1, 1), mode="bilinear", num_slices=2
+        )
+
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Union[ttnn.Tensor, Tuple[ttnn.Tensor, Dict]]:
         y = self.layers(features)
         return y
@@ -161,33 +168,16 @@ class TtDeepLabV3PlusHead(nn.Module):
 
             scale_h = proj_x.shape[1] // y.shape[1]
             scale_w = proj_x.shape[2] // y.shape[2]
-            y_upsampled = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
 
-            orig_batch, orig_height, orig_width, orig_channels = y_upsampled.shape
-
-            # Channel slicing for upsample operation - always slice by 2 (except first iteration)
+            # Use appropriate upsample operation based on iteration
             if i == 0:
-                y_upsampled = ttnn.upsample(y_upsampled, scale_factor=(scale_h, scale_w), mode="bilinear")
+                # No slicing for first iteration
+                self.upsample_standard._scale_factor = (scale_h, scale_w)
+                y_upsampled = self.upsample_standard(y)
             else:
-                split_factor = 2
-                channels_per_slice = orig_channels // split_factor
-                print(f"Using channel slicing for upsample: {orig_channels} channels split into {split_factor} slices")
-                sliced_results = []
-                for slice_idx in range(split_factor):
-                    start_ch = slice_idx * channels_per_slice
-                    end_ch = (slice_idx + 1) * channels_per_slice
-                    y_slice = ttnn.slice(
-                        y_upsampled, [0, 0, 0, start_ch], [orig_batch, orig_height, orig_width, end_ch]
-                    )
-
-                    y_slice_upsampled = ttnn.upsample(y_slice, scale_factor=(scale_h, scale_w), mode="bilinear")
-                    y_slice_upsampled = ttnn.to_memory_config(y_slice_upsampled, ttnn.DRAM_MEMORY_CONFIG)
-
-                    sliced_results.append(y_slice_upsampled)
-                    ttnn.deallocate(y_slice)
-                y_upsampled = ttnn.concat(sliced_results, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                for slice_result in sliced_results:
-                    ttnn.deallocate(slice_result)
+                # Channel slicing for subsequent iterations
+                self.upsample_with_slicing._scale_factor = (scale_h, scale_w)
+                y_upsampled = self.upsample_with_slicing(y)
 
             y_upsampled = ttnn.to_memory_config(y_upsampled, ttnn.DRAM_MEMORY_CONFIG)
             y_upsampled = ttnn.to_layout(y_upsampled, ttnn.TILE_LAYOUT)
@@ -298,15 +288,17 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
         self.predictor = TtConv2d.create(parameters, stride=(1, 1), padding=(0, 0))
 
+        # Initialize final upsample for semantic head
+        # Use default mode if bilinear causes memory issues, otherwise bilinear for PCC
+        self.final_upsample = TtUpsample.create(device=device, scale_factor=common_stride, mode="nearest")
+
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, Dict]:
         """
         The forward pass for the Panoptic head in inference mode.
         """
         y = self.layers(features)
 
-        y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
-        y = ttnn.upsample(y, scale_factor=self.common_stride)  # mode="bilinear" has OOM for 32MB on 16 banks
-        y = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
+        y = self.final_upsample(y)
         return y, {}
 
     def layers(self, features: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:
