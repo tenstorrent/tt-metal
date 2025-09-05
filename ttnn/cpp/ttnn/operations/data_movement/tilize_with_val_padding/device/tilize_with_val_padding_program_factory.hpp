@@ -7,8 +7,6 @@
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_common.hpp"
 
-using namespace tt::constants;
-
 namespace ttnn::operations::data_movement::detail {
 tt::tt_metal::operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     const Tensor& a, Tensor& output, ttnn::PadValue pad_value);
