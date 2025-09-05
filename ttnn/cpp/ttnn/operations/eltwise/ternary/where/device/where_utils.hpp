@@ -22,6 +22,8 @@ enum class KernelName {
     ReaderOuterBcastTTT,
     ReaderOuterBcastTTS,
     ReaderOuterBcastTST,
+    ReaderScalarBcastTTS,
+    ReaderScalarBcastTST,
     WriterNoBcast,
     ReaderRowBcastTTT,
     WriterColBcastTTT,

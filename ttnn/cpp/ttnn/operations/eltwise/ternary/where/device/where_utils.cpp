@@ -257,6 +257,31 @@ WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const 
         return WhereBroadcastType::OUTER_BCAST;
     }
 
+    bool same_width = (predicate_shape[-1] == b_shape[-1]) && (predicate_shape[-1] == b_shape[-1]);
+    bool same_height = (predicate_shape[-2] == b_shape[-2]) && (predicate_shape[-2] == b_shape[-2]);
+
+    // Multi-dimensional ROW and COL broadcast is not supported for now
+    if (!same_height && !same_width) {
+        // Get last dimension sizes
+        auto pred_w = predicate_shape[-1];
+        auto b_w = b_shape[-1];
+
+        auto pred_h = predicate_shape[-2];  // height (second-to-last dimension)
+        auto b_h = b_shape[-2];
+
+        auto max_h = std::max({pred_h, b_h});
+        auto max_w = std::max({pred_w, b_w});
+
+        if ((pred_h == max_h && pred_w == max_w && (b_h == 1 && b_w == 1))) {
+            return WhereBroadcastType::SCALAR_B_BCAST;
+        }
+
+        if ((b_h == max_h && b_w == max_w && (pred_h == 1 && pred_w == 1))) {
+            return WhereBroadcastType::SCALAR_A_BCAST;
+        }
+
+        return WhereBroadcastType::INVALID_BCAST;
+    }
     return WhereBroadcastType::INVALID_BCAST;
 }
 
