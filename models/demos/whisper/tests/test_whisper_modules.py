@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -95,7 +95,7 @@ def test_whisper_attention(
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=lambda *_: True,
-        custom_preprocessor=ttnn_model.custom_preprocessor,
+        custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(),
         device=device,
         prefix="encoder_attn" if use_encoder_states else "",
     )
@@ -179,7 +179,7 @@ def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=ttnn_model.convert_to_ttnn,
-        custom_preprocessor=ttnn_model.custom_preprocessor,
+        custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(),
         device=device,
     )
     ttnn_hidden_states = ttnn.from_torch(
@@ -211,7 +211,7 @@ def test_encoder(device, ttnn_model, model_name, batch_size, sequence_length):
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=ttnn_model.convert_to_ttnn,
-        custom_preprocessor=ttnn_model.custom_preprocessor,
+        custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(),
         prefix="encoder",
         device=device,
     )
@@ -271,7 +271,7 @@ def test_decoder_layer(
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=lambda *_: True,
-        custom_preprocessor=ttnn_model.custom_preprocessor,
+        custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(),
         device=device,
     )
     ttnn_hidden_states = ttnn.from_torch(
@@ -345,7 +345,7 @@ def test_decoder(
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=ttnn_model.convert_to_ttnn,
-        custom_preprocessor=ttnn_model.custom_preprocessor,
+        custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(),
         device=device,
         prefix="decoder",
     )
@@ -399,12 +399,6 @@ def test_ttnn_whisper(tmp_path, device, ttnn_model, model_name, decoder_sequence
     decoder_input_ids = torch.ones(1, decoder_sequence_size).type(torch.int32) * config.decoder_start_token_id
     batch_size = 1
     attention_mask = None
-    print(
-        "torch inputs, input_features and attention_mask, decoder_input_ids",
-        input_features.shape,
-        decoder_input_ids.shape,
-        attention_mask,
-    )
     model = WhisperModel.from_pretrained(model_name).eval()
 
     expected_last_hidden_state = model(
@@ -416,7 +410,7 @@ def test_ttnn_whisper(tmp_path, device, ttnn_model, model_name, decoder_sequence
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=ttnn_model.convert_to_ttnn,
-        custom_preprocessor=ttnn_model.custom_preprocessor,
+        custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(),
         device=device,
     )
 
@@ -432,31 +426,6 @@ def test_ttnn_whisper(tmp_path, device, ttnn_model, model_name, decoder_sequence
     if use_kv_cache:
         kv_cache = init_kv_cache(config, device, max_batch_size=batch_size, max_seq_len=512)
         current_decode_pos = ttnn.from_torch(torch.zeros(batch_size), device=device, dtype=ttnn.int32)
-
-    if input_embeds is not None:
-        print("input_embeds are", input_embeds.shape)
-    else:
-        print("input_embeds are", input_embeds)
-
-    if decoder_hidden_states is not None:
-        print("decoder_hidden_states are", decoder_hidden_states.shape)
-    else:
-        print("decoder_hidden_states are", decoder_hidden_states)
-
-    if decoder_attention_mask is not None:
-        print("decoder_attention_mask are", decoder_attention_mask.shape)
-    else:
-        print("decoder_attention_mask are", decoder_attention_mask)
-
-    if use_kv_cache:
-        print("kv_cache are", kv_cache[0], kv_cache[1])
-    else:
-        print("kv_cache are", use_kv_cache)
-
-    if use_kv_cache:
-        print("current_decode_pos are", current_decode_pos.shape)
-    else:
-        print("current_decode_pos are", use_kv_cache)
 
     last_hidden_state = ttnn_model.whisper(
         config,
