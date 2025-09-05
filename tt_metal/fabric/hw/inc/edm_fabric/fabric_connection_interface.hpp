@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace tt::tt_fabric::connection_interface {
 
 inline constexpr uint8_t edm_fabric_write_noc_index = 0;
