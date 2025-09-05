@@ -100,6 +100,8 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
     auto mesh_device = this->devices_[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device = mesh_device->get_devices()[0];
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     const size_t num_events = 100000;  // Enough to wrap issue queue. 768MB and cmds are 22KB each, so 35k cmds.
     uint32_t cmds_issued_per_cq = 0;
 
@@ -107,13 +109,11 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
 
     for (size_t i = 0; i < num_events; i++) {
         auto event = std::make_shared<distributed::MeshEvent>(
-            i + 1,
+            -1,
             mesh_device.get(),
-            cq.id(),
-            distributed::MeshCoordinateRange(
-                distributed::MeshCoordinate(0, 0),
-                distributed::MeshCoordinate(0, 0)));  // type is std::shared_ptr<Event>
-        distributed::EnqueueRecordEvent(cq);
+            -1,
+            device_range);  // type is std::shared_ptr<Event>
+        distributed::EnqueueRecordEvent(cq, {}, device_range);
         EXPECT_EQ(event->id(), cmds_issued_per_cq + 1);  // Event ids start at 1
         EXPECT_EQ(event->mesh_cq_id(), cq.id());
         cmds_issued_per_cq++;
