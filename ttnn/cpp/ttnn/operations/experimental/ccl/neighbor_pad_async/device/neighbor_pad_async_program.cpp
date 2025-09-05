@@ -82,6 +82,8 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     bool is_first_device = !backward_device.has_value();
     bool is_last_device = !forward_device.has_value();
 
+    bool is_padding_zeros = padding_mode == "zeros";
+
     /****TODO BARRIER SEMAPHORE****/
     // auto [unicast_forward_args, unicast_backward_args] =
     //     ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device,
@@ -156,7 +158,9 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
                 direction ? is_last_device : is_first_device,
                 direction ? is_first_device : is_last_device,
                 sender_cb_index,  // cb_forward_id
-                direction};
+                direction,
+                is_padding_zeros,
+                page_size};
             TensorAccessorArgs(*input_buffer).append_to(reader_kernel_config.compile_args);
             TensorAccessorArgs(*output_buffer).append_to(reader_kernel_config.compile_args);
             auto worker_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -170,7 +174,6 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
             std::vector<uint32_t> reader_rt_args = {
                 input_tensor.buffer()->address(),          // input_tensor_address
                 output_tensor.buffer()->address(),         // output_tensor_address
-                page_size,                                 // stick_size
                 stick_start_id,                            // stick_start_id
                 input_halo_dim_size,                       // input_halo_dim_size
                 outer_dim_size,                            // outer_dim_size
@@ -188,7 +191,9 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
                 direction ? is_first_device : is_last_device,
                 sender_cb_index,                  // cb_forward_id
                 reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
-                direction};
+                direction,
+                is_padding_zeros,
+                page_size};
             TensorAccessorArgs(*output_buffer).append_to(writer_kernel_config.compile_args);
             auto worker_writer_kernel_id = tt::tt_metal::CreateKernel(
                 program,
@@ -201,7 +206,6 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
             std::vector<uint32_t> writer_rt_args = {
                 input_tensor.buffer()->address(),          // input_tensor_address
                 output_tensor.buffer()->address(),         // output_tensor_address
-                page_size,                                 // stick_size
                 stick_start_id,                            // stick_start_id
                 input_halo_dim_size,                       // input_halo_dim_size
                 output_halo_dim_size,                      // output_halo_dim_size
@@ -265,12 +269,12 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
                 auto& worker_reader_runtime_args = reader_runtime_args[core.x][core.y];
                 worker_reader_runtime_args[0] = input.buffer()->address();
                 worker_reader_runtime_args[1] = output.buffer()->address();
-                worker_reader_runtime_args[9] = out_ready_semaphore.address();
+                worker_reader_runtime_args[8] = out_ready_semaphore.address();
                 // writer
                 auto& worker_writer_runtime_args = writer_runtime_args[core.x][core.y];
                 worker_writer_runtime_args[0] = input.buffer()->address();
                 worker_writer_runtime_args[1] = output.buffer()->address();
-                worker_writer_runtime_args[13] = out_ready_semaphore.address();
+                worker_writer_runtime_args[12] = out_ready_semaphore.address();
 
                 // if (barrier_semaphore.has_value()) {
                 // 	worker_writer_sender_runtime_args[16] = barrier_semaphore.value().address();
