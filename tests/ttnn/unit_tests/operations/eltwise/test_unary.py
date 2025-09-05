@@ -1734,8 +1734,9 @@ def test_unary_cosh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
         (torch.Size([100])),
         (torch.Size([10, 10])),
         (torch.Size([3, 128, 32])),
-        (torch.Size([1, 3, 320, 384])),
-        (torch.Size([1, 16, 640, 640])),
+        (torch.Size([1, 1, 102400, 32])),
+        (torch.Size([1, 1, 102400, 64])),
+        (torch.Size([1, 1, 400, 512])),
     ),
 )
 @pytest.mark.parametrize(
@@ -1744,8 +1745,18 @@ def test_unary_cosh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
         (torch.bfloat16, ttnn.bfloat16),
     ],
 )
-def test_unary_hardmish(input_shapes, torch_dtype, ttnn_dtype, device):
-    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+@pytest.mark.parametrize(
+    "input_range",
+    [
+        (-100, 100),
+        (-2, 2),
+        (-1, 1),
+        (-200, 0),
+        (0, 200),
+    ],
+)
+def test_unary_hardmish(input_shapes, torch_dtype, ttnn_dtype, input_range, device):
+    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(input_range[0], input_range[1])
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     output_tensor = ttnn.hardmish(input_tensor1)
