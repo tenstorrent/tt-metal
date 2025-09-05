@@ -51,10 +51,11 @@ enum class MeshScope {
 
 class ControlPlane {
 public:
-    explicit ControlPlane(const std::string& mesh_graph_desc_yaml_file);
+    explicit ControlPlane(const std::string& mesh_graph_desc_file, const bool version_2 = false);
     explicit ControlPlane(
-        const std::string& mesh_graph_desc_yaml_file,
-        const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+        const std::string& mesh_graph_desc_file,
+        const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping,
+        const bool version_2 = false);
 
     ~ControlPlane();
 
@@ -197,6 +198,7 @@ public:
     const MeshGraph& get_mesh_graph() const;
 
 private:
+    const bool version_2_;
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;
 

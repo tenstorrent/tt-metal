@@ -448,7 +448,19 @@ void ControlPlane::init_control_plane(
     const std::string& mesh_graph_desc_file,
     std::optional<std::reference_wrapper<const std::map<FabricNodeId, chip_id_t>>>
         logical_mesh_chip_id_to_physical_chip_id_mapping) {
-    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
+
+    // Check file extension for version 2 to make sure text proto is used
+    if (version_2_) {
+        TT_FATAL(
+            mesh_graph_desc_file.ends_with(".textproto"),
+            "Mesh graph descriptor file must end with .textproto for version 2");
+    } else {
+        TT_FATAL(
+            mesh_graph_desc_file.ends_with(".yaml"),
+            "Mesh graph descriptor file must end with .yaml for version 1");
+    }
+
+    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file, version_2_);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
     this->initialize_distributed_contexts();
@@ -465,13 +477,14 @@ void ControlPlane::init_control_plane(
     this->generate_local_intermesh_link_table();
 }
 
-ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
+ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file, const bool version_2) : version_2_(version_2) {
     init_control_plane(mesh_graph_desc_file, std::nullopt);
 }
 
 ControlPlane::ControlPlane(
     const std::string& mesh_graph_desc_file,
-    const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+    const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping,
+    const bool version_2) : version_2_(version_2) {
     init_control_plane(mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
 }
 
@@ -582,7 +595,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
     // NOTE: This is a special case for the TG mesh graph descriptor.
     // It has to use Ethernet coordinates because ethernet coordinates must be mapped manually to physical chip IDs
     // because the TG intermesh ethernet links could be inverted when mapped to physical chip IDs.
-    if (mesh_graph_desc_filename == "tg_mesh_graph_descriptor.yaml") {
+    if (mesh_graph_desc_filename.starts_with("tg_mesh_graph_descriptor.")) {
         // Add the N150 MMIO devices
         auto eth_coords_per_chip =
             tt::tt_metal::MetalContext::instance().get_cluster().get_all_chip_ethernet_coordinates();

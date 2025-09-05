@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
-#include "assert.hpp"
+#include <assert.hpp>
 
 #include "protobuf/mesh_graph_descriptor.pb.h"
 #include "tt-metalium/mesh_graph_descriptor.hpp"
@@ -89,6 +89,15 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::filesystem::path& text_proto
     MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string()), backwards_compatible) {}
 
 MeshGraphDescriptor::~MeshGraphDescriptor() = default;
+
+proto::Architecture MeshGraphDescriptor::get_arch() const {
+    // All meshes must have the same arch
+    return proto_->mesh_descriptors(0).arch();
+}
+
+uint32_t MeshGraphDescriptor::get_num_eth_ports_per_direction() const {
+    return proto_->mesh_descriptors(0).channels().count();
+}
 
 void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
     // Set the default for channel policy to strict if not specified
@@ -285,6 +294,21 @@ void MeshGraphDescriptor::validate_mesh_topology(const proto::MeshGraphDescripto
                 )
             );
             continue;
+        }
+        
+        // Check that the device topology dimensions are divisible by the host topology dimensions
+        if (mesh.device_topology().dims_size() > 0) {
+            for (int i = 0; i < mesh.device_topology().dims_size(); i++) {
+                if (mesh.device_topology().dims(i) % mesh.host_topology().dims(i) != 0) {
+                    error_messages.push_back(
+                        fmt::format(
+                            "Device topology dimensions must be divisible by host topology dimensions (Mesh: {})",
+                            mesh.name()
+                        )
+                    );
+                    continue;
+                }
+            }
         }
     }
 
@@ -500,21 +524,28 @@ void MeshGraphDescriptor::validate_legacy_requirements(const proto::MeshGraphDes
         }
     }
 
-    // Check that there is only a CLUSTER level graphs
-    if (proto.graph_descriptors_size() != 1) {
-        error_messages.push_back(
-            fmt::format(
-                "MGD 1.0 Compatibility requirement: There can only be one CLUSTER level graph (Graph: {})", proto.graph_descriptors(0).name()
-            )
-        );
+    // Check that there is only 2 dimensions in the device topology and host topology
+    for (const auto& mesh : proto.mesh_descriptors()) {
+        if (mesh.device_topology().dims_size() != 2 || mesh.host_topology().dims_size() != 2) {
+            error_messages.push_back(fmt::format(
+                "MGD 1.0 Compatibility requirement: There can only be 2 dimensions in the device topology and host "
+                "topology (Mesh: {})",
+                mesh.name()));
+        }
     }
+
+    // Check that there is only a FABRIC level graph
+    if (proto.graph_descriptors_size() != 1) {
+        error_messages.push_back(fmt::format(
+            "MGD 1.0 Compatibility requirement: There can only be one FABRIC level graph (Graph: {})",
+            proto.graph_descriptors(0).name()));
+    }
+
     for (const auto& graph : proto.graph_descriptors()) {
         if (graph.type() != "FABRIC") {
-            error_messages.push_back(
-                fmt::format(
-                    "MGD 1.0 Compatibility requirement: There can only be one CLUSTER level graph (Graph: {})", graph.name()
-                )
-            );
+            error_messages.push_back(fmt::format(
+                "MGD 1.0 Compatibility requirement: There can only be one FABRIC level graph (Graph: {})",
+                graph.name()));
         }
     }
 
@@ -537,6 +568,36 @@ void MeshGraphDescriptor::validate_legacy_requirements(const proto::MeshGraphDes
             error_messages.push_back(
                 fmt::format( "MGD 1.0 Compatibility requirement: Graph layout topologies are not supported (Graph: {})", graph.name())
             );
+        }
+    }
+
+    // Check that the directions are set properly
+    for (const auto& graph : proto.graph_descriptors()) {
+        for (const auto& connection : graph.connections()) {
+            if (connection.routing_direction_size() != connection.nodes_size()) {
+                error_messages.push_back(fmt::format(
+                    "MGD 1.0 Compatibility requirement: Routing direction must have the same number of nodes (Graph: "
+                    "{})",
+                    graph.name()));
+            }
+            for (const auto& direction : connection.routing_direction()) {
+                if (direction == proto::RoutingDirection::INVALID) {
+                    error_messages.push_back(fmt::format(
+                        "MGD 1.0 Compatibility requirement: Routing direction must be valid (Graph: {})",
+                        graph.name()));
+                }
+            }
+        }
+    }
+
+    // Check that connections only have 2 nodes
+    for (const auto& graph : proto.graph_descriptors()) {
+        for (const auto& connection : graph.connections()) {
+            if (connection.nodes_size() != 2) {
+                error_messages.push_back(fmt::format(
+                    "MGD 1.0 Compatibility requirement: Connections must have exactly 2 nodes (Graph: {})",
+                    graph.name()));
+            }
         }
     }
 }
@@ -781,7 +842,11 @@ namespace {
             S = MeshCoordinate((src_mesh_coord[0] + 1) % mesh_shape[0], src_mesh_coord[1]);
         }
 
-        for (const auto& coord : {N, E, S, W}) {
+        for (const auto& [coord, direction] :
+             {std::pair{N, proto::RoutingDirection::N},
+              std::pair{E, proto::RoutingDirection::E},
+              std::pair{S, proto::RoutingDirection::S},
+              std::pair{W, proto::RoutingDirection::W}}) {
             if (mesh_coord_range.contains(coord)) {
                 const auto src_device_id = instance.sub_instances_local_id_to_global_id.at(get_device_id(src_mesh_coord, mesh_shape));
                 const auto dst_device_id = instance.sub_instances_local_id_to_global_id.at(get_device_id(coord, mesh_shape));
@@ -792,6 +857,7 @@ namespace {
                     .policy = policy,
                     .directional = false,
                     .parent_instance_id = instance.global_id,
+                    .routing_direction = direction, // TODO: Remove after MGD 1.0 is deprecated
                 };
 
                 connections[src_device_id].push_back(data);
@@ -843,6 +909,7 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
             .policy = mesh_desc->channels().policy(),
             .directional = false,
             .parent_instance_id = mesh_id,
+            .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
         };
 
         add_connection_to_fast_lookups(data, instance.type);
@@ -854,6 +921,7 @@ void MeshGraphDescriptor::populate_intra_mesh_express_connections(GlobalNodeId m
             .policy = mesh_desc->channels().policy(),
             .directional = false,
             .parent_instance_id = mesh_id,
+            .routing_direction = proto::RoutingDirection::C,  // TODO: Remove after MGD 1.0 is deprecated
         };
 
         const auto id = data_reverse.connection_id;
@@ -947,15 +1015,25 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
         TT_ASSERT(nodes.size() >= 2, "Graph descriptor connections must have at least two nodes");
 
         // Add the connection in every direction of the connection
-        for (const auto& node : nodes) {
-            const auto src_device_id = node;
+        for (unsigned int i = 0; i < connection.nodes_size(); ++i) {
+            const auto src_device_id = nodes[i];
+
+            // Create a copy of the nodes vector and swap the first and i-th elements so source is always first
+            std::vector<GlobalNodeId> nodes_copy = nodes;
+            std::swap(nodes_copy[0], nodes_copy[i]);
+
+            proto::RoutingDirection routing_direction = proto::RoutingDirection::NONE;
+            if (connection.routing_direction_size() != 0) {
+                routing_direction = connection.routing_direction(i);
+            }
 
             ConnectionData data{
-                .nodes = nodes,
+                .nodes = nodes_copy,
                 .count = connection.channels().count(),
                 .policy = connection.channels().policy(),
                 .directional = connection.directional(),
                 .parent_instance_id = graph_id,
+                .routing_direction = routing_direction,
             };
 
             const auto id = data.connection_id;

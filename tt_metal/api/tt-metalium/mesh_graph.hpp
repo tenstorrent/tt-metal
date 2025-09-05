@@ -18,6 +18,8 @@
 #include <unordered_map>
 #include <utility>
 
+#include <tt-metalium/mesh_graph_descriptor.hpp>
+
 #include <vector>
 
 namespace tt {
@@ -79,7 +81,7 @@ using InterMeshConnectivity = std::vector<std::vector<std::unordered_map<MeshId,
 using IntraMeshConnectivity = std::vector<std::vector<std::unordered_map<chip_id_t, RouterEdge>>>;
 class MeshGraph {
 public:
-    explicit MeshGraph(const std::string& mesh_graph_desc_file_path);
+    explicit MeshGraph(const std::string& mesh_graph_desc_file_path, const bool version_2 = false);
     MeshGraph() = delete;
     ~MeshGraph() = default;
 
@@ -123,6 +125,7 @@ private:
     std::unordered_map<chip_id_t, RouterEdge> get_valid_connections(
         const MeshCoordinate& src_mesh_coord, const MeshCoordinateRange& mesh_coord_range, FabricType fabric_type) const;
     void initialize_from_yaml(const std::string& mesh_graph_desc_file_path);
+    void initialize_from_mgd2(const MeshGraphDescriptor& mgd2);
 
     void add_to_connectivity(
         MeshId src_mesh_id,

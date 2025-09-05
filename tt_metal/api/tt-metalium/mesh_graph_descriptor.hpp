@@ -30,6 +30,7 @@ class NodeRef;
 class MeshRef;
 class GraphRef;
 enum Policy : int;
+enum RoutingDirection : int;
 }
 
 // TODO: Try make efficient by storing stringviews?
@@ -67,15 +68,19 @@ public:
         const std::uint32_t count;             // ethernet lanes per connection
         const proto::Policy policy;
         const bool directional;
+
         const GlobalNodeId parent_instance_id;
 
         const ConnectionId connection_id = generate_next_global_id();
 
-        private:
-            inline static ConnectionId generate_next_global_id() {
-                static std::atomic_uint32_t next_global_id_ = 0;
-                return next_global_id_++;
-            }
+        // TODO: Remove after MGD 1.0 is deprecated
+        const proto::RoutingDirection routing_direction;
+
+    private:
+        inline static ConnectionId generate_next_global_id() {
+            static std::atomic_uint32_t next_global_id_ = 0;
+            return next_global_id_++;
+        }
     };
 
     // backwards_compatible will enable all checks related to MGD 1.0. This will limit the functionality of MGD 2.0
@@ -140,6 +145,10 @@ public:
         return it->second;
     }
 
+
+    // TODO: This will disappear after we move to Physical discovery
+    proto::Architecture get_arch() const;
+    uint32_t get_num_eth_ports_per_direction() const;
 
 private:
     const bool backwards_compatible_;
