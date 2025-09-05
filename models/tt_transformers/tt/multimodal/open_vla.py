@@ -586,40 +586,13 @@ class PrismaticVisionBackbone(nn.Module):
                 if k.startswith("vision_backbone.featurizer.")
             }
             self.featurizer.load_state_dict(featurizer_state_dict, strict=True)
-            logger.info("Loaded local state dict into PrismaticVisionBackbone.featurizer")
+            print("Loaded local state dict into PrismaticVisionBackbone.featurizer")
         self.embed_dim = self.featurizer.embed_dim
         if self.ttnn_device is not None:
-            # TODO: fix DINOv2 here.
-            self.featurize_parameters = preprocess_model_parameters(
-                initialize_model=lambda: self.featurizer.to(torch.bfloat16),
-                device=self.ttnn_device,
-                custom_preprocessor=ttnn_optimized_vit_highres.custom_preprocessor_siglip,
-            )
-
-            self.head_masks = [
-                ttnn.from_torch(
-                    torch.zeros(1, 1, 1, 1, dtype=torch.float32),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.ttnn_device,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
-                for _ in self.featurize_parameters.blocks
-            ]
-            self.ttnn_featurizer = lambda x2: ttnn_featurizer(
-                embedding=lambda x: ttnn_optimized_vit_highres.siglip_patch_embeddings(
-                    x,
-                    parameters=self.featurize_parameters.patch_embed.patch_embeddings,
-                ),
-                encoder=lambda x: ttnn_optimized_vit_highres.siglip_encoder(
-                    x, self.head_masks, parameters=self.featurize_parameters.blocks
-                ),
-                pixel=x2,
-            )
+            self.ttnn_featurizer = ttnn_optimized_vit_highres.dinov2_encoder(self.featurizer, self.ttnn_device)
 
         # If `use_fused_vision_backbone` =>> create "beta" featurizer
         if self.use_fused_vision_backbone:
-            ## TODO: INSERT TT VISION MODEL HERE
             self.fused_featurizer = timm.create_model(
                 timm_model_ids[1],
                 pretrained=False,
@@ -638,13 +611,13 @@ class PrismaticVisionBackbone(nn.Module):
                     if k.startswith("vision_backbone.fused_featurizer.")
                 }
                 self.fused_featurizer.load_state_dict(fused_featurizer_state_dict, strict=True)
-                logger.info("Loaded local state dict into PrismaticVisionBackbone.fused_featurizer")
+                print("Loaded local state dict into PrismaticVisionBackbone.fused_featurizer")
             for module in self.fused_featurizer.modules():
                 if isinstance(module, LayerScale):
                     ls_apply_patch(module)
             if self.ttnn_device is not None:
                 self.featurize_parameters_2 = preprocess_model_parameters(
-                    initialize_model=lambda: self.featurizer.to(torch.bfloat16),
+                    initialize_model=lambda: self.fused_featurizer.to(torch.bfloat16),
                     device=self.ttnn_device,
                     custom_preprocessor=ttnn_optimized_vit_highres.custom_preprocessor_siglip,
                 )
@@ -681,11 +654,11 @@ class PrismaticVisionBackbone(nn.Module):
             patches, patches_fused = self.featurizer(img), self.fused_featurizer(img_fused)
         else:
             img, img_fused = pixel_values
-            patches, patches_fused = self.ttnn_featurizer(img), self.ttnn_fused_featurizer(img_fused)
+            patches, patches_fused = self.ttnn_featurizer(img)[:, 5:, :], self.ttnn_fused_featurizer(img_fused)
 
         if self.ttnn_device is None:
             return torch.cat([patches, patches_fused], dim=2)
-        return ttnn.concat([patches, patches_fused], dim=2)
+        return ttnn.concat([patches, ttnn.typecast(patches_fused, patches.dtype)], dim=2)
 
 
 # === Prismatic Projector (nn.Module) Definitions ===
@@ -749,7 +722,7 @@ class TTNNPrismaticProjector:
     def forward(self, img_patches):
         projected_features = ttnn.linear(
             img_patches,
-            self.params.fc1.weight[:2048, :],  # TODO: update this after dinov2 is added
+            self.params.fc1.weight,
             bias=self.params.fc1.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
@@ -1361,7 +1334,7 @@ def test_openvla_model(mesh_device):
     }
     config_dict, kwargs = OpenVLAConfig.get_config_dict(**kwargs)
     vla_config, kwargs = OpenVLAConfig.from_dict(config_dict, **kwargs)
-    vla = TTOpenVLAForActionPrediction(vla_config, ttnn_device=None, local_state_dict=merged_tensors).to(
+    vla = TTOpenVLAForActionPrediction(vla_config, ttnn_device=mesh_device, local_state_dict=merged_tensors).to(
         "cpu", dtype=torch.bfloat16
     )
     # Predict Action (7-DoF; un-normalize for BridgeData V2)
