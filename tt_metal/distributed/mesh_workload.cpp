@@ -280,10 +280,8 @@ std::vector<std::shared_ptr<KernelGroup>>& MeshWorkloadImpl::get_kernel_groups(u
         for (auto& [device_range, program] : programs_) {
             const uint32_t device_range_handle = (device_range_idx++) << 16;
             for (auto& kg : program.impl().get_kernel_groups(programmable_core_type_index)) {
-                for (auto& optional_kernel_id : kg->kernel_ids) {
-                    if (optional_kernel_id.has_value()) {
-                        optional_kernel_id = (device_range_handle | optional_kernel_id.value());
-                    }
+                for (auto& kernel_id : kg->kernel_ids) {
+                    kernel_id |= device_range_handle;
                 }
                 kernel_groups_.at(programmable_core_type_index).push_back(kg);
             }

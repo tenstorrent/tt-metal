@@ -59,12 +59,10 @@ void assemble_device_commands(
     bool use_prefetcher_cache);
 }
 
-using kernel_id_array_t = std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX>;
-
 struct KernelGroup {
     uint32_t programmable_core_type_index{};
     CoreRangeSet core_ranges;
-    kernel_id_array_t kernel_ids;
+    std::vector<KernelHandle> kernel_ids;
     // rta_sizes is indexed by dispatch class
     std::vector<uint32_t> rta_sizes;
     uint32_t total_rta_size{};
@@ -76,7 +74,7 @@ struct KernelGroup {
     KernelGroup(
         const detail::ProgramImpl& program,
         uint32_t programmable_core_type_index,
-        kernel_id_array_t kernel_ids,
+        std::vector<KernelHandle> kernel_ids,
         uint32_t local_cb_mask,
         uint32_t min_remote_cb_start_index,
         const CoreRangeSet& new_ranges);
