@@ -46,9 +46,44 @@ class TTOftNet:
         self.lat32 = Conv(parameters.lat32, conv_pt.lat32, output_layout=ttnn.ROW_MAJOR_LAYOUT)
         self.bn32 = GroupNorm(parameters.bn32, num_groups=16, channels=256, eps=1e-5, dtype=ttnn.bfloat8_b)
 
-        self.oft8 = TtOFT(device, parameters.oft8, 256, grid_res, grid_height, features, calib, grid)
-        self.oft16 = TtOFT(device, parameters.oft16, 256, grid_res, grid_height, features, calib, grid)
-        self.oft32 = TtOFT(device, parameters.oft32, 256, grid_res, grid_height, features, calib, grid)
+        # note scale=1 because features is actually input image, without scaling
+        # mbezulj: to clean up this
+        self.oft8 = TtOFT(
+            device,
+            parameters.oft8,
+            256,
+            grid_res,
+            grid_height,
+            features,
+            calib,
+            grid,
+            scale=1,
+            use_precomputed_grid=True,
+        )
+        self.oft16 = TtOFT(
+            device,
+            parameters.oft16,
+            256,
+            grid_res,
+            grid_height,
+            features,
+            calib,
+            grid,
+            scale=1,
+            use_precomputed_grid=True,
+        )
+        self.oft32 = TtOFT(
+            device,
+            parameters.oft32,
+            256,
+            grid_res,
+            grid_height,
+            features,
+            calib,
+            grid,
+            scale=1,
+            use_precomputed_grid=True,
+        )
 
         self.topdown = [
             block(
@@ -173,7 +208,7 @@ class TTOftNet:
             signpost(header="Topdown started")
         for layer in self.topdown:
             print(f"Topdown layer {layer=}")
-            td = layer.forward(device, td, num_splits=2)
+            td = layer.forward(device, td, num_splits=3)  # mbezulj: to investigate, was 2
         print(f"Topdown 2 output shape: {td.shape}, dtype: {td.dtype}")
         # td = self.topdown[2].forward(device, td, num_splits=2)
         # print(f"Topdown 3 output shape: {td.shape}, dtype: {td.dtype}")
