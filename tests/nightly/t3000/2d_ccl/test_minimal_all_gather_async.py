@@ -97,5 +97,6 @@ def test_all_gather_async_training_shapes(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        do_sync=True,
+        use_barrier=True,
+        use_persistent_buffers=False,
     )
