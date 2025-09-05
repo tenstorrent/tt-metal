@@ -405,15 +405,16 @@ uint64_t BankManager::allocate_buffer(
         return address.value();
     }
 
-    // Use helpers to compute available address ranges after subtracting dependencies
-    std::vector<std::pair<DeviceAddr, DeviceAddr>> allowed =
+    // Get available address ranges after subtracting dependencies
+    // The pair represents (start, end) of the available address range(s)
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> available_ranges =
         this->compute_available_addresses(state, size_per_bank, address_limit);
 
     // Choose an address from the allowed ranges respecting alignment and direction
+    // Addresses should already be aligned to alignment_bytes_
     std::optional<DeviceAddr> chosen;
     if (bottom_up) {
-        for (const auto& r : allowed) {
-            // DeviceAddr s = alloc->align(r.first);
+        for (const auto& r : available_ranges) {
             DeviceAddr s = r.first;
             if (s + size_per_bank <= r.second) {
                 chosen = s;
@@ -421,10 +422,9 @@ uint64_t BankManager::allocate_buffer(
             }
         }
     } else {
-        for (ssize_t i = static_cast<ssize_t>(allowed.size()) - 1; i >= 0; --i) {
-            const auto& r = allowed[static_cast<size_t>(i)];
+        for (ssize_t i = static_cast<ssize_t>(available_ranges.size()) - 1; i >= 0; --i) {
+            const auto& r = available_ranges[static_cast<size_t>(i)];
             DeviceAddr s = r.second - size_per_bank;
-            // s = (s / alignment_bytes_) * alignment_bytes_;  // round down to alignment
             if (s >= r.first) {
                 chosen = s;
                 break;
