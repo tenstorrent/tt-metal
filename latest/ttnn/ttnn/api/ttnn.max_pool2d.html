@@ -166,13 +166,14 @@ should be on the device. Height, width and block sharding schemes are supported.
 <li><p><strong>in_place</strong> (<em>bool</em><em>, </em><em>optional</em>) – whether to perform the halo operation in place. Defaults to <cite>False</cite>.</p></li>
 <li><p><strong>deallocate_input</strong> (<em>bool</em><em>, </em><em>optional</em>) – whether to deallocate the input tensor after the operation. Defaults to <cite>False</cite>.</p></li>
 <li><p><strong>reallocate_halo_output</strong> (<em>bool</em><em>, </em><em>optional</em>) – whether to reallocate the halo output tensor after the operation, ideally used with deallocate_activation = true. Defaults to <cite>True</cite>.</p></li>
+<li><p><strong>return_indices</strong> (<em>bool</em><em>, </em><em>optional</em>) – whether to return both values and indices. When True, returns a tuple (values, indices). Defaults to <cite>False</cite>.</p></li>
 <li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – the queue id to use for the operation. Defaults to <cite>0</cite>.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the max pool convolved output tensor.</p>
+<p><em>ttnn.Tensor or tuple[ttnn.Tensor, ttnn.Tensor]</em> – the max pool convolved output tensor, or a tuple of (values, indices) if return_indices is True.</p>
 </dd>
 </dl>
 <div class="admonition-example admonition">
