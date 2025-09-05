@@ -229,7 +229,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         cb_indices.gather_config1,
         kernel_config_df,
         1,
-        gather_config_buffer0->page_size(),
+        gather_config_buffer1->page_size(),
         config_tensors_in_dram ? nullptr : gather_config_buffer1);
 
     const bool is_height_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
