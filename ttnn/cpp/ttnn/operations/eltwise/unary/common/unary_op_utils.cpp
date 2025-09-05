@@ -95,14 +95,12 @@ std::string get_macro_definition(UnaryOpType op_type) {
     };
 }
 
+template <typename T>
 std::pair<std::string, std::string> get_op_init_and_func_parameterized(
-    UnaryOpType op_type,
-    const std::vector<float>& params,
-    const std::string& idst,
-    std::optional<DataType> input_dtype) {
+    UnaryOpType op_type, const std::vector<T>& params, const std::string& idst, std::optional<DataType> input_dtype) {
     std::pair<std::string, std::string> op_init_and_name;
     TT_FATAL(is_parametrized_type(op_type), "operator should support at least one parameter", "Error");
-    float param0 = params[0];
+    auto param0 = params[0];
     switch (op_type) {
         case UnaryOpType::FILL:
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
@@ -711,7 +709,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             }
             break;
         case UnaryOpType::ALT_COMPLEX_ROTATE90:
-            op_init_and_name = {"alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
+            op_init_and_name = {
+                "alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
             break;
         case UnaryOpType::HARDSIGMOID:
             op_init_and_name = {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
@@ -728,9 +727,10 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
     return op_init_and_name;
 }
 
+template <typename T>
 std::map<std::string, std::string> get_defines_impl(
     UnaryOpType op_type,
-    const std::vector<float>& params,
+    const std::vector<T>& params,
     const std::string& idst,
     std::string init_def,
     std::string func_def,
@@ -835,28 +835,48 @@ std::string unary_with_param_to_string(const UnaryWithParam& unary_op) {
     }
 }
 
+template <typename T>
 std::map<std::string, std::string> get_defines(
     UnaryOpType op_type,
-    const std::optional<std::vector<float>>& params,
+    const std::optional<std::vector<std::type_identity_t<T>>>& params,
     const std::string& id,
     const std::string& idst,
     std::optional<DataType> input_dtype) {
     std::string init_def = fmt::format("SFPU_OP_INIT_{}", id);
     std::string func_def = fmt::format("SFPU_OP_FUNC_{}", id);
-    return get_defines_impl(op_type, params.value_or(std::vector<float>{}), idst, init_def, func_def, input_dtype);
+    return get_defines_impl(op_type, params.value_or(std::vector<T>{}), idst, init_def, func_def, input_dtype);
 }
 
-std::pair<std::string, std::string> get_op_init_and_func(
+template std::map<std::string, std::string> get_defines<float>(
     UnaryOpType op_type,
-    const std::vector<float>& params,
+    const std::optional<std::vector<float>>& params,
+    const std::string& id,
     const std::string& idst,
-    std::optional<DataType> input_dtype) {
+    std::optional<DataType> input_dtype);
+
+template std::map<std::string, std::string> get_defines<std::int32_t>(
+    UnaryOpType op_type,
+    const std::optional<std::vector<std::int32_t>>& params,
+    const std::string& id,
+    const std::string& idst,
+    std::optional<DataType> input_dtype);
+
+template std::map<std::string, std::string> get_defines<std::uint32_t>(
+    UnaryOpType op_type,
+    const std::optional<std::vector<std::uint32_t>>& params,
+    const std::string& id,
+    const std::string& idst,
+    std::optional<DataType> input_dtype);
+
+template <typename T>
+std::pair<std::string, std::string> get_op_init_and_func(
+    UnaryOpType op_type, const std::vector<T>& params, const std::string& idst, std::optional<DataType> input_dtype) {
     return params.size() > 0 ? get_op_init_and_func_parameterized(op_type, params, idst, input_dtype)
                              : get_op_init_and_func_default(op_type, idst, input_dtype);
 }
 
 std::map<std::string, std::string> get_block_defines(
-    const std::vector<UnaryWithParam>& op_chain,
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
     const std::string& block_id,
     const std::string& idst,
     std::optional<DataType> input_dtype) {
@@ -867,8 +887,11 @@ std::map<std::string, std::string> get_block_defines(
         std::string init_def = fmt::format("SFPU_OP_CHAIN_{}_INIT_{}", block_id, i);
         std::string func_def = fmt::format("SFPU_OP_CHAIN_{}_FUNC_{}", block_id, i);
         block_define += init_def + " " + func_def + " ";
-        block_defines.merge(
-            get_defines_impl(op_chain[i].op_type, op_chain[i].params, idst, init_def, func_def, input_dtype));
+        block_defines.merge(std::visit(
+            [&](const auto& op) {
+                return get_defines_impl(op.op_type, op.params, idst, init_def, func_def, input_dtype);
+            },
+            op_chain[i].base));
     }
     block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
     return block_defines;

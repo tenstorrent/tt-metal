@@ -31,7 +31,7 @@ Tensor where_impl(
     const auto& value_false,
     const MemoryConfig& memory_config,
     std::optional<Tensor> output) {
-    using FusedActivations = tt::stl::Span<const unary::UnaryWithParam>;
+    using FusedActivations = tt::stl::Span<const unary::EltwiseUnaryWithParam>;
     constexpr auto dtype = std::nullopt;
     const auto get_multiplied = [&](const Tensor& condition, const auto& value) -> Tensor {
         return ttnn::multiply(
@@ -179,7 +179,7 @@ Tensor WhereOperation::invoke(
             return ttnn::operations::unary::Unary_chain::invoke(
                 queue_id,
                 predicate,
-                {unary::UnaryWithParam{op_type, {static_cast<float>(t_true), static_cast<float>(t_false)}}},
+                {unary::EltwiseUnaryWithParam{op_type, {static_cast<float>(t_true), static_cast<float>(t_false)}}},
                 memory_config,
                 output);
         }
