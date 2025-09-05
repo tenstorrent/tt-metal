@@ -258,6 +258,7 @@ class GroupNormDRAM:
         print(f"DRAM {grid_x=}, {grid_y=}, {shard=}, {num_splits=} {self.is_sliced=}")
         if num_splits > 4:
             grid_y = 2
+        grid_x = 4  # mbezulj: to investigate, was 5 (full grid)
         grid_size = ttnn.CoreGrid(y=grid_y, x=grid_x)
 
         # torch input tensor

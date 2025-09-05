@@ -190,7 +190,7 @@ class TTResNetFeatures:
         # print(f"Conv1 output shape: {conv1.shape}, out_h: {out_h}, out_w: {out_w}")
         # conv1 = ttnn.untilize(conv1, memory_config=ttnn.DRAM_MEMORY_CONFIG,  use_multicore=True)
         conv1 = ttnn.to_layout(conv1, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        conv1 = self.bn1(device, conv1, out_h, out_w, num_splits=8)
+        conv1 = self.bn1(device, conv1, out_h, out_w, num_splits=10)  # mbezulj: to investigate, was 8
         # conv1 = self.bn1(device, conv1, out_h, out_w, shard="HS") #this is for later
         #
         # conv1 = ttnn.to_torch(conv1).reshape(conv1.shape[0], out_h, out_w, conv1.shape[-1]).permute((0, 3, 1, 2))
