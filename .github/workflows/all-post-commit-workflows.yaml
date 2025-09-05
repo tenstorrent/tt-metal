@@ -62,6 +62,7 @@ jobs:
       build-wheel: true
       version: ${{ inputs.version || '22.04' }}
       skip-tt-train: false
+      enable-watcher: ${{ inputs.enable-watcher || false }}
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -72,6 +73,7 @@ jobs:
       build-wheel: true
       tracy: true
       version: ${{ inputs.version || '22.04' }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
   # Slow Dispatch Unit Tests
   sd-unit-tests:
