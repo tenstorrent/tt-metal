@@ -8,6 +8,7 @@
 
 #include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
+#include "models/base_transformer.hpp"
 #include "models/common/transformer_common.hpp"
 #include "modules/bert_block.hpp"
 #include "modules/dropout_module.hpp"
@@ -33,7 +34,7 @@ struct BertConfig {
     bool use_pooler = false;  // For classification tasks
 };
 
-class Bert : public autograd::ModuleBase {
+class Bert : public BaseTransformer {
 private:
     std::shared_ptr<modules::Embedding> m_token_embeddings;
     std::shared_ptr<modules::TrainablePositionalEmbedding> m_position_embeddings;
@@ -48,6 +49,9 @@ private:
 
 public:
     explicit Bert(const BertConfig& config);
+    virtual ~Bert() = default;
+
+    void load_from_safetensors(const std::filesystem::path& model_path) override;
 
     [[nodiscard]] autograd::TensorPtr operator()(
         const autograd::TensorPtr& input_ids,
@@ -65,5 +69,7 @@ BertConfig read_config(const YAML::Node& config);
 YAML::Node write_config(const BertConfig& bert_config);
 std::shared_ptr<Bert> create(const BertConfig& config);
 std::shared_ptr<Bert> create(const YAML::Node& config);
+
+void load_model_from_safetensors(const std::filesystem::path& path, serialization::NamedParameters& parameters);
 
 }  // namespace ttml::models::bert
