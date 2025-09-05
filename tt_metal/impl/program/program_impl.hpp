@@ -62,6 +62,7 @@ void assemble_device_commands(
 struct KernelGroup {
     uint32_t programmable_core_type_index{};
     CoreRangeSet core_ranges;
+    // kernel_ids are ordered by dispatch class
     std::vector<KernelHandle> kernel_ids;
     uint32_t rta_sizes[DISPATCH_CLASS_MAX]{};
     uint32_t total_rta_size{};
