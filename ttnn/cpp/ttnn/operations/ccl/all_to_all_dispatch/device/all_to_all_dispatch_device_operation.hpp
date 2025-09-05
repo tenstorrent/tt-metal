@@ -42,9 +42,7 @@ struct AllToAllDispatchDeviceOperation {
         const std::optional<uint32_t> axis;
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
-        const std::optional<GlobalSemaphore> cross_device_semaphore;
         const AllToAllTransferType impl;
-        const std::optional<GlobalSemaphore> init_semaphore;
     };
     struct tensor_args_t {
         const Tensor input_tensor;
