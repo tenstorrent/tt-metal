@@ -53,134 +53,13 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <chrono>
+#include "tests/tt_metal/tt_fabric/benchmark/collectives/perf_helpers.hpp"
 using tt::DevicePool;
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
 
-struct PerfPoint {
-    uint64_t bytes;  // p.tensor_bytes
-    double sec;
-    double ms;
-    double gbps;
-};
-
-struct PerfParams {
-    uint32_t mesh_id = 0;       // mesh to use
-    chip_id_t src_chip = 0;     // logical chip id in that mesh
-    chip_id_t dst_chip = 1;     // logical chip id in that mesh
-    bool use_dram_dst = false;  // false -> land in L1 on dst; true -> land in DRAM
-    uint32_t tensor_bytes = 1024 * 1024;
-    uint32_t page_size = 4096;
-    CoreCoord sender_core = {0, 0};
-    CoreCoord receiver_core = {0, 0};
-};
-struct PerfStats {
-    uint64_t bytes = 0;
-    int iters = 0;
-    double mean_ms = 0.0;
-    double std_ms = 0.0;
-    double p50_ms = 0.0;  // median
-    double p95_ms = 0.0;
-    double min_ms = 0.0;
-    double max_ms = 0.0;
-    double mean_gbps = 0.0;
-};
-
-static inline PerfPoint RunUnicastConnWithParams(BaseFabricFixture* fixture, const PerfParams& p);
-
-static inline double mean_of(const std::vector<double>& v) {
-    if (v.empty()) {
-        return 0.0;
-    }
-    double s = std::accumulate(v.begin(), v.end(), 0.0);
-    return s / static_cast<double>(v.size());
-}
-
-static inline double stddev_of(const std::vector<double>& v, double m) {
-    if (v.size() < 2) {
-        return 0.0;
-    }
-    double acc = 0.0;
-    for (double x : v) {
-        double d = x - m;
-        acc += d * d;
-    }
-    return std::sqrt(acc / static_cast<double>(v.size() - 1));
-}
-
-static inline double percentile(std::vector<double> v, double p_in_0_100) {
-    if (v.empty()) {
-        return 0.0;
-    }
-    p_in_0_100 = std::clamp(p_in_0_100, 0.0, 100.0);
-    const size_t n = v.size();
-    const size_t k = static_cast<size_t>(std::round((p_in_0_100 / 100.0) * (n - 1)));
-    std::nth_element(v.begin(), v.begin() + k, v.end());
-    return v[k];
-}
-
-static inline PerfStats aggregate_stats(const std::vector<PerfPoint>& pts) {
-    PerfStats s;
-    if (pts.empty()) {
-        return s;
-    }
-    s.bytes = pts.front().bytes;
-    s.iters = static_cast<int>(pts.size());
-
-    std::vector<double> v_ms;
-    v_ms.reserve(pts.size());
-    std::vector<double> v_gbps;
-    v_gbps.reserve(pts.size());
-    for (const auto& p : pts) {
-        v_ms.push_back(p.ms);
-        v_gbps.push_back(p.gbps);
-    }
-    s.mean_ms = mean_of(v_ms);
-    s.std_ms = stddev_of(v_ms, s.mean_ms);
-    s.p50_ms = percentile(v_ms, 50.0);
-    s.p95_ms = percentile(v_ms, 95.0);
-    s.min_ms = *std::min_element(v_ms.begin(), v_ms.end());
-    s.max_ms = *std::max_element(v_ms.begin(), v_ms.end());
-    s.mean_gbps = mean_of(v_gbps);
-    return s;
-}
-
-// Warm a given (src,dst) path once (or a few times)
-static inline void warmup_once(BaseFabricFixture* fixture, PerfParams base, int iters = 1) {
-    // small transfer to prime the path; keep same cores for comparability
-    base.tensor_bytes = 4 * base.page_size;
-    for (int i = 0; i < iters; ++i) {
-        (void)RunUnicastConnWithParams(fixture, base);
-    }
-}
-
-// Run the same measurement multiple times, with optional per-case warmups.
-// Returns aggregated statistics.
-static inline PerfStats run_repeated(BaseFabricFixture* fixture, const PerfParams& p, int warmup_iters, int iters) {
-    for (int w = 0; w < warmup_iters; ++w) {
-        (void)RunUnicastConnWithParams(fixture, p);
-    }
-
-    std::vector<PerfPoint> pts;
-    pts.reserve(std::max(iters, 0));
-    for (int i = 0; i < iters; ++i) {
-        pts.push_back(RunUnicastConnWithParams(fixture, p));
-    }
-    return aggregate_stats(pts);
-}
-
-static inline tt::tt_metal::IDevice* find_device_by_id(chip_id_t phys_id) {
-    auto devices = DevicePool::instance().get_all_active_devices();
-    for (auto* d : devices) {
-        if (d->id() == phys_id) {
-            return d;
-        }
-    }
-    return nullptr;
-}
-
-static inline PerfPoint RunUnicastConnWithParams(BaseFabricFixture* fixture, const PerfParams& p) {
+PerfPoint RunUnicastConnWithParams(BaseFabricFixture* fixture, const PerfParams& p) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};

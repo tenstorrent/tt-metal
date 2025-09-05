@@ -8,6 +8,7 @@ set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_1d_fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_mux.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_tt_fabric_socket_perf.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/perf_helpers.cpp
 )
 
 add_executable(fabric_unit_tests ${UNIT_TESTS_FABRIC_SRC})
