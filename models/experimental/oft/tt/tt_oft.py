@@ -30,90 +30,6 @@ def perspective_torch(matrix, vector):
     return homogenous[..., :-1] / homogenous[..., [-1]]
 
 
-def calculate_initialization_parameters(
-    device, channels, cell_size, grid_height, features, calib, grid, scale, use_precomputed_grid
-):
-    y_corners = torch.arange(0, grid_height, cell_size) - grid_height / 2.0
-    y_corners = F.pad(y_corners.view(-1, 1, 1, 1), [1, 1])
-    # Expand the grid in the y dimension
-    corners = grid.unsqueeze(1) + y_corners.view(-1, 1, 1, 3)
-
-    # Project grid corners to image plane and normalize to [-1, 1]
-    img_corners = perspective_torch(calib.view(-1, 1, 1, 1, 3, 4), corners)
-
-    img_height, img_width = features.size()[2:]
-    # print(f"img_height: {img_height}, img_width: {img_width}")
-    # Normalize to [-1, 1]
-    img_size = corners.new([img_width, img_height]) / scale
-    # print(f"img_size shape: {img_size.shape}, dtype: {img_size.dtype}")
-    # print(f"scale: {scale}")
-    # print(f"img_size: {img_size}")
-    norm_corners = (2 * img_corners / img_size - 1).clamp(-1, 1)
-    # print(f"TTNN:: norm_corners shape: {norm_corners.shape}, dtype: {norm_corners.dtype}")
-    # Get top-left and bottom-right coordinates of voxel bounding boxes
-    bbox_corners = torch.cat(
-        [
-            torch.min(norm_corners[:, :-1, :-1, :-1], norm_corners[:, :-1, 1:, :-1]),
-            torch.max(norm_corners[:, 1:, 1:, 1:], norm_corners[:, 1:, :-1, 1:]),
-        ],
-        dim=-1,
-    )
-    batch, _, depth, width, _ = bbox_corners.size()
-    bbox_corners = bbox_corners.flatten(2, 3)
-    area = (
-        (bbox_corners[..., 2:] - bbox_corners[..., :2]).prod(dim=-1) * img_height * img_width * 0.25 + EPSILON
-    ).unsqueeze(1)
-    visible = area > EPSILON
-
-    area = 1 / area
-    area_nhwc = area.permute(0, 2, 3, 1)  # Convert to NHWC format
-    visible_nhwc = visible.permute(0, 2, 3, 1)  # Convert to NHWC format
-    top_left_bc = bbox_corners[..., [0, 1]]
-    btm_right_bc = bbox_corners[..., [2, 3]]
-    top_right_bc = bbox_corners[..., [2, 1]]
-    btm_left_bc = bbox_corners[..., [0, 3]]
-
-    batch_size, grid_h, grid_w, _ = top_left_bc.shape
-    batch_size, channels, height, width = features.shape
-    input_shape_nhwc = [batch_size, height, width, channels]
-
-    # bbox_corners_tt = ttnn.from_torch(bbox_corners, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    if use_precomputed_grid:
-        prepare_grid_lambda = lambda torch_grid_bf16, input_shape_nhwc: ttnn.to_device(
-            ttnn.prepare_grid_sample_grid(
-                ttnn.from_torch(torch_grid_bf16, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32),
-                input_shape_nhwc,
-                padding_mode="zeros",
-                output_dtype=ttnn.bfloat16,
-            ),
-            device,
-        )
-        top_left_bc_tt = prepare_grid_lambda(top_left_bc, input_shape_nhwc)
-        btm_right_bc_tt = prepare_grid_lambda(btm_right_bc, input_shape_nhwc)
-        top_right_bc_tt = prepare_grid_lambda(top_right_bc, input_shape_nhwc)
-        btm_left_bc_tt = prepare_grid_lambda(btm_left_bc, input_shape_nhwc)
-
-    else:
-        top_left_bc_tt = ttnn.from_torch(top_left_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        btm_right_bc_tt = ttnn.from_torch(
-            btm_right_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-        )
-        top_right_bc_tt = ttnn.from_torch(
-            top_right_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-        )
-        btm_left_bc_tt = ttnn.from_torch(btm_left_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-    visible_tt = ttnn.from_torch(visible_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    area_tt = ttnn.from_torch(area_nhwc, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    return (
-        [top_left_bc_tt, btm_right_bc_tt, top_right_bc_tt, btm_left_bc_tt],
-        visible_tt,
-        area_tt,
-        [batch, depth, width],
-    )
-    # return area_tt
-
-
 class OFT:
     def __init__(
         self,
@@ -125,8 +41,8 @@ class OFT:
         features,
         calib,
         grid,
-        scale=1,
-        use_precomputed_grid=True,
+        scale,
+        use_precomputed_grid,
     ):
         # params for conv3d
         self.linear_weight = parameters.conv3d.weight
@@ -135,7 +51,7 @@ class OFT:
         self.scale = scale
         self.use_precomputed_grid = use_precomputed_grid
 
-        self.bbox_corners, self.visible, self.area, self.shape = calculate_initialization_parameters(
+        self.bbox_corners, self.visible, self.area, self.shape = self.calculate_initialization_parameters(
             device, channels, cell_size, grid_height, features, calib, grid, self.scale, use_precomputed_grid
         )
         # self.area = calculate_initialization_parameters(
@@ -270,6 +186,93 @@ class OFT:
         if use_signpost:
             signpost(header="OFT block ended")
         return ortho_feats
+
+    def calculate_initialization_parameters(
+        self, device, channels, cell_size, grid_height, features, calib, grid, scale, use_precomputed_grid
+    ):
+        y_corners = torch.arange(0, grid_height, cell_size) - grid_height / 2.0
+        y_corners = F.pad(y_corners.view(-1, 1, 1, 1), [1, 1])
+        # Expand the grid in the y dimension
+        corners = grid.unsqueeze(1) + y_corners.view(-1, 1, 1, 3)
+
+        # Project grid corners to image plane and normalize to [-1, 1]
+        img_corners = perspective_torch(calib.view(-1, 1, 1, 1, 3, 4), corners)
+
+        img_height, img_width = features.size()[2:]
+        # print(f"img_height: {img_height}, img_width: {img_width}")
+        # Normalize to [-1, 1]
+        img_size = corners.new([img_width, img_height]) / scale
+        # print(f"img_size shape: {img_size.shape}, dtype: {img_size.dtype}")
+        # print(f"scale: {scale}")
+        # print(f"img_size: {img_size}")
+        norm_corners = (2 * img_corners / img_size - 1).clamp(-1, 1)
+        # print(f"TTNN:: norm_corners shape: {norm_corners.shape}, dtype: {norm_corners.dtype}")
+        # Get top-left and bottom-right coordinates of voxel bounding boxes
+        bbox_corners = torch.cat(
+            [
+                torch.min(norm_corners[:, :-1, :-1, :-1], norm_corners[:, :-1, 1:, :-1]),
+                torch.max(norm_corners[:, 1:, 1:, 1:], norm_corners[:, 1:, :-1, 1:]),
+            ],
+            dim=-1,
+        )
+        batch, _, depth, width, _ = bbox_corners.size()
+        bbox_corners = bbox_corners.flatten(2, 3)
+        area = (
+            (bbox_corners[..., 2:] - bbox_corners[..., :2]).prod(dim=-1) * img_height * img_width * 0.25 + EPSILON
+        ).unsqueeze(1)
+        visible = area > EPSILON
+
+        area = 1 / area
+        area_nhwc = area.permute(0, 2, 3, 1)  # Convert to NHWC format
+        visible_nhwc = visible.permute(0, 2, 3, 1)  # Convert to NHWC format
+        top_left_bc = bbox_corners[..., [0, 1]]
+        btm_right_bc = bbox_corners[..., [2, 3]]
+        top_right_bc = bbox_corners[..., [2, 1]]
+        btm_left_bc = bbox_corners[..., [0, 3]]
+
+        batch_size, grid_h, grid_w, _ = top_left_bc.shape
+        batch_size, channels, height, width = features.shape
+        input_shape_nhwc = [batch_size, height, width, channels]
+
+        # bbox_corners_tt = ttnn.from_torch(bbox_corners, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        if use_precomputed_grid:
+            prepare_grid_lambda = lambda torch_grid_bf16, input_shape_nhwc: ttnn.to_device(
+                ttnn.prepare_grid_sample_grid(
+                    ttnn.from_torch(torch_grid_bf16, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32),
+                    input_shape_nhwc,
+                    padding_mode="zeros",
+                    output_dtype=ttnn.bfloat16,
+                ),
+                device,
+            )
+            top_left_bc_tt = prepare_grid_lambda(top_left_bc, input_shape_nhwc)
+            btm_right_bc_tt = prepare_grid_lambda(btm_right_bc, input_shape_nhwc)
+            top_right_bc_tt = prepare_grid_lambda(top_right_bc, input_shape_nhwc)
+            btm_left_bc_tt = prepare_grid_lambda(btm_left_bc, input_shape_nhwc)
+
+        else:
+            top_left_bc_tt = ttnn.from_torch(
+                top_left_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+            btm_right_bc_tt = ttnn.from_torch(
+                btm_right_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+            top_right_bc_tt = ttnn.from_torch(
+                top_right_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+            btm_left_bc_tt = ttnn.from_torch(
+                btm_left_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+
+        visible_tt = ttnn.from_torch(visible_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        area_tt = ttnn.from_torch(area_nhwc, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        return (
+            [top_left_bc_tt, btm_right_bc_tt, top_right_bc_tt, btm_left_bc_tt],
+            visible_tt,
+            area_tt,
+            [batch, depth, width],
+        )
+        # return area_tt
 
 
 def ttnn_integral_image_channel_last(features_nhwc):
