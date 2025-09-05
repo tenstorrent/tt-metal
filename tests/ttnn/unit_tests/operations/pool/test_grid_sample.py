@@ -25,7 +25,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ((2, 160, 32, 8), (2, 28, 6, 2)),
     ],
 )
-def test_grid_sample_random_grid(device, input_shape, grid_shape):
+@pytest.mark.parametrize("grid_dtype", ["bfloat16", "float32"])
+def test_grid_sample_random_grid(device, input_shape, grid_shape, grid_dtype):
     """Test grid_sample with completely random grid coordinates"""
 
     torch.manual_seed(0)
@@ -33,25 +34,39 @@ def test_grid_sample_random_grid(device, input_shape, grid_shape):
     torch_input_nchw = torch.randn(input_shape, dtype=torch.float32)
     torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
-    # Makes a random grid with coordinates in range [-1, 1]
-    torch_grid = torch.rand(grid_shape, dtype=torch.bfloat16) * 2.0 - 1.0
-
-    torch_grid_float = torch_grid.to(torch.float32)
+    # Create a random grid with coordinates in range [-1, 1]
+    torch_grid_f32 = torch.rand(grid_shape, dtype=torch.float32) * 2.0 - 1.0
 
     torch_output_nchw = F.grid_sample(
-        torch_input_nchw, torch_grid_float, mode="bilinear", padding_mode="zeros", align_corners=False
+        torch_input_nchw, torch_grid_f32, mode="bilinear", padding_mode="zeros", align_corners=False
     )
 
     torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_grid = ttnn.from_torch(torch_grid, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    if grid_dtype == "float32":
+        ttnn_grid = ttnn.from_torch(torch_grid_f32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32)
+    else:  # bfloat16
+        torch_grid_bf16 = torch_grid_f32.to(torch.bfloat16)
+        ttnn_grid = ttnn.from_torch(torch_grid_bf16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
-    logger.info(pcc_message)
+    logger.info(f"{grid_dtype.upper()} grid PCC: {pcc_message}")
+
+    # Test allclose with grid type specific tolerances
+    if grid_dtype == "float32":
+        atol, rtol = 0.2, 1e-2
+    else:  # bfloat16
+        atol, rtol = 1.0, 1e-1
+
+    allclose_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
+
+    assert pcc_passed, f"{grid_dtype.upper()} grid test failed with PCC below threshold"
+    assert allclose_passed, f"{grid_dtype.upper()} grid test failed allclose comparison (atol={atol}, rtol={rtol})"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
@@ -67,7 +82,8 @@ def test_grid_sample_random_grid(device, input_shape, grid_shape):
         ((3, 224, 40, 40), (3, 32, 32, 2)),
     ],
 )
-def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape):
+@pytest.mark.parametrize("grid_dtype", ["bfloat16", "float32"])
+def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape, grid_dtype):
     torch.manual_seed(0)
 
     batch_size, grid_h, grid_w, _ = grid_shape
@@ -88,18 +104,33 @@ def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape):
         torch_input_nchw, torch_grid, mode="bilinear", padding_mode="zeros", align_corners=False
     )
 
-    torch_grid_bf16 = torch_grid.to(torch.bfloat16)
-
     torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
     ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_grid = ttnn.from_torch(torch_grid_bf16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    if grid_dtype == "float32":
+        ttnn_grid = ttnn.from_torch(torch_grid, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32)
+    else:  # bfloat16
+        torch_grid_bf16 = torch_grid.to(torch.bfloat16)
+        ttnn_grid = ttnn.from_torch(torch_grid_bf16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
     pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
-    logger.info(pcc_message)
+    logger.info(f"{grid_dtype.upper()} grid PCC: {pcc_message}")
+
+    # Test allclose with grid type specific tolerances
+    if grid_dtype == "float32":
+        atol, rtol = 0.2, 1e-2
+    else:  # bfloat16
+        atol, rtol = 1.0, 1e-1
+
+    allclose_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
+    logger.info(f"{grid_dtype.upper()} grid allclose (atol={atol}, rtol={rtol}): {allclose_passed}")
+
+    assert pcc_passed, f"{grid_dtype.upper()} grid test failed with PCC below threshold"
+    assert allclose_passed, f"{grid_dtype.upper()} grid test failed allclose comparison (atol={atol}, rtol={rtol})"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
