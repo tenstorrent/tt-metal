@@ -13,18 +13,18 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_selu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::selu, APPROXIMATE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::selu, APPROXIMATE>(sfpu::selu_init);
 }
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_selu(
-    uint dst_index, uint param0, uint param1, int vector_mode = (int)VectorMode::RC) {
+    uint dst_index, uint scale, uint alpha, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_selu<APPROXIMATE, is_fp32_dest_acc_en, ITERATIONS>,
         dst_index,
         vector_mode,
-        param0,
-        param1);
+        scale,
+        alpha);
 }
 
 }  // namespace ckernel
