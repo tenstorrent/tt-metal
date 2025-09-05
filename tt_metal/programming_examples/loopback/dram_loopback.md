@@ -32,27 +32,6 @@ We first obtain the device's `CommandQueue` in order to use the fast dispatch ca
 
 Next, we create a `Program` to be run on our accelerator. This is how we'll be keeping track of things in our session with the device.
 
-## Building a data movement kernel
-
-Declare a kernel for data movement. We'll use a pre-written kernel that copies data from one place to another.
-
-We will be using the accelerator core with coordinates `{0, 0}`.
-
-``` cpp
-constexpr CoreCoord core = {0, 0};
-
-// Note: In the actual code, buffers are created before this kernel,
-// so input_dram_buffer and output_dram_buffer already exist
-KernelHandle dram_copy_kernel_id = CreateKernel(
-    program,
-    "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
-    core,
-    DataMovementConfig{
-        .processor = DataMovementProcessor::RISCV_0,
-        .noc = NOC::RISCV_0_default}
-);
-```
-
 ## Create buffers in DRAM and L1
 
 Next, we need to declare buffers that we will use during execution. We will need:
@@ -91,6 +70,28 @@ InterleavedBufferConfig dram_config{
 
 auto input_dram_buffer = CreateBuffer(dram_config);
 auto output_dram_buffer = CreateBuffer(dram_config);
+```
+
+## Building a data movement kernel
+
+Declare a kernel for data movement. We'll use a pre-written kernel that copies data from one place to another.
+
+We will be using the accelerator core with coordinates `{0, 0}`.
+
+``` cpp
+constexpr CoreCoord core = {0, 0};
+
+std::vector<uint32_t> dram_copy_compile_time_args;
+TensorAccessorArgs(*input_dram_buffer).append_to(dram_copy_compile_time_args);
+TensorAccessorArgs(*output_dram_buffer).append_to(dram_copy_compile_time_args);
+KernelHandle dram_copy_kernel_id = CreateKernel(
+    program,
+    "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
+    core,
+    DataMovementConfig{
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = NOC::RISCV_0_default,
+        .compile_args = dram_copy_compile_time_args});
 ```
 
 ## Sending real data into DRAM
