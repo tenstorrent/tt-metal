@@ -16,9 +16,6 @@
 
 #include <tracy/Tracy.hpp>
 
-using namespace tt;
-using namespace tt::tt_metal;
-
 struct CoreSplitResult {
     uint32_t required_cores = 0;
     CoreRangeSet all_cores;
@@ -46,7 +43,7 @@ CoreSplitResult split_work_to_cores_aligned(
     }
 
     // Core set for all active cores
-    CoreRangeSet all_cores = num_cores_to_corerangeset(required_cores, grid_size, false);
+    CoreRangeSet all_cores = tt::tt_metal::num_cores_to_corerangeset(required_cores, grid_size, false);
 
     // Calculate remaining units for the last core
     uint32_t evenly_distributed_units = (required_cores - 1) * units_per_core;
@@ -63,7 +60,7 @@ CoreSplitResult split_work_to_cores_aligned(
 
         core_group_2 =
             CoreRangeSet(CoreRange(CoreCoord(last_core_x, last_core_y), CoreCoord(last_core_x, last_core_y)));
-        core_group_1 = num_cores_to_corerangeset(required_cores - 1, grid_size, false);
+        core_group_1 = tt::tt_metal::num_cores_to_corerangeset(required_cores - 1, grid_size, false);
     }
 
     // Adjust the units per core for each group
@@ -86,7 +83,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::Buffer* out_buffer = output.buffer();
+    tt::tt_metal::Buffer* out_buffer = output.buffer();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -144,7 +141,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     uint32_t g1_numcores = core_group_1.num_cores();
 
     // Create Buffers
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     EmbeddingsIndexType embeddings_index_type;
     if (a.dtype() == DataType::BFLOAT16) {
@@ -153,56 +150,57 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
 
-    tt::DataFormat weights_cb_data_format = tt_metal::datatype_to_dataformat_converter(weights.dtype());
-    uint32_t weights_single_tile_size = tt_metal::detail::TileSize(weights_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
+    tt::DataFormat weights_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
+    uint32_t weights_single_tile_size = tt::tt_metal::detail::TileSize(weights_cb_data_format);
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
     // Hardcoded limit to reduce L1 usage. Should be updated to be tuned based on overall L1 usage
     constexpr uint32_t max_double_buffer_tiles = 64;
     uint32_t buffering = num_tiles_per_block > max_double_buffer_tiles ? 1 : 2;
 
-    constexpr uint32_t src0_cb_index = CBIndex::c_0;
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(
+    constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
+    tt::tt_metal::CircularBufferConfig cb_src0_config =
+        tt::tt_metal::CircularBufferConfig(
             buffering * num_tiles_per_block * weights_single_tile_size, {{src0_cb_index, weights_cb_data_format}})
             .set_page_size(src0_cb_index, weights_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    constexpr uint32_t src1_cb_index = CBIndex::c_1;
-    tt_metal::CircularBufferConfig cb_src1_config =
-        tt_metal::CircularBufferConfig(TILE_HEIGHT * input_element_size_bytes, {{src1_cb_index, input_cb_data_format}})
+    constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
+    tt::tt_metal::CircularBufferConfig cb_src1_config =
+        tt::tt_metal::CircularBufferConfig(
+            TILE_HEIGHT * input_element_size_bytes, {{src1_cb_index, input_cb_data_format}})
             .set_page_size(src1_cb_index, TILE_HEIGHT * input_element_size_bytes);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
-    constexpr uint32_t output_cb_index = CBIndex::c_2;
+    constexpr uint32_t output_cb_index = tt::CBIndex::c_2;
     uint32_t output_cb_size;
     if (output_sharded) {
         output_cb_size = output.buffer()->aligned_size_per_bank();
     } else {
         output_cb_size = buffering * num_tiles_per_block * output_single_tile_size;
     }
-    tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(output_cb_size, {{output_cb_index, output_cb_data_format}})
+    tt::tt_metal::CircularBufferConfig cb_output_config =
+        tt::tt_metal::CircularBufferConfig(output_cb_size, {{output_cb_index, output_cb_data_format}})
             .set_page_size(output_cb_index, output_single_tile_size);
     if (output_sharded) {
         cb_output_config.set_globally_allocated_address(*out_buffer);
     }
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    constexpr uint32_t src2_cb_index = CBIndex::c_3;
+    constexpr uint32_t src2_cb_index = tt::CBIndex::c_3;
     if (embeddings_type == EmbeddingsType::PADDED) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        tt_metal::CircularBufferConfig cb_src2_config =
-            tt_metal::CircularBufferConfig(cache_page_size, {{src2_cb_index, weights_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig cb_src2_config =
+            tt::tt_metal::CircularBufferConfig(cache_page_size, {{src2_cb_index, weights_cb_data_format}})
                 .set_page_size(src2_cb_index, cache_page_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
     } else if (embeddings_type == EmbeddingsType::BINARY) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        tt_metal::CircularBufferConfig cb_src2_config =
-            tt_metal::CircularBufferConfig(2 * cache_page_size, {{src2_cb_index, weights_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig cb_src2_config =
+            tt::tt_metal::CircularBufferConfig(2 * cache_page_size, {{src2_cb_index, weights_cb_data_format}})
                 .set_page_size(src2_cb_index, cache_page_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
     }
     uint32_t weight_block_size;
     if (output_sharded) {
@@ -224,18 +222,18 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         (std::uint32_t)weight_block_size,
         (std::uint32_t)num_tiles_per_block,
         (std::uint32_t)input_block_size_bytes};
-    TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
-    TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
     std::map<std::string, std::string> embedding_defines = {
         {enchantum::to_string(embeddings_type).data(), "1"},
         {enchantum::to_string(embeddings_index_type).data(), "1"}};
 
-    auto reader_kernel_id = tt_metal::CreateKernel(
+    auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
+        tt::tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
     if (num_blocks_per_core_group_1 > 0) {
         std::vector<uint32_t> compute_args_1 = {
@@ -244,11 +242,11 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
             uint32_t(num_blocks_per_core_group_1),  // per_core_block_cnt
             uint32_t(num_tiles_per_block)           // per_core_block_tile_cnt
         };
-        tt_metal::CreateKernel(
+        tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp",
             core_group_1,
-            tt_metal::ComputeConfig{.compile_args = compute_args_1});
+            tt::tt_metal::ComputeConfig{.compile_args = compute_args_1});
     }
 
     if (num_blocks_per_core_group_2 > 0) {
@@ -258,24 +256,24 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
             uint32_t(num_blocks_per_core_group_2),  // per_core_block_cnt
             uint32_t(num_tiles_per_block)           // per_core_block_tile_cnt
         };
-        tt_metal::CreateKernel(
+        tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp",
             core_group_2,
-            tt_metal::ComputeConfig{.compile_args = compute_args_2});
+            tt::tt_metal::ComputeConfig{.compile_args = compute_args_2});
     }
-    KernelHandle writer_kernel_id = 0;
+    tt::tt_metal::KernelHandle writer_kernel_id = 0;
     // TODO: We can use the second risc to do more work in parallel
     if (!output_sharded) {
         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
         tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
         // Tilized writer
-        writer_kernel_id = tt_metal::CreateKernel(
+        writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
             all_cores,
-            tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+            tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
 
     auto cores = corerange_to_cores(all_cores, std::nullopt, row_major);
@@ -309,7 +307,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
             reader_runtime_args[3] = input_offset % num_blocks_per_batch * input_block_size_bytes;
             reader_runtime_args[4] = weight_offset;
             reader_runtime_args[5] = local_num_blocks;
-            tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+            tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         }
 
         // Writer
@@ -317,7 +315,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
             writer_runtime_args[1] = num_tiles_per_block * local_num_blocks;
             writer_runtime_args[2] = tile_offset;
             tile_offset += local_num_blocks * num_tiles_per_block;
-            tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
             input_offset += local_num_blocks;
         } else {
             weight_offset += weight_block_size;
@@ -374,7 +372,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::Buffer* out_buffer = output.buffer();
+    tt::tt_metal::Buffer* out_buffer = output.buffer();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -438,11 +436,11 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     uint32_t g1_numcores = core_group_1.num_cores();
 
     // Create Buffers
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    tt::DataFormat weights_cb_data_format = tt_metal::datatype_to_dataformat_converter(weights.dtype());
+    tt::DataFormat weights_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
 
-    constexpr uint32_t out_cb_index = CBIndex::c_0;
+    constexpr uint32_t out_cb_index = tt::CBIndex::c_0;
     uint32_t rounded_weight_page_size = round_up_to_mul32(weight_page_size);
     uint32_t out_cb_size;
     if (output_sharded) {
@@ -451,34 +449,34 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
         uint32_t buffering_size = (num_blocks_per_core_group_1 > 1 || num_blocks_per_core_group_2 > 1) ? 2 : 1;
         out_cb_size = buffering_size * rounded_weight_page_size;
     }
-    tt_metal::CircularBufferConfig cb_out_config =
-        tt_metal::CircularBufferConfig(out_cb_size, {{out_cb_index, weights_cb_data_format}})
+    tt::tt_metal::CircularBufferConfig cb_out_config =
+        tt::tt_metal::CircularBufferConfig(out_cb_size, {{out_cb_index, weights_cb_data_format}})
             .set_page_size(out_cb_index, rounded_weight_page_size);
     if (output_sharded) {
         cb_out_config.set_globally_allocated_address(*out_buffer);
     }
-    auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+    auto cb_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
 
-    constexpr uint32_t src1_cb_index = CBIndex::c_1;
+    constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
     uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
-    tt_metal::CircularBufferConfig cb_src1_config =
-        tt_metal::CircularBufferConfig(block_height * index_page_size, {{src1_cb_index, input_cb_data_format}})
+    tt::tt_metal::CircularBufferConfig cb_src1_config =
+        tt::tt_metal::CircularBufferConfig(block_height * index_page_size, {{src1_cb_index, input_cb_data_format}})
             .set_page_size(src1_cb_index, block_height * index_page_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
-    constexpr uint32_t src2_cb_index = CBIndex::c_2;
+    constexpr uint32_t src2_cb_index = tt::CBIndex::c_2;
     if (embeddings_type == EmbeddingsType::PADDED) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        tt_metal::CircularBufferConfig cb_src2_config =
-            tt_metal::CircularBufferConfig(cache_page_size, {{src2_cb_index, weights_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig cb_src2_config =
+            tt::tt_metal::CircularBufferConfig(cache_page_size, {{src2_cb_index, weights_cb_data_format}})
                 .set_page_size(src2_cb_index, cache_page_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
     } else if (embeddings_type == EmbeddingsType::BINARY) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        tt_metal::CircularBufferConfig cb_src2_config =
-            tt_metal::CircularBufferConfig(2 * cache_page_size, {{src2_cb_index, weights_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig cb_src2_config =
+            tt::tt_metal::CircularBufferConfig(2 * cache_page_size, {{src2_cb_index, weights_cb_data_format}})
                 .set_page_size(src2_cb_index, cache_page_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
     }
 
     // Create Kernels
@@ -491,8 +489,8 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
         (std::uint32_t)weight_page_size,
         (std::uint32_t)block_height,
         (std::uint32_t)block_height * input_element_size_bytes};
-    TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
-    TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
     EmbeddingsIndexType embeddings_index_type;
     if (a.dtype() == DataType::BFLOAT16) {
@@ -505,23 +503,23 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
         {enchantum::to_string(embeddings_type).data(), "1"},
         {enchantum::to_string(embeddings_index_type).data(), "1"}};
 
-    auto reader_kernel_id = tt_metal::CreateKernel(
+    auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
+        tt::tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
     // Tilized writer
-    KernelHandle writer_kernel_id = 0;
+    tt::tt_metal::KernelHandle writer_kernel_id = 0;
     if (!output_sharded) {
         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)out_cb_index, (std::uint32_t)output_page_size};
-        TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
-        writer_kernel_id = tt_metal::CreateKernel(
+        writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
             all_cores,
-            tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+            tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
 
     uint32_t input_offset = 0;
@@ -550,17 +548,17 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
         {
             reader_runtime_args[2] = input_offset / num_blocks_per_batch;
             reader_runtime_args[3] =
-                round_down(input_offset % num_blocks_per_batch, block_height) * input_element_size_bytes;
+                tt::round_down(input_offset % num_blocks_per_batch, block_height) * input_element_size_bytes;
             reader_runtime_args[4] = local_num_blocks;
             reader_runtime_args[5] = input_offset % num_blocks_per_batch % block_height;
-            tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+            tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         }
 
         // Writer
         if (!output_sharded) {
             writer_runtime_args[2] = local_num_blocks;
             writer_runtime_args[3] = input_offset;
-            tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
         }
 
         input_offset += local_num_blocks;
@@ -658,37 +656,37 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     uint32_t g1_numcores = core_group_1.num_cores();
 
     // Create Buffers
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    tt::DataFormat weights_cb_data_format = tt_metal::datatype_to_dataformat_converter(weights.dtype());
+    tt::DataFormat weights_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
 
-    constexpr uint32_t src0_cb_index = CBIndex::c_0;
+    constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t rounded_weight_page_size = round_up_to_mul32(weight_page_size);
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(2 * rounded_weight_page_size, {{src0_cb_index, weights_cb_data_format}})
+    tt::tt_metal::CircularBufferConfig cb_src0_config =
+        tt::tt_metal::CircularBufferConfig(2 * rounded_weight_page_size, {{src0_cb_index, weights_cb_data_format}})
             .set_page_size(src0_cb_index, rounded_weight_page_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    constexpr uint32_t src1_cb_index = CBIndex::c_1;
+    constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
     uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
-    tt_metal::CircularBufferConfig cb_src1_config =
-        tt_metal::CircularBufferConfig(FACE_HEIGHT * index_page_size, {{src1_cb_index, input_cb_data_format}})
+    tt::tt_metal::CircularBufferConfig cb_src1_config =
+        tt::tt_metal::CircularBufferConfig(FACE_HEIGHT * index_page_size, {{src1_cb_index, input_cb_data_format}})
             .set_page_size(src1_cb_index, FACE_HEIGHT * index_page_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
-    constexpr uint32_t src2_cb_index = CBIndex::c_2;
+    constexpr uint32_t src2_cb_index = tt::CBIndex::c_2;
     if (embeddings_type == EmbeddingsType::PADDED) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        tt_metal::CircularBufferConfig cb_src2_config =
-            tt_metal::CircularBufferConfig(cache_page_size, {{src2_cb_index, weights_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig cb_src2_config =
+            tt::tt_metal::CircularBufferConfig(cache_page_size, {{src2_cb_index, weights_cb_data_format}})
                 .set_page_size(src2_cb_index, cache_page_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
     } else if (embeddings_type == EmbeddingsType::BINARY) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        tt_metal::CircularBufferConfig cb_src2_config =
-            tt_metal::CircularBufferConfig(2 * cache_page_size, {{src2_cb_index, weights_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig cb_src2_config =
+            tt::tt_metal::CircularBufferConfig(2 * cache_page_size, {{src2_cb_index, weights_cb_data_format}})
                 .set_page_size(src2_cb_index, cache_page_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
     }
 
     uint32_t output_cb_index = src0_cb_index;
@@ -703,8 +701,8 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
         (std::uint32_t)weight_page_size,
         (std::uint32_t)a.logical_shape()[-1],  // width/length of a row
         (std::uint32_t)FACE_HEIGHT};
-    TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
-    TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
     EmbeddingsIndexType embeddings_index_type;
     if (a.dtype() == DataType::BFLOAT16) {
@@ -717,21 +715,21 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
         {enchantum::to_string(embeddings_type).data(), "1"},
         {enchantum::to_string(embeddings_index_type).data(), "1"}};
 
-    auto reader_kernel_id = tt_metal::CreateKernel(
+    auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embedding_ind_tilized.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
+        tt::tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)output_page_size};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     // Tilized writer
-    auto writer_kernel_id = tt_metal::CreateKernel(
+    auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     uint32_t col_offset = 0;
     uint32_t weight_offset = 0;
@@ -774,14 +772,14 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
             reader_runtime_args[4] = local_num_blocks;
             reader_runtime_args[5] = col_offset;
             reader_runtime_args[6] = (col_offset % FACE_HEIGHT);  // starting col in the face row
-            tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+            tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         }
 
         // Writer
         {
             writer_runtime_args[2] = local_num_blocks;
             writer_runtime_args[3] = weight_offset;
-            tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
         }
 
         weight_offset += local_num_blocks;
