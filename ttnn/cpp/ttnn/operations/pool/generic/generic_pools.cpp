@@ -171,7 +171,7 @@ static Tensor pool2d_invoke(
     uint32_t output_c = channels;
     uint32_t output_c_padded = tt::round_up(output_c, tt::constants::TILE_WIDTH / 2);
     if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED || shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        output_c_padded = tt::round_up(tt::div_up(output_c, num_cores_c), tt::constants::TILE_WIDTH / 2) * num_cores_c;
+        output_c_padded = tt::round_up(output_c, num_cores_c * tt::constants::TILE_WIDTH / 2);
     }
     uint32_t output_shard_width_padded = output_c_padded / num_cores_c;
     log_debug(

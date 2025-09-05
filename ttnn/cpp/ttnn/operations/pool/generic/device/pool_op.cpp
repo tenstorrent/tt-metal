@@ -91,9 +91,7 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     uint32_t out_c_padded = tt::round_up(out_c, tt::constants::TILE_WIDTH / 2);
     if (mem_config.is_sharded()) {
         if (layout == TensorMemoryLayout::WIDTH_SHARDED || layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            out_c_padded =
-                tt::round_up(tt::div_up(out_c, sliding_window_config.num_cores_c), tt::constants::TILE_WIDTH / 2) *
-                sliding_window_config.num_cores_c;
+            out_c_padded = tt::round_up(out_c, sliding_window_config.num_cores_c * tt::constants::TILE_WIDTH / 2);
         }
     }
 
