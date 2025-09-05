@@ -19,7 +19,6 @@
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/rs_matmul_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async_pybind.hpp"
-#include "ttnn/operations/experimental/ccl/all_reduce_minimal_async/all_reduce_minimal_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter/llama_reduce_scatter_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/llama_reduce_scatter_create_heads_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ring_attention_all_gather_async_pybind.hpp"
@@ -42,7 +41,6 @@ void py_module(pybind11::module& module) {
     ccl::py_bind_rs_matmul(module);
     ccl::py_bind_reduce_scatter_minimal_async(module);
     ccl::py_bind_all_reduce_async(module);
-    ccl::py_bind_all_reduce_minimal_async(module);
     ccl::py_bind_llama_reduce_scatter(module);
     ccl::py_bind_llama_rs_create_heads(module);
     ccl::py_bind_ring_attention_all_gather_async(module);

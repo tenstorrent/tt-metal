@@ -30,7 +30,6 @@ target_sources(
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_program.cpp
         all_reduce_async/device/all_reduce_async_op.cpp
         all_reduce_async/device/all_reduce_async_program_minimal_variants.cpp
-        all_reduce_minimal_async/all_reduce_minimal_async.cpp
         reduce_scatter_async/device/reduce_scatter_async_op.cpp
         reduce_scatter_async/device/reduce_scatter_async_program.cpp
         reduce_scatter_async/reduce_scatter.cpp

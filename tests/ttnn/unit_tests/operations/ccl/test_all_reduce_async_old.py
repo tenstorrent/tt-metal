@@ -43,8 +43,9 @@ def run_all_reduce_test(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
-    rs_global_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(3)]
-    ag_global_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
+    from_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    to_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    gather_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
 
     debug = False
 
@@ -79,15 +80,15 @@ def run_all_reduce_test(
     )
     # Run the op
     for i in range(num_iters):
-        output_tensor_mesh = ttnn.experimental.all_reduce_minimal_async(
+        output_tensor_mesh = ttnn.experimental.all_reduce_async(
             input_tensor_mesh,
-            num_devices=num_devices,
-            rs_global_semaphores=rs_global_semaphores,
-            ag_global_semaphores=ag_global_semaphores,
+            from_remote_multi_device_global_semaphore=from_remote_semaphore_handles,
+            to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
+            gather_multi_device_global_semaphore=gather_semaphore_handles,
             math_op=math_op,
             num_links=num_links,
             memory_config=mem_config,
-            topology=ttnn.Topology.Linear,
+            topology=topology,
             subdevice_id=worker_sub_device_id,
         )
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
@@ -289,8 +290,10 @@ def run_all_reduce_with_mesh_tensor_along_row(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
-    rs_global_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(3)]
-    ag_global_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
+    from_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    to_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    gather_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+
     try:
         debug = False
 
@@ -328,23 +331,17 @@ def run_all_reduce_with_mesh_tensor_along_row(
             memory_config=mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
         )
-        # print input tensor values
-        """
-        for i, t in enumerate(ttnn.get_device_tensors(ttnn_tensor)):
-            # Convert to a torch tensor to print all values
-            torch_tensor = ttnn.to_torch(t)
-            print(f"input tensor {i} values:\n{torch_tensor}")
-        """
         input_tensor_mesh = ttnn.to_device(ttnn_tensor, mesh_device)
 
         # Run the op
         for i in range(num_iters):
-            output_tensor_mesh = ttnn.experimental.all_reduce_minimal_async(
+            output_tensor_mesh = ttnn.experimental.all_reduce_async(
                 input_tensor_mesh,
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
-                rs_global_semaphores=rs_global_semaphores,
-                ag_global_semaphores=ag_global_semaphores,
+                from_remote_multi_device_global_semaphore=from_remote_semaphore_handles,
+                to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
+                gather_multi_device_global_semaphore=gather_semaphore_handles,
                 math_op=math_op,
                 num_links=num_links,
                 memory_config=mem_config,
@@ -359,19 +356,9 @@ def run_all_reduce_with_mesh_tensor_along_row(
         mesh_device.reset_sub_device_stall_group()
 
     tt_out_tensors = ttnn.get_device_tensors(output_tensor_mesh)
-
-    """
-    for i, t in enumerate(tt_out_tensors):
-        # Convert to a torch tensor to print all values
-        torch_tensor = ttnn.to_torch(t)
-        print(f"output tensor {i} values:\n{torch_tensor}")
-    """
-    # print(f"num output tensors: {len(tt_out_tensors)}")
-    # print(f"output tensor shape: {tt_out_tensors[0].shape}")
     logger.info(f"Compare")
     golden_canonical_out_tensor = torch.sum(unchunked_input_tensor, 0, keepdim=True)
     golden_canonical_out_tensor = golden_canonical_out_tensor.view(per_chip_output_shape)
-    # print(f"golden shape: {golden_canonical_out_tensor.shape}")
 
     # Compare
     mismatch = False
@@ -379,8 +366,6 @@ def run_all_reduce_with_mesh_tensor_along_row(
         tt_output_tensor = ttnn.to_torch(t)
 
         eq, output = comp_pcc(tt_output_tensor, golden_canonical_out_tensor)
-        # print("output tensor:", tt_output_tensor)
-        # print("golden tensor:", golden_canonical_out_tensor)
         mismatch = mismatch or not eq
         if not eq:
             logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_device_ids()[i]}")
@@ -404,12 +389,7 @@ def run_all_reduce_with_mesh_tensor_along_row(
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, layout",
     [
-        (4, 1, [1, 4, 32, 2304], ttnn.TILE_LAYOUT),
-        (4, 1, [4, 1, 64, 1024], ttnn.TILE_LAYOUT),
-        (4, 1, [3, 2, 90, 2040], ttnn.TILE_LAYOUT),
-        (4, 1, [16, 1, 16, 512], ttnn.ROW_MAJOR_LAYOUT),
-        (4, 1, [1, 1, 250, 2048], ttnn.ROW_MAJOR_LAYOUT),
-        (4, 1, [2, 2, 350, 350], ttnn.ROW_MAJOR_LAYOUT),
+        (4, 2, [1, 4, 32, 2304], ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
@@ -426,8 +406,8 @@ def run_all_reduce_with_mesh_tensor_along_row(
         ttnn.BufferType.L1,
     ],
 )
-@pytest.mark.parametrize("replication_factor", [2])
-@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
+@pytest.mark.parametrize("replication_factor", [8])  # 1, 8])
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_reduce_on_TG_rows_post_commit(
@@ -443,8 +423,8 @@ def test_line_all_reduce_on_TG_rows_post_commit(
     replication_factor,
     num_iters=16,
 ):
-    # if mesh_device.get_num_devices() != 32:
-    #    pytest.skip("Not TG!")
+    if mesh_device.get_num_devices() != 32:
+        pytest.skip("Not TG!")
 
     run_all_reduce_with_mesh_tensor_along_row(
         mesh_device,
@@ -481,8 +461,8 @@ def test_line_all_reduce_on_TG_rows_post_commit(
         ttnn.BufferType.DRAM,
     ],
 )
-@pytest.mark.parametrize("replication_factor", [1])
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 1), id="8x1_grid")], indirect=True)
+@pytest.mark.parametrize("replication_factor", [4])
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_reduce_on_TG_cols_post_commit(
@@ -498,8 +478,8 @@ def test_line_all_reduce_on_TG_cols_post_commit(
     replication_factor,
     num_iters=16,
 ):
-    # if mesh_device.get_num_devices() != 32:
-    #    pytest.skip("Not TG!")
+    if mesh_device.get_num_devices() != 32:
+        pytest.skip("Not TG!")
 
     run_all_reduce_with_mesh_tensor_along_row(
         mesh_device,
