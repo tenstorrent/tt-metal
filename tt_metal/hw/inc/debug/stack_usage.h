@@ -37,25 +37,6 @@ static inline uint32_t measure_stack_usage() {
 
 #else // !KERNEL_BUILD
 
-static inline uint32_t get_dispatch_class() {
-#if defined(COMPILE_FOR_BRISC)
-    return DISPATCH_CLASS_TENSIX_DM0;
-#elif defined(COMPILE_FOR_NCRISC)
-    return DISPATCH_CLASS_TENSIX_DM1;
-#elif defined(COMPILE_FOR_IDLE_ERISC)
-    return COMPILE_FOR_IDLE_ERISC == 0 ? DISPATCH_CLASS_ETH_DM0
-        : DISPATCH_CLASS_ETH_DM1;
-#elif defined(COMPILE_FOR_AERISC)
-    return COMPILE_FOR_AERISC == 0 ? DISPATCH_CLASS_ETH_DM0 : DISPATCH_CLASS_ETH_DM1;
-#elif defined(COMPILE_FOR_ERISC)
-    return DISPATCH_CLASS_ETH_DM0;
-#elif defined(COMPILE_FOR_TRISC)
-    return DISPATCH_CLASS_TENSIX_COMPUTE;
-#else
-#error "dispatch class not defined"
-#endif
-}
-
 // stack_free is offset by 1
 static inline void record_stack_usage(uint32_t stack_free) {
     if (!stack_free)
@@ -72,7 +53,7 @@ static inline void record_stack_usage(uint32_t stack_free) {
         usage->min_free = stack_free;
         unsigned launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
         launch_msg_t tt_l1_ptr* launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_idx]);
-        usage->watcher_kernel_id = launch_msg->kernel_config.watcher_kernel_ids[get_dispatch_class()];
+        usage->watcher_kernel_id = launch_msg->kernel_config.watcher_kernel_ids[PROCESSOR_INDEX];
     }
 }
 #endif // KERNEL_BUILD
