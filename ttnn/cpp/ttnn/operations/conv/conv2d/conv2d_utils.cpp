@@ -398,7 +398,7 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
         }
     }
 
-    if (enable_activation_reuse) {
+    if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED && enable_activation_reuse) {
         const uint32_t output_image_width_ntiles = div_up(output_width, tt::constants::TILE_HEIGHT);
         TT_FATAL(
             act_block_h_ntiles > output_image_width_ntiles,
