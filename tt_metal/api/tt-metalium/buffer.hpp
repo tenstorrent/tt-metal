@@ -32,7 +32,7 @@
 #include <tt-metalium/buffer_page_mapping.hpp>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_soc_descriptor.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 namespace stl {

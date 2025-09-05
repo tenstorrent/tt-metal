@@ -25,7 +25,7 @@
 #include <umd/device/tt_simulation_device.h>
 #include <umd/device/types/arch.h>
 #include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include "utils.hpp"
 
 namespace tt {

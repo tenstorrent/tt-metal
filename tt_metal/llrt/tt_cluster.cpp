@@ -38,7 +38,7 @@
 #include <umd/device/types/arch.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/cluster_types.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include <unistd.h>
 
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;

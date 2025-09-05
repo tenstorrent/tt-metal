@@ -54,7 +54,7 @@
 #include "tracy/TracyTTDevice.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <umd/device/tt_core_coordinates.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 

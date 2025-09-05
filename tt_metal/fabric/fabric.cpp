@@ -22,7 +22,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 
 #include "fabric_host_utils.hpp"
 #include "fabric_context.hpp"

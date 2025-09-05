@@ -29,7 +29,7 @@
 #include <tt-metalium/control_plane.hpp>
 #include "distributed/mesh_trace.hpp"
 #include <umd/device/tt_core_coordinates.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include "vector_aligned.hpp"
 
 using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;

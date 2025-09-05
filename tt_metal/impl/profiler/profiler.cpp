@@ -41,7 +41,7 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/arch.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include <umd/device/wormhole_implementation.h>
 #include <tt-metalium/device_pool.hpp>
 #include "tt_cluster.hpp"
