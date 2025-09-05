@@ -60,7 +60,7 @@ std::string get_latest_kernel_binary_path(
     std::filesystem::path kernel_path{kernel_root_path + kernel->name()};
     std::filesystem::file_time_type ftime = std::filesystem::last_write_time(*kernel_path.begin());
     std::string latest_hash;
-    for (auto const& dir_entry : std::filesystem::directory_iterator{kernel_path}) {
+    for (const auto& dir_entry : std::filesystem::directory_iterator{kernel_path}) {
         auto kbtime = std::filesystem::last_write_time(dir_entry.path());
         if (kbtime > ftime) {
             ftime = kbtime;
@@ -146,9 +146,9 @@ int main(int argc, char** argv) {
         auto devices = tt::tt_metal::detail::CreateDevices(ids);
         std::vector<tt_metal::Program> programs;
         // kernel->binaries() returns 32B aligned binaries
-        std::map<uint32_t, std::vector<ll_api::memory const*>> compute_binaries;
-        std::map<uint32_t, std::vector<ll_api::memory const*>> brisc_binaries;
-        std::map<uint32_t, std::vector<ll_api::memory const*>> ncrisc_binaries;
+        std::map<uint32_t, std::vector<const ll_api::memory*>> compute_binaries;
+        std::map<uint32_t, std::vector<const ll_api::memory*>> brisc_binaries;
+        std::map<uint32_t, std::vector<const ll_api::memory*>> ncrisc_binaries;
 
         for (int i = 0; i < num_devices; i++) {
             auto device = devices[i];
@@ -174,7 +174,7 @@ int main(int argc, char** argv) {
             std::shared_ptr<tt_metal::Kernel> riscv0_kernel = nullptr;
             std::shared_ptr<tt_metal::Kernel> riscv1_kernel = nullptr;
             for (auto kernel_id : kernel_group->kernel_ids) {
-                auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
+                auto kernel = program.impl().get_kernel(kernel_id);
                 switch (kernel->get_kernel_processor_class()) {
                     case tt_metal::HalProcessorClassType::DM:
                         switch (kernel->get_kernel_processor_type(0)) {
@@ -244,7 +244,7 @@ int main(int argc, char** argv) {
                         std::shared_ptr<tt_metal::Kernel> riscv0_kernel = nullptr;
                         std::shared_ptr<tt_metal::Kernel> riscv1_kernel = nullptr;
                         for (auto kernel_id : kernel_group->kernel_ids) {
-                            auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
+                            auto kernel = program.impl().get_kernel(kernel_id);
                             switch (kernel->get_kernel_processor_class()) {
                                 case tt_metal::HalProcessorClassType::DM:
                                     switch (kernel->get_kernel_processor_type(0)) {

@@ -592,7 +592,7 @@ BatchedTransfers assemble_runtime_args_commands(
     uint32_t per_kernel_crta_multicast_count = 0;
     for (size_t kernel_index = 0; kernel_index < program.num_kernels(); kernel_index++) {
         auto kernel_id = get_device_local_kernel_handle(kernel_index);
-        auto kernel = detail::GetKernel(program, kernel_id);
+        auto kernel = program.get_kernel(kernel_id);
         if (kernel->get_kernel_core_type() != CoreType::WORKER) {
             continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
         }
@@ -613,7 +613,7 @@ BatchedTransfers assemble_runtime_args_commands(
             bool has_crtas = false;
             for (auto kernel_id : kg->kernel_ids) {
                 auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id);
-                auto kernel = detail::GetKernel(program, device_local_kernel_handle);
+                auto kernel = program.get_kernel(device_local_kernel_handle);
                 if (!kernel->common_runtime_args().empty()) {
                     has_crtas = true;
                     break;
@@ -629,7 +629,7 @@ BatchedTransfers assemble_runtime_args_commands(
     bool use_kernel_group_crta_multicast = kernel_group_crta_multicast_count <= per_kernel_crta_multicast_count;
 
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        auto kernel = detail::GetKernel(program, kernel_id);
+        auto kernel = program.get_kernel(kernel_id);
         auto programmable_core_type = kernel->get_kernel_programmable_core_type();
         if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
             // Fast dispatch not supported on IDLE_ETH yet
@@ -677,7 +677,7 @@ BatchedTransfers assemble_runtime_args_commands(
         for (auto& kg : program.get_kernel_groups(index)) {
             for (auto kernel_id : kg->kernel_ids) {
                 auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id);
-                auto kernel = detail::GetKernel(program, device_local_kernel_handle);
+                auto kernel = program.get_kernel(device_local_kernel_handle);
                 if (kernel->common_runtime_args().empty()) {
                     continue;
                 }
@@ -724,7 +724,7 @@ BatchedTransfers assemble_runtime_args_commands(
                             unique_rt_data_and_sizes.resize(unique_rt_data_and_sizes.size() + 1);
                             for (auto kernel_id : kg->kernel_ids) {
                                 auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id);
-                                auto kernel = detail::GetKernel(program, device_local_kernel_handle);
+                                auto kernel = program.get_kernel(device_local_kernel_handle);
                                 if (!kernel->cores_with_runtime_args().empty()) {
                                     auto dispatch_class = kernel->dispatch_class();
                                     const auto& runtime_args_data = kernel->runtime_args(core_coord);
@@ -781,7 +781,7 @@ BatchedTransfers assemble_runtime_args_commands(
 
                 for (size_t kernel_index = 0; kernel_index < program.num_kernels(); kernel_index++) {
                     auto kernel_id = get_device_local_kernel_handle(kernel_index);
-                    auto kernel = detail::GetKernel(program, kernel_id);
+                    auto kernel = program.get_kernel(kernel_id);
                     if (kernel->get_kernel_core_type() != core_type) {
                         continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
                     }
