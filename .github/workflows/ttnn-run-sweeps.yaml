@@ -854,6 +854,9 @@ jobs:
         with:
           name: sweeps-run-result
           path: tests/sweep_framework/results_export
+      - name: List all downloaded files
+        run: |
+          ls -hal tests/sweep_framework/results_export
       - name: Upload via SFTP
         uses: ./.github/actions/upload-data-via-sftp
         with:
