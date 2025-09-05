@@ -177,6 +177,8 @@ class TtInvertedResidual:
         out, h, w = self.conv2(x)
         out, h, w = self.conv3(out)
         if self.use_res_connect:
+            if identity.memory_config() != out.memory_config():
+                identity = ttnn.to_memory_config(identity, out.memory_config())
             tmp = ttnn.add(identity, out)
             ttnn.deallocate(identity)
             ttnn.deallocate(out)

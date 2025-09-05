@@ -8,6 +8,7 @@ from typing import Optional
 import torch
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import reshard_for_output_channels_divisibility
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import get_default_compute_config
 
 
@@ -147,33 +148,15 @@ class downsample_2d:
             "conv_config": conv_config,
         }
 
-        if not ttnn.is_tensor_storage_on_device(self.conv_weights):
-            self.conv_weights = ttnn.prepare_conv_weights(
-                weight_tensor=self.conv_weights,
-                weights_format="OIHW",
-                input_memory_config=hidden_states.memory_config(),
-                input_layout=hidden_states.get_layout(),
-                has_bias=True,
-                **conv_kwargs,
-                input_dtype=ttnn.bfloat8_b,
-            )
-            self.conv_bias = ttnn.prepare_conv_bias(
-                bias_tensor=self.conv_bias,
-                input_memory_config=hidden_states.memory_config(),
-                input_layout=hidden_states.get_layout(),
-                **conv_kwargs,
-                input_dtype=ttnn.bfloat8_b,
-            )
-            self.conv_weights = ttnn.to_device(self.conv_weights, self.device)
-            self.conv_bias = ttnn.to_device(self.conv_bias, self.device)
-
-        hidden_states = ttnn.conv2d(
+        hidden_states, [self.conv_weights, self.conv_bias] = ttnn.conv2d(
             input_tensor=hidden_states,
             **conv_kwargs,
             weight_tensor=self.conv_weights,
             bias_tensor=self.conv_bias,
             compute_config=compute_config,
             dtype=ttnn.bfloat8_b,
+            return_weights_and_bias=True,
         )
+        hidden_states = reshard_for_output_channels_divisibility(hidden_states, self.out_channels)
 
         return hidden_states

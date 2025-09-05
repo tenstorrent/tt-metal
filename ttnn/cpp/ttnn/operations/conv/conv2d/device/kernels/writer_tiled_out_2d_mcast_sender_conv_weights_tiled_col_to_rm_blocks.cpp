@@ -4,7 +4,7 @@
 
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -22,7 +22,6 @@ void kernel_main() {
     constexpr uint32_t weight_block_height_ntiles = get_compile_time_arg_val(9);
     constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(10);
     constexpr uint32_t weight_stride_h = get_compile_time_arg_val(11);
-    constexpr uint32_t weight_next_block_stride_h = get_compile_time_arg_val(12);
     constexpr uint32_t weight_next_block_stride_w = get_compile_time_arg_val(13);
 
     // Bias arg. Unused if bias fusion is not enabled.
@@ -30,8 +29,9 @@ void kernel_main() {
 
     constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(15);
     constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(16);
+    constexpr uint32_t weight_block_height_num_outer_in = get_compile_time_arg_val(17);
 
-    constexpr auto s_weight_args = TensorAccessorArgs<27>();
+    constexpr auto s_weight_args = TensorAccessorArgs<18>();
     constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
 
     uint32_t i = 0;
@@ -40,11 +40,6 @@ void kernel_main() {
     const uint32_t bias_addr = get_arg_val<uint32_t>(i++);
     const uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i++);
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i++);
-
-    uint32_t noop = get_arg_val<uint32_t>(i++);
-    if (noop) {
-        return;
-    }
 
     // mcast args
     const uint32_t weights_mcast_dest_noc_start_x = get_arg_val<uint32_t>(i++);
@@ -88,7 +83,7 @@ void kernel_main() {
 
     // Pre-compute constants used in tile_id calculation (preserving exact original logic)
     constexpr uint32_t tiles_per_full_block =
-        num_blocks_weight_h * weight_block_height_ntiles * weight_block_height_num_outer * weight_block_width_ntiles;
+        num_blocks_weight_h * weight_block_height_ntiles * weight_block_height_num_outer_in * weight_block_width_ntiles;
     constexpr uint32_t height_stride_factor = weight_block_height_ntiles * weight_stride_h;
 
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
