@@ -25,6 +25,9 @@ public:
 
     // Returns the distributed host buffer.
     const DistributedHostBuffer& buffer() const;
+    #if 0
+    DistributedHostBuffer& buffer();
+    #endif
 
     // Applies a transformation function to each device buffer in parallel, returning a new HostStorage.
     HostStorage transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const;
