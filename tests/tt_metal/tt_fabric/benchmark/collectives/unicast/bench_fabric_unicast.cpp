@@ -2,58 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
-#include <tt-metalium/device_pool.hpp>
-#include "hostdevcommon/fabric_common.h"
+#include <fmt/format.h>
 #include <algorithm>
-#include <map>
-#include <memory>
-#include <numeric>
-#include <set>
-#include <string>
-#include <unordered_map>
-#include <utility>
-#include <variant>
-#include <vector>
-#include <fstream>
-#include <filesystem>
-#include <iomanip>
-#include <cmath>
-
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
-#include <tt-metalium/device.hpp>
-#include "fabric_fixture.hpp"
-#include "t3k_mesh_descriptor_chip_mappings.hpp"
-#include "utils.hpp"
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/mesh_graph.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
-#include "impl/context/metal_context.hpp"
-#include "tests/tt_metal/test_utils/test_common.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include "umd/device/types/xy_pair.h"
-#include <tt-metalium/utils.hpp>
-#include "tests/tt_metal/tt_fabric/common/utils.hpp"
-#include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/global_semaphore.hpp>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <vector>
+
+#include <tt-metalium/tt_metal.hpp>
+#include "fabric_fixture.hpp"
+#include "tests/tt_metal/tt_fabric/common/utils.hpp"
 #include "tests/tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
+#include <tt-metalium/global_semaphore.hpp>
 using tt::DevicePool;
 
 namespace tt::tt_fabric {
