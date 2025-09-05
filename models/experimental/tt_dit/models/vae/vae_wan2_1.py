@@ -3,7 +3,7 @@ import ttnn
 from loguru import logger
 from ...layers.normalization import RMSNorm
 from ...layers.linear import Linear
-from ...utils.conv3d import _ntuple, get_conv3d_config, prepare_conv3d_weights
+from ...utils.conv3d import _ntuple, get_conv3d_config, prepare_conv3d_weights, count_convs
 from ...utils.substate import substate, indexed_substates
 
 CACHE_T = 2
@@ -759,3 +759,130 @@ class WanDecoder3d:
         else:
             x_BTHWC = self.conv_out(x_BTHWC)
         return x_BTHWC
+
+
+class WanDecoder:
+    def __init__(
+        self,
+        base_dim=96,
+        decoder_base_dim=None,
+        z_dim=16,
+        dim_mult=[1, 2, 4, 4],
+        num_res_blocks=2,
+        attn_scales=[],
+        temperal_downsample=[False, True, True],
+        latents_mean=[
+            -0.7571,
+            -0.7089,
+            -0.9113,
+            0.1075,
+            -0.1745,
+            0.9653,
+            -0.1517,
+            1.5508,
+            0.4134,
+            -0.0715,
+            0.5517,
+            -0.3632,
+            -0.1922,
+            -0.9497,
+            0.2503,
+            -0.2921,
+        ],
+        latents_std=[
+            2.8184,
+            1.4541,
+            2.3275,
+            2.6558,
+            1.2196,
+            1.7708,
+            2.6052,
+            2.0743,
+            3.2687,
+            2.1526,
+            2.8652,
+            1.5579,
+            1.6382,
+            1.1253,
+            2.8251,
+            1.9160,
+        ],
+        is_residual=False,
+        in_channels=3,
+        out_channels=3,
+        mesh_device=None,
+    ):
+        assert not is_residual, "is_residual is not supported"
+        self.z_dim = z_dim
+        self.temperal_upsample = temperal_downsample[::-1]
+        self.out_channels = out_channels
+        decoder_base_dim = decoder_base_dim or base_dim
+
+        self.mesh_device = mesh_device
+
+        # Linear for post_quant_conv
+        self.post_quant_conv = Linear(
+            in_features=z_dim,
+            out_features=z_dim,
+            mesh_device=mesh_device,
+        )
+
+        self.decoder = WanDecoder3d(
+            dim=decoder_base_dim,
+            z_dim=z_dim,
+            dim_mult=dim_mult,
+            num_res_blocks=num_res_blocks,
+            attn_scales=attn_scales,
+            temperal_upsample=self.temperal_upsample,
+            out_channels=out_channels,
+            is_residual=is_residual,
+            mesh_device=mesh_device,
+        )
+
+        self.cached_conv_count = count_convs(self.decoder)
+
+    def load_state_dict(self, state_dict):
+        def conv3d_to_linear_weight(state):
+            weight = state["weight"]
+            out_c, in_c, kt, kh, kw = weight.shape
+            assert kt == kh == kw == 1
+            weight = weight.reshape(out_c, in_c)
+            state["weight"] = weight
+            return state
+
+        self.post_quant_conv.load_state_dict(conv3d_to_linear_weight(substate(state_dict, "post_quant_conv")))
+        self.decoder.load_state_dict(substate(state_dict, "decoder"))
+
+    def clear_cache(self):
+        self._conv_idx = [0]
+        self._feat_cache = [None] * self.cached_conv_count
+
+    def __call__(self, z_BTHWC):
+        B, T, H, W, C = z_BTHWC.shape
+
+        self.clear_cache()
+        z_tile_BTHWC = ttnn.to_layout(z_BTHWC, ttnn.TILE_LAYOUT)
+        x_tile_BTHWC = self.post_quant_conv(z_tile_BTHWC)
+        x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+
+        output_BCTHW = None
+        for i in range(T):
+            # Process one frame at a time
+            self._conv_idx = [0]
+            out_BTHWC = self.decoder(
+                x_BTHWC[:, i : i + 1, :, :, :], feat_cache=self._feat_cache, feat_idx=self._conv_idx
+            )
+            # Channels first
+            out_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
+            # Trim padding on output channels
+            out_BCTHW = out_BCTHW[:, : self.out_channels, :, :, :]
+            if output_BCTHW is None:
+                output_BCTHW = out_BCTHW
+            else:
+                output_BCTHW = ttnn.concat([output_BCTHW, out_BCTHW], dim=2)
+
+        output_tile_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.TILE_LAYOUT)
+        output_BCTHW = ttnn.clamp(output_tile_BCTHW, min=-1.0, max=1.0)
+        output_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
+        self.clear_cache()
+        return (output_BCTHW,)
