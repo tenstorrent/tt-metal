@@ -43,7 +43,9 @@ struct FactoryParameters {
     uint32_t multi_buffering_factor;
     bool split_reader;
     uint32_t nbytes;
+    uint32_t index_nbytes;
     tt::DataFormat data_format;
+    tt::DataFormat index_format;
     uint32_t in_ntiles_c;
     uint32_t out_ntiles_c;
     bool is_avg_pool;
@@ -88,7 +90,8 @@ std::optional<sliding_window::ParallelConfig> determine_pool_config_for_auto_sha
     uint32_t channels,
     Pool2DType pool_type,
     bool count_include_pad,
-    std::optional<int32_t> divisor_override);
+    std::optional<int32_t> divisor_override,
+    bool return_indices);
 
 FactoryParameters get_factory_parameters(
     uint32_t num_shards_c,
@@ -96,7 +99,8 @@ FactoryParameters get_factory_parameters(
     uint32_t kernel_h,
     uint32_t kernel_w,
     uint32_t in_channels,
-    Pool2DType pool_type);
+    Pool2DType pool_type,
+    bool return_indices);
 
 uint32_t calculate_L1_usage(
     const Tensor& input,
@@ -106,6 +110,7 @@ uint32_t calculate_L1_usage(
     uint32_t ceil_pad_h,
     uint32_t ceil_pad_w,
     bool ceil_mode,
+    bool return_indices,
     uint32_t kernel_h,
     uint32_t kernel_w,
     uint32_t out_h,

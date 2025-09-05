@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <variant>
 #include "adaptive_pools.hpp"
 #include "adaptive_pool_utils.hpp"
 #include "ttnn/operations/pool/generic/generic_pools.hpp"
@@ -71,7 +72,7 @@ Tensor AdaptiveMaxPool2DOp::invoke(
 
     auto params = calculate_adaptive_pool_params(input_h, input_w, output_h, output_w);
 
-    return ttnn::operations::pool::MaxPool2DOp::invoke(
+    auto result = ttnn::operations::pool::MaxPool2DOp::invoke(
         queue_id,
         input_tensor,
         batch_size,
@@ -87,7 +88,12 @@ Tensor AdaptiveMaxPool2DOp::invoke(
         applied_shard_scheme,
         in_place_halo,
         deallocate_input,
-        reallocate_output);
+        reallocate_output,
+        false /*return_indices*/);
+
+    // Since return_indices=false, the result variant should always contain a Tensor
+    TT_FATAL(std::holds_alternative<Tensor>(result), "Expected Tensor result when return_indices is false");
+    return std::get<Tensor>(result);
 }
 
 }  // namespace operations::experimental::adaptive_pool

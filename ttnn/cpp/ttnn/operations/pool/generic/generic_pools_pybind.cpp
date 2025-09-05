@@ -44,10 +44,11 @@ void bind_max_pool2d_operation(py::module& module) {
             in_place (bool, optional): whether to perform the halo operation in place. Defaults to `False`.
             deallocate_input (bool, optional): whether to deallocate the input tensor after the operation. Defaults to `False`.
             reallocate_halo_output (bool, optional): whether to reallocate the halo output tensor after the operation, ideally used with deallocate_activation = true. Defaults to `True`.
+            return_indices (bool, optional): whether to return both values and indices. When True, returns a tuple (values, indices). Defaults to `False`.
             queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
         Returns:
-            ttnn.Tensor: the max pool convolved output tensor.
+            ttnn.Tensor or tuple[ttnn.Tensor, ttnn.Tensor]: the max pool convolved output tensor, or a tuple of (values, indices) if return_indices is True.
 
         Example:
             >>> import ttnn
@@ -101,8 +102,9 @@ void bind_max_pool2d_operation(py::module& module) {
                bool in_place_halo,
                bool deallocate_input,
                bool reallocate_halo_output,
-               QueueId queue_id) -> ttnn::Tensor {
-                return self(
+               bool return_indices,
+               QueueId queue_id) -> py::object {
+                auto result = self(
                     queue_id,
                     input_tensor,
                     batch_size,
@@ -118,7 +120,16 @@ void bind_max_pool2d_operation(py::module& module) {
                     applied_shard_scheme,
                     in_place_halo,
                     deallocate_input,
-                    reallocate_halo_output);
+                    reallocate_halo_output,
+                    return_indices);
+
+                // Handle variant return type
+                if (std::holds_alternative<MaxPoolWithIndicesResult>(result)) {
+                    auto mpwi_result = std::get<MaxPoolWithIndicesResult>(result);
+                    return py::make_tuple(mpwi_result.output, mpwi_result.indices);
+                } else {
+                    return py::cast(std::get<ttnn::Tensor>(result));
+                }
             },
             py::arg("input_tensor"),
             py::arg("batch_size"),
@@ -136,6 +147,7 @@ void bind_max_pool2d_operation(py::module& module) {
             py::arg("in_place_halo") = false,
             py::arg("deallocate_input") = false,
             py::arg("reallocate_halo_output") = true,
+            py::arg("return_indices") = false,
             py::arg("queue_id") = DefaultQueueId});
 }
 

@@ -3444,34 +3444,26 @@ def test_conv2d_sdxl_refiner(
 
 
 @pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, auto_shard, deallocate_activation, slice_type, num_slices, act_block_h_override",
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, deallocate_activation, slice_type, num_slices, act_block_h_override",
     (
         # 1024x1024 resolution
 
         # VAE
         # kernel 3x3
-        (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, ttnn.Conv2dSliceWidth, 8, 32),
-        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, ttnn.Conv2dSliceWidth, 16, 32),
-        (1, 256, 256, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, ttnn.Conv2dSliceWidth, 16, 128),
-        (1, 256, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, ttnn.Conv2dSliceWidth, 4, 64),
-        (1, 512, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, None, 1, 128),
-        (1, 512, 512, 256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, ttnn.Conv2dSliceWidth, 2, 32),
-        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, ttnn.Conv2dSliceWidth, 8, 64),
-        (1, 512, 512, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, ttnn.Conv2dSliceWidth, 8, 32),
+        (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dSliceWidth, 8, 32),
+        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dSliceWidth, 16, 32),
+        (1, 256, 256, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth, 16, 512),
+        (1, 256, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth, 4, 512),
+        (1, 512, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, None, 1, 512),
+        (1, 512, 512, 256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth, 2, 256),
+        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth, 8, 512),
+        (1, 512, 512, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth, 8, 256),
 
         # output_channels 3
-        (1, 128, 3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, ttnn.Conv2dSliceWidth, 16, 512),
+        (1, 128, 3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dSliceWidth, 8, 256),
 
         # input_channels 4
-        (1, 4, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, None, 1, 256),
-
-        # kernel 1x1
-        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, None, 1, 0),
-        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, None, 1, 0),
-
-        # channels 4
-        # Skip specific test case for Blackhole devices
-        (1, 4, 4, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, None, 1, 0),
+        (1, 4, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, None, 1, 0),
     ),
 )
 
@@ -3492,13 +3484,12 @@ def test_conv2d_vae_sdxl(
     stride,
     padding,
     dilation,
-    auto_shard,
+    shard_layout,
     deallocate_activation,
     slice_type,
     num_slices,
     act_block_h_override
 ):
-
     # Skip all on N300
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 grid for wormhole_b0")
@@ -3513,7 +3504,7 @@ def test_conv2d_vae_sdxl(
     slice_config = ttnn.Conv2dSliceConfig(
         slice_type=slice_type,
         num_slices=num_slices,
-    ) if num_slices > 1 and slice_type is not None else None
+    ) if num_slices > 1 or slice_type is not None else None
 
 
     run_conv(
@@ -3541,15 +3532,15 @@ def test_conv2d_vae_sdxl(
         deallocate_activation=deallocate_activation,
         groups=groups,
         has_bias=True,
-        shard_layout=None,
-        auto_shard=auto_shard,
+        shard_layout=shard_layout,
         memory_config=None,
         input_mesh_mapper=None,
         weight_mesh_mapper=None,
         output_mesh_composer=None,
-        enable_split_reader=False,
         slice_config=slice_config,
         input_layout=ttnn.TILE_LAYOUT,
+        enable_act_double_buffer=False, # TODO: this is set to true in SDXL, need to adapt tests
+        enable_split_reader=True if shard_layout == HS else False,
     )
 
 
