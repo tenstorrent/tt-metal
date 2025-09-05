@@ -846,15 +846,12 @@ void ProcessDeviceProfilerResults(
             profiler.initializeMissingTracyContexts();
 
             std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
-                getSortedDeviceMarkersVector(profiler.device_markers_per_core_risc_map);
+                getSortedDeviceMarkersVector(profiler.device_markers_per_core_risc_map, profiler.thread_pool.get());
 
-            {
-                std::scoped_lock lock(profiler_state_manager->mid_run_dump_mutex);
-                profiler_state_manager->thread_pool->enqueue([&profiler]() { profiler.dumpDeviceResults(); });
-                profiler.pushTracyDeviceResults(device_markers_vec);
-            }
+            profiler.thread_pool->enqueue([&profiler]() { profiler.writeDeviceResultsToFiles(); });
+            profiler.pushTracyDeviceResults(device_markers_vec);
 
-            profiler_state_manager->thread_pool->wait();
+            profiler.thread_pool->wait();
 
             profiler.device_markers_per_core_risc_map.clear();
         }
