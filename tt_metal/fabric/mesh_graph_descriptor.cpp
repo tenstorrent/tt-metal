@@ -1003,6 +1003,7 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
         for (unsigned int i = 0; i < connection.nodes_size(); ++i) {
             const auto src_device_id = nodes[i];
 
+            // Create a copy of the nodes vector and swap the first and i-th elements so source is always first
             std::vector<GlobalNodeId> nodes_copy = nodes;
             std::swap(nodes_copy[0], nodes_copy[i]);
 
