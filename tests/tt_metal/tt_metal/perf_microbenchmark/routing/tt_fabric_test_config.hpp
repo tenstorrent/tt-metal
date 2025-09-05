@@ -1626,7 +1626,11 @@ private:
                     expand_one_or_all_to_all_multicast(test, defaults, HighLevelTrafficPattern::OneToAll);
                 }
             } else if (pattern.type == "all_to_one") {
-                expand_all_to_one_unicast(test, defaults, HighLevelTrafficPattern::AllToOne);
+                if (defaults.ftype == ChipSendType::CHIP_UNICAST) {
+                    expand_all_to_one_unicast(test, defaults, HighLevelTrafficPattern::AllToOne);
+                } else {
+                    expand_all_to_one_multicast(test, defaults, HighLevelTrafficPattern::AllToOne);
+                }
             } else if (pattern.type == "full_device_random_pairing") {
                 expand_full_device_random_pairing(test, defaults);
             } else if (pattern.type == "unidirectional_linear") {
@@ -1768,6 +1772,47 @@ private:
 
                 auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
                 test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
+            }
+        }
+    }
+
+    void expand_all_to_one_multicast(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
+        log_info(LogTest, "Expanding all_to_one_multicast pattern for test: {}", test.name);
+        std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
+        TT_FATAL(!devices.empty(), "Cannot expand all_to_one_multicast because no devices were found.");
+
+        // Get the first device as the single receiver (destination)
+        FabricNodeId target_device = devices[0];
+
+        // All other devices (except target) will send to the target device
+        for (const auto& src_node : devices) {
+            if (src_node == target_device) {
+                continue;  // Skip the target device itself
+            }
+
+            // Use existing method to get multicast hops
+            // Note: This may need adjustment based on your specific routing requirements
+            auto hops = this->route_manager_.get_full_mcast_hops(src_node);
+
+            ParsedTrafficPatternConfig specific_pattern;
+            specific_pattern.destination = ParsedDestinationConfig{.hops = hops};
+            specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
+
+            auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
+
+            auto it = std::find_if(test.senders.begin(), test.senders.end(), [&](const ParsedSenderConfig& s) {
+                // Compare FabricNodeId with DeviceIdentifier
+                if (std::holds_alternative<FabricNodeId>(s.device)) {
+                    return std::get<FabricNodeId>(s.device) == src_node;
+                }
+                return false;
+            });
+
+            if (it != test.senders.end()) {
+                it->patterns.emplace_back(std::move(merged_pattern));
+            } else {
+                test.senders.emplace_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
             }
         }
     }
