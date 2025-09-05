@@ -37,6 +37,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
@@ -157,10 +158,10 @@ void generate_receiver_worker_kernels(
 
     CreateCircularBuffer(program, worker_core, cb_src0_config);
     std::vector<uint32_t> receiver_worker_writer_compile_args{
-        dest_is_dram,  //
-        num_pages,     //
+        num_pages,  //
         page_size,
         num_pages_per_edm_buffer};
+    tt::tt_metal::TensorAccessorArgs().append_to(receiver_worker_writer_compile_args);
     std::vector<uint32_t> receiver_worker_writer_runtime_args{dram_output_buffer_base_addr};
     log_info(tt::LogTest, "\tReceiverWriter CT Args");
     for (auto const& arg : receiver_worker_writer_compile_args) {
@@ -229,10 +230,10 @@ void generate_sender_worker_kernels(
     bool src_is_dram,
     ttnn::ccl::EriscDataMoverTerminationMode edm_termination_mode) {
     std::vector<uint32_t> sender_worker_reader_compile_args{
-        src_is_dram,      //
         num_pages_total,  //
         page_size,
         num_pages_per_edm_buffer};
+    tt::tt_metal::TensorAccessorArgs().append_to(sender_worker_reader_compile_args);
     std::vector<uint32_t> sender_worker_reader_runtime_args{dram_output_buffer_base_addr};
 
     log_info(tt::LogTest, "\tSenderReader CT Args");

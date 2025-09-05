@@ -8,8 +8,19 @@ import ttnn
 from models.demos.yolov8x.tt.ttnn_yolov8x_utils import ttnn_decode_bboxes
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 
+try:
+    from tracy import signpost
 
-def sharded_concat(input_tensors, num_cores=64, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
+
+def sharded_concat(
+    input_tensors, num_cores=64, dim=3, skip_S2I=True
+):  # expected input tensors to be in fp16, RM, same (h*w)
+    if use_signpost:
+        signpost(header="sharded_concat")
     shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
 
     input_sharded_memory_configs = []
@@ -36,7 +47,8 @@ def sharded_concat(input_tensors, num_cores=64, dim=3):  # expected input tensor
     )
 
     output = ttnn.concat(sharded_inputs, dim, memory_config=out_sharded_memory_config)
-    output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
+    if not skip_S2I:
+        output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     return output
 
@@ -64,10 +76,12 @@ class TtConv:
         enable_split_reader=False,
         reshard_if_not_optimal=False,
         batch_size=1,
+        core_count=None,
     ):
         self.device = device
         self.parameters = parameters
         self.path = path
+        self.core_count = core_count
         self.input_params = input_params
         self.groups = groups
         self.dilation = dilation
@@ -93,7 +107,7 @@ class TtConv:
     def _initialize_conv_config(self):
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat16,
-            activation="",
+            activation="" if self.is_detect_cv2 else "silu",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             act_block_w_div=1,
             deallocate_activation=False,
@@ -163,14 +177,14 @@ class TtConv:
             memory_config=None,
             return_weights_and_bias=True,
             return_output_dim=True,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
         )
 
         if self.is_detect_cv2:
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
             return x, out_height, out_width
 
-        x = ttnn.silu(x)
+        x = ttnn.reallocate(x)
         return x, out_height, out_width
 
 
@@ -216,12 +230,11 @@ class TtBottleneck:
         )
 
     def __call__(self, x):
+        if use_signpost:
+            signpost(header="BottleNeck")
         cv1, out_h, out_w = self.cv1(x)
         cv2, out_h, out_w = self.cv2(cv1)  # pass cv1
         ttnn.deallocate(cv1)
-
-        if self.tilize:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         return ttnn.add(x, cv2, memory_config=ttnn.L1_MEMORY_CONFIG) if self.shortcut else cv2
 
@@ -240,7 +253,9 @@ class TtC2f:
         bfloat8=True,
         block_shard=False,
         deallocate_activation=False,
-        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        output_layout=ttnn.TILE_LAYOUT,
+        reshard=False,
+        core_count=None,
     ):
         self.device = device
         self.parameters = parameters
@@ -255,15 +270,30 @@ class TtC2f:
         self.deallocate_activation = deallocate_activation
         self.output_layout = output_layout
 
-        self.cv1 = TtConv(
+        self.cv1_a = TtConv(
             device,
             self.parameters,
-            f"{self.path}.cv1",
+            f"{self.path}.cv1_a",
             input_params=self.input_params[0],
             bfloat8=self.bfloat8,
             change_shard=self.change_shard,
             deallocate_activation=self.deallocate_activation,
             output_layout=self.output_layout,
+            core_count=core_count,
+            reshard_if_not_optimal=reshard,
+        )
+
+        self.cv1_b = TtConv(
+            device,
+            self.parameters,
+            f"{self.path}.cv1_b",
+            input_params=self.input_params[0],
+            bfloat8=self.bfloat8,
+            change_shard=self.change_shard,
+            deallocate_activation=self.deallocate_activation,
+            output_layout=self.output_layout,
+            reshard_if_not_optimal=reshard,
+            core_count=core_count,
         )
 
         self.cv2 = TtConv(
@@ -272,7 +302,8 @@ class TtC2f:
             f"{self.path}.cv2",
             input_params=self.input_params[1],
             bfloat8=self.bfloat8,
-            block_shard=self.block_shard,
+            block_shard=True if core_count != None else self.block_shard,
+            reshard_if_not_optimal=True if core_count != None else False,
             change_shard=self.change_shard,
             deallocate_activation=self.deallocate_activation,
         )
@@ -296,22 +327,19 @@ class TtC2f:
             )
 
     def __call__(self, x):
-        cv1, out_h, out_w = self.cv1(x)
-        cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if use_signpost:
+            signpost(header="C2F")
+        cv1_a, out_h_a, out_w_a = self.cv1_a(x)
+        cv1_b, out_h_b, out_w_b = self.cv1_b(x)
 
-        y = [
-            cv1[:, :, :, : cv1.shape[-1] // 2],
-            cv1[:, :, :, cv1.shape[-1] // 2 :],
-        ]
+        cv1_a = ttnn.to_memory_config(cv1_a, ttnn.L1_MEMORY_CONFIG)
+        cv1_b = ttnn.to_memory_config(cv1_b, ttnn.L1_MEMORY_CONFIG)
 
-        ttnn.deallocate(cv1)
+        y = [cv1_a, cv1_b]
 
         for i in range(self.n):
             z = self.bottleneck_modules[i](y[-1])
             y.append(z)
-
-        y[0] = ttnn.to_layout(y[0], layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        y[1] = ttnn.to_layout(y[1], layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         if not self.shortcut:
             for i in range(2, len(y)):
@@ -327,21 +355,29 @@ class TtC2f:
 
 
 class TtSppf:
-    def __init__(self, device, parameters, path, input_params, batch_size):
+    def __init__(self, device, parameters, path, input_params, batch_size, core_count=None):
         self.device = device
         self.parameters = parameters
         self.path = path
         self.input_params = input_params
         self.batch_size = batch_size
 
-        self.cv1 = TtConv(device, parameters, f"{path}.cv1", input_params=input_params[0], change_shard=True)
-        self.cv2 = TtConv(device, parameters, f"{path}.cv2", input_params=input_params[1], change_shard=True)
+        self.cv1 = TtConv(device, parameters, f"{path}.cv1", input_params=input_params[0], deallocate_activation=True)
+        self.cv2 = TtConv(
+            device,
+            parameters,
+            f"{path}.cv2",
+            input_params=input_params[1],
+            core_count=core_count,
+            reshard_if_not_optimal=True if core_count == None else False,
+        )
 
     def __call__(self, x):
+        if use_signpost:
+            signpost(header="SPPF")
         cv1, out_h, out_w = self.cv1(x)
-        cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
+        p = 5 // 2
         y = [cv1]
-
         for i in range(3):
             output = ttnn.max_pool2d(
                 input_tensor=y[-1],
@@ -351,13 +387,15 @@ class TtSppf:
                 channels=y[-1].shape[-1],
                 kernel_size=[5, 5],
                 stride=[1, 1],
-                padding=[2, 2],
+                padding=[p, p],
                 dilation=[1, 1],
             )
-            output_interleaved = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
-            y.append(output_interleaved)
+            y.append(output)
 
-        x = sharded_concat(y)
+        y[0] = ttnn.sharded_to_interleaved(y[0])
+        y[0] = ttnn.to_layout(y[0], ttnn.ROW_MAJOR_LAYOUT)
+
+        x = sharded_concat(y, skip_S2I=False)
         for i in range(len(y)):
             ttnn.deallocate(y[i])
 
@@ -366,13 +404,29 @@ class TtSppf:
 
 
 class TtDetectCv2:
-    def __init__(self, device, parameters, path, input_params):
+    def __init__(self, device, parameters, path, input_params, block_shard=False, block_shard_all_convs=False):
         self.device = device
         self.parameters = parameters
         self.path = path
         self.input_params = input_params
-        self.conv0 = TtConv(device, parameters, f"{path}.0", input_params=input_params[0], bfloat8=True)
-        self.conv1 = TtConv(device, parameters, f"{path}.1", input_params=input_params[1], bfloat8=True)
+        self.conv0 = TtConv(
+            device,
+            parameters,
+            f"{path}.0",
+            input_params=input_params[0],
+            bfloat8=True,
+            block_shard=block_shard,
+            deallocate_activation=False,
+        )
+        self.conv1 = TtConv(
+            device,
+            parameters,
+            f"{path}.1",
+            input_params=input_params[1],
+            bfloat8=True,
+            block_shard=block_shard_all_convs,
+            deallocate_activation=True,
+        )
         self.conv2 = TtConv(
             device,
             parameters,
@@ -382,9 +436,13 @@ class TtDetectCv2:
             is_fused=False,
             change_shard=True,
             is_detect_cv2=True,
+            block_shard=block_shard_all_convs,
+            deallocate_activation=True,
         )
 
     def __call__(self, x):
+        if use_signpost:
+            signpost(header="DetectCv2")
         x, out_h, out_w = self.conv0(x)
         x, out_h, out_w = self.conv1(x)
         x, out_h, out_w = self.conv2(x)
@@ -397,18 +455,21 @@ class TtDFL:
         self.parameters = parameters
         self.path = path
         self.input_params = input_params
-        self.conv = TtConv(device, parameters, path, input_params, bfloat8=True, is_fused=False, change_shard=True)
+        self.conv = TtConv(device, parameters, path, input_params, bfloat8=True, is_fused=False, is_detect_cv2=True)
 
     def __call__(self, x, c1=16):
+        if use_signpost:
+            signpost(header="DFL")
         b, _, a = x.shape
 
         x = ttnn.reshape(x, (b, 4, c1, a), memory_config=ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.softmax(x, dim=2)
         x = ttnn.permute(x, (0, 1, 3, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ttnn.softmax(x, dim=-1)
         x, h, w = self.conv(x)
-        x = ttnn.permute(x, (0, 3, 1, 2))
-        x = ttnn.reshape(x, (x.shape[0], 1, 4, int(x.shape[3] / 4)))
-        x = ttnn.reshape(x, (x.shape[0], x.shape[1] * x.shape[2], x.shape[3]))
+        x = ttnn.permute(x, (0, 1, 3, 2))  # To increase the performance of below reshape operation
+        x = ttnn.reshape(x, (x.shape[0], 4, -1))
         return x
 
 
@@ -427,14 +488,32 @@ class TtDetect:
         for i in range(nl):
             cv2_params = input_params["cv2_params"][i]["input_params"]
             cv3_params = input_params["cv3_params"][i]["input_params"]
-            self.detect_cv2_modules.append(TtDetectCv2(device, parameters, f"{path}.cv2.{i}", input_params=cv2_params))
-            self.detect_cv3_modules.append(TtDetectCv2(device, parameters, f"{path}.cv3.{i}", input_params=cv3_params))
+            self.detect_cv2_modules.append(
+                TtDetectCv2(
+                    device,
+                    parameters,
+                    f"{path}.cv2.{i}",
+                    input_params=cv2_params,
+                    block_shard_all_convs=True if i > 0 else False,
+                )
+            )
+            self.detect_cv3_modules.append(
+                TtDetectCv2(
+                    device,
+                    parameters,
+                    f"{path}.cv3.{i}",
+                    input_params=cv3_params,
+                    block_shard_all_convs=True if i > 0 else False,
+                )
+            )
 
         self.dfl_module = TtDFL(
             device, parameters, f"{path}.dfl", input_params=input_params["dfl_params"]["input_params"]
         )
 
     def __call__(self, x, nc=80, ch=(), reg_max=16):
+        if use_signpost:
+            signpost(header="Detect")
         nc = self.nc
         ch = self.ch
         nl = len(ch)
@@ -459,6 +538,8 @@ class TtDetect:
         box = ttnn.slice(x_cat, [0, 0, 0], [1, 64, x_cat.shape[2]], memory_config=ttnn.L1_MEMORY_CONFIG)
         cls = ttnn.slice(x_cat, [0, 64, 0], [1, 144, x_cat.shape[2]], memory_config=ttnn.L1_MEMORY_CONFIG)
         dfl = self.dfl_module(box)
+        if use_signpost:
+            signpost(header="ttnn_decode_bboxes")
         dbox = ttnn_decode_bboxes(self.device, dfl, anchors)
         dbox = dbox * strides
 
@@ -474,14 +555,14 @@ class TtDetectionModel:
         self.batch_size = batch_size
         sppf_configs = {"input_params": ((1, 1, 0, 320, 640), (1, 1, 0, 640, 1280))}
         c2f_configs = {
-            "model.2": {"input_params": ((1, 1, 0, 160, 160), (1, 1, 0, 160, 400), (3, 1, 1, 80, 80))},
-            "model.4": {"input_params": ((1, 1, 0, 320, 320), (1, 1, 0, 320, 1280), (3, 1, 1, 160, 160))},
-            "model.6": {"input_params": ((1, 1, 0, 640, 640), (1, 1, 0, 640, 2560), (3, 1, 1, 320, 320))},
-            "model.8": {"input_params": ((1, 1, 0, 640, 640), (1, 1, 0, 640, 1600), (3, 1, 1, 320, 320))},
-            "model.12": {"input_params": ((1, 1, 0, 640, 1280), (1, 1, 0, 640, 1600), (3, 1, 1, 320, 320))},
-            "model.15": {"input_params": ((1, 1, 0, 320, 960), (1, 1, 0, 320, 800), (3, 1, 1, 160, 160))},
-            "model.18": {"input_params": ((1, 1, 0, 640, 960), (1, 1, 0, 640, 1600), (3, 1, 1, 320, 320))},
-            "model.21": {"input_params": ((1, 1, 0, 640, 1280), (1, 1, 0, 640, 1600), (3, 1, 1, 320, 320))},
+            "model.2": {"input_params": ((1, 1, 0, 80, 160), (1, 1, 0, 160, 400), (3, 1, 1, 80, 80))},
+            "model.4": {"input_params": ((1, 1, 0, 160, 320), (1, 1, 0, 320, 1280), (3, 1, 1, 160, 160))},
+            "model.6": {"input_params": ((1, 1, 0, 320, 640), (1, 1, 0, 640, 2560), (3, 1, 1, 320, 320))},
+            "model.8": {"input_params": ((1, 1, 0, 320, 640), (1, 1, 0, 640, 1600), (3, 1, 1, 320, 320))},
+            "model.12": {"input_params": ((1, 1, 0, 320, 1280), (1, 1, 0, 640, 1600), (3, 1, 1, 320, 320))},
+            "model.15": {"input_params": ((1, 1, 0, 160, 960), (1, 1, 0, 320, 800), (3, 1, 1, 160, 160))},
+            "model.18": {"input_params": ((1, 1, 0, 320, 960), (1, 1, 0, 640, 1600), (3, 1, 1, 320, 320))},
+            "model.21": {"input_params": ((1, 1, 0, 320, 1280), (1, 1, 0, 640, 1600), (3, 1, 1, 320, 320))},
         }
         detect_config = {
             "cv2_params": [
@@ -574,7 +655,14 @@ class TtDetectionModel:
             shortcut=True,
             input_params=c2f_configs["model.4"]["input_params"],
         )
-        self.conv_5 = TtConv(device, parameters, "model.5", input_params=[3, 2, 1, 640, 320], block_shard=True)
+        self.conv_5 = TtConv(
+            device,
+            parameters,
+            "model.5",
+            input_params=[3, 2, 1, 640, 320],
+            block_shard=True,
+            reshard_if_not_optimal=True,
+        )
         self.c2f_6 = TtC2f(
             device,
             parameters,
@@ -582,22 +670,34 @@ class TtDetectionModel:
             n=6,
             shortcut=True,
             block_shard=False,
-            change_shard=True,
+            core_count=64,
             input_params=c2f_configs["model.6"]["input_params"],
         )
-        self.conv_7 = TtConv(device, parameters, "model.7", input_params=[3, 2, 1, 640, 640], block_shard=True)
+        self.conv_7 = TtConv(
+            device,
+            parameters,
+            "model.7",
+            input_params=[3, 2, 1, 640, 640],
+            block_shard=True,
+            reshard_if_not_optimal=True,
+        )
         self.c2f_8 = TtC2f(
             device,
             parameters,
             "model.8",
             n=3,
             shortcut=True,
-            change_shard=True,
             block_shard=True,
+            core_count=64,
             input_params=c2f_configs["model.8"]["input_params"],
         )
         self.sppf_9 = TtSppf(
-            device, parameters, "model.9", input_params=sppf_configs["input_params"], batch_size=self.batch_size
+            device,
+            parameters,
+            "model.9",
+            input_params=sppf_configs["input_params"],
+            batch_size=self.batch_size,
+            core_count=64,
         )
         self.c2f_12 = TtC2f(
             device,
@@ -607,6 +707,7 @@ class TtDetectionModel:
             shortcut=False,
             bfloat8=True,
             block_shard=True,
+            reshard=True,
             input_params=c2f_configs["model.12"]["input_params"],
         )
         self.c2f_15 = TtC2f(
@@ -615,15 +716,25 @@ class TtDetectionModel:
             "model.15",
             n=3,
             shortcut=False,
+            reshard=True,
             input_params=c2f_configs["model.15"]["input_params"],
         )
-        self.conv_16 = TtConv(device, parameters, "model.16", input_params=[3, 2, 1, 320, 320], block_shard=True)
+        self.conv_16 = TtConv(
+            device,
+            parameters,
+            "model.16",
+            input_params=[3, 2, 1, 320, 320],
+            block_shard=True,
+            reshard_if_not_optimal=True,
+        )
         self.c2f_18 = TtC2f(
             device,
             parameters,
             "model.18",
             n=3,
             shortcut=False,
+            block_shard=True,
+            reshard=True,
             input_params=c2f_configs["model.18"]["input_params"],
         )
         self.conv_19 = TtConv(device, parameters, "model.19", input_params=[3, 2, 1, 640, 640], block_shard=True)
@@ -655,23 +766,28 @@ class TtDetectionModel:
         conv_0, out_h, out_w = self.conv_0(x)
         conv_1, out_h, out_w = self.conv_1(conv_0)
         ttnn.deallocate(conv_0)
+        if use_signpost:
+            signpost(header="start c2f_2")
         c2f_2, out_h, out_w = self.c2f_2(conv_1)
         ttnn.deallocate(conv_1)
         conv_3, out_h, out_w = self.conv_3(c2f_2)
         ttnn.deallocate(c2f_2)
+        if use_signpost:
+            signpost(header="start c2f_4")
         c2f_4, out_h, out_w = self.c2f_4(conv_3)
         ttnn.deallocate(conv_3)
-        c2f_4 = ttnn.sharded_to_interleaved(c2f_4, ttnn.L1_MEMORY_CONFIG)
-        c2f_4 = ttnn.reallocate(c2f_4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         conv_5, out_h, out_w = self.conv_5(c2f_4)
+        if use_signpost:
+            signpost(header="start c2f_6")
         c2f_6, out_h, out_w = self.c2f_6(conv_5)
         ttnn.deallocate(conv_5)
-        c2f_6 = ttnn.reallocate(c2f_6, memory_config=ttnn.L1_MEMORY_CONFIG)
         conv_7, out_h, out_w = self.conv_7(c2f_6)
-        conv_7 = ttnn.sharded_to_interleaved(conv_7, ttnn.L1_MEMORY_CONFIG)
+        if use_signpost:
+            signpost(header="start c2f_8")
         c2f_8, out_h, out_w = self.c2f_8(conv_7)
         ttnn.deallocate(conv_7)
-        c2f_8 = ttnn.sharded_to_interleaved(c2f_8)
+        if use_signpost:
+            signpost(header="start sppf_9")
         nine, out_h, out_w = self.sppf_9(c2f_8)
         ttnn.deallocate(c2f_8)
         sppf_9 = ttnn.to_layout(nine, ttnn.ROW_MAJOR_LAYOUT)
@@ -693,6 +809,8 @@ class TtDetectionModel:
         c2f_6 = ttnn.to_layout(c2f_6, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = sharded_concat([x, c2f_6])
         ttnn.deallocate(c2f_6)
+        if use_signpost:
+            signpost(header="start c2f_12")
         c2f_12, out_h, out_w = self.c2f_12(x)
         ttnn.deallocate(x)
         ttnn.deallocate(sppf_9)
@@ -720,30 +838,36 @@ class TtDetectionModel:
         ttnn.deallocate(c2f_4)
         ttnn.deallocate(c2f_12)
 
+        if use_signpost:
+            signpost(header="start c2f_15")
         c2f_15, out_h, out_w = self.c2f_15(x)
         ttnn.deallocate(x)
+        conv_16, out_h, out_w = self.conv_16(c2f_15)
         c2f_15 = ttnn.sharded_to_interleaved(c2f_15, ttnn.L1_MEMORY_CONFIG)
         fifteen = ttnn.clone(c2f_15, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        conv_16, out_h, out_w = self.conv_16(c2f_15)
         ttnn.deallocate(c2f_15)
         conv_16 = ttnn.sharded_to_interleaved(conv_16, ttnn.L1_MEMORY_CONFIG)
         conv_16 = ttnn.to_layout(conv_16, ttnn.ROW_MAJOR_LAYOUT)
         x = sharded_concat([conv_16, twelve])
-        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+
         ttnn.deallocate(twelve)
         ttnn.deallocate(conv_16)
+        if use_signpost:
+            signpost(header="start c2f_18")
         c2f_18, out_h, out_w = self.c2f_18(x)
         ttnn.deallocate(x)
+        conv_19, out_h, out_w = self.conv_19(c2f_18)
         c2f_18 = ttnn.sharded_to_interleaved(c2f_18, ttnn.L1_MEMORY_CONFIG)
         eighteen = ttnn.clone(c2f_18, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        conv_19, out_h, out_w = self.conv_19(c2f_18)
         ttnn.deallocate(c2f_18)
         conv_19 = ttnn.sharded_to_interleaved(conv_19, ttnn.L1_MEMORY_CONFIG)
         conv_19 = ttnn.to_layout(conv_19, ttnn.ROW_MAJOR_LAYOUT)
         nine = ttnn.to_layout(nine, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = sharded_concat([conv_19, nine])
+        x = sharded_concat([conv_19, nine], skip_S2I=False)
         ttnn.deallocate(nine)
         ttnn.deallocate(conv_19)
+        if use_signpost:
+            signpost(header="start c2f_21")
         c2f_21, out_h, out_w = self.c2f_21(x)
         ttnn.deallocate(x)
         x = [fifteen, eighteen, c2f_21]

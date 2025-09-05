@@ -1198,20 +1198,34 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     auto local_physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(this->local_fabric_node_id);
     auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(local_physical_chip_id);
 
-    const auto topology =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_topology();
+    const auto& fabric_context = control_plane.get_fabric_context();
+    const auto topology = fabric_context.get_fabric_topology();
     auto sender_channel_to_check = get_worker_connected_sender_channel(direction, topology);
     size_t sender_channel_num_buffers = this->sender_channels_num_buffers[sender_channel_to_check];
     size_t receiver_channel_num_buffers =
         this->dateline_connection ? this->receiver_channels_num_buffers[1] : this->receiver_channels_num_buffers[0];
+
+    bool update_pkt_hdr_on_rx_ch = true;
+    bool fabric_tensix_extension_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
+                                           tt::tt_fabric::FabricTensixConfig::DISABLED;
+    bool support_pkt_hdr_update_on_sender_channel =
+        !fabric_tensix_extension_enabled &&
+        (topology == tt::tt_fabric::Topology::Torus || topology == tt::tt_fabric::Topology::Mesh);
+    if (support_pkt_hdr_update_on_sender_channel) {
+        // The only mode that currently supports packet header update on sender channel is
+        // a mesh when we aren't also implementing a mux on a tensix core.
+        // The other topologies haven't been updated to support this new mode yet.
+        // For mux case, information about direction isn't tied to the channels yet.
+        // Information about turning and how to update the packet header route isn't exposed
+        // to the mux yet to implement sender side updates.
+        update_pkt_hdr_on_rx_ch = false;
+    }
 
     TT_FATAL(
         sender_channel_num_buffers > 0,
         "Sender channel on direction {} num buffers must be greater than 0",
         sender_channel_to_check);
     TT_FATAL(receiver_channel_num_buffers > 0, "Receiver channel num buffers must be greater than 0");
-
-    const auto& fabric_context = control_plane.get_fabric_context();
 
     const auto& stream_ids = StreamRegAssignments::get_all_stream_ids();
     auto ct_args = std::vector<uint32_t>(stream_ids.begin(), stream_ids.end());
@@ -1324,6 +1338,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
         risc_id,
         this->get_configured_risc_count(),
+
+        update_pkt_hdr_on_rx_ch,
 
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
