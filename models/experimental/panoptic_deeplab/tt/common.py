@@ -212,7 +212,7 @@ def load_resnet_weights_from_pickle(pickle_path: str = None) -> dict:
     if pickle_path is None:
         # Default path relative to this file
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        pickle_path = os.path.join(current_dir, "resnet", "R-52.pkl")
+        pickle_path = os.path.join(current_dir, "..", "weights", "R-52.pkl")
 
     if not os.path.exists(pickle_path):
         raise FileNotFoundError(f"Pickle file not found at: {pickle_path}")

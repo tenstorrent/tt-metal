@@ -4,7 +4,7 @@
 import pytest
 import torch
 import ttnn
-from models.experimental.panoptic_deeplab.tt.tt_pytorch_aspp import ASPP
+from models.experimental.panoptic_deeplab.reference.pytorch_aspp import ASPP
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.panoptic_deeplab.tt.tt_aspp import TtASPP
 
