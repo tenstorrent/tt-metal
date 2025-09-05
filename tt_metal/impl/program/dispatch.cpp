@@ -23,6 +23,7 @@
 #include <set>
 #include <tuple>
 #include <type_traits>
+#include <umd/device/types/core_coordinates.hpp>
 #include <unordered_set>
 #include <variant>
 #include <vector>
@@ -41,8 +42,10 @@
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
 #include "kernel.hpp"
+#include "kernel_types.hpp"
 #include "math.hpp"
 #include "mesh_device.hpp"
+#include "program/program_impl.hpp"
 #include "program_device_map.hpp"
 #include "tt-metalium/program.hpp"
 #include "runtime_args_data.hpp"
@@ -174,13 +177,13 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t crta_base_offset,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes) {
-    uint32_t processor_classes =
-        MetalContext::instance().hal().get_processor_classes_count(programmable_core_type_index);
-    std::vector<uint32_t> max_crtas(processor_classes);
+    std::vector<CommonRTAInfo>& crta_info) {
+    // Note: it's wrong to use HAL processor class here, because HAL will be fixed to have only DM/COMPUTE classes,
+    // whereas the CRTA allocation is separate for DM0/DM1/COMPUTE.
+    uint32_t dispatch_classes = DISPATCH_CLASS_MAX;
+    std::vector<uint32_t> max_crtas(dispatch_classes);
 
-    for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
+    for (int dispatch_class = 0; dispatch_class < dispatch_classes; dispatch_class++) {
         max_crtas[dispatch_class] = 0;
     }
     // Find the max # common RTAs across all kernels for each dispatch class
@@ -193,25 +196,25 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     // Derive crta offsets and sizes per dispatch class
     uint32_t offset = 0;
     uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
+    crta_info.resize(dispatch_classes);
+    for (int dispatch_class = 0; dispatch_class < dispatch_classes; dispatch_class++) {
         uint32_t size = max_crtas[dispatch_class] * sizeof(uint32_t);
-        crta_offsets[dispatch_class] = crta_base_offset + offset;
-        crta_sizes[dispatch_class] = size;
+        crta_info[dispatch_class] = {.offset = crta_base_offset + offset, .size = size};
         offset += size;
         offset = tt::align(offset, l1_alignment);
     }
     uint32_t total_crta_size = offset;
 
     // Set the runtime_args_data sizing info based on the shared max
-    for (auto& kernel_info : kernels) {
-        auto kernel = kernel_info.second;
+    for (auto& [kernel_handle, kernel] : kernels) {
         uint32_t dispatch_class = kernel->dispatch_class();
         kernel->set_common_runtime_args_count(max_crtas[dispatch_class]);
     }
     // Set the kernel group common runtime arg offsets use in the launch message
     for (auto& kg : kernel_groups) {
-        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-            kg->launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset = crta_offsets[dispatch_class];
+        // TODO: update launch msg to not use dispatch class
+        for (int dispatch_class = 0; dispatch_class < dispatch_classes; dispatch_class++) {
+            kg->launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset = crta_info[dispatch_class].offset;
         }
     }
     return total_crta_size;
@@ -225,13 +228,12 @@ uint32_t finalize_rt_args(
     uint32_t base_offset,
     uint32_t programmable_core_type_index,
     uint32_t& rta_offset,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes) {
+    std::vector<CommonRTAInfo>& crta_info) {
     uint32_t max_unique_rta_size = program_dispatch::configure_rta_offsets_for_kernel_groups(
         programmable_core_type_index, kernels, kernel_groups, base_offset);
     uint32_t crta_base_offset = base_offset + max_unique_rta_size;
     uint32_t total_crta_size = program_dispatch::configure_crta_offsets_for_kernel_groups(
-        programmable_core_type_index, kernels, kernel_groups, crta_base_offset, crta_offsets, crta_sizes);
+        programmable_core_type_index, kernels, kernel_groups, crta_base_offset, crta_info);
 
     uint32_t offset = max_unique_rta_size + total_crta_size;
 
@@ -641,7 +643,7 @@ BatchedTransfers assemble_runtime_args_commands(
         }
         uint32_t programmable_core_type_index = hal.get_programmable_core_type_index(programmable_core_type);
         uint32_t common_size =
-            program.get_program_config(programmable_core_type_index).crta_sizes[kernel->dispatch_class()];
+            program.get_program_config(programmable_core_type_index).crta_info[kernel->dispatch_class()].size;
         if (common_size != 0) {
             uint32_t max_runtime_args_len = common_size / sizeof(uint32_t);
             const auto& common_rt_args = kernel->common_runtime_args();
@@ -683,8 +685,8 @@ BatchedTransfers assemble_runtime_args_commands(
                     if (kernel->common_runtime_args().empty()) {
                         continue;
                     }
-                    uint32_t dispatch_class = kernel->dispatch_class();
-                    const uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
+                    const uint32_t crta_offset =
+                        program.get_program_config(index).crta_info[kernel->dispatch_class()].offset;
                     for (auto& transfer_info :
                          extract_dst_noc_multicast_info(device, kg->core_ranges.ranges(), CoreType::WORKER)) {
                         auto noc_xy_addr = device->get_noc_multicast_encoding(
@@ -787,11 +789,12 @@ BatchedTransfers assemble_runtime_args_commands(
                     continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
                 }
                 auto dispatch_class = kernel->dispatch_class();
-                uint32_t common_size = program.get_program_config(index).crta_sizes[dispatch_class];
+                const auto& program_config = program.get_program_config(index);
+                uint32_t common_size = program_config.crta_info[dispatch_class].size;
                 if (common_size == 0) {
                     continue;
                 }
-                uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
+                uint32_t crta_offset = program_config.crta_info[dispatch_class].offset;
 
                 const auto& common_rt_args = kernel->common_runtime_args();
                 if (common_rt_args.empty()) {
