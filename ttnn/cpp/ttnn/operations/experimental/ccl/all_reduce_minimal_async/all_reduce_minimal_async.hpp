@@ -20,6 +20,7 @@ namespace ccl {
 struct ExecuteAllReduceMinimalAsync {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
+        const uint32_t num_devices,
         const std::vector<GlobalSemaphore>& rs_global_semaphores,
         const std::vector<GlobalSemaphore>& ag_global_semaphores,
         ttnn::operations::reduction::ReduceType math_op,

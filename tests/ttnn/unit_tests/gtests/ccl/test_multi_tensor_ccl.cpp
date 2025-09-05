@@ -138,6 +138,17 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllReduceAsync) {
         tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
     }
 
+    // create vectors of semaphores
+    std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> rs_semaphores(3);
+    std::generate(rs_semaphores.begin(), rs_semaphores.end(), [&devices]() {
+        return CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
+    });
+
+    std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> ag_semaphores(2);
+    std::generate(ag_semaphores.begin(), ag_semaphores.end(), [&devices]() {
+        return CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
+    });
+    uint32_t num_devices = devices.size();
     auto from_remote_multi_device_global_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
     auto to_remote_multi_device_global_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
     auto semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
@@ -145,9 +156,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllReduceAsync) {
 
     auto all_reduced = ttnn::experimental::all_reduce_async(
         tensors,
-        from_remote_multi_device_global_semaphore,
-        to_remote_multi_device_global_semaphore,
-        semaphore,
+        num_devices,
+        rs_semaphores,
+        ag_semaphores,
         ttnn::operations::reduction::ReduceType::Sum,
         std::nullopt,
         ttnn::ccl::Topology::Linear,

@@ -27,6 +27,7 @@ void bind_all_reduce_minimal_async(pybind11::module& module, const ccl_operation
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
+               const uint32_t num_devices,
                const std::vector<GlobalSemaphore>& rs_global_semaphores,
                const std::vector<GlobalSemaphore>& ag_global_semaphores,
                ttnn::operations::reduction::ReduceType math_op,
@@ -36,6 +37,7 @@ void bind_all_reduce_minimal_async(pybind11::module& module, const ccl_operation
                std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) -> ttnn::Tensor {
                 return self(
                     input_tensor,
+                    num_devices,
                     rs_global_semaphores,
                     ag_global_semaphores,
                     math_op,
@@ -45,6 +47,7 @@ void bind_all_reduce_minimal_async(pybind11::module& module, const ccl_operation
                     worker_subdevice_id_opt);
             },
             py::arg("input_tensor"),
+            py::arg("num_devices"),
             py::arg("rs_global_semaphores"),
             py::arg("ag_global_semaphores"),
             py::arg("math_op"),
