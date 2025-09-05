@@ -51,7 +51,7 @@ void kernel_main() {
 #endif
 #if !SRC_SHARDED || !SRC_SHARDED_B
     constexpr uint32_t onetile = 1;
-    constexpr bool has_sharding = get_compile_time_arg_val(src_b_args.next_compile_time_args_offset()) == 1;
+    constexpr bool has_sharding = false;  // get_compile_time_arg_val(src_b_args.next_compile_time_args_offset()) == 1;
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;
