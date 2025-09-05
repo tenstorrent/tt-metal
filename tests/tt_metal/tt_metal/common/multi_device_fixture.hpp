@@ -23,24 +23,6 @@
 
 namespace tt::tt_metal {
 
-class TwoDeviceFixture : public DispatchFixture {
-protected:
-    void SetUp() override {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
-        if (slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
-            GTEST_SKIP();
-        }
-
-        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        if (num_devices != 2) {
-            GTEST_SKIP() << "TwoDeviceFixture can only be run on machines with two devices";
-        }
-
-        DispatchFixture::SetUp();
-    }
-};
-
 class TwoMeshDeviceFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {

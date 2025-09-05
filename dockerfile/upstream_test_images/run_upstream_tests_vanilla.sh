@@ -14,10 +14,9 @@ test_suite_bh_single_pcie_metal_unit_tests() {
     # I wonder why we can't put these in the validation suite?
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueSingleCardProgramFixture.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardProgramFixture.*
-    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueProgramFixture.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQProgramFixture.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=*RandomProgramFixture.*
-    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueSingleCardBufferFixture.* # Tests EnqueueRead/EnqueueWrite Buffer from DRAM/L1
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardBufferFixture.* # Tests EnqueueRead/EnqueueWrite Buffer from DRAM/L1
 
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_api --gtest_filter=*SimpleDram*:*SimpleL1* # Executable is dependent on arch (provided through GitHub CI workflow scripts)
 }
@@ -157,7 +156,7 @@ test_suite_wh_6u_metal_unit_tests() {
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardFixture.*"
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardProgramFixture.*"
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardProgramFixture.*"
-    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardBufferFixture.ShardedBufferLarge*ReadWrites"
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites"
     TT_METAL_USE_MGD_2_0=1 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 }
 

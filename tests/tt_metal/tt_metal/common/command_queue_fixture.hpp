@@ -26,47 +26,6 @@
 
 namespace tt::tt_metal {
 // #22835: These Fixtures will be removed once tests are fully migrated, and replaced by UnitMeshCQFixtures
-class CommandQueueFixture : public DispatchFixture {
-protected:
-    tt::tt_metal::IDevice* device_{};
-    void SetUp() override {
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        this->create_device();
-    }
-
-    void TearDown() override {
-        if (!this->IsSlowDispatch()) {
-            tt::tt_metal::CloseDevice(this->device_);
-        }
-    }
-
-    bool validate_dispatch_mode() {
-        this->slow_dispatch_ = false;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
-            this->slow_dispatch_ = true;
-            return false;
-        }
-        return true;
-    }
-
-    void create_device(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
-        const chip_id_t device_id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        this->device_ =
-            tt::tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_config);
-    }
-};
-
-class CommandQueueBufferFixture : public CommandQueueFixture {};
-
-class CommandQueueProgramFixture : public CommandQueueFixture {};
-
 class UnitMeshCQFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
@@ -138,7 +97,7 @@ protected:
 
 // #22835: These Fixtures will be removed once tests are fully migrated, and replaced by UnitMeshCQSingleCardFixture and
 // UnitMeshCQSingleCardProgramFixture
-class CommandQueueSingleCardFixture : virtual public DispatchFixture {
+class CommandQueueSingleCardFixture : virtual public DispatchFixture {  // NTMigrate!!!
 protected:
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
@@ -288,9 +247,8 @@ protected:
 };
 
 using UnitMeshCQSingleCardBufferFixture = UnitMeshCQSingleCardFixture;
-class CommandQueueSingleCardBufferFixture : public CommandQueueSingleCardFixture {};
 
-class CommandQueueSingleCardProgramFixture : virtual public CommandQueueSingleCardFixture {};
+class CommandQueueSingleCardProgramFixture : virtual public CommandQueueSingleCardFixture {};  // NTMigrate!!!
 
 class UnitMeshCQMultiDeviceFixture : public MeshDispatchFixture {
 protected:
@@ -334,48 +292,6 @@ protected:
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
 };
-
-// #22835: These Fixtures will be removed once tests are fully migrated, and replaced by UnitMeshCQMultiDeviceFixtures
-class CommandQueueMultiDeviceFixture : public DispatchFixture {
-protected:
-    void SetUp() override {
-        this->slow_dispatch_ = false;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
-            this->slow_dispatch_ = true;
-            GTEST_SKIP();
-        }
-
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-
-        num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-        if (num_devices_ < 2) {
-            GTEST_SKIP();
-        }
-
-        std::vector<chip_id_t> chip_ids;
-        for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
-            chip_ids.push_back(id);
-        }
-
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        reserved_devices_ = tt::tt_metal::detail::CreateDevices(
-            chip_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
-        for (const auto& [id, device] : reserved_devices_) {
-            devices_.push_back(device);
-        }
-    }
-
-    void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
-
-    std::vector<tt::tt_metal::IDevice*> devices_;
-    std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
-    size_t num_devices_{};
-};
-
-class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixture {};
 
 class UnitMeshCQMultiDeviceProgramFixture : public UnitMeshCQMultiDeviceFixture {};
 
