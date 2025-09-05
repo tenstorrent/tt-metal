@@ -124,7 +124,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "t3k CCL perf tests", arch: wormhole_b0, cmd: run_t3000_ccl_all_gather_perf_tests && run_t3000_ccl_reduce_scatter_perf_tests, timeout: 75, owner_id: ULMEPM2MA}, # Sean Nijjar
+          { name: "t3k CCL perf tests", arch: wormhole_b0, cmd: run_t3000_ccl_all_gather_perf_tests && run_t3000_ccl_reduce_scatter_perf_tests, timeout: 75, owner_id: U05ACKAJTHS}, # Naif Tarafdar
         ]
     name: ${{ matrix.test-group.name }}
     env:
