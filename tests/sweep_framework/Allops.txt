@@ -183,7 +183,6 @@ ttnn.geglu
 ttnn.gelu
 ttnn.gelu_bw
 ttnn.gez
-ttnn.global_avg_pool2d
 ttnn.glu
 ttnn.group_norm
 ttnn.gt
