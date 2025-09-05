@@ -17,6 +17,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -80,6 +81,33 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
     };
     auto output_shape = sliding_window_config.get_output_shape();
     const bool is_input_tensor_in_dram = input_tensor.memory_config().is_dram();
+
+    // Check if this is a global pooling case that can use reduce operations directly
+    bool bypass_to_reduce = is_global_pool(input_h, input_w, kernel_size, stride, padding_4d, count_include_pad);
+
+    if (bypass_to_reduce) {
+        Tensor reduced_tensor;
+        if (pool_type == Pool2DType::AVG_POOL2D) {
+            // Apply mean reduction over the spatial dimension (dim -2)
+            reduced_tensor = ttnn::mean(
+                input_tensor,
+                ttnn::SmallVector<int>{-2},  // reduce over spatial dimension
+                false,                       // keep_dim = false
+                memory_config);
+        } else {
+            // Apply max reduction over the spatial dimension (dim -2)
+            reduced_tensor = ttnn::max(
+                input_tensor,
+                ttnn::SmallVector<int>{-2},  // reduce over spatial dimension
+                false,                       // keep_dim = false
+                memory_config);
+        }
+
+        // Reshape output to match expected pool output shape: (batch, output_h=1, output_w=1, channels)
+        // ttnn::Shape final_output_shape({output_shape[0], 1, 1, channels});
+        // return reduced_tensor.reshape(reduced_tensor.logical_shape(), final_output_shape);
+        return reduced_tensor;
+    }
     sliding_window::ParallelConfig parallel_config;
     MemoryConfig out_memory_config = input_tensor.memory_config();
     uint32_t num_cores_nhw = 0;
