@@ -68,6 +68,8 @@ class TtSDXLPipeline(LightweightModule):
         if pipeline_config.is_galaxy:
             logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
             os.environ["TT_MM_THROTTLE_PERF"] = "5"
+            logger.info("Setting TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE for Galaxy")
+            os.environ["TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE"] = "7, 7"
 
         logger.info("Loading TT components...")
         self.__load_tt_components(pipeline_config)
