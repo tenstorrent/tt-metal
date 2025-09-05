@@ -65,9 +65,9 @@ tt::tt_metal::HostStorage transform_storage(
                 constexpr bool row_major_input = false;
                 constexpr bool is_exp_a = false;
                 if constexpr (std::is_same_v<DstType, bfloat8_tag>) {
-                    return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
+                    return pack_as_bfp8_tiles(data, row_major_input, is_exp_a);
                 } else if constexpr (std::is_same_v<DstType, bfloat4_tag>) {
-                    return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
+                    return pack_as_bfp4_tiles(data, row_major_input, is_exp_a);
                 } else {
                     static_assert(ttsl::concepts::always_false_v<DstType>, "Unsupported data type");
                 }
