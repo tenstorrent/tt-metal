@@ -142,7 +142,15 @@ jobs:
 
 
   create-docker-release-image:
-    needs: build-artifact
+    needs:
+      - build-artifact
+      - single-card-demos
+      - t3000-demos
+      - t3000-model-perf
+      - galaxy-4u-demos
+      - galaxy-6u-demos
+      - blackhole-single-card-demos
+      - blackhole-multi-card-demos
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
     if: github.ref == 'refs/heads/stable'
@@ -204,7 +212,15 @@ jobs:
   publish-to-pypi:
     name: >-
       Publish Python 🐍 distribution 📦 to PyPI
-    needs: build-artifact
+    needs:
+      - build-artifact
+      - single-card-demos
+      - t3000-demos
+      - t3000-model-perf
+      - galaxy-4u-demos
+      - galaxy-6u-demos
+      - blackhole-single-card-demos
+      - blackhole-multi-card-demos
 
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/stable'
