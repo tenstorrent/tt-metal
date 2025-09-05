@@ -28,6 +28,7 @@
 #include "kernel.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel_impl.hpp"
 
 enum class UnpackToDestMode : uint8_t;
 
