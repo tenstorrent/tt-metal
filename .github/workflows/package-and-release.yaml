@@ -72,7 +72,7 @@ jobs:
 
 
   build-test-publish:
-    needs: create-tag
+    needs: [create-tag, release-precheck]
     uses: ./.github/workflows/release-build-test-publish.yaml
     secrets: inherit
     strategy:
