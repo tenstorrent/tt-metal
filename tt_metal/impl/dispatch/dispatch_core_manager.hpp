@@ -14,7 +14,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/core_descriptor.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>
 

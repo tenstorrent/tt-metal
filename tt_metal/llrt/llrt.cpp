@@ -31,7 +31,7 @@
 #include "metal_soc_descriptor.h"
 // #include <umd/device/driver_atomics.h> - This should be included as it is used here, but the file is missing include
 // guards
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 
