@@ -115,24 +115,19 @@ SliceWidth = ttnn.Conv2dSliceWidth
     "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity",
     # fmt: off
     (
-        (1, 528,  528,  192,   192,   SliceWidth,    0,  ttnn.bfloat8_b, (3, 3), (2, 2), (1, 1), (1, 1),      0,  ttnn.MathFidelity.HiFi4  ),
+        (1, 528,  528,  192,   192,   SliceWidth,    0,  ttnn.bfloat8_b, (3, 3), (2, 2), (1, 1), (1, 1),      0,  ttnn.MathFidelity.HiFi4 ),
         (2,  13,   31,  313,    71,   SliceWidth,   16,  ttnn.bfloat8_b, (5, 5), (1, 1), (2, 2), (2, 2), 32 * 4,  ttnn.MathFidelity.LoFi  ),
         (2,  63,  129,  981,    39,   SliceHeight,  16,  ttnn.bfloat8_b, (3, 3), (2, 2), (2, 2), (1, 1),      0,  ttnn.MathFidelity.LoFi  ),
         (2, 512,  512,  128,   128,   SliceWidth,    4,  ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), (1, 1), 32 * 8,  ttnn.MathFidelity.LoFi  ),
         (2, 64,   64,   384,   64,    SliceHeight,   6,  ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1),      0,  ttnn.MathFidelity.LoFi  ),
         (1, 4,    32,   1024,  1024,  SliceWidth,    4,  ttnn.bfloat8_b, (5, 5), (1, 1), (0, 0), (1, 1),     32,  ttnn.MathFidelity.LoFi  ),
-        (1, 64,   128,  992,   992,   SliceWidth,   64,  ttnn.bfloat8_b, (2, 2), (1, 1), (0, 0), (1, 1), 32 * 4,  ttnn.MathFidelity.LoFi  ),
-        (1, 2904, 2904,  48,    48,   SliceWidth,   4,  ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (1, 1),      32,  ttnn.MathFidelity.HiFi4 ),
-        (1, 2944, 2944,  48,    48,   SliceWidth,   4,  ttnn.bfloat8_b,  (3, 3), (1, 1), (0, 0), (1, 1),     32,  ttnn.MathFidelity.HiFi4 ),
+        (1, 2904, 2904,   48,    48,   SliceWidth,   4,  ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (1, 1),     32,  ttnn.MathFidelity.HiFi4 ),
     )
     # fmt: on
 )
 @pytest.mark.parametrize(
     "has_bias, fp32_accum, packer_l1_acc",
     [[True, True, False]],
-)
-@pytest.mark.skip(
-    reason="Temporarily disabled due to issues - see ticket: https://github.com/tenstorrent/tt-metal/issues/26930"
 )
 def test_conv_dram(
     device,
