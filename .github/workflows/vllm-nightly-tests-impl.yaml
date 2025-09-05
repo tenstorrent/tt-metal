@@ -295,6 +295,7 @@ jobs:
           owner: ${{ matrix.test-group.co-owner-2-id }}
 
       - name: Set artifact prefix
+        if: ${{ !cancelled() }}
         id: set-artifact-prefix
         run: |
           # Replace spaces with underscores
