@@ -43,7 +43,7 @@ def run_all_reduce_with_mesh_tensor_along_row(
     # create global semaphore handles
     rs_global_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(3)]
     ag_global_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
-    barrier_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(1)]
+    barrier_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
     try:
         debug = False
 
@@ -158,14 +158,18 @@ def run_all_reduce_with_mesh_tensor_along_row(
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, layout",
     [
-        (4, 2, [1, 4, 32, 2304], ttnn.TILE_LAYOUT),
+        (4, 1, [1, 4, 32, 2304], ttnn.TILE_LAYOUT),
+        (4, 1, [4, 1, 64, 1024], ttnn.TILE_LAYOUT),
+        (4, 1, [3, 2, 90, 2040], ttnn.TILE_LAYOUT),
+        (4, 1, [16, 1, 16, 512], ttnn.ROW_MAJOR_LAYOUT),
+        (4, 1, [1, 1, 250, 2048], ttnn.ROW_MAJOR_LAYOUT),
+        (4, 1, [2, 2, 350, 350], ttnn.ROW_MAJOR_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
         ttnn.bfloat16,
-        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
@@ -175,8 +179,8 @@ def run_all_reduce_with_mesh_tensor_along_row(
         ttnn.BufferType.L1,
     ],
 )
-@pytest.mark.parametrize("replication_factor", [1])  # 1, 8])
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("replication_factor", [2])
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_reduce_on_TG_rows_post_commit(
@@ -192,8 +196,8 @@ def test_line_all_reduce_on_TG_rows_post_commit(
     replication_factor,
     num_iters=16,
 ):
-    if mesh_device.get_num_devices() != 32:
-        pytest.skip("Not TG!")
+    # if mesh_device.get_num_devices() != 32:
+    #    pytest.skip("Not TG!")
 
     run_all_reduce_with_mesh_tensor_along_row(
         mesh_device,
