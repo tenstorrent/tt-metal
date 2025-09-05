@@ -29,7 +29,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "weights, layers, iterations",
     [
-        ("instruct", 3, 2000),
+        ("instruct", 64, 2000),
     ],
     ids=["quick"],
 )
@@ -96,6 +96,7 @@ def test_qwen_model_ttt_inference(
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 2  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
+    # dtype = ttnn.bfloat16
 
     top_k = sampling_params["top_k"]
     if isinstance(top_k, int):
@@ -122,7 +123,7 @@ def test_qwen_model_ttt_inference(
 
     model_name = {
         (80): "qwen3_70b",
-        (3): "qwen3_1layer",
+        (64): "qwen3_1layer",
     }[(layers if layers is not None else model_args.n_layers)]
 
     # Define minimum PCC for each iteration

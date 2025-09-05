@@ -1209,8 +1209,10 @@ def tt_distributed_rmsnorm(
         core_range = ttnn.CoreRange(
             grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
         )
+        inp_mem_config = inp.memory_config()
         inp = ttnn.to_memory_config(inp, ttnn.DRAM_MEMORY_CONFIG)
-        inp = ttnn.typecast(inp, ttnn.bfloat16, sub_core_grids=core_range)
+        inp = ttnn.typecast(inp, ttnn.bfloat16, sub_core_grids=ttnn.CoreRangeSet({core_range}))
+        inp = ttnn.to_memory_config(inp, inp_mem_config)
     tt_stats = (
         ttnn.rms_norm_pre_all_gather(
             inp,
@@ -1224,6 +1226,7 @@ def tt_distributed_rmsnorm(
             inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, use_2d_core_grid=use_2d_grid
         )
     )
+
     padded_shape = (1, 1, inp.shape[-2], 32)
     # tt_stats_gathered = tt_ccl.line_all_gather(
     #     tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="LAYERNORM"

@@ -150,6 +150,7 @@ class TtTransformerBlock(LightweightModule):
             # Note this works because layer 0 has a bfloat16 input while other layers use bfloat8
             # since we want residual to be bfloat16
             # attn_in_sharded, _ = self.attention_norm(x, None, mode)
+            # attn_in_sharded = ttnn.to_memory_config(attn_in_sharded, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"])
             inp_torch = ttnn.to_torch(
                 x, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4))
             )[:, :1, :, :]
@@ -188,31 +189,33 @@ class TtTransformerBlock(LightweightModule):
 
         else:
             # In subsequent Layers we take the h tensor from before and modify it in place
-            h = ttnn.add(x, h, memory_config=skip_mem_cfg)
+            h = ttnn.add(x, h, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
+            attn_in_sharded, _ = self.attention_norm(x, h, mode)
             # attn_in_sharded, _ = self.attention_norm(x, h, mode)
-            # attn_in_sharded, _ = self.attention_norm(x, h, mode)
-            # attn_in_sharded = ttnn.to_memory_config(attn_in_sharded, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"])
+            attn_in_sharded = ttnn.to_memory_config(
+                attn_in_sharded, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
+            )
 
             # h = ttnn.add(x, h, memory_config=skip_mem_cfg)
-            inp_torch = ttnn.to_torch(
-                h, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4))
-            )[:, :1, :, :]
-            attn_in_torch = inp_torch * torch.rsqrt(
-                inp_torch.pow(2).mean(-1, keepdim=True) + self.attention_norm.norm.eps
-            )
-            attn_in_torch = attn_in_torch * self.attn_norm_weight
-            attn_in_sharded = ttnn.from_torch(
-                attn_in_torch,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device,
-                    dims=(None, 3),
-                    mesh_shape=(8, 4),
-                ),
-                memory_config=self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"],
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-            )
+            # inp_torch = ttnn.to_torch(
+            #     h, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4))
+            # )[:, :1, :, :]
+            # attn_in_torch = inp_torch * torch.rsqrt(
+            #     inp_torch.pow(2).mean(-1, keepdim=True) + self.attention_norm.norm.eps
+            # )
+            # attn_in_torch = attn_in_torch * self.attn_norm_weight
+            # attn_in_sharded = ttnn.from_torch(
+            #     attn_in_torch,
+            #     mesh_mapper=ttnn.ShardTensor2dMesh(
+            #         self.mesh_device,
+            #         dims=(None, 3),
+            #         mesh_shape=(8, 4),
+            #     ),
+            #     memory_config=self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"],
+            #     dtype=ttnn.bfloat8_b,
+            #     layout=ttnn.TILE_LAYOUT,
+            #     device=self.mesh_device,
+            # )
 
         attn_out = self.attention.forward(
             attn_in_sharded,
@@ -265,7 +268,8 @@ class TtTransformerBlock(LightweightModule):
                     mesh_shape=(8, 4),
                 ),
                 memory_config=self.model_config["SHARDED_FF12_RING_MEMCFG"],
-                dtype=ttnn.bfloat8_b,
+                # dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
             )

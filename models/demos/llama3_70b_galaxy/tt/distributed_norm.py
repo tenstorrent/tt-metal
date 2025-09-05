@@ -65,7 +65,7 @@ class DistributedNorm(LightweightModule):
             if mode == "decode":
                 if self.args.qk_norm:
                     x = ttnn.to_memory_config(x, self.gather_in_mem_cfg)
-                    res = ttnn.to_memory_config(res, self.gather_in_mem_cfg) if res is not None else None
+                    # res = ttnn.to_memory_config(res, self.gather_in_mem_cfg) if res is not None else None
 
                 # return tt_sharded_distributed_rmsnorm(
                 #     x,
@@ -85,7 +85,7 @@ class DistributedNorm(LightweightModule):
                     epsilon=self.norm.eps,
                     gamma=self.norm.weight_distributed,
                     mesh_device=self.args.mesh_device,
-                    # program_config=self.ln_prg_cfg,
+                    program_config=self.ln_prg_cfg,
                     compute_kernel_config=self.ln_cfg,
                     tt_ccl=self.tt_ccl,
                 )
