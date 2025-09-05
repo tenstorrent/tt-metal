@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <map>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -39,20 +40,30 @@ struct DataMovementConfig {
     std::map<std::string, std::string> defines;
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
+    // Both compile_args and named_compile_args contain compile time arguments
+    // The former is accessed by index, the latter by name
+    // Can be used in new/existing kernels by explicitly defining them in the config
+    // Ex. std::vector<uint32_t> compile_args = {5, 7};
+    //     std::unordered_map<std::string, uint32_t> named_compile_args = {{"arg1", 5}, {"arg2", 7}};
+    //     CreateKernel(program, "kernel.cpp", core, DataMovementConfig{.compile_args = compile_args,
+    //     .named_compile_args = named_compile_args})
+    std::unordered_map<std::string, uint32_t> named_compile_args;
 };
 
 struct ReaderDataMovementConfig : public DataMovementConfig {
     ReaderDataMovementConfig(
         std::vector<uint32_t> compile_args = {},
         std::map<std::string, std::string> defines = {},
-        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2);
+        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2,
+        std::unordered_map<std::string, uint32_t> named_compile_args = {});
 };
 
 struct WriterDataMovementConfig : public DataMovementConfig {
     WriterDataMovementConfig(
         std::vector<uint32_t> compile_args = {},
         std::map<std::string, std::string> defines = {},
-        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2);
+        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2,
+        std::unordered_map<std::string, uint32_t> named_compile_args = {});
 };
 
 struct ComputeConfig {
@@ -69,6 +80,14 @@ struct ComputeConfig {
     std::map<std::string, std::string> defines;
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
+    // Both compile_args and named_compile_args contain compile time arguments
+    // The former is accessed by index, the latter by name
+    // Can be used in new/existing kernels by explicitly defining them in the config
+    // Ex. std::vector<uint32_t> compile_args = {5, 7};
+    //     std::unordered_map<std::string, uint32_t> named_compile_args = {{"arg1", 5}, {"arg2", 7}};
+    //     CreateKernel(program, "kernel.cpp", core, ComputeConfig{.compile_args = compile_args, .named_compile_args =
+    //     named_compile_args})
+    std::unordered_map<std::string, uint32_t> named_compile_args;
 };
 
 struct EthernetConfig {
@@ -82,6 +101,14 @@ struct EthernetConfig {
     std::map<std::string, std::string> defines;
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
+    // Both compile_args and named_compile_args contain compile time arguments
+    // The former is accessed by index, the latter by name
+    // Can be used in new/existing kernels by explicitly defining them in the config
+    // Ex. std::vector<uint32_t> compile_args = {5, 7};
+    //     std::unordered_map<std::string, uint32_t> named_compile_args = {{"arg1", 5}, {"arg2", 7}};
+    //     CreateKernel(program, "kernel.cpp", core, EthernetConfig{.compile_args = compile_args, .named_compile_args =
+    //     named_compile_args})
+    std::unordered_map<std::string, uint32_t> named_compile_args;
 };
 
 }  // namespace tt::tt_metal
