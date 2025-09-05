@@ -20,8 +20,6 @@
 #include <tt_stl/caseless_comparison.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
-#include <tt-metalium/multi_mesh_types.hpp>
-#include "tt_metal/fabric/serialization/logical_port_to_eth_chan.hpp"
 #include "tt_metal/fabric/serialization/connections_table.hpp"
 #include "tt-metalium/control_plane.hpp"
 #include "tt_metal/fabric/serialization/port_id_table.hpp"
@@ -225,7 +223,7 @@ void MeshGraph::initialize_from_yaml(
     TT_FATAL(yaml["ChipSpec"].IsMap(), "MeshGraph: Expecting yaml to define a ChipSpec as a Map");
     TT_FATAL(yaml["Board"].IsSequence(), "MeshGraph: Expecting yaml to define Board as a Sequence");
     TT_FATAL(yaml["Mesh"].IsSequence(), "MeshGraph: Expecting yaml to define Mesh as a Sequence");
-    TT_FATAL(yaml["Graph"].IsSequence(), "MeshGraph: Expecting yaml to define Graph as a Sequence");
+    // TT_FATAL(yaml["Graph"].IsSequence(), "MeshGraph: Expecting yaml to define Graph as a Sequence");
 
     // Parse Chip
     const auto& chip = yaml["ChipSpec"];

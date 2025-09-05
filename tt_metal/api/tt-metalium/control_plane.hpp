@@ -11,7 +11,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/fabric_types.hpp>
-#include <tt-metalium/multi_mesh_types.hpp>
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/distributed_context.hpp>
 
@@ -71,7 +70,7 @@ public:
     // Return mesh_id, chip_id from physical chip id
     FabricNodeId get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id) const;
     chip_id_t get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
-
+    FabricNodeId get_fabric_node_id_from_asic_id(uint64_t asic_id) const;
     std::vector<MeshId> get_user_physical_mesh_ids() const;
 
     // Queries for the MeshId(s) and MeshHostRankId owned by the local rank. A vector of MeshIds allows
@@ -185,9 +184,6 @@ public:
     std::unordered_set<CoreCoord> get_active_ethernet_cores(chip_id_t chip_id, bool skip_reserved_cores = false) const;
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores(chip_id_t chip_id) const;
 
-    // Query the local intermesh link table containing the local to remote link mapping
-    const IntermeshLinkTable& get_local_intermesh_link_table() const;
-
     // Get the ASIC ID for a chip (the ASIC ID is unique per chip, even in multi-host systems and is programmed
     // by SPI-ROM firmware)
     uint64_t get_asic_id(chip_id_t chip_id) const;
@@ -233,12 +229,6 @@ private:
     // map[phys_chip_id] has a vector of (eth_core, channel) pairs used for intermesh routing
     // TODO: remove once UMD can provide all intermesh links
     std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>> intermesh_eth_links_;
-
-    // Stores a table of all local intermesh links (board_id, chan_id) and the corresponding remote intermesh links
-    IntermeshLinkTable intermesh_link_table_;
-    std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, std::map<EthChanDescriptor, EthChanDescriptor>>>
-        peer_intermesh_link_tables_;
-
     // Mapping from MeshId, MeshHostRankId to MPI rank
     std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, tt_metal::distributed::multihost::Rank>> mpi_ranks_;
     std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>> logical_node_ids_;
@@ -308,8 +298,6 @@ private:
 
     void assign_intermesh_link_directions_to_local_host(const FabricNodeId& fabric_node_id);
 
-    void assign_intermesh_link_directions_to_remote_host(const FabricNodeId& fabric_node_id);
-
     // Initialize the local mesh binding from the environment variables
     // Returns std::nullopt if not in multi-host context
     LocalMeshBinding initialize_local_mesh_binding();
@@ -317,6 +305,9 @@ private:
     void generate_intermesh_connectivity();
 
     PortIdTable generate_exit_node_port_id_table();
+
+    std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>>
+    generate_intermesh_connections_for_local_host();
 
     void exchange_exit_node_port_id_tables(PortIdTable& port_id_table, uint32_t my_rank, const std::string& my_host);
 

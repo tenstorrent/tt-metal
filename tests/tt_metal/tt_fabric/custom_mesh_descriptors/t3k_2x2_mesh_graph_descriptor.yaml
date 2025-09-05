@@ -30,6 +30,6 @@ Mesh: [
 }
 ]
 
-Graph: [
-  [M0, M1, 4]
+RelaxedGraph: [
+  [M0, M1, 2]
 ]

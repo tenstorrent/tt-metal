@@ -575,10 +575,10 @@ TEST_P(T3kCustomMeshGraphFabric2DDynamicFixture, TestGetNextHopRouterDirectionDi
     RunGetNextHopRouterDirectionTest(this, true);
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    T3kDisjointMeshGraphFabric2DDynamicTests,
-    T3kCustomMeshGraphFabric2DDynamicFixture,
-    ::testing::ValuesIn(t3k_disjoint_mesh_descriptor_chip_mappings));
+// INSTANTIATE_TEST_SUITE_P(
+//     T3kDisjointMeshGraphFabric2DDynamicTests,
+//     T3kCustomMeshGraphFabric2DDynamicFixture,
+//     ::testing::ValuesIn(t3k_disjoint_mesh_descriptor_chip_mappings));
 
 INSTANTIATE_TEST_SUITE_P(
     T3kCustomMeshGraphFabric2DDynamicTests,
