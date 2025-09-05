@@ -3,10 +3,14 @@ cmake_minimum_required(VERSION 3.22...3.30)
 # Find required packages
 find_package(Threads REQUIRED)
 
-# Fetch cpp-httplib (much simpler, no complex dependencies)
-include(FetchContent)
-FetchContent_Declare(httplib GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git GIT_TAG v0.14.1 GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(httplib)
+# Fetch cpp-httplib using CPM (consistent with third_party dependencies)
+CPMAddPackage(
+    NAME httplib
+    GITHUB_REPOSITORY yhirose/cpp-httplib
+    GIT_TAG v0.14.1
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)
 
 add_library(telemetry_libs INTERFACE)
 target_include_directories(telemetry_libs INTERFACE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
