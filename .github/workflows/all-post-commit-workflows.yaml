@@ -91,7 +91,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      tt-metal-watcher: ${{ inputs.tt-metal-watcher }}
       enable-watcher: ${{ inputs.enable-watcher }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
@@ -110,7 +109,6 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      tt-metal-watcher: ${{ inputs.tt-metal-watcher }}
       enable-watcher: ${{ inputs.enable-watcher }}
   # Fabric Unit Tests
   fabric-unit-tests:
@@ -129,7 +127,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      tt-metal-watcher: ${{ inputs.tt-metal-watcher }}
       enable-watcher: ${{ inputs.enable-watcher }}
   # TTNN FD Unit tests
   ttnn-unit-tests:
@@ -149,7 +146,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      tt-metal-watcher: ${{ inputs.tt-metal-watcher }}
       enable-watcher: ${{ inputs.enable-watcher }}
 
   # FD Model Tests
@@ -169,7 +165,6 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      tt-metal-watcher: ${{ inputs.tt-metal-watcher }}
       enable-watcher: ${{ inputs.enable-watcher }}
   # FD C++ Unit Tests
   cpp-unit-tests:
@@ -189,7 +184,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      tt-metal-watcher: ${{ inputs.tt-metal-watcher }}
       enable-watcher: ${{ inputs.enable-watcher }}
   tt-train-cpp-unit-tests:
     needs: build-artifact
@@ -207,7 +201,6 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      tt-metal-watcher: ${{ inputs.tt-metal-watcher }}
       enable-watcher: ${{ inputs.enable-watcher }}
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
@@ -227,7 +220,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      tt-metal-watcher: ${{ inputs.tt-metal-watcher }}
       enable-watcher: ${{ inputs.enable-watcher }}
 
   run-profiler-regression:
@@ -257,7 +249,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      tt-metal-watcher: ${{ inputs.tt-metal-watcher || false }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
   # tg-demo-apc-tests:
   #   if: ${{ github.event.pull_request.head.repo.fork == false }}
@@ -300,5 +291,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      tt-metal-watcher: ${{ inputs.tt-metal-watcher || false }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
