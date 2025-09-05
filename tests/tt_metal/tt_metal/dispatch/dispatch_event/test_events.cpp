@@ -62,9 +62,9 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
             buffers.push_back(distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get()));
 
             if (data_movement_mode == DataMovementMode::WRITE) {
-                distributed::WriteShard(cq, buffers.back(), page, distributed::MeshCoordinate(0, 0));
+                distributed::WriteShard(cq, buffers.back(), page, distributed::MeshCoordinate(0, 0), true);
             } else if (data_movement_mode == DataMovementMode::READ) {
-                distributed::ReadShard(cq, page, buffers.back(), distributed::MeshCoordinate(0, 0));
+                distributed::ReadShard(cq, page, buffers.back(), distributed::MeshCoordinate(0, 0), true);
             }
         }
         distributed::Finish(cq);
@@ -99,23 +99,15 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
 TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
     auto mesh_device = this->devices_[0];
     auto& cq = mesh_device->mesh_command_queue();
-    auto device = mesh_device->get_devices()[0];
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     const size_t num_events = 100000;  // Enough to wrap issue queue. 768MB and cmds are 22KB each, so 35k cmds.
     uint32_t cmds_issued_per_cq = 0;
 
     auto start = std::chrono::system_clock::now();
 
     for (size_t i = 0; i < num_events; i++) {
-        auto event = std::make_shared<distributed::MeshEvent>(
-            -1,
-            mesh_device.get(),
-            -1,
-            device_range);  // type is std::shared_ptr<Event>
-        distributed::EnqueueRecordEvent(cq, {}, device_range);
-        EXPECT_EQ(event->id(), cmds_issued_per_cq + 1);  // Event ids start at 1
-        EXPECT_EQ(event->mesh_cq_id(), cq.id());
+        auto event = distributed::EnqueueRecordEventToHost(cq);
+        EXPECT_EQ(event.id(), cmds_issued_per_cq + 1);  // Event ids start at 1
+        EXPECT_EQ(event.mesh_cq_id(), cq.id());
         cmds_issued_per_cq++;
     }
     distributed::Finish(cq);
@@ -128,7 +120,6 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
 TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventAndSynchronize) {
     auto mesh_device = this->devices_[0];
     auto& cq = mesh_device->mesh_command_queue();
-    auto device = mesh_device->get_devices()[0];
     const size_t num_events = 100;
     const size_t num_events_between_sync = 10;
 
@@ -138,12 +129,8 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventAndSynchronize) {
 
     // A bunch of events recorded, occasionally will sync from host.
     for (size_t i = 0; i < num_events; i++) {
-        auto event = sync_events.emplace_back(std::make_shared<distributed::MeshEvent>(
-            0,
-            mesh_device.get(),
-            cq.id(),
-            distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0))));
-        distributed::EnqueueRecordEvent(cq);
+        auto event = sync_events.emplace_back(
+            std::make_shared<distributed::MeshEvent>(distributed::EnqueueRecordEventToHost(cq)));
         // Host synchronize every N number of events.
         if (i > 0 && ((i % num_events_between_sync) == 0)) {
             distributed::EventSynchronize(*event);
@@ -160,84 +147,6 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventAndSynchronize) {
     log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
 
-// Negative test. Host syncing on a future event that isn't actually issued.
-// Ensure that expected hang is seen, which indicates event sync feature is working properly.
-TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventAndSynchronizeHang) {
-    auto mesh_device = this->devices_[0];
-    auto& cq = mesh_device->mesh_command_queue();
-    auto device = mesh_device->get_devices()[0];
-    tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(
-        true);  // Required for finish hang breakout.
-
-    auto future_event = std::make_shared<distributed::MeshEvent>(
-        0,
-        mesh_device.get(),
-        cq.id(),
-        distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0)));
-    distributed::EnqueueRecordEvent(cq);
-    // future_event->wait_until_ready();  // in case async used, must block until async cq populated event.
-    // future_event->id = 0xFFFF;   // Modify event_id to be a future event that isn't issued yet.
-
-    // Launch Host Sync in an async thread, expected to hang, with timeout and kill signal.
-    auto future =
-        std::async(std::launch::async, [this, future_event]() { return distributed::EventSynchronize(*future_event); });
-
-    bool seen_expected_hang = future.wait_for(std::chrono::seconds(1)) == std::future_status::timeout;
-    MetalContext::instance().watcher_server()->set_killed_due_to_error_flag(
-        seen_expected_hang);  // Signal to terminate thread. Don't care about it's exception.
-
-    // Briefly wait before clearing error flag, and wrapping up via finish.
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    MetalContext::instance().watcher_server()->set_killed_due_to_error_flag(false);
-    distributed::Finish(cq);
-
-    log_info(
-        tt::LogTest,
-        "Note: Test expects to see a hang if events feature is working. seen_expected_hang: {}",
-        seen_expected_hang);
-    EXPECT_TRUE(seen_expected_hang);
-}
-
-// Negative test. Device sync. Single CQ here syncing on a future event that isn't actually issued.
-// Ensure that expected hang is seen, which indicates event sync feature is working properly.
-TEST_F(UnitMeshCQEventFixture, TestEventsQueueWaitForEventHang) {
-    auto mesh_device = this->devices_[0];
-    auto& cq = mesh_device->mesh_command_queue();
-    auto device = mesh_device->get_devices()[0];
-    // Skip this test until #7216 is implemented.
-    // GTEST_SKIP();
-    tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(
-        true);  // Required for finish hang breakout.
-
-    auto future_event = std::make_shared<distributed::MeshEvent>(
-        0,
-        mesh_device.get(),
-        cq.id(),
-        distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0)));
-    distributed::EnqueueRecordEvent(cq);
-    // future_event->wait_until_ready();  // in case async used, must block until async cq populated event.
-    // future_event->event_id = 0xFFFF;   // Modify event_id to be a future event that isn't issued yet.
-    distributed::EnqueueWaitForEvent(cq, *future_event);
-
-    // Launch Finish in an async thread, expected to hang, with timeout and kill signal.
-    auto future = std::async(
-        std::launch::async, [this]() { return distributed::Finish(this->devices_[0]->mesh_command_queue()); });
-
-    bool seen_expected_hang = future.wait_for(std::chrono::seconds(1)) == std::future_status::timeout;
-    MetalContext::instance().watcher_server()->set_killed_due_to_error_flag(
-        seen_expected_hang);  // Signal to terminate thread. Don't care about it's exception.
-
-    // Clear error flag before exiting to restore state for next test.
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    MetalContext::instance().watcher_server()->set_killed_due_to_error_flag(false);
-
-    log_info(
-        tt::LogTest,
-        "Note: Test expects to see a hang if events feature is working. seen_expected_hang: {}",
-        seen_expected_hang);
-    EXPECT_TRUE(seen_expected_hang);
-}
-
 // Device sync. Single CQ here, less interesting than 2CQ but still useful. Ensure no hangs.
 TEST_F(UnitMeshCQEventFixture, TestEventsQueueWaitForEventBasic) {
     auto mesh_device = this->devices_[0];
@@ -251,12 +160,8 @@ TEST_F(UnitMeshCQEventFixture, TestEventsQueueWaitForEventBasic) {
 
     // A bunch of events recorded, occasionally will sync from device.
     for (size_t i = 0; i < num_events; i++) {
-        auto event = sync_events.emplace_back(std::make_shared<distributed::MeshEvent>(
-            0,
-            mesh_device.get(),
-            cq.id(),
-            distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0))));
-        distributed::EnqueueRecordEvent(cq);
+        auto event = sync_events.emplace_back(
+            std::make_shared<distributed::MeshEvent>(distributed::EnqueueRecordEventToHost(cq)));
 
         // Device synchronize every N number of events.
         if (i > 0 && ((i % num_events_between_sync) == 0)) {
@@ -289,12 +194,8 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEventsQueryBasic) {
 
     // Record many events, occasionally query from host, but cannot guarantee completion status.
     for (size_t i = 0; i < num_events; i++) {
-        auto event = sync_events.emplace_back(std::make_shared<distributed::MeshEvent>(
-            0,
-            mesh_device.get(),
-            cq.id(),
-            distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0))));
-        distributed::EnqueueRecordEvent(cq);
+        auto event = sync_events.emplace_back(
+            std::make_shared<distributed::MeshEvent>(distributed::EnqueueRecordEventToHost(cq)));
 
         if (i > 0 && ((i % num_events_between_query) == 0)) {
             [[maybe_unused]] auto status = distributed::EventQuery(*event);
@@ -315,13 +216,11 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEventsQueryBasic) {
 
     // Query a future event that hasn't completed and ensure it's not finished.
     auto future_event = std::make_shared<distributed::MeshEvent>(
-        -1,
+        0xffff,
         mesh_device.get(),
         cq.id(),
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0)));
     distributed::EnqueueRecordEvent(cq);
-    // future_event->wait_until_ready();  // in case async used, must block until async cq populated event.
-    // future_event->event_id = 0xFFFF;   // Modify event_id to be a future event that isn't issued yet.
     event_status = distributed::EventQuery(*future_event);
     EXPECT_EQ(event_status, false);
 
@@ -351,14 +250,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
     for (size_t i = 0; i < num_buffers; i++) {
         log_debug(tt::LogTest, "i: {} - Going to record event, write, wait, synchronize.", i);
-        auto event = std::make_shared<distributed::MeshEvent>(
-            -1,
-            mesh_device.get(),
-            cq.id(),
-            distributed::MeshCoordinateRange(
-                distributed::MeshCoordinate(0, 0),
-                distributed::MeshCoordinate(0, 0)));  // type is std::shared_ptr<Event>
-        distributed::EnqueueRecordEvent(cq);
+        auto event = std::make_shared<distributed::MeshEvent>(distributed::EnqueueRecordEventToHost(cq));
         EXPECT_EQ(event->mesh_cq_id(), cq.id());
         EXPECT_EQ(event->id(), events_issued_per_cq + 1);  // Event ids start at 1
 
@@ -366,7 +258,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
         distributed::ReplicatedBufferConfig buffer_config{.size = page_size};
         std::shared_ptr<distributed::MeshBuffer> buf =
             distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
-        distributed::WriteShard(cq, buf, page, distributed::MeshCoordinate(0, 0));
+        distributed::WriteShard(cq, buf, page, distributed::MeshCoordinate(0, 0), true);
         distributed::EnqueueWaitForEvent(cq, *event);
 
         if (i % 10 == 0) {
