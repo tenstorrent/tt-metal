@@ -6,8 +6,8 @@
 #include <tt-metalium/utils.hpp>
 
 #include <umd/device/driver_atomics.hpp>
-#include "umd/device/tt_cluster_descriptor.h"
-#include "umd/device/tt_simulation_device.h"
+#include <umd/device/cluster_descriptor.hpp>
+#include <umd/device/simulation/simulation_device.hpp>
 #include "impl/context/metal_context.hpp"
 
 #include <string>

@@ -45,7 +45,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include <umd/device/types/core_coordinates.hpp>
-#include "umd/device/tt_io.hpp"
+#include <umd/device/tt_io.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/utils.hpp>
 

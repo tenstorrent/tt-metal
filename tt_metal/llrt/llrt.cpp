@@ -29,8 +29,7 @@
 #include "hal_types.hpp"
 #include "llrt.hpp"
 #include "metal_soc_descriptor.h"
-// #include <umd/device/driver_atomics.h> - This should be included as it is used here, but the file is missing include
-// guards
+#include <umd/device/driver_atomics.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
