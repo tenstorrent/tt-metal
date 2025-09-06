@@ -73,9 +73,12 @@ struct EthEndpoint {
 }  // namespace
 
 PhysicalSystemDescriptor::PhysicalSystemDescriptor(bool run_discovery) {
+    std::cout << "PhysicalSystemDescriptor constructor" << std::endl;
     if (run_discovery) {
+        std::cout << "Running discovery" << std::endl;
         this->run_discovery();
     }
+    std::cout << "PhysicalSystemDescriptor constructor finished" << std::endl;
 }
 
 void PhysicalSystemDescriptor::resolve_hostname_uniqueness() {
@@ -139,10 +142,14 @@ void PhysicalSystemDescriptor::resolve_hostname_uniqueness() {
 }
 
 void PhysicalSystemDescriptor::run_discovery(bool run_global_discovery) {
+    std::cout << "Resolving hostname uniqueness" << std::endl;
     this->resolve_hostname_uniqueness();
+    std::cout << "Running local discovery" << std::endl;
     this->run_local_discovery();
     if (run_global_discovery) {
+        std::cout << "Running global discovery" << std::endl;
         this->run_global_discovery();
+        std::cout << "Global discovery finished" << std::endl;
     }
 }
 
@@ -231,13 +238,21 @@ void PhysicalSystemDescriptor::run_global_discovery() {
     constexpr uint32_t controller_rank = 0;
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     auto my_rank = *(distributed_context.rank());
+    std::cout << "Exchanging metadata" << std::endl;
     this->exchange_metadata(true);
+    std::cout << "Exchanged metadata" << std::endl;
     if (my_rank == controller_rank) {
+        std::cout << "Removing unresolved nodes" << std::endl;
         this->remove_unresolved_nodes();
+        std::cout << "Removed unresolved nodes" << std::endl;
         this->generate_cross_host_connections();
+        std::cout << "Generated cross-host connections" << std::endl;
         this->validate_graphs();
+        std::cout << "Validated graphs" << std::endl;
     }
+    std::cout << "Exchanging metadata" << std::endl;
     this->exchange_metadata(false);
+    std::cout << "Exchanged metadata" << std::endl;
 }
 
 void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
