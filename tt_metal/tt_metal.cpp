@@ -32,7 +32,7 @@
 #include "data_types.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <umd/device/cluster.h>
-#include <umd/device/tt_cluster_descriptor.h>
+#include <umd/device/cluster_descriptor.hpp>
 #include <filesystem>
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"

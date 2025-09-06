@@ -33,7 +33,7 @@
 #include "tt_metal/llrt/tlb_config.hpp"
 #include <umd/device/cluster.h>
 #include <umd/device/hugepage.h>
-#include <umd/device/tt_cluster_descriptor.h>
+#include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/tt_simulation_device.h>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
