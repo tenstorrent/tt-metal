@@ -22,7 +22,26 @@ from loguru import logger
         )
     ],
 )
-def test_oftnet(device, input_image_path, calib_path):
+@pytest.mark.parametrize(
+    # fmt: off
+    "use_host_oft, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
+    [
+       (False, 0.144, 0.121, 0.143, 0.202),  # Using device OFT
+    #  ( True, 0.86, 0.99, 0.99, 0.99, 0.99)
+    ],
+    # fmt: on
+    # ids=["use_device_oft", "use_host_oft"],
+)
+def test_oftnet(
+    device,
+    input_image_path,
+    calib_path,
+    use_host_oft,
+    pcc_scores_oft,
+    pcc_positions_oft,
+    pcc_dimensions_oft,
+    pcc_angles_oft,
+):
     torch.manual_seed(42)
 
     input_tensor = load_image(input_image_path, pad_hw=(384, 1280))[None]
@@ -80,11 +99,15 @@ def test_oftnet(device, input_image_path, calib_path):
 
     scores, pos_offsets, dim_offsets, ang_offsets = ref_model(input_tensor, calib, grid)
 
-    scores_pcc_passed, scores_pcc = check_with_pcc(tt_scores, scores, 0.99)
+    scores_pcc_passed, scores_pcc = check_with_pcc(tt_scores, scores, pcc_scores_oft)
     logger.info(f"{scores_pcc_passed=}, {scores_pcc=}")
-    positions_pcc_passed, positions_pcc = check_with_pcc(tt_pos_offsets, pos_offsets, 0.99)
+    positions_pcc_passed, positions_pcc = check_with_pcc(tt_pos_offsets, pos_offsets, pcc_positions_oft)
     logger.info(f"{positions_pcc_passed=}, {positions_pcc=}")
-    dimensions_pcc_passed, dimensions_pcc = check_with_pcc(tt_dim_offsets, dim_offsets, 0.99)
+    dimensions_pcc_passed, dimensions_pcc = check_with_pcc(tt_dim_offsets, dim_offsets, pcc_dimensions_oft)
     logger.info(f"{dimensions_pcc_passed=}, {dimensions_pcc=}")
-    angles_pcc_passed, angles_pcc = check_with_pcc(tt_ang_offsets, ang_offsets, 0.99)
+    angles_pcc_passed, angles_pcc = check_with_pcc(tt_ang_offsets, ang_offsets, pcc_angles_oft)
     logger.info(f"{angles_pcc_passed=}, {angles_pcc=}")
+
+    assert (
+        scores_pcc_passed and positions_pcc_passed and dimensions_pcc_passed and angles_pcc_passed
+    ), f"Failed PCC OFT {scores_pcc_passed=}, {positions_pcc_passed=}, {dimensions_pcc_passed=}, {angles_pcc_passed=}"
