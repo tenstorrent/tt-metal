@@ -287,7 +287,7 @@ void Cluster::initialize_device_drivers() {
         this->assign_mem_channels_to_devices(mmio_device_id, controlled_devices);
     }
 
-    tt_device_params default_params;
+    tt::umd::device_params default_params;
     this->start_driver(default_params);
     this->generate_virtual_to_umd_coord_mapping();
     this->generate_virtual_to_profiler_flat_id_mapping();
@@ -371,7 +371,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     this->driver_ = std::move(device_driver);
 }
 
-void Cluster::start_driver(tt_device_params &device_params) const {
+void Cluster::start_driver(tt::umd::device_params& device_params) const {
     device_params.init_device = true;
 
     TT_FATAL(this->sdesc_per_chip_.size(), "Descriptor must be loaded. Try open_driver()");
