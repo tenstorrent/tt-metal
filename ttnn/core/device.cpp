@@ -32,6 +32,7 @@ void disable_and_clear_program_cache(IDevice& device) { device.disable_and_clear
 void close_device(IDevice& device) {
     // TODO #20966: Remove single device support and branches + dynamic_cast
     if (auto mesh_device = dynamic_cast<MeshDevice*>(&device)) {
+        fmt::println(stderr, "Clearing pinned memories cache");
         tt::tt_metal::tensor_impl::clear_pinned_memories_cache();
         mesh_device->close();
     } else {
