@@ -4,11 +4,12 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
-#include "tt_metal/fabric/serialization/physical_desc.hpp"
+#include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 
 namespace tt::tt_metal {
 
@@ -31,32 +32,14 @@ std::string get_mobo_name() {
 
     return motherboard;
 }
-// TODO: Once ASIC Location is exposed through a UMD API, code generating the asic location
-// here can be removed.
-// TODO: UBB specific code here is duplicated. This needs to be exposed as a UMD API.
-const std::unordered_map<tt::ARCH, std::vector<std ::uint16_t>> ubb_bus_ids = {
-    {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
-    {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
-};
-
-std::pair<TrayID, ASICLocation> get_ubb_id(chip_id_t chip_id) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& tray_bus_ids = ubb_bus_ids.at(cluster.arch());
-    const auto bus_id = cluster.get_bus_id(chip_id);
-    auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
-    if (tray_bus_id_it != tray_bus_ids.end()) {
-        auto ubb_asic_location = bus_id & 0x0F;
-        return {TrayID{tray_bus_id_it - tray_bus_ids.begin() + 1}, ASICLocation{ubb_asic_location}};
-    }
-    return {};
-}
 
 std::pair<TrayID, ASICLocation> get_asic_position(
     chip_id_t chip_id, const std::set<uint32_t, std::greater<uint32_t>>& sorted_pcie_slots) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto cluster_desc = cluster.get_cluster_desc();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB) {
-        return get_ubb_id(chip_id);
+        auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
+        return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     } else if (cluster_desc->get_board_type(chip_id) == BoardType::N300) {
         // Derive NID based on the tunnel depth for N300 systems
         auto mmio_device = cluster.get_associated_mmio_device(chip_id);
@@ -321,7 +304,7 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
     }
 
     if (sender_ranks.find(my_rank) != sender_ranks.end()) {
-        auto serialized_desc = serialize_physical_descriptor_to_bytes(*this);
+        auto serialized_desc = serialize_physical_system_descriptor_to_bytes(*this);
         std::size_t desc_size = serialized_desc.size();
 
         for (auto rank : receiver_ranks) {
@@ -349,7 +332,7 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
                     tt::stl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
                 Rank{rank},
                 Tag{0});
-            auto peer_desc = deserialize_physical_descriptor_from_bytes(serialized_peer_desc);
+            auto peer_desc = deserialize_physical_system_descriptor_from_bytes(serialized_peer_desc);
             this->merge(std::move(peer_desc));
         }
     }
@@ -478,6 +461,10 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
     } else {
         std::cout << root << std::endl;
     }
+}
+
+void PhysicalSystemDescriptor::emit_to_text_proto(const std::optional<std::string>& file_path) {
+    emit_physical_system_descriptor_to_text_proto(*this, file_path);
 }
 
 void PhysicalSystemDescriptor::validate_graphs() {

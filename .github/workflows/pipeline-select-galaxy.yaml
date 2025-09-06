@@ -1,4 +1,4 @@
-name: "(TG) Choose your pipeline"
+name: "(Galaxy) Choose your pipeline"
 
 on:
   workflow_dispatch:
@@ -25,15 +25,15 @@ on:
           - TSan
         default: "Release"
       extra-tag: # set in-service and topology-6u by default
-        description: "You can specify only one topology, 'topology-6u' or 'config-tg'. Default is config-tg."
+        description: "You can specify only one topology. Default is 'topology-6u'."
         required: true
         type: string
-        default: "in-service,config-tg"
-      tg-quick:
+        default: "in-service,topology-6u"
+      galaxy-quick:
         required: false
         type: boolean
         default: false
-      tg-demo:
+      galaxy-demo:
         required: false
         type: boolean
         default: false
@@ -71,7 +71,7 @@ jobs:
     steps:
       - name: Determine test execution
         id: logic
-        # Skip all but tg-quick if trigger-type is not manual
+        # Skip all but galaxy-quick if trigger-type is not manual
         run: |
           EXTRA_TAG="${{ inputs.extra-tag }}"
           # (remove both config-tg and topology-6u) from EXTRA_TAG
@@ -91,10 +91,10 @@ jobs:
 
           case "${{ inputs.trigger_type }}" in
             "manual")
-              echo "run-quick=${{ inputs.tg-quick }}" >> $GITHUB_OUTPUT
+              echo "run-quick=${{ inputs.galaxy-quick }}" >> $GITHUB_OUTPUT
               echo "run-unit=${{ inputs.tg-unit }}" >> $GITHUB_OUTPUT
               echo "run-frequent=${{ inputs.tg-frequent }}" >> $GITHUB_OUTPUT
-              echo "run-demo=${{ inputs.tg-demo }}" >> $GITHUB_OUTPUT
+              echo "run-demo=${{ inputs.galaxy-demo }}" >> $GITHUB_OUTPUT
               echo "run-model-perf=${{ inputs.tg-model-perf }}" >> $GITHUB_OUTPUT
               echo "run-stress=${{ inputs.tg-stress }}" >> $GITHUB_OUTPUT
               ;;
@@ -150,17 +150,16 @@ jobs:
       tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
       build-wheel: true
       version: 22.04
-  tg-quick:
+  galaxy-quick:
     if: ${{ needs.determine-tests.outputs.run-quick == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/tg-quick.yaml
+    uses: ./.github/workflows/galaxy-quick-impl.yaml
     with:
       extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology-4u: ${{ needs.determine-tests.outputs.is-config-tg == 'true'}}
       topology-6u: ${{ needs.determine-tests.outputs.is-config-tg == 'false'}}
 
   tg-unit-tests:
@@ -185,17 +184,17 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
-  tg-demo-tests:
+  galaxy-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/tg-demo-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
     with:
       extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
+      topology: ${{ 'topology-6u' }}
   tg-model-perf-tests:
     if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
     needs: [build-artifact, determine-tests]
