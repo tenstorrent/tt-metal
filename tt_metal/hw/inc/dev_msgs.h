@@ -235,6 +235,7 @@ struct debug_sanitize_noc_addr_msg_t {
     volatile uint8_t is_target;
     volatile uint8_t pad;  // CODEGEN:skip
 };
+static_assert(sizeof(debug_sanitize_noc_addr_msg_t) % sizeof(uint32_t) == 0);
 
 // Host -> device. Populated with the information on where we want to insert delays.
 struct debug_insert_delays_msg_t {

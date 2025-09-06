@@ -157,70 +157,38 @@ HalProcessorSet Hal::parse_processor_set_spec(std::string_view spec) const {
     // Either keep this syntax but move it to hal/tt-1xx, and create the new one in hal/tt-2xx,
     // or break compatibility and use the new syntax for all architectures.
     if (spec.find("BR") != std::string_view::npos) {
-        set.add(
-            HalProgrammableCoreType::TENSIX,
-            get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::DM, 0));
+        set.add(HalProgrammableCoreType::TENSIX, 0);
     }
     if (spec.find("NC") != std::string_view::npos) {
-        set.add(
-            HalProgrammableCoreType::TENSIX,
-            get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::DM, 1));
+        set.add(HalProgrammableCoreType::TENSIX, 1);
     }
     if (spec.find("TR0") != std::string_view::npos) {
-        set.add(
-            HalProgrammableCoreType::TENSIX,
-            get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 0));
+        set.add(HalProgrammableCoreType::TENSIX, 2);
     }
     if (spec.find("TR1") != std::string_view::npos) {
-        set.add(
-            HalProgrammableCoreType::TENSIX,
-            get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 1));
+        set.add(HalProgrammableCoreType::TENSIX, 3);
     }
     if (spec.find("TR2") != std::string_view::npos) {
-        set.add(
-            HalProgrammableCoreType::TENSIX,
-            get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 2));
+        set.add(HalProgrammableCoreType::TENSIX, 4);
     }
     if (spec.find("TR*") != std::string_view::npos) {
-        set.add(
-            HalProgrammableCoreType::TENSIX,
-            get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 0));
-        set.add(
-            HalProgrammableCoreType::TENSIX,
-            get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 1));
-        set.add(
-            HalProgrammableCoreType::TENSIX,
-            get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 2));
+        set.add(HalProgrammableCoreType::TENSIX, 2);
+        set.add(HalProgrammableCoreType::TENSIX, 3);
+        set.add(HalProgrammableCoreType::TENSIX, 4);
     }
     if (spec.find("ER0") != std::string_view::npos) {
-        set.add(
-            HalProgrammableCoreType::ACTIVE_ETH,
-            get_processor_index(HalProgrammableCoreType::ACTIVE_ETH, HalProcessorClassType::DM, 0));
-        set.add(
-            HalProgrammableCoreType::IDLE_ETH,
-            get_processor_index(HalProgrammableCoreType::IDLE_ETH, HalProcessorClassType::DM, 0));
+        set.add(HalProgrammableCoreType::ACTIVE_ETH, 0);
+        set.add(HalProgrammableCoreType::IDLE_ETH, 0);
     }
     if (spec.find("ER1") != std::string_view::npos) {
-        set.add(
-            HalProgrammableCoreType::ACTIVE_ETH,
-            get_processor_index(HalProgrammableCoreType::ACTIVE_ETH, HalProcessorClassType::DM, 1));
-        set.add(
-            HalProgrammableCoreType::IDLE_ETH,
-            get_processor_index(HalProgrammableCoreType::IDLE_ETH, HalProcessorClassType::DM, 1));
+        set.add(HalProgrammableCoreType::ACTIVE_ETH, 1);
+        set.add(HalProgrammableCoreType::IDLE_ETH, 1);
     }
     if (spec.find("ER*") != std::string_view::npos) {
-        set.add(
-            HalProgrammableCoreType::ACTIVE_ETH,
-            get_processor_index(HalProgrammableCoreType::ACTIVE_ETH, HalProcessorClassType::DM, 0));
-        set.add(
-            HalProgrammableCoreType::ACTIVE_ETH,
-            get_processor_index(HalProgrammableCoreType::ACTIVE_ETH, HalProcessorClassType::DM, 1));
-        set.add(
-            HalProgrammableCoreType::IDLE_ETH,
-            get_processor_index(HalProgrammableCoreType::IDLE_ETH, HalProcessorClassType::DM, 0));
-        set.add(
-            HalProgrammableCoreType::IDLE_ETH,
-            get_processor_index(HalProgrammableCoreType::IDLE_ETH, HalProcessorClassType::DM, 1));
+        set.add(HalProgrammableCoreType::ACTIVE_ETH, 0);
+        set.add(HalProgrammableCoreType::ACTIVE_ETH, 1);
+        set.add(HalProgrammableCoreType::IDLE_ETH, 0);
+        set.add(HalProgrammableCoreType::IDLE_ETH, 1);
     }
     if (set.empty()) {
         TT_THROW("Invalid RISC selection: \"{}\". Valid values are BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*.", spec);

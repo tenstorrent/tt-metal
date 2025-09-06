@@ -44,6 +44,12 @@ struct HalProcessorIdentifier {
     int processor_type = 0;
 };
 
+std::ostream& operator<<(std::ostream&, const HalProcessorIdentifier&);
+bool operator<(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
+bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
+
+// A set of processors distinguishing programmable core type and index within that core type.
+// See get_processor_index and get_processor_class_and_type_from_index.
 class HalProcessorSet {
 private:
     std::array<uint32_t, NumHalProgrammableCoreTypes> masks_{};
@@ -69,10 +75,6 @@ public:
         return masks_[static_cast<size_t>(core_type)];
     }
 };
-
-std::ostream& operator<<(std::ostream&, const HalProcessorIdentifier&);
-bool operator<(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
-bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
 
 // Compile-time maximum for processor types count for any arch.  Useful for creating bitsets.
 static constexpr int MAX_PROCESSOR_TYPES_COUNT = 3;
