@@ -50,7 +50,6 @@ WorkerMemMap generate_worker_mem_map(std::shared_ptr<tt_metal::distributed::Mesh
     constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
     constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
     constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
-    uint32_t NOTIFICATION_MAILBOX_ADDR_SIZE_BYTES = tt::tt_metal::hal::get_l1_alignment();
 
     uint32_t base_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
     uint32_t source_l1_buffer_address = base_addr + PACKET_HEADER_RESERVED_BYTES;
@@ -91,7 +90,6 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
     auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
 
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     // Get fabric context and topology

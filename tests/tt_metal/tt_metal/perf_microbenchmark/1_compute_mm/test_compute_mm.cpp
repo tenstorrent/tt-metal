@@ -1008,14 +1008,14 @@ tt_metal::Program create_program_single_core(
         tt_metal::CircularBufferConfig(in0_CB_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size)
             .set_globally_allocated_address(*in0_cb_addr->get_backing_buffer());
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(in1_CB_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, single_tile_size)
             .set_globally_allocated_address(*in1_cb_addr->get_backing_buffer());
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     uint32_t out_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = tt::CBIndex::c_24;
@@ -1037,7 +1037,7 @@ tt_metal::Program create_program_single_core(
             tt_metal::CircularBufferConfig(out_CB_size, {{out_cb_index, cb_data_format}})
                 .set_page_size(out_cb_index, single_tile_size)
                 .set_globally_allocated_address(*out_cb_addr->get_backing_buffer());
-        auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
     } else if (packer_l1 and cb_data_format == tt::DataFormat::Bfp8_b) {
         tt_metal::CircularBufferConfig cb_interm_config =
             tt_metal::CircularBufferConfig(out_CB_tiles * 2048, {{interm0_cb_index, tt::DataFormat::Float16_b}})
@@ -1048,7 +1048,7 @@ tt_metal::Program create_program_single_core(
             tt_metal::CircularBufferConfig(out_CB_size, {{out_cb_index, cb_data_format}})
                 .set_page_size(out_cb_index, single_tile_size)
                 .set_globally_allocated_address(*out_cb_addr->get_backing_buffer());
-        auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
     } else {
         std::map<uint8_t, tt::DataFormat> partials_and_out_data_format_spec = {
             {out_cb_index, cb_data_format}, {interm0_cb_index, cb_data_format}};
@@ -1057,7 +1057,7 @@ tt_metal::Program create_program_single_core(
                 .set_page_size(interm0_cb_index, single_tile_size)
                 .set_page_size(out_cb_index, single_tile_size)
                 .set_globally_allocated_address(*out_cb_addr->get_backing_buffer());
-        auto cb_out = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_out_config);
+        tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_out_config);
     }
 
     log_debug(tt::LogTest, "in0_CB_size: {}", in0_CB_tiles * single_tile_size);

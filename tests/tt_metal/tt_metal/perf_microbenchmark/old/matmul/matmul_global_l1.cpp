@@ -215,13 +215,10 @@ tt_metal::Program create_program_mcast_in0_in1(
     auto top_left_core_plus_one_physical = device->worker_core_from_logical_core(top_left_core_plus_one);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool in3_is_dram = true;
     if (bias_buffer != nullptr) {
         in3_is_dram = bias_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     }
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> in0_sender_compile_time_args = {
 
         // in0 tensor args

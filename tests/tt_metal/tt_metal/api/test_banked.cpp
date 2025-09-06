@@ -229,9 +229,6 @@ bool reader_datacopy_writer(std::shared_ptr<distributed::MeshDevice> mesh_device
             .set_page_size(output_cb_index, cfg.page_size_bytes);
     CreateCircularBuffer(program_, cfg.logical_core, l1_output_cb_config);
 
-    bool input_is_dram = cfg.input_buffer_type == BufferType::DRAM;
-    bool output_is_dram = cfg.output_buffer_type == BufferType::DRAM;
-
     std::vector<uint32_t> reader_compile_time_args_dc = {input0_cb_index, uint32_t(input_buffer->page_size())};
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args_dc);
     auto reader_kernel = CreateKernel(
