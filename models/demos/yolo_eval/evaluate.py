@@ -109,6 +109,8 @@ def evaluation(
             num_iterations = 180
         elif model_name == "YOLOv8s_World":
             num_iterations = 50
+        elif model_name == "YOLOv5x":
+            num_iterations = 13
 
     dataset_name = "coco-2017"
     dataset = fiftyone.zoo.load_zoo_dataset(
@@ -169,7 +171,7 @@ def evaluation(
         else:
             ttnn_im = im.permute((0, 2, 3, 1))
 
-        if model_name in ["YOLOv11", "YOLOv12x"]:
+        if model_name in ["YOLOv11", "YOLOv12x", "YOLOv5x"]:
             ttnn_im = ttnn_im.reshape(
                 1,
                 1,
@@ -187,6 +189,7 @@ def evaluation(
             "YOLOv7",
             "YOLOv12x",
             "YOLOv6l",
+            "YOLOv5x",
         ]:
             ttnn_im = ttnn.from_torch(ttnn_im, dtype=input_dtype, layout=input_layout, device=device)
         elif model_name == "YOLOv12x":
@@ -237,6 +240,9 @@ def evaluation(
             elif model_name == "YOLOv12x":
                 preds_temp = model.run(torch_input_tensor=im)
                 preds = ttnn.to_torch(preds_temp, dtype=torch.float32)
+            elif model_name == "YOLOv5x":
+                preds = model.run(im)
+                preds = ttnn.to_torch(preds, dtype=torch.float32)
             else:
                 preds = model(ttnn_im)
                 preds[0] = ttnn.to_torch(preds[0], dtype=torch.float32)
@@ -765,3 +771,51 @@ def test_yolov6l(device, model_type, res, reset_seeds):
         save_dir=save_dir,
         model_name="YOLOv6l",
     )
+
+
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        "tt_model",
+        # "torch_model",  # Uncomment to run the demo with torch model.
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+def test_yolov5x(model_location_generator, device, model_type, reset_seeds):
+    from models.demos.yolov5x.common import load_torch_model
+    from models.demos.yolov5x.runner.performant_runner import YOLOv5xPerformantRunner
+
+    disable_persistent_kernel_cache()
+
+    if model_type == "torch_model":
+        model = load_torch_model(model_location_generator)
+        logger.info("Inferencing [Torch] Model")
+    else:
+        model = YOLOv5xPerformantRunner(
+            device,
+            device_batch_size=1,
+            act_dtype=ttnn.bfloat8_b,
+            weight_dtype=ttnn.bfloat8_b,
+            model_location_generator=model_location_generator,
+        )
+        model._capture_yolov5x_trace_2cqs()
+        logger.info("Inferencing [TTNN] Model")
+
+    save_dir = "models/demos/yolov5x/demo/runs"
+
+    input_dtype = ttnn.bfloat16
+    input_layout = ttnn.ROW_MAJOR_LAYOUT
+
+    evaluation(
+        device=device,
+        res=(640, 640),
+        model_type=model_type,
+        model=model,
+        input_dtype=input_dtype,
+        input_layout=input_layout,
+        save_dir=save_dir,
+        model_name="YOLOv5x",
+    )
+    logger.info("Inference done")
