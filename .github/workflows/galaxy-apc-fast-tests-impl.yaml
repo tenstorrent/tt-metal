@@ -1,4 +1,4 @@
-name: "[internal] TG demo all post commit"
+name: "[internal] Galaxy APC fast tests"
 
 on:
   workflow_call:
@@ -19,10 +19,10 @@ on:
       topology:
         required: false
         type: string
-        default: "config-tg"
+        default: "topology-6u"
 
 jobs:
-  tg-demo-all-post-commit-tests:
+  galaxy-apc-fast-tests:
     strategy:
       fail-fast: false
       matrix:
@@ -39,8 +39,6 @@ jobs:
     runs-on:
       - arch-wormhole_b0
       - ${{ inputs.topology }}
-      - bare-metal
-      - pipeline-functional
       - ${{ inputs.runner-label }}
     container:
         image: ${{ inputs.docker-image }}

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include "dataflow_api.h"
 #include "height_sharded_reader_common.hpp"
 
@@ -84,30 +85,19 @@ void kernel_main() {
     constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(25);
     constexpr uint32_t cb_l1_array = get_compile_time_arg_val(26);
 
-    uint32_t i = 0;
-    uint32_t noop = get_arg_val<uint32_t>(i);
-    i += 1;
-
-    if (noop) {
-        return;
-    }
-
     if constexpr (needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act_row_major_bfloat16>();
     }
 
-    uint32_t act_mcast_dest_noc_start_x = get_arg_val<uint32_t>(i);
-    i += 1;
-    uint32_t act_mcast_dest_noc_start_y = get_arg_val<uint32_t>(i);
-    i += 1;
-    uint32_t act_mcast_dest_noc_end_x = get_arg_val<uint32_t>(i);
-    i += 1;
-    uint32_t act_mcast_dest_noc_end_y = get_arg_val<uint32_t>(i);
-    i += 1;
-    uint32_t act_mcast_sender_id = get_arg_val<uint32_t>(i);
-    i += 1;
-    uint32_t act_mcast_sender_noc_x = get_arg_val<uint32_t>(i);
-    i += 1;
+    uint32_t i = 0;
+    uint32_t act_mcast_dest_noc_start_x = get_arg_val<uint32_t>(i++);
+    uint32_t act_mcast_dest_noc_start_y = get_arg_val<uint32_t>(i++);
+    uint32_t act_mcast_dest_noc_end_x = get_arg_val<uint32_t>(i++);
+    uint32_t act_mcast_dest_noc_end_y = get_arg_val<uint32_t>(i++);
+    uint32_t act_mcast_sender_id = get_arg_val<uint32_t>(i++);
+    uint32_t act_mcast_sender_noc_x = get_arg_val<uint32_t>(i++);
+    const bool is_receiver_core = get_arg_val<uint32_t>(i++) > 0;
+    const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
 
     tt_l1_ptr uint32_t* act_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
@@ -161,50 +151,52 @@ void kernel_main() {
             reader_idx = start_reader_idx;
 
             cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
-            uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
+            if (is_sender_core) {
+                uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
 
-            if constexpr (sliced_inner_dim) {
-                read_sticks<
-                    dilation_w,
-                    coalesced_read_bytes,
-                    conv_act_c_read_bytes,
-                    act_block_w_extra_align_bytes,
-                    stride_w_bytes,
-                    weight_size_w,
-                    stride_w>(packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
-            } else {
-                uint16_t num_elems = packed_reader_indices_ptr[reader_idx] & 0xffff;
-                while (num_elems--) {
-                    reader_idx++;
-                    uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
-                    uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
-                    for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
-                        if constexpr (DILATION_W == 1) {
-                            read_channels(
-                                l1_write_addr_act,
-                                act_l1_read_addr,
-                                ind,
-                                conv_act_c_read_bytes,
-                                coalesced_read_bytes,
-                                stride_h_bytes);
-                            if constexpr (act_block_w_extra_align_bytes) {
-                                l1_write_addr_act += act_block_w_extra_align_bytes;
+                if constexpr (sliced_inner_dim) {
+                    read_sticks<
+                        dilation_w,
+                        coalesced_read_bytes,
+                        conv_act_c_read_bytes,
+                        act_block_w_extra_align_bytes,
+                        stride_w_bytes,
+                        weight_size_w,
+                        stride_w>(packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
+                } else {
+                    uint16_t num_elems = packed_reader_indices_ptr[reader_idx] & 0xffff;
+                    while (num_elems--) {
+                        reader_idx++;
+                        uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
+                        uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
+                        for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
+                            if constexpr (DILATION_W == 1) {
+                                read_channels(
+                                    l1_write_addr_act,
+                                    act_l1_read_addr,
+                                    ind,
+                                    conv_act_c_read_bytes,
+                                    coalesced_read_bytes,
+                                    stride_h_bytes);
+                                if constexpr (act_block_w_extra_align_bytes) {
+                                    l1_write_addr_act += act_block_w_extra_align_bytes;
+                                }
+                            } else {
+                                read_dilated_channels<weight_size_h, weight_size_w>(
+                                    l1_write_addr_act,
+                                    act_l1_read_addr,
+                                    ind,
+                                    conv_act_c_read_bytes,
+                                    stride_h_bytes,
+                                    stride_w_bytes);
                             }
-                        } else {
-                            read_dilated_channels<weight_size_h, weight_size_w>(
-                                l1_write_addr_act,
-                                act_l1_read_addr,
-                                ind,
-                                conv_act_c_read_bytes,
-                                stride_h_bytes,
-                                stride_w_bytes);
                         }
                     }
+                    reader_idx++;
                 }
-                reader_idx++;
-            }
 
-            noc_async_read_barrier();
+                noc_async_read_barrier();
+            }
             cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
 
             reader_offset += window_outer_offset;
@@ -216,14 +208,14 @@ void kernel_main() {
                 cb_reserve_back(cb_id_act, act_block_num_tiles);
                 if (act_w_outer_i == act_mcast_sender_id) {
                     // MCAST SENDER: send entire tilized input to other cores in column
-                    // wait until all act mcast destinations have atomically incremented the act semaphore_addr (i.e.
-                    // its value should be act_mcast_num_dests), then reset the semaphore_addr value back to zero for
-                    // the next block
-                    noc_semaphore_wait(act_mcast_sender_semaphore_addr_ptr, act_mcast_num_dests);
+                    // wait until all act mcast destinations have atomically incremented the act semaphore_addr
+                    // (i.e. its value should be act_mcast_num_dests), then reset the semaphore_addr value back to
+                    // zero for the next block
+                    noc_semaphore_wait(
+                        act_mcast_sender_semaphore_addr_ptr, act_mcast_num_dests + (is_receiver_core ? 0 : 1));
                     noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
 
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
-
                     // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
                     cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
 
@@ -231,31 +223,59 @@ void kernel_main() {
                     uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
 
                     uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
-                    // num_dests will source, since we are copying to a different local CB as well
-                    noc_async_write_multicast_loopback_src(
-                        tilized_act_start_address,
-                        act_multicast_data_addr,
-                        act_mcast_sender_size_bytes,
-                        act_mcast_num_cores + 1,
-                        true);
+                    if (is_receiver_core) {
+                        if constexpr (act_mcast_num_cores) {
+                            // num_dests will source, since we are copying to a different local CB as well
+                            noc_async_write_multicast_loopback_src(
+                                tilized_act_start_address,
+                                act_multicast_data_addr,
+                                act_mcast_sender_size_bytes,
+                                act_mcast_num_cores + 1,
+                                true);
+                        } else {
+                            // In this case sender core is the only reciever in the grid,
+                            // we can't use the multicast_loopback_src (hang)
+                            noc_async_write(
+                                get_noc_addr(tilized_act_start_address),
+                                get_noc_addr(get_write_ptr(cb_id_act)),
+                                act_mcast_sender_size_bytes);
+                            noc_async_write_barrier();
+                        }
+                    } else {
+                        // If sender core is not the reciever core as well we can't use the loopback mcast. (hang)
+                        noc_async_write_multicast(
+                            tilized_act_start_address,
+                            act_multicast_data_addr,
+                            act_mcast_sender_size_bytes,
+                            act_mcast_num_cores + 1,
+                            true);
+                    }
 
-                    // Note: no need for write barrier, since these two multicasts are done on the same noc id and same
-                    // vc even though cmd bufs are different Also, this only works because we are setting VCs statically
-                    // (using NOC_CMD_STATIC_VC).
+                    // Note: no need for write barrier, since these two multicasts are done on the same noc id and
+                    // same vc even though cmd bufs are different Also, this only works because we are setting VCs
+                    // statically (using NOC_CMD_STATIC_VC).
 #ifdef ARCH_BLACKHOLE
-                    // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may
-                    // not be sent in order they are issued
+                    // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and
+                    // may not be sent in order they are issued
                     noc_async_writes_flushed();
 #endif
 
-                    // We should also multicast VALID flag to destinations for receiver semaphore
-                    noc_semaphore_set_multicast_loopback_src(
-                        act_mcast_sender_semaphore_valid_addr,
-                        act_mcast_receiver_semaphore_noc_addr,
-                        act_mcast_num_cores + 1);
-
-                    noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
-                } else {
+                    if (is_receiver_core) {
+                        // We should also multicast VALID flag to destinations for receiver semaphore
+                        if constexpr (act_mcast_num_cores) {
+                            noc_semaphore_set_multicast_loopback_src(
+                                act_mcast_sender_semaphore_valid_addr,
+                                act_mcast_receiver_semaphore_noc_addr,
+                                act_mcast_num_cores + 1);
+                            noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+                        }
+                    } else {
+                        noc_semaphore_set_multicast(
+                            act_mcast_sender_semaphore_valid_addr,
+                            act_mcast_receiver_semaphore_noc_addr,
+                            act_mcast_num_cores + 1);
+                    }
+                } else if (is_receiver_core) {
                     // MCAST RECEIVER: receive entire tilized input from sender core
                     // Set act semaphore value to INVALID
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
@@ -280,10 +300,12 @@ void kernel_main() {
                 }
                 cb_push_back(cb_id_act, act_block_num_tiles);
             }  // act_w_num_outer
+
             cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
 #endif
         }
         start_reader_idx = reader_idx;
     }
+
     noc_async_write_barrier();
 }
