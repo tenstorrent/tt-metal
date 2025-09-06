@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "ttnn/run_operation.hpp"
 
 namespace ttnn {
