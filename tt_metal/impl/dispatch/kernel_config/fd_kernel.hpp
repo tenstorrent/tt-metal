@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <stdint.h>
 #include <map>
 #include <string>

@@ -157,7 +157,7 @@ def create_tt_model(
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
-            tt_model_args.max_batch_size, paged_attention_config.max_num_blocks // tt_model_args.max_batch_size
+            max_batch_size, paged_attention_config.max_num_blocks // max_batch_size
         )
 
     model = TtTransformer(
@@ -189,7 +189,10 @@ def create_tt_model(
 # page_params (dict): Page parameters for paged attention (block_size, max_num_blocks) For smaller context lengths use block_size=32 and max_num_blocks=1024, for larger context use block_size=64 and max_num_blocks=2048
 # sampling_params (dict): Sampling parameters for decoding (temperature, top_p). If temperature is set to 0, argmax (greedy decode) is used.
 # stop_at_eos (bool): Whether to stop decoding when the model generates an EoS token
-#
+# is_cur_pos_sharded (bool): Whether to replicate the cur pos tensor on sub core grid as an optimization
+# is_page_table_sharded (bool):  Whether to replicate the page table tensor on sub core grid as an optimization (Currently page table sharding is only supported for BS=32)
+
+
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 @pytest.mark.parametrize(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, prefill_profile, num_layers, print_outputs, is_cur_pos_sharded, is_page_table_sharded",
@@ -229,8 +232,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # evals-1 run (Throughput) - 1 user, smaller prompts, batch repeat 32
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
@@ -305,7 +308,7 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
-            False,  # is_cur_pos_sharded
+            False,  # is_cur_pos_sharded    #NOTE: currently cur pos/ page table sharding is not supported on repeat batch runs
             False,  # is_page_table_sharded
         ),
         (  # long-4k-b1 - Single user, 4K long prompt
@@ -324,8 +327,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # long-8k-b1 - Single user, 8K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
@@ -343,8 +346,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # long-16k-b32 - 32 users, 16K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
@@ -362,8 +365,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # long-32k-b1 - Single user, 32K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
@@ -381,8 +384,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # long-64k-b1 - Single user, 64K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
@@ -400,8 +403,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # long-128k-b1 - Single user, 128K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
@@ -419,8 +422,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # prefill-profile [default 4K seqlen] - Runs 1L prefill-only
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
@@ -438,8 +441,8 @@ def create_tt_model(
             True,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # apc-test Run for PCC check, perf and functionality check: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
@@ -457,8 +460,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # pcc-80L - CI Run for PCC check for 80 Layers + Teacher Forced: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
@@ -476,8 +479,8 @@ def create_tt_model(
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
     ],
     ids=[
