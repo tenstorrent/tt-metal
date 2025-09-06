@@ -18,8 +18,10 @@
 #include "risc_attribs.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "fabric_edm_types.hpp"
-#include "edm_fabric_worker_adapters.hpp"
 #include "edm_fabric_flow_control_helpers.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
+
+#include "hostdevcommon/fabric_common.h"
 
 namespace tt::tt_fabric {
 
@@ -233,7 +235,7 @@ struct EdmChannelWorkerInterface {
             worker_info.worker_teardown_semaphore_address);
 
         // Set connection to unused so it's available for next worker
-        *this->connection_live_semaphore = tt::tt_fabric::EdmToEdmSender<0>::unused_connection_value;
+        *this->connection_live_semaphore = tt::tt_fabric::connection_interface::unused_connection_value;
 
         this->copy_read_counter_to_worker_location_info();
 
@@ -252,11 +254,11 @@ struct EdmChannelWorkerInterface {
 
     [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const {
         invalidate_l1_cache();
-        return *connection_live_semaphore == tt::tt_fabric::EdmToEdmSender<0>::close_connection_request_value;
+        return *connection_live_semaphore == tt::tt_fabric::connection_interface::close_connection_request_value;
     }
     [[nodiscard]] FORCE_INLINE bool connection_is_live() const {
         invalidate_l1_cache();
-        return *connection_live_semaphore == tt::tt_fabric::EdmToEdmSender<0>::open_connection_value;
+        return *connection_live_semaphore == tt::tt_fabric::connection_interface::open_connection_value;
     }
 
     volatile tt_l1_ptr EDMChannelWorkerLocationInfo* worker_location_info_ptr;

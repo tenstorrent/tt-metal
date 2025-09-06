@@ -13,6 +13,8 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/kernel.hpp>
 
+#include "impl/program/program_impl.hpp"
+
 namespace tt::tt_metal {
 
 LightMetalCaptureContext::LightMetalCaptureContext() : is_tracing_(false), builder_() {}
@@ -100,31 +102,31 @@ uint32_t LightMetalCaptureContext::get_global_id(const Buffer* obj) {
 }
 
 bool LightMetalCaptureContext::is_in_map(const Program* obj) {
-    return program_id_to_global_id_map_.find(obj->get_id()) != program_id_to_global_id_map_.end();
+    return program_id_to_global_id_map_.find(obj->impl().get_id()) != program_id_to_global_id_map_.end();
 }
 
 uint32_t LightMetalCaptureContext::add_to_map(const Program* obj) {
     if (is_in_map(obj)) {
-        log_warning(tt::LogMetalTrace, "Program id: {} already exists in global_id map.", obj->get_id());
+        log_warning(tt::LogMetalTrace, "Program id: {} already exists in global_id map.", obj->impl().get_id());
     }
     uint32_t global_id = next_global_id_++;
-    program_id_to_global_id_map_[obj->get_id()] = global_id;
+    program_id_to_global_id_map_[obj->impl().get_id()] = global_id;
     return global_id;
 }
 
 void LightMetalCaptureContext::remove_from_map(const Program* obj) {
     if (!is_in_map(obj)) {
-        log_warning(tt::LogMetalTrace, "Program id: {} not found in global_id map.", obj->get_id());
+        log_warning(tt::LogMetalTrace, "Program id: {} not found in global_id map.", obj->impl().get_id());
     }
-    program_id_to_global_id_map_.erase(obj->get_id());
+    program_id_to_global_id_map_.erase(obj->impl().get_id());
 }
 
 uint32_t LightMetalCaptureContext::get_global_id(const Program* obj) {
-    auto it = program_id_to_global_id_map_.find(obj->get_id());
+    auto it = program_id_to_global_id_map_.find(obj->impl().get_id());
     if (it != program_id_to_global_id_map_.end()) {
         return it->second;
     } else {
-        TT_THROW("Program id: {} not found in global_id map.", obj->get_id());
+        TT_THROW("Program id: {} not found in global_id map.", obj->impl().get_id());
     }
 }
 

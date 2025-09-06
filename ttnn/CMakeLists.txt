@@ -117,12 +117,13 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_core
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
     FILE_SET
     jit_api
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn
         COMPONENT ttnn-runtime
 )
-install(TARGETS ttnn_core LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 ##################################################
 # Collect all the files and folders that TTNN will use
@@ -305,6 +306,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/concatenate_heads/concatenate_heads_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa/sdpa_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa_windowed/sdpa_windowed_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/transformer_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/uniform/uniform_${PY_BINDING}.cpp
@@ -436,6 +438,10 @@ target_sources(
             cpp/ttnn/operations/creation.hpp
             cpp/ttnn/operations/functions.hpp
             cpp/ttnn/operations/compute_throttle_utils.hpp
+            cpp/ttnn/operations/cb_utils.hpp
+            cpp/ttnn/operations/math.hpp
+            cpp/ttnn/operations/sharding_utilities.hpp
+            cpp/ttnn/operations/trace.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -460,9 +466,6 @@ target_sources(
         cpp/ttnn/operations/experimental/ccl/rms_allgather/device/multi_core/rms_allgather_pf.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
-        cpp/ttnn/operations/normalization/softmax/softmax.cpp
-        cpp/ttnn/operations/normalization/softmax/device/multi_core/softmax_op_multi_core.cpp
-        cpp/ttnn/operations/normalization/softmax/device/softmax_op.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_device_op.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_program_factory.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp

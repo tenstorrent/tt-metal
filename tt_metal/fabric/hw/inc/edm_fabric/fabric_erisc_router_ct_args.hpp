@@ -16,8 +16,6 @@
 // CHANNEL CONSTANTS
 // ETH TXQ SELECTION
 
-constexpr uint32_t DEFAULT_ETH_TXQ = 0;
-
 constexpr size_t NUM_ROUTER_CARDINAL_DIRECTIONS = 4;
 
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;
@@ -259,7 +257,12 @@ constexpr size_t MY_ERISC_ID = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 15)
 constexpr size_t NUM_ACTIVE_ERISCS = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 16);
 static_assert(MY_ERISC_ID < NUM_ACTIVE_ERISCS, "MY_ERISC_ID must be less than NUM_ACTIVE_ERISCS");
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 17;
+// Defines if packet header updates (as the packet header traverses its route) are done on the receiver side or the
+// sender side. If true, then the receiver channel updates the packet header before forwarding it. If false, the sender
+// channel updates the packet header before sending it over Ethernet.
+constexpr bool UPDATE_PKT_HDR_ON_RX_CH = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 17) != 0;
+
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 18;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,
