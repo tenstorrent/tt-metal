@@ -9,7 +9,7 @@
 #include <unordered_map>
 
 #include <umd/device/device_api_metal.h>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 class tt_device;
 namespace tt {
