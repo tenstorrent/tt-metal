@@ -12,7 +12,7 @@
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
@@ -287,7 +287,7 @@ static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_channels_turn_
 // Defined here because sender_channel_0_free_slots_stream_id does not come from
 // fabric_erisc_router_ct_args.hpp
 static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids = {
-    WorkerToFabricEdmSenderImpl<0>::sender_channel_0_free_slots_stream_id,
+    tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id,
     sender_channel_1_free_slots_stream_id,
     sender_channel_2_free_slots_stream_id,
     sender_channel_3_free_slots_stream_id,
@@ -1555,7 +1555,7 @@ void run_sender_channel_step_impl(
     bool has_unsent_packet = free_slots != SENDER_NUM_BUFFERS;
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        can_send = can_send && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
+        can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
     if constexpr (enable_first_level_ack) {
         bool sender_backpressured_from_sender_side = free_slots == 0;
@@ -1830,7 +1830,7 @@ void run_receiver_channel_step_impl(
         auto& completion_counter = receiver_channel_pointers.completion_counter;
         bool unsent_completions = !completion_counter.is_caught_up_to(completion_counter, wr_flush_counter);
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            unsent_completions = unsent_completions && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
+            unsent_completions = unsent_completions && !internal_::eth_txq_is_busy(receiver_txq_id);
         }
         if (unsent_completions) {
             // completion ptr incremented in callee
@@ -1850,7 +1850,7 @@ void run_receiver_channel_step_impl(
         bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         bool can_send_completion = unflushed_writes && next_trid_flushed;
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
+            can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
         }
         if (can_send_completion) {
             receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(

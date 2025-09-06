@@ -9,6 +9,8 @@
 #include "eth_l1_address_map.h"
 #include "noc_nonblocking_api.h"
 #include "debug/eth_link_status.h"
+#include "tt_eth_ss_regs.h"
+#include "tt_eth_api.h"
 
 inline void RISC_POST_STATUS(uint32_t status) {
     volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
