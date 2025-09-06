@@ -127,11 +127,11 @@ int main() {
 
             firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
 
-            enum dispatch_core_processor_masks enables =
-                (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
+            uint32_t enables = launch_msg_address->kernel_config.enables;
 
             // Run the ERISC kernel, no kernel config buffer on active eth
-            if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
+            int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
+            if (enables & (1u << index)) {
                 WAYPOINT("R");
 #ifdef ARCH_BLACKHOLE
                 // #18384: This register was left dirty by eth training.
@@ -141,7 +141,6 @@ int main() {
 #endif
                 // TODO: This currently runs on second risc on active eth cores but with newer drop of syseng FW
                 //  this will run on risc0
-                int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
                 uint32_t kernel_lma =
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
                 auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
