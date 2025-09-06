@@ -41,26 +41,6 @@ protected:
     }
 };
 
-class N300DeviceFixture : public DispatchFixture {
-protected:
-    void SetUp() override {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
-        if (slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
-            GTEST_SKIP();
-        }
-
-        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        if (this->arch_ == tt::ARCH::WORMHOLE_B0 && num_devices == 2 && num_pci_devices == 1) {
-            DispatchFixture::SetUp();
-        } else {
-            GTEST_SKIP() << "This suite can only be run on N300";
-        }
-    }
-};
-
 class N300MeshDeviceFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
