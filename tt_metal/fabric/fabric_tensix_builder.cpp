@@ -96,7 +96,6 @@ FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
 
 void FabricTensixDatamoverConfig::initialize_channel_mappings() {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
     // Get logical fabric mux cores from the first available device (same for all devices), except for TG
     const bool is_TG =
