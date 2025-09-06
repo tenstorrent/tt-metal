@@ -37,7 +37,7 @@
 #include <umd/device/simulation/simulation_device.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/cluster_types.h>
+#include <umd/device/types/cluster_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <unistd.h>
 
