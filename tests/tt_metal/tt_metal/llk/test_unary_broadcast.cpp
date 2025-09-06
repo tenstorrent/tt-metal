@@ -37,7 +37,7 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/utils.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 

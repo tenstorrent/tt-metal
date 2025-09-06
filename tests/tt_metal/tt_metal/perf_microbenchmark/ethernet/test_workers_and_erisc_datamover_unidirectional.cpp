@@ -40,7 +40,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/core_coordinates.hpp>
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include "umd/device/types/xy_pair.h"
 
 using namespace tt;

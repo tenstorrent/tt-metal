@@ -45,7 +45,7 @@
 #include "multi_command_queue_fixture.hpp"
 #include <tt-metalium/shape2d.hpp>
 #include "impl/context/metal_context.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 
 #include <umd/device/types/core_coordinates.hpp>
 

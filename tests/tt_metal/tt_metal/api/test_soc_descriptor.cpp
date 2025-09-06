@@ -19,7 +19,7 @@
 #include "tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "umd/device/coordinate_manager.h"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/utils.hpp>
 
 using namespace tt;
