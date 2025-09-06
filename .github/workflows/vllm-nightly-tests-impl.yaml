@@ -25,7 +25,7 @@ jobs:
       matrix:
         test-group: [
           {
-            name: "[T3K] Llama-3.1-8B-Instruct",
+            name: "[WH-T3K] Llama-3.1-8B-Instruct",
             model: "meta-llama/Llama-3.1-8B-Instruct",
             server-timeout: 5,
             benchmark-timeout: 5,
@@ -37,7 +37,7 @@ jobs:
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
           {
-            name: "[T3K] Qwen2.5-VL-72B-Instruct",
+            name: "[WH-T3K] Qwen2.5-VL-72B-Instruct",
             model: "Qwen/Qwen2.5-VL-72B-Instruct",
             server-timeout: 30,
             benchmark-timeout: 15,
@@ -48,7 +48,7 @@ jobs:
             co-owner-1-id: U07RY6B5FLJ, # Gongyu Wang
           },
           {
-            name: "[DB] Llama-3.1-8B-Instruct",
+            name: "[BH-DB] Llama-3.1-8B-Instruct",
             model: "meta-llama/Llama-3.1-8B-Instruct",
             server-timeout: 5,
             benchmark-timeout: 5,
@@ -59,7 +59,7 @@ jobs:
             owner_id: U08GELBB1AP, # Ambrose Ling
           },
           {
-            name: "[QB] Llama-3.1-8B-Instruct",
+            name: "[BH-QB] Llama-3.1-8B-Instruct",
             model: "meta-llama/Llama-3.1-8B-Instruct",
             server-timeout: 5,
             benchmark-timeout: 5,
@@ -67,10 +67,11 @@ jobs:
             mesh-device: P150x4,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 4}",
-            owner_id: U08GELBB1AP, # Ambrose Ling
+            owner_id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
-          # { Removing this until #26734 is resolved
-          #   name: "[RB] Llama-3.1-8B-Instruct",
+          # {
+          #   Removing this until #26734 is resolved
+          #   name: "[BH-RB] Llama-3.1-8B-Instruct",
           #   model: "meta-llama/Llama-3.1-8B-Instruct",
           #   server-timeout: 35,
           #   benchmark-timeout: 10,
@@ -81,25 +82,37 @@ jobs:
           #   owner_id: U08GELBB1AP, # Ambrose Ling
           # },
           {
-            name: "[TG] Llama-3.3-70B-Instruct",
+            name: "[WH-GLX] Llama-3.3-70B-Instruct",
             model: "meta-llama/Llama-3.3-70B-Instruct",
             server-timeout: 35,
             benchmark-timeout: 10,
-            runner-label: config-tg,
+            runner-label: topology-6u,
             mesh-device: TG,
             tt-llama-text-ver: llama3_70b_galaxy,
-            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D\", \"worker_l1_size\": 1344544, \"trace_region_size\": 95693824}",
+            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 95693824}",
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
           {
-            name: "[TG] Llama-8B DP=16",
+            name: "[WH-GLX] Llama-8B DP=16",
             model: "meta-llama/Llama-3.1-8B-Instruct",
             server-timeout: 10,
             benchmark-timeout: 5,
-            runner-label: config-tg,
+            runner-label: topology-6u,
             mesh-device: TG,
-            override-tt-config: "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D\"}",
+            override-tt-config: "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D_RING\"}",
+            tt-llama-text-ver: tt_transformers,
+            co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
+            co-owner-2-id: U08BH66EXAL, # Radoica Draskic
+          },
+          {
+            name: "[WH-T3K] Gemma3-27B",
+            model: "google/gemma-3-27b-it",
+            server-timeout: 10,
+            benchmark-timeout: 5,
+            runner-label: config-t3000,
+            mesh-device: T3K,
+            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"l1_small_size\": 768}",
             tt-llama-text-ver: tt_transformers,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08BH66EXAL, # Radoica Draskic
@@ -281,12 +294,20 @@ jobs:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: ${{ matrix.test-group.co-owner-2-id }}
 
+      - name: Set artifact prefix
+        if: ${{ !cancelled() }}
+        id: set-artifact-prefix
+        run: |
+          # Replace spaces with underscores
+          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' ' '_')
+          echo "prefix=vllm_output_${SAFE_NAME}_" >> $GITHUB_OUTPUT
+
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: docker-job/output/
-          prefix: "vllm_output_"
+          prefix: ${{ steps.set-artifact-prefix.outputs.prefix }}
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

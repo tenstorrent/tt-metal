@@ -1,7 +1,7 @@
 # Yolov8x
 
 ## Platforms:
-    Wormhole (n150, n300)
+Wormhole (n150, n300)
 
 ## Introduction
 YOLOv8 is one of the recent iterations in the YOLO series of real-time object detectors, offering cutting-edge performance in terms of accuracy and speed.
@@ -19,13 +19,13 @@ pytest --disable-warnings models/demos/yolov8x/tests/pcc/test_yolov8x.py::test_y
 
 ## Model performant running with Trace+2CQ
 ### Single Device (BS=1):
-- For `640x640`, end-2-end perf is `50` FPS:
+- For `640x640`, end-2-end perf is `62` FPS:
   ```
   pytest --disable-warnings models/demos/yolov8x/tests/perf/test_e2e_performant.py::test_run_yolov8x_performant
   ```
 
 ### Multi Device (DP=2, n300):
-- For `640x640`, end-2-end perf is `100` FPS:
+- For `640x640`, end-2-end perf is `121` FPS:
   ```
   pytest --disable-warnings models/demos/yolov8x/tests/perf/test_e2e_performant.py::test_run_yolov8x_performant_dp
   ```
@@ -60,6 +60,15 @@ Note: Output images will be saved in the `models/demos/yolov8x/demo/runs` folder
   ```
   pytest --disable-warnings models/demos/yolov8x/demo/demo.py::test_demo_dataset_dp
   ```
+
+### Performant evaluation with Trace+2CQ
+- Use the following command to run the performant evaluation with Trace+2CQs:
+
+  ```
+  pytest models/demos/yolo_eval/evaluate.py::test_yolov8x[res0-device_params0-tt_model]
+  ```
+Note: The model is evaluated with 500 samples.
+
 
 ### Web Demo
 - Try the interactive web demo at [yolov8x/web_demo](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov8x/web_demo/README.md)

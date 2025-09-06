@@ -117,7 +117,7 @@ void PagedUpdateCacheDeviceOperation::validate(
                                           const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                                           const std::vector<uint32_t>& update_idxs) {
         TT_FATAL(
-            optional_input_tensors.at(0).has_value() != update_idxs.size() > 0,
+            (optional_input_tensors.at(0).has_value()) != (update_idxs.size() > 0),
             "Only an update tensor or an update vector can be provided. Not both or neither.");
 
         uint32_t num_indices = 0;
@@ -400,7 +400,7 @@ operation::Hash PagedUpdateCacheDeviceOperation::compute_program_hash(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     return operation::hash_operation<PagedUpdateCacheDeviceOperation>(
-        this->op_type, input_tensors, optional_input_tensors);
+        this->op_type, input_tensors, optional_input_tensors, this->mesh_coords);
 }
 
 }  // namespace ttnn::operations::experimental::paged_cache

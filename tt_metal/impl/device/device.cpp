@@ -70,6 +70,7 @@
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "tt_metal/fabric/fabric_init.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
@@ -281,13 +282,12 @@ void Device::configure_command_queue_programs() {
     configure_dispatch_cores(this);
 
     // Run the cq program
-    command_queue_program.finalize_offsets(this);
+    command_queue_program.impl().finalize_offsets(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
 }
 
 void Device::init_command_queue_host() {
-    using_fast_dispatch_ = true;
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
 
     auto cq_shared_state = std::make_shared<CQSharedState>();
@@ -358,8 +358,7 @@ void Device::init_command_queue_device() {
         watcher_lock.value().unlock();
     }
 
-    // TODO: should get a const ref
-    std::vector<std::vector<CoreCoord>> logical_cores = command_queue_program.logical_cores();
+    std::vector<std::vector<CoreCoord>> logical_cores = command_queue_program.impl().logical_cores();
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const auto& logical_dispatch_cores = logical_cores[index];
@@ -381,7 +380,7 @@ void Device::init_command_queue_device() {
 }
 
 bool Device::compile_fabric() {
-    fabric_program_ = create_and_compile_fabric_program(this);
+    fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(this);
     return fabric_program_ != nullptr;
 }
 
@@ -390,17 +389,17 @@ void Device::configure_fabric() {
         return;
     }
 
-    configure_fabric_cores(this);
+    tt::tt_fabric::configure_fabric_cores(this);
 
-    fabric_program_->finalize_offsets(this);
+    fabric_program_->impl().finalize_offsets(this);
 
-    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, this->using_fast_dispatch());
-    detail::ConfigureDeviceWithProgram(this, *fabric_program_, this->using_fast_dispatch());
+    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
+    detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
 
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox (eg, storage cores) have all landed
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
-    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->logical_cores();
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->impl().logical_cores();
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
          programmable_core_type_index++) {
@@ -446,10 +445,8 @@ bool Device::initialize(
         num_hw_cqs > 0 and num_hw_cqs <= dispatch_core_manager::MAX_NUM_HW_CQS,
         "num_hw_cqs can be between 1 and {}",
         dispatch_core_manager::MAX_NUM_HW_CQS);
-    this->using_fast_dispatch_ = false;
-    // Trying to preserve logic that was in device_pool.cpp
-    // However, I honestly don't understand it
-    this->num_hw_cqs_ = num_hw_cqs;
+    using_fast_dispatch_ = MetalContext::instance().rtoptions().get_fast_dispatch();
+    num_hw_cqs_ = num_hw_cqs;
     const auto& hal = MetalContext::instance().hal();
     if (worker_l1_size == 0) {
         worker_l1_size = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -683,10 +680,6 @@ CommandQueue& Device::command_queue(size_t cq_id) {
     return *command_queues_[cq_id];
 }
 
-bool Device::using_slow_dispatch() const { return !using_fast_dispatch(); }
-
-bool Device::using_fast_dispatch() const { return using_fast_dispatch_; }
-
 void Device::enable_program_cache() {
     log_info(tt::LogMetal, "Enabling program cache on device {}", this->id_);
     program_cache_.enable();
@@ -792,10 +785,11 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
 
         const auto& hal = MetalContext::instance().hal();
         bool noc_translation_enabled =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(this->id());
+            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(
+                this->id());
         bool dram_is_virtualized =
-            noc_translation_enabled &&
-            (hal.get_virtualized_core_types().find(AddressableCoreType::DRAM) != hal.get_virtualized_core_types().end());
+            noc_translation_enabled && (hal.get_virtualized_core_types().find(AddressableCoreType::DRAM) !=
+                                        hal.get_virtualized_core_types().end());
         const metal_SocDescriptor& soc_d =
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id());
         std::vector<CoreCoord> dram_phy_coords;
