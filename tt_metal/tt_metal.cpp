@@ -31,7 +31,7 @@
 #include "circular_buffer_config.hpp"
 #include "data_types.hpp"
 #include "llrt/tt_cluster.hpp"
-#include <umd/device/cluster.h>
+#include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <filesystem>
 #include "device.hpp"

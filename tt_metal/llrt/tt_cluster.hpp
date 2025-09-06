@@ -25,7 +25,7 @@
 
 #include "assert.hpp"
 #include "core_coord.hpp"
-#include <umd/device/cluster.h>
+#include <umd/device/cluster.hpp>
 #include <umd/device/device_api_metal.h>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/types/core_coordinates.hpp>

@@ -5,10 +5,10 @@
 #include "ops/distributed/comm_ops.hpp"
 
 #include <gtest/gtest.h>
-#include <umd/device/cluster.h>
 
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
+#include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"

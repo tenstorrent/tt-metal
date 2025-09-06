@@ -15,7 +15,7 @@
 #include "metal_soc_descriptor.h"
 #include "tt_backend_api_types.hpp"
 #include <umd/device/blackhole_implementation.h>
-#include <umd/device/cluster.h>
+#include <umd/device/cluster.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
