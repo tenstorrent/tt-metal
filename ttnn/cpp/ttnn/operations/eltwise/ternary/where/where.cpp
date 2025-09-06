@@ -110,7 +110,7 @@ Tensor WhereOperation::invoke(
             // Check if shapes are broadcast-compatible for TTT using broadcast detection
             // This needs to be done in the device operation but we need this check here to decide fallback to legacy
             auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
-                predicate.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
+                predicate.logical_shape(), t_true.logical_shape(), t_false.logical_shape(), WhereVariant::TTT);
 
             if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
                 log_debug(tt::LogOp, "Where LLK - TTT");
@@ -132,8 +132,10 @@ Tensor WhereOperation::invoke(
             if (typecast_predicate) {
                 condition = ttnn::typecast(queue_id, predicate, t_true.dtype());
             }
-            auto broadcast_type =
-                ttnn::operations::ternary::get_broadcast_type(predicate.logical_shape(), t_true.logical_shape());
+
+            // Check if shapes are broadcast-compatible for TTS using broadcast detection
+            auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
+                predicate.logical_shape(), t_true.logical_shape(), WhereVariant::TTS);
 
             if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
                 log_debug(tt::LogOp, "Where LLK - TTS");
@@ -156,8 +158,8 @@ Tensor WhereOperation::invoke(
             if (typecast_predicate) {
                 condition = ttnn::typecast(queue_id, predicate, t_false.dtype());
             }
-            auto broadcast_type =
-                ttnn::operations::ternary::get_broadcast_type(predicate.logical_shape(), t_false.logical_shape());
+            auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
+                predicate.logical_shape(), WhereVariant::TST, t_false.logical_shape());
 
             if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
                 log_debug(tt::LogOp, "Where LLK - TST");

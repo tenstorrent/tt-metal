@@ -19,6 +19,7 @@ enum class KernelName {
     ReaderNoBcastTTS,
     ReaderNoBcastTSS,
     ReaderColBcastTTT,
+    ReaderColBcastTTS,
     ReaderOuterBcastTTT,
     ReaderOuterBcastTTS,
     ReaderOuterBcastTST,
@@ -30,6 +31,7 @@ enum class KernelName {
     ComputeNoBcastTTS,
     ComputeNoBcastTSS,
     ComputeColBcastTTT,
+    ComputeColBcastTTS,
 };
 
 struct WhereKernelConfig {
@@ -48,8 +50,19 @@ std::map<std::string, std::string> make_dataflow_defines(DataType dtype, DataTyp
 std::map<std::string, std::string> make_dataflow_defines(
     DataType dtype, DataType b_dtype, DataType c_dtype);  // for ternary variant
 
+// TTT variant (tensor-tensor-tensor)
 WhereBroadcastType get_broadcast_type(
-    const ttnn::Shape& predicate_shape, const ttnn::Shape& value_true_shape, const ttnn::Shape& value_false_shape);
-WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& b_shape);
+    const ttnn::Shape& predicate_shape,
+    const ttnn::Shape& value_true_shape,
+    const ttnn::Shape& value_false_shape,
+    WhereVariant variant);
+
+// TTS variant (tensor-tensor-scalar)
+WhereBroadcastType get_broadcast_type(
+    const ttnn::Shape& predicate_shape, const ttnn::Shape& value_true_shape, WhereVariant variant);
+
+// TST variant (tensor-scalar-tensor) - different parameter order to avoid ambiguity
+WhereBroadcastType get_broadcast_type(
+    const ttnn::Shape& predicate_shape, WhereVariant variant, const ttnn::Shape& value_false_shape);
 
 }  // namespace ttnn::operations::ternary

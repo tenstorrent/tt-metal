@@ -69,6 +69,7 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
     if (args.where_variant == WhereVariant::TTT) {
         auto& true_shape = value_true_tensor.value().logical_shape();
         auto& false_shape = value_false_tensor.value().logical_shape();
+
         if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::NONE ||
             broadcast_type == ttnn::operations::ternary::WhereBroadcastType::OUTER_BCAST) {
             const bool is_W_same = (predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]);
@@ -84,12 +85,31 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
         }
 
     } else if (args.where_variant == WhereVariant::TTS) {
-        TT_FATAL(
-            (predicate_tensor.logical_shape() == value_true_tensor.value().logical_shape() ||
-             broadcast_type == ttnn::operations::ternary::WhereBroadcastType::OUTER_BCAST),
-            "Where TTS operation requires predicate and value_true to have same shape. Predicate: {}, Value true: {}",
-            predicate_tensor.logical_shape(),
-            value_true_tensor.value().logical_shape());
+        // For TTS, validate broadcast compatibility instead of requiring exact shape match
+        auto broadcast_type = args.broadcast_type;
+        if (broadcast_type == WhereBroadcastType::NONE) {
+            TT_FATAL(
+                predicate_tensor.logical_shape() == value_true_tensor.value().logical_shape(),
+                "Where TTS operation requires predicate and value_true to have same shape. Predicate: {}, Value true: "
+                "{}",
+                predicate_tensor.logical_shape(),
+                value_true_tensor.value().logical_shape());
+        } else if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
+            // For outer broadcast, shapes should be compatible
+            // The broadcast detection should have already validated this
+        } else if (broadcast_type == WhereBroadcastType::COL_BCAST) {
+            // For column broadcast, validate that dimensions are broadcastable
+            // Either heights are same, or one is 1 (broadcastable)
+            const auto pred_h = predicate_tensor.logical_shape()[-2];
+            const auto true_h = value_true_tensor.value().logical_shape()[-2];
+            const bool height_broadcastable = (pred_h == true_h) || (pred_h == 1) || (true_h == 1);
+            TT_FATAL(
+                height_broadcastable,
+                "Where TTS column broadcast requires predicate and value_true heights to be broadcastable. "
+                "Predicate: {}, Value true: {}",
+                predicate_tensor.logical_shape(),
+                value_true_tensor.value().logical_shape());
+        }
         TT_FATAL(
             args.value_false_scalar.has_value(),
             "Where TTS operation requires value_false_scalar to be set in operation attributes");
@@ -156,7 +176,8 @@ TensorSpec WhereDeviceOperation::compute_output_specs(
 
     auto output_shape = tensor_args.predicate.logical_shape();
 
-    if (broadcast_type == WhereBroadcastType::NONE) {
+    // TST & TTS support broadcast for compatible shapes
+    if (broadcast_type == WhereBroadcastType::NONE && where_variant != WhereVariant::TTT) {
         return TensorSpec(
             output_shape, tt::tt_metal::TensorLayout(args.dtype.value(), output_layout, args.memory_config));
     }
@@ -225,6 +246,57 @@ TensorSpec WhereDeviceOperation::compute_output_specs(
         return ttnn::Shape(output_shape);
     };
 
+    const auto compute_broadcasted_output_tts = [&]() {
+        auto pred_shape = tensor_args.predicate.logical_shape();
+        auto true_shape = tensor_args.value_true.value().logical_shape();
+
+        const int rank_a = pred_shape.rank();
+        const int rank_b = true_shape.rank();
+        const int largest_rank = std::max(rank_a, rank_b);
+
+        SmallVector<uint32_t> output_shape(largest_rank, 1);
+
+        for (int i = -1; i >= -largest_rank; --i) {
+            auto dim_a = (i >= -rank_a) ? pred_shape[i] : 1;
+            auto dim_b = (i >= -rank_b) ? true_shape[i] : 1;
+
+            // Find the maximum dimension size (ignoring 1s which can be broadcast)
+            uint32_t max_dim = 1;
+            if (dim_a != 1) {
+                max_dim = std::max(max_dim, dim_a);
+            }
+            if (dim_b != 1) {
+                max_dim = std::max(max_dim, dim_b);
+            }
+
+            // Validate broadcasting compatibility for TTS (only predicate and true tensor)
+            bool compatible = true;
+            if (dim_a != 1 && dim_a != max_dim) {
+                compatible = false;
+            }
+            if (dim_b != 1 && dim_b != max_dim) {
+                compatible = false;
+            }
+
+            TT_FATAL(
+                compatible, "Broadcasting rule violation for TTS rank {}, dim pred: {}, dim true: {}", i, dim_a, dim_b);
+
+            // For ranks >= 6, ensure exact match (following existing pattern)
+            if (i <= -6) {
+                TT_FATAL(
+                    dim_a == dim_b,
+                    "Broadcasting rule violation for TTS rank >= 6 : dim {}, Broadcast is supported up to rank 5, "
+                    "dim pred: {}, dim true: {}",
+                    i,
+                    dim_a,
+                    dim_b);
+            }
+
+            output_shape[i + largest_rank] = max_dim;
+        }
+        return ttnn::Shape(output_shape);
+    };
+
     const auto compute_broadcasted_output_binary = [&](const auto& pred_shape, const auto& b_shape) {
         const int rank_a = pred_shape.rank();
         const int rank_b = b_shape.rank();
@@ -267,8 +339,14 @@ TensorSpec WhereDeviceOperation::compute_output_specs(
 
         output_shape = compute_broadcasted_output_ternary(pred_shape, true_shape, false_shape);
     } else if (args.where_variant == WhereVariant::TTS) {
-        output_shape = compute_broadcasted_output_binary(
-            tensor_args.predicate.logical_shape(), tensor_args.value_true.value().logical_shape());
+        // Use column broadcast-aware function if column broadcast is detected
+        if (args.broadcast_type == WhereBroadcastType::COL_BCAST) {
+            output_shape = compute_broadcasted_output_tts();
+        } else {
+            // Use binary function for outer broadcast and other cases
+            output_shape = compute_broadcasted_output_binary(
+                tensor_args.predicate.logical_shape(), tensor_args.value_true.value().logical_shape());
+        }
     } else if (args.where_variant == WhereVariant::TST) {
         output_shape = compute_broadcasted_output_binary(
             tensor_args.predicate.logical_shape(), tensor_args.value_false.value().logical_shape());
@@ -354,8 +432,8 @@ WhereDeviceOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     // Detect broadcast type for TTT variant
-    WhereBroadcastType broadcast_type =
-        get_broadcast_type(predicate.logical_shape(), value_true.logical_shape(), value_false.logical_shape());
+    WhereBroadcastType broadcast_type = get_broadcast_type(
+        predicate.logical_shape(), value_true.logical_shape(), value_false.logical_shape(), WhereVariant::TTT);
 
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TTT,
@@ -383,7 +461,9 @@ WhereDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    WhereBroadcastType broadcast_type = get_broadcast_type(predicate.logical_shape(), value_true.logical_shape());
+    // Detect broadcast type for TTS variant
+    WhereBroadcastType broadcast_type =
+        get_broadcast_type(predicate.logical_shape(), value_true.logical_shape(), WhereVariant::TTS);
 
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TTS,
@@ -412,7 +492,8 @@ WhereDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    WhereBroadcastType broadcast_type = get_broadcast_type(predicate.logical_shape(), value_false.logical_shape());
+    WhereBroadcastType broadcast_type =
+        get_broadcast_type(predicate.logical_shape(), WhereVariant::TST, value_false.logical_shape());
 
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TST,
