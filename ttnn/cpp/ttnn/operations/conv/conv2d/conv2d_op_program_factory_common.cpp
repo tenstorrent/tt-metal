@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "conv2d_op_program_factory_common.hpp"
+#include <umd/device/types/arch.h>
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -11,6 +13,7 @@
 #include "tt-metalium/hal.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/tensor/types.hpp"
 namespace ttnn::operations::conv {
 namespace conv2d {
 
@@ -22,13 +25,15 @@ std::vector<CBInfo> get_cb_info(
     const OptimizedConvParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> dilation,
     const Conv2dConfig& conv_config,
     DataType input_datatype,
     DataType output_datatype,
     std::array<uint32_t, 2> conv_input_shard_shape,
     bool enable_bias,
     bool is_1d_depthwise_conv,
-    bool skip_act_cb_create) {
+    bool skip_act_cb_create,
+    uint32_t input_channels_padded) {
     const uint32_t num_cbs = static_cast<uint32_t>(Conv2dCb::COUNT);
     std::vector<CBInfo> cb_info;
     cb_info.reserve(num_cbs);
@@ -116,8 +121,17 @@ std::vector<CBInfo> get_cb_info(
         // ACT and ACT_SECOND_READER CB
         uint32_t act_cb_num_tiles = act_block_num_tiles;
         uint32_t act_block_split_num_tiles = 0;
-        if (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED && conv_config.enable_split_reader &&
-            !is_1d_depthwise_conv) {
+        if (is_split_reader_supported(sharding_scheme, is_1d_depthwise_conv, block_config.act_block_h_ntiles) &&
+            is_split_reader_viable(
+                block_config.act_block_h_ntiles,
+                input_channels_padded,
+                kernel_size[1],
+                tt::tt_metal::hal::get_arch(),
+                input_datatype,
+                per_core_out_matrix_width_ntiles * block_config.act_block_w_ntiles,
+                weights_tile_size,
+                dilation[1],
+                num_blocks_act_h)) {
             uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles;
             uint32_t act_block_h_nsubblocks_split_last = act_block_h_nsubblocks / 2;
             uint32_t act_block_h_nsubblocks_split = act_block_h_nsubblocks - act_block_h_nsubblocks_split_last;
@@ -281,6 +295,200 @@ const CBInfo& get_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb c
 }
 CBInfo& access_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_name) {
     return const_cast<CBInfo&>(get_cb_info_by_name(cb_info, cb_name));
+}
+
+/**
+ * Calculates NOC transfer rate for L1 local transfers using empirical data.
+ *
+ * The transfer rate follows a clamped linear approximation:
+ * - Minimum rate for small transfers (16B)
+ * - Linear growth until reaching peak performance
+ * - Constant peak rate for larger transfers
+ */
+static float get_local_l1_noc_transfer_rate(uint32_t transfer_size_bytes, tt::ARCH arch) {
+    // Minimum NOC transfer size that was benchmarked
+    const uint32_t min_transfer_size_bytes = tt::tt_metal::hal::get_l1_alignment();
+
+    // Architecture-specific performance characteristics
+    struct NocPerformanceParams {
+        uint32_t linear_growth_threshold_bytes;
+        float min_rate_gbps;   // Transfer rate at minimum size
+        float peak_rate_gbps;  // Maximum achievable transfer rate
+    };
+
+    NocPerformanceParams params = {0, 0.0f, 0.0f};
+    switch (arch) {
+        case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{4096, 1.124f, 80.48f}; break;
+        case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{1024, 0.868f, 27.84f}; break;
+        default: TT_THROW("Unsupported architecture when calculating NOC transfer rate");
+    }
+
+    // Clamp transfer size to the linear growth region
+    const uint32_t effective_transfer_size =
+        std::clamp(transfer_size_bytes, min_transfer_size_bytes, params.linear_growth_threshold_bytes);
+
+    // Calculate transfer rate using linear interpolation
+    const float rate_increase_per_byte =
+        (params.peak_rate_gbps - params.min_rate_gbps) /
+        static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
+
+    return params.min_rate_gbps + rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes);
+}
+/**
+ * Calculates NOC transfer rate for DRAM transfers using empirical data.
+ *
+ * The transfer rate follows a clamped linear approximation:
+ * - Minimum rate for small transfers (16B)
+ * - Linear growth until reaching peak performance
+ * - Constant peak rate for larger transfers
+ */
+static float get_all_dram_noc_transfer_rate(uint32_t transfer_size_bytes, tt::ARCH arch) {
+    // Minimum NOC transfer size that was benchmarked
+    const uint32_t min_transfer_size_bytes = tt::tt_metal::hal::get_l1_alignment();
+
+    // Architecture-specific performance characteristics
+    struct NocPerformanceParams {
+        uint32_t linear_growth_threshold_bytes;
+        float min_rate_gbps;   // Transfer rate at minimum size
+        float peak_rate_gbps;  // Maximum achievable transfer rate
+    };
+
+    NocPerformanceParams params = {0, 0.0f, 0.0f};
+    switch (arch) {
+        case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{2048, 0.671f, 80.885f}; break;
+        case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{2048, 0.436f, 28.411f}; break;
+        default: TT_THROW("Unsupported architecture when calculating DRAM NOC transfer rate");
+    }
+
+    // Clamp transfer size to the linear growth region
+    const uint32_t effective_transfer_size =
+        std::clamp(transfer_size_bytes, min_transfer_size_bytes, params.linear_growth_threshold_bytes);
+
+    // Calculate transfer rate using linear interpolation
+    const float rate_increase_per_byte =
+        (params.peak_rate_gbps - params.min_rate_gbps) /
+        static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
+
+    return params.min_rate_gbps + rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes);
+}
+/**
+ * Calculates NOC transfer rate for multicast L1-linked transfers using empirical data.
+ *
+ * The transfer rate follows a clamped linear approximation:
+ * - Minimum rate for small transfers (16B)
+ * - Linear growth until reaching peak performance
+ * - Constant peak rate for larger transfers
+ */
+static float get_mcast_many_l1_linked_noc_transfer_rate(uint32_t transfer_size_bytes, tt::ARCH arch) {
+    // Minimum NOC transfer size that was benchmarked
+    const uint32_t min_transfer_size_bytes = tt::tt_metal::hal::get_l1_alignment();
+
+    // Architecture-specific performance characteristics
+    struct NocPerformanceParams {
+        uint32_t linear_growth_threshold_bytes;
+        float min_rate_gbps;   // Transfer rate at minimum size
+        float peak_rate_gbps;  // Maximum achievable transfer rate
+    };
+
+    NocPerformanceParams params = {0, 0.0f, 0.0f};
+    switch (arch) {
+        case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{65536, 0.182f, 57.677f}; break;
+        case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{65536, 0.318f, 25.345f}; break;
+        default: TT_THROW("Unsupported architecture when calculating multicast L1-linked NOC transfer rate");
+    }
+
+    // Clamp transfer size to the linear growth region
+    const uint32_t effective_transfer_size =
+        std::clamp(transfer_size_bytes, min_transfer_size_bytes, params.linear_growth_threshold_bytes);
+
+    // Calculate transfer rate using linear interpolation
+    const float rate_increase_per_byte =
+        (params.peak_rate_gbps - params.min_rate_gbps) /
+        static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
+
+    return params.min_rate_gbps + rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes);
+}
+/**
+ * Determines if split reader optimization is supported for the given configuration.
+ *
+ * Split reader requires all of the following conditions:
+ * 1. Height-sharded memory layout (enables parallel reading across height dimension)
+ * 2. Not a 1D depthwise convolution (incompatible memory access patterns)
+ * 3. Multiple activation block height tiles (must have data to split between readers)
+ */
+bool is_split_reader_supported(
+    TensorMemoryLayout memory_layout, bool is_1d_depthwise_conv, uint32_t act_block_h_ntiles) {
+    return memory_layout == TensorMemoryLayout::HEIGHT_SHARDED && !is_1d_depthwise_conv && act_block_h_ntiles > 1;
+}
+
+/*
+    Split reader viability is calculated by comparing activation and weight transfer costs.
+    - Activation cost is calculated by using benchmarked NOC transfer rate for L1 local transfer.
+    Activations are transfered in chunks of input_bytes_per_element * input_channels_padded * kernel_width bytes because
+    that is sequential data in the L1.
+    Activation cost is calculated by dividing the activation block size by the NOC transfer local l1 transfer rate.
+    Activations are in ROW_MAJOR layout so dtype is used to calculate the total activation block size.
+    - Weight cost is calculated by using non benchmarked NOC link bandwidth for the time
+    it takes to transfer the weights from DRAM to L1.
+    Weight cost is calculated by sum of dividing the weight block size by the NOC all dram transfer rate and the NOC
+   multicast L1-linked transfer rate. Weights are in TILE_LAYOUT so tile size is used to calculate the total weight
+   block size.
+    - A threshold factor of 2.0 is used to compare the
+    activation and weight costs because activating split reader will delay weights reading and multicasting.
+
+*/
+bool is_split_reader_viable(
+    uint32_t act_block_h_ntiles,
+    uint32_t input_channels_padded,
+    uint32_t kernel_width,
+    tt::ARCH arch,
+    DataType input_datatype,
+    uint32_t weights_block_ntiles,
+    uint32_t weights_tile_size,
+    uint32_t dilation_w,
+    uint32_t num_blocks_act_h) {
+    // Calculate activation transfer cost
+    const uint32_t input_bytes_per_element = (input_datatype == DataType::FLOAT32) ? 4 : 2;
+    // For dilated convs the kernel_width number of channels isn't sequential in the L1, so we transfer 1 channel at a
+    // time
+    const uint32_t coallesced_read_channels = (dilation_w == 1 ? kernel_width : 1);
+    const uint32_t noc_local_l1_transfer_unit_bytes =
+        input_bytes_per_element * input_channels_padded * coallesced_read_channels;
+    const float noc_local_l1_transfer_rate_gbps =
+        get_local_l1_noc_transfer_rate(noc_local_l1_transfer_unit_bytes, arch);
+    const float activation_cost = static_cast<float>(
+                                      input_bytes_per_element * act_block_h_ntiles * tt::constants::TILE_HEIGHT *
+                                      input_channels_padded * kernel_width) /
+                                  noc_local_l1_transfer_rate_gbps;
+
+    const float noc_mcast_many_l1_linked_transfer_rate_gbps =
+        get_mcast_many_l1_linked_noc_transfer_rate(weights_block_ntiles * weights_tile_size, arch);
+    const float noc_all_dram_transfer_rate_gbps = get_all_dram_noc_transfer_rate(weights_tile_size, arch);
+    const float weight_cost =
+        static_cast<float>(weights_tile_size * weights_block_ntiles) *
+        (1.0f / noc_all_dram_transfer_rate_gbps + 1.0f / noc_mcast_many_l1_linked_transfer_rate_gbps);
+
+    const float comparisson_factor = num_blocks_act_h > 1 ? 2.0f : 1.0f;
+
+    // Split reader is viable when activation cost significantly exceeds weight cost
+    const bool is_viable = activation_cost > comparisson_factor * weight_cost;
+
+    log_debug(
+        tt::LogOp,
+        "Split reader viability: activation_cost={:.3f}, weight_cost={:.3f}, comparisson_factor={}, "
+        "weight_tile_size={}, weight_block_ntiles={},local_l1_transfer_unit_bytes={},coallesced_read_channels={}, "
+        "viable={}, num_blocks_act_h={}",
+        activation_cost,
+        weight_cost,
+        comparisson_factor,
+        weights_tile_size,
+        weights_block_ntiles,
+        noc_local_l1_transfer_unit_bytes,
+        coallesced_read_channels,
+        is_viable,
+        num_blocks_act_h);
+
+    return is_viable;
 }
 
 }  // namespace conv2d

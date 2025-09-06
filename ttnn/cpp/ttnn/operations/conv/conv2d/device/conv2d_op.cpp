@@ -14,6 +14,7 @@
 #include <tt-metalium/constants.hpp>
 
 #include <tt-metalium/work_split.hpp>
+#include "tt-metalium/shape.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -43,8 +44,7 @@ Tensor optimized_conv_new(
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
-    bool full_inner_dim,
-    bool enable_split_reader) {
+    bool full_inner_dim) {
     TT_FATAL(b.layout() == Layout::TILE,
              "Weights should be in TILE layout.");  // Weights should already be formatted
     const auto& ashape = input_tensor_shape;
@@ -73,8 +73,7 @@ Tensor optimized_conv_new(
         compute_kernel_config,
         enable_act_double_buffer,
         enable_weights_double_buffer,
-        full_inner_dim,
-        enable_split_reader);
+        full_inner_dim);
     IDevice* device = a.device();
 
     optimized_conv_op.pre_op_l1_allocation_size_bytes =
@@ -256,7 +255,6 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             compute_kernel_config,
             enable_act_double_buffer,
             enable_weights_double_buffer,
-            enable_split_reader,
             full_inner_dim);
     }
 
@@ -269,19 +267,22 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second});
 
     const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, memory_config.memory_layout());
+
+    const std::array<uint32_t, 2> shard_shape = input_tensor_a.shard_spec().value().shape;
+    const uint32_t input_channels_padded = shard_shape[1];
     conv_op_l1_usage l1_usage = calculate_L1_usage(
         compute_kernel_config,
         block_config,
         parallelization_config,
         weights_shape,
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second}),
+        std::array<uint32_t, 2>({sliding_window_config.dilation_hw.first, sliding_window_config.dilation_hw.second}),
         Conv2dConfig{
             .weights_dtype = input_tensor_b.dtype(),
             .shard_layout = this->memory_config.memory_layout(),
             .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
             .enable_act_double_buffer = enable_act_double_buffer,
-            .enable_weights_double_buffer = enable_weights_double_buffer,
-            .enable_split_reader = enable_split_reader},
+            .enable_weights_double_buffer = enable_weights_double_buffer},
         input_tensor_a.dtype(),
         this->dtype,
         has_bias,
@@ -292,6 +293,7 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             kernel_dims[1],
             sliding_window_config.get_output_shape()[2],
             has_bias),
+        input_channels_padded,
         skip_mcast.skip_activation_mcast);
 
     TT_FATAL(

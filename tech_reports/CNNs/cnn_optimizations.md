@@ -176,7 +176,7 @@ Maximizing group size will give the best possible performance for a model. Ensur
 
 There are several parameters in `ttnn.conv2d` that can meaningfully affect performance:
 - `act_block_w_div`: Increasing output activation block size increases L1 usage but can also improve performance
-- `enable_weights_double_buffer`, `enable_act_double_buffer`, `enable_split_reader`: Enabling can improve performance but also increases total L1 usage.
+- `enable_weights_double_buffer`, `enable_act_double_buffer`: Enabling can improve performance but also increases total L1 usage.
 
 Determining the combination of these parameters that is the most performant but does not exceed the availible L1 is done iteratively. More details on these parameters are found here: [link](./ttcnn.md).
 
