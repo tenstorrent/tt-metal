@@ -31,7 +31,7 @@
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/llrt/tlb_config.hpp"
-#include <umd/device/cluster.h>
+#include <umd/device/cluster.hpp>
 #include <umd/device/hugepage.h>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/tt_simulation_device.h>
