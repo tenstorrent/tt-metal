@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import ttnn
 
@@ -26,7 +27,7 @@ from models.experimental.efficientnet.tt.efficientnet_fused_mbconv import (
 )
 
 
-class TtEfficientNet(torch.nn.Module):
+class TtEfficientNet(LightweightModule):
     def __init__(
         self,
         state_dict,
@@ -60,7 +61,7 @@ class TtEfficientNet(torch.nn.Module):
         ):
             raise TypeError("The inverted_residual_setting should be List[MBConvConfig]")
 
-        layers: List[torch.nn.Module] = []
+        layers: List[LightweightModule] = []
 
         # building first layer
         firstconv_output_channels = inverted_residual_setting[0].input_channels
@@ -87,7 +88,7 @@ class TtEfficientNet(torch.nn.Module):
         stage_block_id = 0
 
         for cnf in inverted_residual_setting:
-            stage: List[torch.nn.Module] = []
+            stage: List[LightweightModule] = []
 
             for _ in range(cnf.num_layers):
                 # copy to avoid modifications. shallow copy is enough
@@ -506,7 +507,7 @@ def save_file_from_url(url, path):
     open(path, "wb").write(response.content)
 
 
-def reference_efficientnet_lite0(pretrained: bool = True) -> torch.nn.Module:
+def reference_efficientnet_lite0(pretrained: bool = True) -> LightweightModule:
     reference_model = build_efficientnet_lite("efficientnet_lite0", 1000)
 
     save_path = "./efficientnet_lite0.pth"
@@ -522,7 +523,7 @@ def reference_efficientnet_lite0(pretrained: bool = True) -> torch.nn.Module:
     return reference_model
 
 
-def reference_efficientnet_lite1(pretrained: bool = True) -> torch.nn.Module:
+def reference_efficientnet_lite1(pretrained: bool = True) -> LightweightModule:
     reference_model = build_efficientnet_lite("efficientnet_lite1", 1000)
 
     save_path = "./efficientnet_lite1.pth"
@@ -538,7 +539,7 @@ def reference_efficientnet_lite1(pretrained: bool = True) -> torch.nn.Module:
     return reference_model
 
 
-def reference_efficientnet_lite2(pretrained: bool = True) -> torch.nn.Module:
+def reference_efficientnet_lite2(pretrained: bool = True) -> LightweightModule:
     reference_model = build_efficientnet_lite("efficientnet_lite2", 1000)
 
     save_path = "./efficientnet_lite2.pth"
@@ -554,7 +555,7 @@ def reference_efficientnet_lite2(pretrained: bool = True) -> torch.nn.Module:
     return reference_model
 
 
-def reference_efficientnet_lite3(pretrained: bool = True) -> torch.nn.Module:
+def reference_efficientnet_lite3(pretrained: bool = True) -> LightweightModule:
     reference_model = build_efficientnet_lite("efficientnet_lite3", 1000)
 
     save_path = "./efficientnet_lite3.pth"
@@ -570,7 +571,7 @@ def reference_efficientnet_lite3(pretrained: bool = True) -> torch.nn.Module:
     return reference_model
 
 
-def reference_efficientnet_lite4(pretrained: bool = True) -> torch.nn.Module:
+def reference_efficientnet_lite4(pretrained: bool = True) -> LightweightModule:
     reference_model = build_efficientnet_lite("efficientnet_lite4", 1000)
 
     save_path = "./efficientnet_lite4.pth"

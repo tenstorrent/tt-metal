@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
-from torch import nn
 
 import ttnn
 from loguru import logger
@@ -13,7 +13,7 @@ from models.experimental.llama.tt.llama_attention import TtLlamaAttention
 from models.experimental.llama.tt.llama_layer_norm import TtLlamaRMSNorm
 
 
-class TtLlamaDecoderLayer(nn.Module):
+class TtLlamaDecoderLayer(LightweightModule):
     def __init__(self, device, state_dict, base_url, decoder_idx, max_position_embeddings, config):
         super().__init__()
         self.hidden_size = config.hidden_size
