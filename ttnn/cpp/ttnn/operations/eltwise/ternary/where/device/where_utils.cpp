@@ -37,6 +37,12 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
                 reader_kernel = KernelName::ReaderOuterBcastTTS;
                 compute_kernel = KernelName::ComputeNoBcastTTS;
                 writer_kernel = KernelName::WriterNoBcast;
+            } else if (
+                broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
+                broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) {
+                reader_kernel = KernelName::ReaderScalarBcastTTS;
+                compute_kernel = KernelName::ComputeScalarBcastTTS;
+                writer_kernel = KernelName::WriterNoBcast;
             } else {
                 reader_kernel = KernelName::ReaderNoBcastTTS;
                 compute_kernel = KernelName::ComputeNoBcastTTS;
@@ -48,6 +54,12 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
             if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
                 reader_kernel = KernelName::ReaderOuterBcastTST;
                 compute_kernel = KernelName::ComputeNoBcastTST;
+                writer_kernel = KernelName::WriterNoBcast;
+            } else if (
+                broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
+                broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) {
+                reader_kernel = KernelName::ReaderScalarBcastTST;
+                compute_kernel = KernelName::ComputeScalarBcastTST;
                 writer_kernel = KernelName::WriterNoBcast;
             } else {
                 reader_kernel = KernelName::ReaderNoBcastTST;
@@ -78,6 +90,8 @@ std::string get_kernel_file_path(KernelName kernel_name) {
             return fmt::format(dataflow, root, "ternary_reader_outerbcast_tst_tts.cpp");
         case KernelName::ReaderOuterBcastTST:
             return fmt::format(dataflow, root, "ternary_reader_outerbcast_tst_tts.cpp");
+        case KernelName::ReaderScalarBcastTTS: return fmt::format(dataflow, root, "tst_tts_reader_scalar_bcast.cpp");
+        case KernelName::ReaderScalarBcastTST: return fmt::format(dataflow, root, "tst_tts_reader_scalar_bcast.cpp");
         case KernelName::ReaderNoBcastTSS: return fmt::format(dataflow, root, "ternary_reader_nobcast_tss.cpp");
         case KernelName::ReaderColBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
@@ -98,6 +112,8 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ComputeNoBcastTST: return fmt::format(compute, root, "where_sfpu_no_bcast_tst.cpp");
         case KernelName::ComputeNoBcastTTS: return fmt::format(compute, root, "where_sfpu_no_bcast_tts.cpp");
         case KernelName::ComputeNoBcastTSS: return fmt::format(compute, root, "where_sfpu_no_bcast_tss.cpp");
+        case KernelName::ComputeScalarBcastTST: return fmt::format(compute, root, "where_sfpu_scalar_bcast_tst.cpp");
+        case KernelName::ComputeScalarBcastTTS: return fmt::format(compute, root, "where_sfpu_scalar_bcast_tts.cpp");
         case KernelName::ComputeColBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_col_bcast_ttt.cpp";
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
@@ -112,7 +128,7 @@ uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype) {
 }
 
 std::map<std::string, std::string> make_dataflow_defines(
-    const DataType dtype, const DataType b_dtype, const DataType c_dtype) {
+    const DataType dtype, const DataType b_dtype, std::optional<DataType> c_dtype) {
     std::map<std::string, std::string> defines;
     // Exact copy of binary_ng make_dataflow_defines for compatibility
     if (dtype == DataType::FLOAT32) {
@@ -159,28 +175,30 @@ std::map<std::string, std::string> make_dataflow_defines(
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfloat16";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
     }
-
-    // Add defines for third tensor (false tensor)
-    if (c_dtype == DataType::FLOAT32) {
-        defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column";
-        defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element<float>";
-        defines["FILL_WITH_VALUE_FLOAT_C"] = "fill_with_val<1024, float>";
-    } else if (c_dtype == DataType::INT32) {
-        defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column";
-        defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element<int32_t>";
-        defines["FILL_WITH_VALUE_C"] = "fill_with_val<1024, int32_t>";
-    } else if (c_dtype == DataType::UINT32) {
-        defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column";
-        defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element<uint32_t>";
-        defines["FILL_WITH_VALUE_C"] = "fill_with_val<1024, uint32_t>";
-    } else {
-        defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column_bfloat16";
-        defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row_bfloat16";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element_bfloat16";
-        defines["FILL_WITH_VALUE_C"] = "fill_with_val_bfloat16";
+    if (c_dtype.has_value()) {
+        // Add defines for third tensor (false tensor)
+        c_dtype = c_dtype.value();
+        if (c_dtype == DataType::FLOAT32) {
+            defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column";
+            defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row";
+            defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element<float>";
+            defines["FILL_WITH_VALUE_FLOAT_C"] = "fill_with_val<1024, float>";
+        } else if (c_dtype == DataType::INT32) {
+            defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column";
+            defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row";
+            defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element<int32_t>";
+            defines["FILL_WITH_VALUE_C"] = "fill_with_val<1024, int32_t>";
+        } else if (c_dtype == DataType::UINT32) {
+            defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column";
+            defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row";
+            defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element<uint32_t>";
+            defines["FILL_WITH_VALUE_C"] = "fill_with_val<1024, uint32_t>";
+        } else {
+            defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column_bfloat16";
+            defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row_bfloat16";
+            defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element_bfloat16";
+            defines["FILL_WITH_VALUE_C"] = "fill_with_val_bfloat16";
+        }
     }
 
     return defines;
@@ -195,13 +213,12 @@ WhereBroadcastType get_broadcast_type(
         return WhereBroadcastType::NONE;
     }
 
-    if ((predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]) &&
-        (predicate_shape[-2] == true_shape[-2]) && (predicate_shape[-2] == false_shape[-2])) {
-        return WhereBroadcastType::OUTER_BCAST;
-    }
-
     bool same_width = (predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]);
     bool same_height = (predicate_shape[-2] == true_shape[-2]) && (predicate_shape[-2] == false_shape[-2]);
+
+    if (same_height && same_width) {
+        return WhereBroadcastType::OUTER_BCAST;
+    }
 
     // Multi-dimensional ROW and COL broadcast is not supported for now
     if (!same_height && !same_width) {
@@ -253,12 +270,12 @@ WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const 
         return WhereBroadcastType::NONE;
     }
 
-    if ((predicate_shape[-1] == b_shape[-1]) && (predicate_shape[-2] == b_shape[-2])) {
-        return WhereBroadcastType::OUTER_BCAST;
-    }
-
     bool same_width = (predicate_shape[-1] == b_shape[-1]) && (predicate_shape[-1] == b_shape[-1]);
     bool same_height = (predicate_shape[-2] == b_shape[-2]) && (predicate_shape[-2] == b_shape[-2]);
+
+    if (same_height && same_width) {
+        return WhereBroadcastType::OUTER_BCAST;
+    }
 
     // Multi-dimensional ROW and COL broadcast is not supported for now
     if (!same_height && !same_width) {

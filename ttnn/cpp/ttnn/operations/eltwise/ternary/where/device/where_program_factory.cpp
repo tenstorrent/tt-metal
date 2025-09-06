@@ -236,7 +236,9 @@ void set_or_update_runtime_arguments(
             reader_runtime_args[4] = start_tile_id;                                   // 4: start_id
 
             // Extended broadcast arguments
-            if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
+            if (broadcast_type == WhereBroadcastType::OUTER_BCAST ||
+                broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
+                broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) {
                 reader_runtime_args[5] = aHt * aWt * aC * aN * aD * (aND > 1);   // 5: nD_stride
                 reader_runtime_args[6] = aHt * aWt * aC * aN * (aD > 1);         // 6: d_stride
                 reader_runtime_args[7] = aHt * aWt * aC * (aN > 1);              // 7: n_stride
@@ -655,6 +657,34 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         reader_defines["SRC_SHARDED_A"] = predicate_sharded ? "1" : "0";
         reader_defines["SRC_SHARDED_B"] = value_false_sharded ? "1" : "0";
     }
+    if (variant == WhereVariant::TTS && (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
+                                         broadcast_type == WhereBroadcastType::SCALAR_B_BCAST)) {
+        // TODO: Use the sharding config from the tensor args when sharding support is added
+        reader_defines = make_dataflow_defines(predicate_tensor.dtype(), value_true_tensor.value().dtype());
+
+        bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
+        bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
+        reader_defines["SRC_SHARDED_A"] = predicate_sharded ? "1" : "0";
+        reader_defines["SRC_SHARDED_B"] = value_true_sharded ? "1" : "0";
+        reader_defines["SRC_BCAST_A"] =
+            (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST) ? "1" : "0";  // First tensor (CB0)
+        reader_defines["SRC_BCAST_B"] =
+            (broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) ? "1" : "0";  // Second tensor (CB1)
+    }
+    if (variant == WhereVariant::TST && (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
+                                         broadcast_type == WhereBroadcastType::SCALAR_B_BCAST)) {
+        // TODO: Use the sharding config from the tensor args when sharding support is added
+        reader_defines = make_dataflow_defines(predicate_tensor.dtype(), value_false_tensor.value().dtype());
+
+        bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
+        bool value_false_sharded = value_false_tensor.value().memory_config().is_sharded();
+        reader_defines["SRC_SHARDED_A"] = predicate_sharded ? "1" : "0";
+        reader_defines["SRC_SHARDED_B"] = value_false_sharded ? "1" : "0";
+        reader_defines["SRC_BCAST_A"] =
+            (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST) ? "1" : "0";  // First tensor (CB0)
+        reader_defines["SRC_BCAST_B"] =
+            (broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) ? "1" : "0";  // Second tensor (CB1)
+    }
 
     tt_metal::ReaderDataMovementConfig reader_config;
 
@@ -664,7 +694,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             (std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_true_tensor_cb};
         TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
         TensorAccessorArgs(*value_true_tensor.value().buffer()).append_to(reader_compile_time_args);
-        reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args);
+        reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines);
 
     } else if (variant == WhereVariant::TST) {
         // TST: c_0 = predicate, c_1 = value_false tensor
@@ -672,7 +702,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             (std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_false_tensor_cb};
         TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
         TensorAccessorArgs(*value_false_tensor.value().buffer()).append_to(reader_compile_time_args);
-        reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args);
+        reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines);
     } else if (variant == WhereVariant::TTT) {
         // TTT: c_0 = predicate, c_1 = value_true, c_2 = value_false
         std::vector<uint32_t> reader_compile_time_args = {
@@ -755,6 +785,18 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         kernel_defines["BCAST_PRED"] = pred_is_bcast ? "1" : "0";
         kernel_defines["BCAST_TRUE"] = true_is_bcast ? "1" : "0";
         kernel_defines["BCAST_FALSE"] = false_is_bcast ? "1" : "0";
+    }
+    if ((variant == WhereVariant::TTS) && (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
+                                           broadcast_type == WhereBroadcastType::SCALAR_B_BCAST)) {
+        // 2-tensor broadcast configuration - set defines for each tensor independently
+        kernel_defines["BCAST_PRED"] = (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST) ? "1" : "0";
+        kernel_defines["BCAST_TRUE"] = (broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) ? "1" : "0";
+    }
+    if ((variant == WhereVariant::TST) && (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
+                                           broadcast_type == WhereBroadcastType::SCALAR_B_BCAST)) {
+        // 2-tensor broadcast configuration - set defines for each tensor independently
+        kernel_defines["BCAST_PRED"] = (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST) ? "1" : "0";
+        kernel_defines["BCAST_FALSE"] = (broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) ? "1" : "0";
     }
 
     kernel_defines["WHERE_LLK"] = "where_tile";

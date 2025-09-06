@@ -696,7 +696,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     std::vector<uint32_t> writer_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(*c_buffer).append_to(writer_compile_time_args);
     writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
-    std::cout << "writer_kernel: " << get_kernel_file_path(writer_kernel, is_sfpu_op) << std::endl;
     tt::tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(writer_kernel, is_sfpu_op),
@@ -742,7 +741,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     } else {
         reader_defines["BCAST_LLK"] = "0";
     }
-    std::cout << "compute_kernel: " << get_kernel_file_path(compute_kernel, is_sfpu_op) << std::endl;
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(compute_kernel, is_sfpu_op),
@@ -758,7 +756,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     tt::tt_metal::TensorAccessorArgs(*a_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(b_buffer != nullptr ? *b_buffer : *a_buffer).append_to(reader_compile_time_args);
     reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
-    std::cout << "reader_kernel: " << get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op) << std::endl;
     tt::tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op),

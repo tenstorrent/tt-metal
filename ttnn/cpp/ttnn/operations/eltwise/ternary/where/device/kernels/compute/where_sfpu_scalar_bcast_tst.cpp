@@ -14,7 +14,7 @@ namespace NAMESPACE {
 
 ALWI void process_tile(
     tt::CBIndex predicate_cb,
-    tt::CBIndex true_cb,
+    tt::CBIndex false_cb,
     tt::CBIndex cb_out,
     uint32_t freq,
     uint32_t tile_start,
@@ -25,8 +25,8 @@ ALWI void process_tile(
 #if BCAST_PRED
     cb_wait_front(predicate_cb, num_tiles_per_cycle);  // predicate_cb is broadcast
 #endif
-#if BCAST_TRUE
-    cb_wait_front(true_cb, num_tiles_per_cycle);  // true_cb is broadcast
+#if BCAST_FALSE
+    cb_wait_front(false_cb, num_tiles_per_cycle);  // false_cb is broadcast
 #endif
 
     for (uint32_t j = tile_start; j < freq; ++j) {
@@ -34,8 +34,8 @@ ALWI void process_tile(
 #if !BCAST_PRED
         cb_wait_front(predicate_cb, num_tiles_per_cycle);
 #endif
-#if !BCAST_TRUE
-        cb_wait_front(true_cb, num_tiles_per_cycle);
+#if !BCAST_FALSE
+        cb_wait_front(false_cb, num_tiles_per_cycle);
 #endif
 
         cb_reserve_back(cb_out, num_tiles_per_cycle);
@@ -46,18 +46,18 @@ ALWI void process_tile(
         copy_tile_init(predicate_cb);
         copy_tile(predicate_cb, 0, 0);
 
-        copy_tile_init(true_cb);
-        copy_tile(true_cb, 0, 1);
-
-        // Fill scalar value to dst reg 2
+        // Fill scalar value to dst reg 1
         fill_tile_init();
 #ifdef FILL_WITH_VALUE_FLOAT
-        const auto false_value = reinterpret_cast<const float*>(&scalar);
-        FILL_LLK(2, *false_value);
+        const auto true_value = reinterpret_cast<const float*>(&scalar);
+        FILL_LLK(1, *true_value);
 #endif
 #ifdef FILL_WITH_VALUE_INT
-        FILL_LLK(2, scalar);
+        FILL_LLK(1, scalar);
 #endif
+
+        copy_tile_init(false_cb);
+        copy_tile(false_cb, 0, 2);
 
         // Perform the where operation
         where_tile_init();
@@ -76,8 +76,8 @@ ALWI void process_tile(
 #if !BCAST_PRED
         cb_pop_front(predicate_cb, num_tiles_per_cycle);
 #endif
-#if !BCAST_TRUE
-        cb_pop_front(true_cb, num_tiles_per_cycle);
+#if !BCAST_FALSE
+        cb_pop_front(false_cb, num_tiles_per_cycle);
 #endif
     }
 
@@ -85,8 +85,8 @@ ALWI void process_tile(
 #if BCAST_PRED
     cb_pop_front(predicate_cb, num_tiles_per_cycle);
 #endif
-#if BCAST_TRUE
-    cb_pop_front(true_cb, num_tiles_per_cycle);
+#if BCAST_FALSE
+    cb_pop_front(false_cb, num_tiles_per_cycle);
 #endif
 }
 
@@ -94,7 +94,7 @@ void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t tile_freq = get_arg_val<uint32_t>(1);
     uint32_t tile_start = get_arg_val<uint32_t>(2);
-    const uint32_t false_scalar = get_arg_val<uint32_t>(3);
+    const uint32_t true_scalar = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
@@ -103,7 +103,7 @@ void MAIN {
     }
 
     constexpr auto predicate_cb = tt::CBIndex::c_0;
-    constexpr auto true_cb = tt::CBIndex::c_1;
+    constexpr auto false_cb = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_3;
 
     unary_op_init_common(predicate_cb, cb_out);
@@ -112,12 +112,12 @@ void MAIN {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(predicate_cb, true_cb, cb_out, tile_freq, tile_start, num_tiles_per_cycle, false_scalar);
+        process_tile(predicate_cb, false_cb, cb_out, tile_freq, tile_start, num_tiles_per_cycle, true_scalar);
     }
 
     if (remaining_iterations > 0) {
         process_tile(
-            predicate_cb, true_cb, cb_out, remaining_iterations, tile_start, num_tiles_per_cycle, false_scalar);
+            predicate_cb, false_cb, cb_out, remaining_iterations, tile_start, num_tiles_per_cycle, true_scalar);
     }
 }
 }  // namespace NAMESPACE
