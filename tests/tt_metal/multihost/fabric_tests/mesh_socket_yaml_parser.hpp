@@ -17,6 +17,8 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "tests/tt_metal/test_utils/test_common.hpp"
 
+using tt::umd::eth_coord_t;
+
 namespace tt::tt_fabric::mesh_socket_tests {
 
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;

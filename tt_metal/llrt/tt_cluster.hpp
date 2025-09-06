@@ -50,6 +50,14 @@ class Hal;
 }
 }  // namespace tt
 
+using tt::umd::BoardType;
+using tt::umd::chip_id_t;
+using tt::umd::CoordSystem;
+using tt::umd::CoreType;
+using tt::umd::eth_coord_t;
+using tt::umd::ethernet_channel_t;
+using tt::umd::TensixSoftResetOptions;
+
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
 using tt_target_dram = std::tuple<int, int, int>;

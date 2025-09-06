@@ -43,6 +43,8 @@ struct from_json_t;
 }  // namespace stl
 }  // namespace tt
 
+using tt::umd::CoreType;
+
 namespace tt::tt_metal {
 
 class Allocator;

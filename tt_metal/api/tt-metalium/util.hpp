@@ -12,6 +12,8 @@
 #include <tt-metalium/hal_types.hpp>
 #include <umd/device/soc_descriptor.hpp>
 
+using tt::umd::CoreType;
+
 namespace tt::tt_metal::detail {
 
 /**

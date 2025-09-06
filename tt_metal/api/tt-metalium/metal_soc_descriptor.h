@@ -17,6 +17,10 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
+using tt::umd::BoardType;
+using tt::umd::CoordSystem;
+using tt::umd::CoreType;
+
 //! tt::umd::SocDescriptor contains information regarding the SOC configuration targetted.
 /*!
     Should only contain relevant configuration for SOC

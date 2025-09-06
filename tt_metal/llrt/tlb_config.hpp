@@ -11,6 +11,8 @@
 #include <umd/device/cluster.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
+using tt::umd::chip_id_t;
+
 struct metal_SocDescriptor;
 
 namespace ll_api {

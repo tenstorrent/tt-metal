@@ -10,6 +10,8 @@
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
+using tt::umd::CoreType;
+
 namespace tt {
 
 namespace tt_metal {

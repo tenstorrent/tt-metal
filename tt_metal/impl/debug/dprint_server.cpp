@@ -55,6 +55,8 @@ using std::to_string;
 using std::tuple;
 using std::uint32_t;
 
+using tt::umd::CoreDescriptor;
+
 using namespace tt;
 
 #define CAST_U8P(p) (reinterpret_cast<uint8_t*>(p))

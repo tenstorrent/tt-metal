@@ -23,6 +23,8 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
+using tt::umd::CoreType;
+
 namespace tt {
 
 namespace llrt {

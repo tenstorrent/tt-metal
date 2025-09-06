@@ -11,6 +11,8 @@
 
 #include <umd/device/types/core_coordinates.hpp>  // CoreType
 
+using tt::umd::CoreType;
+
 namespace tt::tt_metal {
 
 enum DispatchWorkerType : uint32_t {

@@ -22,6 +22,8 @@
  * actual `Program` object.
  */
 
+using tt::umd::CoreType;
+
 namespace tt::tt_metal {
 
 struct Tile;

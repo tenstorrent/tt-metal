@@ -17,6 +17,8 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 
+using tt::umd::chip_id_t;
+
 namespace tt {
 
 struct core_descriptor_t {

@@ -25,6 +25,9 @@ namespace tt_metal {
 enum class ClusterType : std::uint8_t;
 }  // namespace tt_metal
 }  // namespace tt
+
+using tt::umd::chip_id_t;
+
 namespace tt::tt_fabric {
 
 using tt::tt_metal::distributed::MeshContainer;

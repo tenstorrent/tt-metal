@@ -16,6 +16,8 @@ namespace tt {
 class Cluster;
 }
 
+using tt::umd::CoreType;
+
 namespace tt::tt_metal {
 
 //

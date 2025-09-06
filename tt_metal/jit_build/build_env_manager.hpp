@@ -13,6 +13,8 @@
 #include "build.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
+using tt::umd::chip_id_t;
+
 namespace tt::tt_metal {
 
 using BuildIndexAndTypeCount = std::pair<int, int>;            // Build index and processor type count
