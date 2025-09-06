@@ -24,6 +24,7 @@ class PinnedMemoryImpl;
 
 namespace distributed {
 class MeshDevice;
+class MeshEvent;
 }
 
 /**
@@ -99,6 +100,15 @@ public:
      * @return True if the device can access the buffer via NOC (i.e., map_to_noc is true and device is MMIO-capable)
      */
     bool usable_from_noc(chip_id_t device_id) const;
+
+    // Add an event that will be waited on before the memory can be locked or destroyed.
+    void add_barrier_event(const distributed::MeshEvent& event);
+
+    // Return a pointer to the memory that can be used to access the pinned memory. Will block until all barrier events are completed.
+    void* lock();
+
+    // Unlock the memory.
+    void unlock();
 
 private:
     friend class distributed::MeshDevice;

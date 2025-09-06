@@ -12,6 +12,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <deque>
 
 namespace tt::umd {
 class SysmemBuffer;
@@ -70,6 +71,12 @@ public:
     bool has_device(chip_id_t device_id) const;
     bool usable_from_noc(chip_id_t device_id) const;
 
+    void add_barrier_event(const distributed::MeshEvent& event);
+
+    void* lock();
+
+    void unlock();
+
 private:
     void initialize_from_devices(
         const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc);
@@ -84,6 +91,8 @@ private:
 
     // Map from logical device ID to its associated MMIO device ID
     std::unordered_map<chip_id_t, chip_id_t> device_to_mmio_map_;
+
+    std::deque<distributed::MeshEvent> barrier_events_;
 };
 
 }  // namespace tt::tt_metal

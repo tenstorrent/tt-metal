@@ -14,9 +14,12 @@
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_event.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <context/metal_context.hpp>
 #include <umd/device/chip_helpers/sysmem_manager.h>
 #include <umd/device/chip_helpers/sysmem_buffer.h>
+#include "impl/dispatch/system_memory_manager.hpp"
 
 namespace tt::tt_metal {
 
@@ -215,6 +218,41 @@ bool PinnedMemoryImpl::usable_from_noc(chip_id_t device_id) const {
     return map_to_noc_ && (mmio_it->second == device_id);
 }
 
+void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) { barrier_events_.push_back(event);
+
+    while (!barrier_events_.empty()) {
+        auto& event = barrier_events_.front();
+        if (event.device()->using_slow_dispatch()) {
+            barrier_events_.pop_front();
+            continue;
+        }
+        bool all_devices_completed = true;
+        for (const auto& coord : event.device_range()) {
+            auto physical_device = event.device()->get_device(coord);
+            if (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
+                all_devices_completed = false;
+                break;
+            }
+        }
+        if (all_devices_completed) {
+            barrier_events_.pop_front();
+        } else {
+            break;
+        }
+    }
+}
+
+void* PinnedMemoryImpl::lock() {
+    while (!barrier_events_.empty()) {
+        auto& event = barrier_events_.front();
+        distributed::EventSynchronize(event);
+        barrier_events_.pop_front();
+    }
+    return get_host_ptr();
+}
+
+void PinnedMemoryImpl::unlock() {}
+
 // PinnedMemory pimpl wrapper implementation
 PinnedMemory::PinnedMemory(
     const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc) :
@@ -248,5 +286,11 @@ std::vector<chip_id_t> PinnedMemory::get_device_ids() const { return pImpl->get_
 bool PinnedMemory::has_device(chip_id_t device_id) const { return pImpl->has_device(device_id); }
 
 bool PinnedMemory::usable_from_noc(chip_id_t device_id) const { return pImpl->usable_from_noc(device_id); }
+
+void PinnedMemory::add_barrier_event(const distributed::MeshEvent& event) { pImpl->add_barrier_event(event); }
+
+void* PinnedMemory::lock() { return pImpl->lock(); }
+
+void PinnedMemory::unlock() { pImpl->unlock(); }
 
 }  // namespace tt::tt_metal
