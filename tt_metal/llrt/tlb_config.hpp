@@ -12,9 +12,6 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 class tt_device;
-namespace tt {
-enum class ARCH;
-}  // namespace tt
 struct metal_SocDescriptor;
 
 namespace ll_api {

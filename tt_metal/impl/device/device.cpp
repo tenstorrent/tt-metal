@@ -81,7 +81,6 @@
 #include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
-enum class ARCH;
 
 namespace tt_metal {
 

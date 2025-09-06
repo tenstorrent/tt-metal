@@ -25,7 +25,6 @@
 #include "tracy/TracyTTDevice.hpp"
 
 namespace tt {
-enum class ARCH;
 namespace tt_metal {
 class IDevice;
 }  // namespace tt_metal

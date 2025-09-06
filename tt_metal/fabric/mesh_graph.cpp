@@ -19,10 +19,6 @@
 #include <tt_stl/indestructible.hpp>
 #include <tt_stl/caseless_comparison.hpp>
 
-namespace tt {
-enum class ARCH;
-}  // namespace tt
-
 namespace tt::tt_fabric {
 FabricType operator|(FabricType lhs, FabricType rhs) {
     return static_cast<FabricType>(static_cast<uint32_t>(lhs) | static_cast<uint32_t>(rhs));
