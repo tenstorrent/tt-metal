@@ -34,7 +34,7 @@
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/harvesting.h>
+#include <umd/device/types/harvesting.hpp>
 #include <umd/device/types/cluster_types.hpp>
 
 namespace tt {
