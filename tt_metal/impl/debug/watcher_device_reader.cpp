@@ -919,12 +919,13 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
     fprintf(reader_.f, "|");
     auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
     uint32_t all_enable_mask = (1u << num_processors) - 1;
-    if (launch_msg_->kernel_config.enables & ~all_enable_mask) {
+    uint32_t enables = launch_msg_->kernel_config.enables;
+    if (enables & ~all_enable_mask) {
         LogRunningKernels();
         TT_THROW(
             "Watcher data corruption, unexpected kernel enable on core {}: {} (expected only low bits set)",
             virtual_coord_.str(),
-            launch_msg_->kernel_config.enables);
+            enables);
     }
 
     // TODO(#17275): Generalize and pull risc data out of HAL
@@ -940,7 +941,7 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
     }
     for (size_t i = 0; i < symbols.size(); i++) {
         char c = symbols[i];
-        if ((launch_msg_->kernel_config.enables & (1u << i)) == 0) {
+        if ((enables & (1u << i)) == 0) {
             c = tolower(c);
         }
         fputc(c, reader_.f);
