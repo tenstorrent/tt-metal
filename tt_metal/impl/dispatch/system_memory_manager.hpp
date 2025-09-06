@@ -6,7 +6,7 @@
 
 // needed for private members
 #include "system_memory_cq_interface.hpp"
-#include <umd/device/chip_helpers/tlb_manager.h>  // needed because tt_io.hpp requires needs TLBManager
+#include <umd/device/chip_helpers/tlb_manager.hpp>  // needed because tt_io.hpp requires needs TLBManager
 #include <umd/device/tt_io.hpp>                   // for tt::Writer
 #include <umd/device/types/xy_pair.hpp>           // for tt_cxy_pair
 #include <atomic>
