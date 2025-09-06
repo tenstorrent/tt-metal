@@ -22,6 +22,7 @@ from framework.serialize import serialize, serialize_structured
 from framework.serialize import deserialize, deserialize_structured
 from framework.sweeps_logger import sweeps_logger as logger
 from infra.data_collection.pydantic_models import OpTest, PerfMetric, TestStatus, OpParam, OpRun, RunStatus
+from framework.upload_sftp import upload_run_sftp
 
 
 class ResultDestination(ABC):
@@ -622,6 +623,41 @@ def _flatten_any_to_dotted(value: Any) -> Dict[str, Any]:
     return flat
 
 
+class SupersetResultDestination(FileResultDestination):
+    """Superset destination: file export plus SFTP upload of oprun_*.json."""
+
+    def __init__(self, export_dir: Optional[pathlib.Path] = None):
+        super().__init__(export_dir)
+
+    def finalize_run(self, run_id: Optional[str], final_status: str) -> None:
+        # First perform the standard file-based finalize to write oprun_*.json
+        super().finalize_run(run_id, final_status)
+
+        # Compute the path of the just-written oprun file
+        try:
+            run_start_ts = (
+                self._run_metadata.get("start_time_ts") or self._run_metadata.get("run_start_ts") or dt.datetime.now()
+            )
+            run_id_str = run_id or self._run_id or run_start_ts.strftime("%Y%m%d_%H%M%S")
+            run_path = self.export_dir / f"oprun_{run_id_str}.json"
+        except Exception as e:
+            logger.error(f"Superset: failed to determine oprun file path for upload: {e}")
+            return
+
+        # Upload via SFTP if environment/configuration is available
+        try:
+            success = upload_run_sftp(run_path)
+            if success:
+                logger.info(f"Superset: successfully uploaded '{run_path.name}' via SFTP")
+            else:
+                logger.warning(
+                    f"Superset: skipping SFTP upload for '{run_path.name}' (missing credentials or upload failed)"
+                )
+        except Exception as e:
+            logger.error(f"Superset: unexpected error during SFTP upload of '{run_path}': {e}")
+            # Do not raise; file export already succeeded
+
+
 class ResultDestinationFactory:
     """Factory to create appropriate result destination based on configuration"""
 
@@ -638,5 +674,8 @@ class ResultDestinationFactory:
         elif result_destination == "results_export":
             export_dir = kwargs.get("export_dir")
             return FileResultDestination(export_dir)
+        elif result_destination == "superset":
+            export_dir = kwargs.get("export_dir")
+            return SupersetResultDestination(export_dir)
         else:
             raise ValueError(f"Unknown result destination: {result_destination}")
