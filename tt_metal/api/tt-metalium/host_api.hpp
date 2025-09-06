@@ -483,14 +483,14 @@ void SetRuntimeArgs(
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any logical Tensix core coordinate(s) on which the kernel is placed | Yes      |
- * | runtime_args | The runtime args to be written                                         | initializer_list<const uint32_t>                       |                                                                     | Yes      |
+ * | runtime_args | The runtime args to be written                                         | initializer_list<uint32_t>                       |                                                                     | Yes      |
  */
 // clang-format on
 void SetRuntimeArgs(
     const Program& program,
     KernelHandle kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    std::initializer_list<const uint32_t> runtime_args);
+    std::initializer_list<uint32_t> runtime_args);
 
 // clang-format off
 /**
@@ -540,11 +540,11 @@ void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::S
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
- * | runtime_args | The runtime args to be written                                         | std::initializer_list<const uint32_t>                  |                                                                     | Yes      |
+ * | runtime_args | The runtime args to be written                                         | std::initializer_list<uint32_t>                  |                                                                     | Yes      |
  */
 // clang-format on
 void SetCommonRuntimeArgs(
-    const Program& program, KernelHandle kernel_id, std::initializer_list<const uint32_t> runtime_args);
+    const Program& program, KernelHandle kernel_id, std::initializer_list<uint32_t> runtime_args);
 
 // clang-format off
 /**
