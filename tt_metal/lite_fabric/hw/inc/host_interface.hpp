@@ -209,13 +209,14 @@ struct FabricLiteMemoryMap {
     uint32_t sender_connection_live_semaphore{};
     unsigned char padding1[12]{};
     uint32_t worker_semaphore{};
-    unsigned char padding2[12]{};
+    unsigned char padding2[92]{};
     unsigned char sender_channel_buffer[lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0] * lite_fabric::CHANNEL_BUFFER_SIZE]{};
+    unsigned char padding3[192]{};
     unsigned char
         receiver_channel_buffer[lite_fabric::RECEIVER_NUM_BUFFERS_ARRAY[0] * lite_fabric::CHANNEL_BUFFER_SIZE]{};
     // L1 address of the service_lite_fabric function
     uint32_t service_lite_fabric_addr{};
-    unsigned char padding3[12]{};
+    unsigned char padding4[12]{};
     // Must be last because it has members that are only stored on the host
     HostToFabricLiteInterface<lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0], lite_fabric::CHANNEL_BUFFER_SIZE>
         host_interface;
@@ -236,8 +237,8 @@ struct FabricLiteMemoryMap {
 static_assert(offsetof(FabricLiteMemoryMap, sender_flow_control_semaphore) % 16 == 0);
 static_assert(offsetof(FabricLiteMemoryMap, sender_connection_live_semaphore) % 16 == 0);
 static_assert(offsetof(FabricLiteMemoryMap, worker_semaphore) % 16 == 0);
-static_assert(offsetof(FabricLiteMemoryMap, sender_channel_buffer) % 16 == 0);
-static_assert(offsetof(FabricLiteMemoryMap, receiver_channel_buffer) % 16 == 0);
+static_assert(offsetof(FabricLiteMemoryMap, sender_channel_buffer) % GLOBAL_ALIGNMENT == 0);
+static_assert(offsetof(FabricLiteMemoryMap, receiver_channel_buffer) % GLOBAL_ALIGNMENT == 0);
 static_assert(offsetof(FabricLiteMemoryMap, host_interface) % 16 == 0);
 
 }  // namespace lite_fabric

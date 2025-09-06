@@ -629,3 +629,14 @@ TEST_P(FabricLite, ActiveEthKernelDevice0) {
     log_info(tt::LogTest, "========== Kernel done. Performing basic combo test while in metal firmware ==========");
     perform_basic_combo_test(desc, host_interface);
 }
+
+TEST_P(FabricLite, ReadArcScratch) {
+    uint32_t arc_addr = 0x80030408;
+    uint64_t dest_noc_addr_arc = (0ULL << (36 + 6)) | (8ULL << 36) | (uint64_t)arc_addr;
+
+    for (int i = 0; i < 50; ++i) {
+        uint32_t read_val = 0;
+        host_interface.read(&read_val, sizeof(uint32_t), dest_noc_addr_arc);
+        EXPECT_EQ(read_val, 5);
+    }
+}

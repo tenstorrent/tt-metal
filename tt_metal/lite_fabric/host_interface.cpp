@@ -4,6 +4,7 @@
 
 #include "tt_metal/lite_fabric/hw/inc/lf_dev_mem_map.hpp"
 #include "tt_metal/lite_fabric/hw/inc/host_interface.hpp"
+#include <thread>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/api/tt-metalium/hal_types.hpp"
 
@@ -228,24 +229,29 @@ void HostToFabricLiteInterface<NUM_BUFFERS, CHANNEL_BUFFER_SIZE>::read(
     header.to_chip_unicast(1);
     header.to_noc_read(
         lite_fabric::NocReadCommandHeader{src_noc_addr, HostToFabricLiteReadEvent::get()}, size, noc_index);
-    header.unaligned_offset = src_noc_addr & (l1_alignment_bytes - 1);
+    // The device will calculate the proper alignment offset, so we just initialize this to 0
+    header.unaligned_offset = 0;
 
     uint32_t receiver_header_address = get_next_receiver_buffer_slot_address(receiver_channel_base);
-    log_debug(
-        tt::LogMetal,
-        "Reading data from {} {:#x} unaligned {}",
-        get_mmio_eth_core().str(),
-        receiver_header_address,
-        header.unaligned_offset);
-    uint32_t receiver_data_address = receiver_header_address + sizeof(FabricLiteHeader) + header.unaligned_offset;
+    log_debug(tt::LogMetal, "Reading data from {} {:#x}", get_mmio_eth_core().str(), receiver_header_address);
+    // Base data address is immediately after header - device will handle alignment
+    uint32_t receiver_data_address = receiver_header_address + sizeof(FabricLiteHeader);
 
     wait_for_empty_write_slot();
     send_payload_flush_non_blocking_from_address(header, sender_channel_base);
 
     wait_for_read_event(receiver_header_address);
 
+    // Read back the alignment offset that the device calculated and stored in the header
+    uint8_t read_back_unaligned_offset = 0;
     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        mem_ptr, size, get_mmio_eth_core(), receiver_data_address);
+        &read_back_unaligned_offset,
+        sizeof(uint8_t),
+        get_mmio_eth_core(),
+        receiver_header_address + offsetof(FabricLiteHeader, unaligned_offset));
+
+    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        mem_ptr, size, get_mmio_eth_core(), receiver_data_address + read_back_unaligned_offset);
 
     // Ack to device we read
     h2d.receiver_host_read_index =
@@ -313,8 +319,7 @@ FabricLiteMemoryMap::make_host_interface(const tt_cxy_pair& mmio_core) {
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::BARRIER);
     host_interface.tensix_barrier_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BARRIER);
-    host_interface.l1_alignment_bytes =
-        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    host_interface.l1_alignment_bytes = GLOBAL_ALIGNMENT;
     host_interface.mmio_device_id = mmio_core.chip;
     host_interface.mmio_eth_core_x = mmio_core.x;
     host_interface.mmio_eth_core_y = mmio_core.y;

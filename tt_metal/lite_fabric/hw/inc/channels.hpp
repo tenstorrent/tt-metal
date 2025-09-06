@@ -139,19 +139,43 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
 
         case lite_fabric::NocSendTypeEnum::NOC_READ: {
             if (!on_mmio_chip) {
-                const auto src_address = header.command_fields.noc_read.noc_address;
+                const uint64_t src_address = header.command_fields.noc_read.noc_address;
                 // This assumes nobody else is using the sender channel on device 1 because
                 // the tunnel depth is only 1 at the moment
-                uint32_t dst_address = sender_buffer_channel.get_cached_next_buffer_slot_addr();
-                uint32_t payload_dst_address =
-                    dst_address + sizeof(lite_fabric::FabricLiteHeader) + header.unaligned_offset;
+                uint32_t dst_header_address = sender_buffer_channel.get_cached_next_buffer_slot_addr();
                 // Create packet header for writing back
                 tt_l1_ptr lite_fabric::FabricLiteHeader* packet_header_in_sender_ch =
-                    reinterpret_cast<lite_fabric::FabricLiteHeader*>(dst_address);
+                    reinterpret_cast<lite_fabric::FabricLiteHeader*>(dst_header_address);
                 *packet_header_in_sender_ch = header;
                 // Read the data into the buffer
                 // This is safe only if the data at the sender buffer slot has been flushed out
                 // We rely on the host to not do a read until the received data has been read out
+                // When doing reads, ensure that the lower 6 bits of the src_address and payload_dst_address are the
+                // same we will let the host know of the data offset by setting header.unaligned_offset Lower 6 bits
+                // must match for all reads from all core types to work
+
+                // Calculate natural payload location (immediately after header)
+                uint32_t natural_payload_address = dst_header_address + sizeof(lite_fabric::FabricLiteHeader);
+
+                // Get the lower 6 bits that we need to match from source address
+                uint32_t src_alignment = src_address & (GLOBAL_ALIGNMENT - 1);  // Lower 6 bits of source
+                uint32_t natural_alignment =
+                    natural_payload_address & (GLOBAL_ALIGNMENT - 1);  // Lower 6 bits of natural location
+
+                // Calculate offset needed to align to source's lower 6 bits
+                uint32_t alignment_offset;
+                if (src_alignment >= natural_alignment) {
+                    alignment_offset = src_alignment - natural_alignment;
+                } else {
+                    alignment_offset = GLOBAL_ALIGNMENT + src_alignment - natural_alignment;
+                }
+
+                // Final aligned payload address
+                uint32_t payload_dst_address = natural_payload_address + alignment_offset;
+
+                // Store the offset for the host to know where the actual data starts
+                packet_header_in_sender_ch->unaligned_offset = alignment_offset;
+
                 noc_async_read(src_address, payload_dst_address, payload_size_bytes, noc_index);
                 noc_async_read_barrier(noc_index);
 
