@@ -90,6 +90,35 @@ class TransformerBlock(LightweightModule):
             tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
         )
+
+        # Resolve FFN norm key dynamically for broader model compatibility (Falcon, etc.)
+        def _resolve_ffn_norm_key(sd, ln):
+            base = f"layers.{ln}."
+            # Preferred aliases in order
+            preferred = [
+                "ffn_norm",
+                "post_attention_layernorm",
+                "post_feedforward_layernorm",
+                "ln_mlp",
+                "mlp_layernorm",
+                "mlp_ln",
+            ]
+            for key in preferred:
+                if f"{base}{key}.weight" in sd:
+                    return key
+            # Fallback: scan for any layer norm that is not the attention norm
+            suffixes = []
+            for k in sd.keys():
+                if k.startswith(base) and k.endswith(".weight") and ("norm" in k or "layernorm" in k):
+                    suffix = k[len(base) : -len(".weight")]
+                    if suffix != "attention_norm" and not suffix.startswith("pre_feedforward"):
+                        suffixes.append(suffix)
+            if suffixes:
+                return suffixes[0]
+            return "ffn_norm"
+
+        ffn_norm_key = _resolve_ffn_norm_key(state_dict, layer_num)
+
         self.ff_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -99,7 +128,7 @@ class TransformerBlock(LightweightModule):
                 state_dict_prefix=args.get_state_dict_prefix("", layer_num),
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
-                weight_key="ffn_norm",
+                weight_key=ffn_norm_key,
                 is_distributed=self.args.is_distributed_norm,
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],

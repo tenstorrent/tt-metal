@@ -79,6 +79,7 @@ def standardize_hf_keys_multimodal(state_dict):
 
 
 def convert_hf_to_meta(state_dict, head_dim):
+    state_dict = _standardize_falcon_hf_paths(state_dict)
     state_dict = split_hf_keys(state_dict)
     state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
     state_dict = map_hf_to_meta_keys(state_dict)
@@ -502,6 +503,27 @@ def load_sharded_checkpoints(checkpoints, n_layers):
 def split_hf_keys(loaded_weights):
     converted_weights = {}
     for key, tensor in loaded_weights.items():
+        # Falcon-style fused attention: transformer.h.N.self_attention.query_key_value.(weight|bias)
+        if re.search(r"(^|\.)query_key_value\.(weight|bias)$", key):
+            base = key.rsplit(".", 1)[0]
+            q_key = base.replace("query_key_value", "q_proj") + "." + key.rsplit(".", 1)[1]
+            k_key = base.replace("query_key_value", "k_proj") + "." + key.rsplit(".", 1)[1]
+            v_key = base.replace("query_key_value", "v_proj") + "." + key.rsplit(".", 1)[1]
+            # Split along output dim (dim=0) equally into Q,K,V
+            q_tensor, k_tensor, v_tensor = torch.split(tensor, tensor.shape[0] // 3, dim=0)
+            converted_weights[q_key] = q_tensor
+            converted_weights[k_key] = k_tensor
+            converted_weights[v_key] = v_tensor
+            continue
+        # Falcon-style fused MLP: mlp.dense_h_to_4h.(weight|bias) -> split to gate_proj/up_proj
+        if re.search(r"(^|\.)mlp\.dense_h_to_4h\.(weight|bias)$", key):
+            base, suffix = key.rsplit(".", 1)
+            gate_key = base.replace("mlp.dense_h_to_4h", "mlp.gate_proj") + "." + suffix
+            up_key = base.replace("mlp.dense_h_to_4h", "mlp.up_proj") + "." + suffix
+            gate_tensor, up_tensor = torch.split(tensor, tensor.shape[0] // 2, dim=0)
+            converted_weights[gate_key] = gate_tensor
+            converted_weights[up_key] = up_tensor
+            continue
         if "qkv_proj" in key:
             # split Q, K and V
             q_key = key.replace("qkv_proj", "q_proj")
@@ -843,3 +865,52 @@ def convert_rope_style_hf_to_meta(cos_hf: torch.Tensor, sin_hf: torch.Tensor) ->
     sin_meta = torch.repeat_interleave(sin_unique, repeats=2, dim=-1)
 
     return cos_meta, sin_meta
+
+
+def _standardize_falcon_hf_paths(state_dict: dict) -> dict:
+    """
+    Normalize common Falcon (and related) HF checkpoint key patterns to the
+    generic HuggingFace layout expected by the rest of the conversion path.
+
+    Examples handled:
+    - transformer.word_embeddings.* -> model.embed_tokens.*
+    - transformer.ln_f.*            -> model.norm.*
+    - transformer.h.<i>.X           -> model.layers.<i>.X
+    - self_attention.*              -> self_attn.*
+    - attention.*                   -> self_attn.* (older variants)
+    """
+    if not state_dict:
+        return state_dict
+
+    output = {}
+    for k, v in state_dict.items():
+        new_k = k
+        if new_k.startswith("transformer.word_embeddings."):
+            new_k = new_k.replace("transformer.word_embeddings.", "model.embed_tokens.")
+        elif new_k.startswith("transformer.ln_f."):
+            new_k = new_k.replace("transformer.ln_f.", "model.norm.")
+        elif new_k.startswith("transformer.h."):
+            # transformer.h.<i>. -> model.layers.<i>.
+            parts = new_k.split(".")
+            # parts: [transformer, h, <i>, ...]
+            if len(parts) >= 3 and parts[1] == "h" and parts[2].isdigit():
+                new_k = "model.layers." + parts[2] + "." + ".".join(parts[3:])
+            else:
+                new_k = new_k.replace("transformer.h.", "model.layers.")
+
+        # Unify attention naming
+        new_k = new_k.replace(".self_attention.", ".self_attn.")
+        new_k = new_k.replace(".self_attn_layer.", ".self_attn.")
+        new_k = new_k.replace(".attention.", ".self_attn.")
+
+        # Falcon-specific MLP and attn projections
+        new_k = new_k.replace(".mlp.dense_4h_to_h.", ".mlp.down_proj.")
+        new_k = new_k.replace(".self_attn.dense.", ".self_attn.o_proj.")
+
+        # Falcon layernorm aliases
+        new_k = new_k.replace(".ln_attn.", ".input_layernorm.")
+        new_k = new_k.replace(".ln_mlp.", ".post_attention_layernorm.")
+
+        output[new_k] = v
+
+    return output

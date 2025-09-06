@@ -679,6 +679,7 @@ def test_demo_text(
             )
 
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
+    vocab_size = model_args[0].vocab_size
 
     if token_accuracy:
         input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
@@ -754,6 +755,11 @@ def test_demo_text(
         all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
         for user in range(global_batch_size):
             user_tok = int(prefilled_token[user].item())
+            # Clamp to valid vocab range to avoid tokenizer decode overflow
+            if user_tok < 0:
+                user_tok = 0
+            elif user_tok >= vocab_size:
+                user_tok = vocab_size - 1
             all_outputs[user].append(user_tok)
 
         user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
@@ -826,7 +832,12 @@ def test_demo_text(
                 current_pos += 1
             # Save output token to print out later
             for user in range(global_batch_size):
-                user_tok = out_tok[user].item()
+                user_tok = int(out_tok[user].item())
+                # Clamp to valid vocab range to avoid tokenizer decode overflow
+                if user_tok < 0:
+                    user_tok = 0
+                elif user_tok >= vocab_size:
+                    user_tok = vocab_size - 1
                 if (
                     user_tok not in tokenizer.stop_tokens and user_done[user] == False
                 ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
@@ -967,7 +978,17 @@ def test_demo_text(
     )
 
     # Benchmark targets
-    supported_models = ["Llama-3.2-1B", "Llama-3.2-3B", "Llama-3.1-8B", "Llama-3.2-11B", "Llama-3.1-70B", "Mistral-7B"]
+    supported_models = [
+        "Llama-3.2-1B",
+        "Llama-3.2-3B",
+        "Llama-3.1-8B",
+        "Llama-3.2-11B",
+        "Llama-3.1-70B",
+        "Mistral-7B",
+        "Falcon-H1-0.5B",
+        "Falcon3-1B",
+        "Falcon-H1-7B",
+    ]
     supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "P150x8", "T3K", "TG"]
 
     tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
@@ -1016,6 +1037,11 @@ def test_demo_text(
             "N300_Mistral-7B": 38,  # TODO Update target
             "T3K_Mistral-7B": 45,  # TODO Update target
             "TG_Mistral-7B": 45,  # TODO Update target
+            # Add initial Falcon-H1 entry (targets optional)
+            # "N150_Falcon-H1-0.5B": <value>,
+            # "N300_Falcon-H1-0.5B": <value>,
+            # "T3K_Falcon-H1-0.5B": <value>,
+            # "TG_Falcon-H1-0.5B": <value>,
         }
         if model_device_key in dict_target_decode_tok_s_u:
             target_decode_tok_s_u = dict_target_decode_tok_s_u[model_device_key]
