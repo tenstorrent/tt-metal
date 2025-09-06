@@ -671,7 +671,7 @@ Tensor to_device(
 
 struct PinnedMemoryWrapper {
     std::shared_ptr<tt_metal::PinnedMemory> pinned_memory;
-    std::shared_ptr<tt_metal::distributed::MeshEvent> release_event;
+    //std::shared_ptr<tt_metal::distributed::MeshEvent> release_event;
 };
 std::deque<PinnedMemoryWrapper> pinned_memories_cache;
 
@@ -695,9 +695,11 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
 
     const DistributedHostBuffer& distributed_host_buffer = host_tensor.host_storage().buffer();
 
+    #if 0
     for (auto& pinned_memory : pinned_memories_cache) {
         EventSynchronize(*pinned_memory.release_event);
     }
+    #endif
     pinned_memories_cache.clear();
 
     // Host tensor must have pre-allocated buffers for all device shards.
@@ -738,10 +740,12 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
     }
 
     mesh_cq.enqueue_read(mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
+    #if 0
     std::shared_ptr<tt_metal::distributed::MeshEvent> event = std::make_shared<tt_metal::distributed::MeshEvent>(mesh_cq.enqueue_record_event_to_host());
     for (auto& pinned_memory : pinned_memories) {
         pinned_memories_cache.push_back({std::move(pinned_memory), event});
     }
+    #endif
     #if 0
     for (auto& shard : shards) {
         shard.second->set_pinned_memory(nullptr);
