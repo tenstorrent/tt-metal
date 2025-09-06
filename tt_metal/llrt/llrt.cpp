@@ -268,12 +268,14 @@ void wait_until_cores_done(
             }
         }
 
+#ifdef DEBUG
         // Print not-done cores
         if (loop_count % 1000 == 0) {
             log_debug(
                 tt::LogMetal, "Device {}: Not done phys cores: {}", device_id, fmt::join(not_done_phys_cores, " "));
             usleep(100000);
         }
+#endif
 
         for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end(); ) {
             const auto &phys_core = *it;
