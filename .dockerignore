@@ -1,0 +1,7 @@
+models/
+generated/
+conan_build/
+build_Release/
+build_Release_tracy/
+build_RelWithDebInfo_tracy/
+__pycache__/

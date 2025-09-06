@@ -1,0 +1,24 @@
+
+libnuma_1.1 {
+};
+
+libnuma_1.2 {
+} libnuma_1.1;
+
+libnuma_1.3 {
+} libnuma_1.2;
+
+libnuma_1.4 {
+} libnuma_1.3;
+
+libnuma_1.5 {
+} libnuma_1.4;
+
+libnuma_1.6{
+} libnuma_1.5;
+
+libnuma_1.7{
+} libnuma_1.6;
+
+libnuma_2.1{
+} libnuma_1.7;

@@ -36,6 +36,28 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG -fno-omit-frame-pointer")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG -fno-omit-frame-pointer")
 
+option(CONAN_INSTALL_ROOT "Root for the conan package installation" "")
+message(STATUS "CONAN_INSTALL_ROOT = ${CONAN_INSTALL_ROOT}")
+
+if(CONAN_INSTALL_ROOT)
+    set(CONAN_INSTALL_DIR "${CONAN_INSTALL_ROOT}/build/Release/generators")
+    include("${CONAN_INSTALL_DIR}/conan_cmakedeps_paths.cmake")
+endif()
+
+find_package(libnuma REQUIRED)
+find_package(hwloc)
+
+if(TARGET hwloc::hwloc)
+    add_library(hwloc ALIAS hwloc::hwloc)
+    # conan-provided hwloc target include directories do not transfer correctly, need to
+    # set them explicitly in the consumer cmake script.
+    target_include_directories(hwloc::hwloc INTERFACE "${hwloc_INCLUDE_DIR}")
+endif()
+
+if(TARGET libnuma::libnuma)
+    add_library(numa ALIAS libnuma::libnuma)
+endif()
+
 # Defining build types is the pervue of the top-level project
 if(PROJECT_IS_TOP_LEVEL)
     include(sanitizers)

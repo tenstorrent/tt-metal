@@ -1,0 +1,59 @@
+# TT-Metalium Dockerfile
+
+#############################################################
+
+ARG DEBIAN_VERSION=12
+FROM debian:${DEBIAN_VERSION} AS base
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo
+ENV PATH="$CARGO_HOME/bin:$PATH"
+
+# Install runtime deps
+COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    acl \
+    gdb \
+    less \
+    libmpfr-dev \
+    libgl1 \
+    ipmitool \
+    git \
+    build-essential \
+    pkg-config \
+    xz-utils \
+    python3-pip python3-full \
+    wget \
+    curl \
+    lsb-release wget software-properties-common gnupg \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && ./llvm.sh 20 17
+
+# Set up virtual environment and TT_METAL_HOME
+ENV PYTHON_ENV_DIR=/opt/venv
+ENV TT_METAL_HOME=/tt-metal
+ENV PYTHONPATH=/tt-metal
+
+RUN pip3 install --user conan
+RUN conan --version
+
+RUN git config --global --add safe.directory /workspace
+
+WORKDIR /tt-metal-conan
+COPY conanfile.txt /tt-metal-conan/conanfile.txt
+COPY tool_conanfile.txt /tt-metal-conan/tool_conanfile.txt
+COPY conan_profile.txt /tt-metal-conan/conan_profile.txt
+COPY install_conan_packages.sh /tt-metal-conan/install_conan_packages.sh
+RUN ls -al
+RUN ./install_conan_packages.sh /tt-metal-conan/conan-build
+
+WORKDIR /tt-metal
+COPY . /tt-metal
+RUN ls
+
+
+# # Build tt-metal and venv, then clear cache
+# RUN /bin/bash -c "./build_metal.sh"

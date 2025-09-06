@@ -59,7 +59,10 @@ if(ENABLE_DISTRIBUTED AND EXISTS ${ULFM_PREFIX}/lib/libmpi.so.40)
 elseif(ENABLE_DISTRIBUTED)
     # Try to find system MPI if distributed is enabled
     find_package(MPI QUIET COMPONENTS C)
-    if(MPI_FOUND)
+    # conan MPI package provides different target name compared to the apt-provided one
+    if(TARGET openmpi::openmpi)
+        add_library(OpenMPI::MPI ALIAS openmpi::openmpi)
+    elseif(MPI_FOUND)
         message(STATUS "ULFM MPI not found, using system MPI")
         add_library(OpenMPI::MPI ALIAS MPI::MPI_C)
         set(USE_MPI TRUE)
