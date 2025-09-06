@@ -9,7 +9,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
@@ -593,12 +592,9 @@ def save_and_get_path(path, tensor):
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
-    memory_config = tensor.memory_config()
     ttnn.dump_tensor(path, tensor)
     ttnn.deallocate(tensor)
-    return SavedWeight(
-        path=path, memory_config=memory_config
-    )  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+    return str(path)
 
 
 def get_mesh_coords(mesh_shape: list[int], row: int = None, col: int = None) -> list[ttnn.MeshCoordinate]:

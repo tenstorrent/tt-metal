@@ -1057,6 +1057,7 @@ class DeepseekV3DecoderLayer(nn.Module):
         )
         self.input_layernorm = DeepseekV3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = DeepseekV3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        print
 
     def forward(
         self,
