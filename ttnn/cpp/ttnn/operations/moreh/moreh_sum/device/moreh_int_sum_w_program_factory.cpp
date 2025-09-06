@@ -34,7 +34,7 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
     const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
     uint32_t Wt{W / tt::constants::TILE_WIDTH};
     uint32_t Ht{H / tt::constants::TILE_HEIGHT};
-    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
+    [[maybe_unused]] uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
     auto num_rows{other_dims_product * Ht};
 
     // check mask for w-dim

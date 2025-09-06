@@ -579,7 +579,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         auto& writer_args = writer_args_per_core[core_id];
 
         // Get is_reducer value from the stored arguments
-        bool is_reducer = (writer_args[13] == 1);
+        [[maybe_unused]] bool is_reducer = (writer_args[13] == 1);
 
         // Add reducer core coordinates
         if (reducer_core_ids[reduction_group_id] != UINT32_MAX) {

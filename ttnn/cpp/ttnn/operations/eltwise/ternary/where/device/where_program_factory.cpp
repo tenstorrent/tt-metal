@@ -60,7 +60,6 @@ void set_or_update_runtime_arguments(
     constexpr size_t num_writer_args = 3;
     constexpr size_t num_kernel_args = 3;
 
-
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
 
@@ -306,7 +305,7 @@ void set_or_update_runtime_arguments(
                 reader_runtime_args[26] = a_num_tiles;                           // 26: src_num_tiles (predicate)
             }
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
-        }  else {
+        } else {
             TT_THROW("Unsupported Where variant in WhereDeviceOperation. Supported: TTS, TST, TTT");
         }
 
@@ -501,9 +500,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         num_tiles_per_cb,
         output_data_format);  // output
 
-    auto predicate_is_dram =
-        static_cast<uint32_t>(predicate_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-
     // Handle DRAM flags based on variant and tensor availability
     uint32_t value_true_is_dram = 0, value_false_is_dram = 0;
     if (variant == WhereVariant::TTS) {
@@ -518,8 +514,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         value_false_is_dram =
             static_cast<uint32_t>(value_false_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
     }
-
-    auto output_is_dram = static_cast<uint32_t>(output.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
 
     // BROADCAST DETECTION - Common for both reader and compute kernels
     bool pred_is_bcast = false, true_is_bcast = false, false_is_bcast = false;

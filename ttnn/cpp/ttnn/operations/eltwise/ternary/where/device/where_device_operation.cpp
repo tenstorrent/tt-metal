@@ -152,7 +152,6 @@ TensorSpec WhereDeviceOperation::compute_output_specs(
     // For TST/TTS variants, one of the values is a scalar, so we need to handle that case
 
     auto broadcast_type = args.broadcast_type;
-    auto where_variant = args.where_variant;
 
     auto output_shape = tensor_args.predicate.logical_shape();
 
