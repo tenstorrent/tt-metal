@@ -69,11 +69,9 @@ void create_CBs_for_fused_matmul(
     uint32_t untilize_mode_reblock_cb = 27;
     uint32_t out0_cb = 16;
 
-    auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
 
     uint32_t single_tile_size = num_bytes_for_df * 1024;
 
