@@ -53,7 +53,7 @@
 #include "llrt.hpp"
 #include "multi_command_queue_fixture.hpp"
 #include "random_program_fixture.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
 

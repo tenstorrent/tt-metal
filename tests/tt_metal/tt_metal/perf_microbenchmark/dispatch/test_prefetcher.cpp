@@ -44,7 +44,7 @@
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 #include "umd/device/tt_io.hpp"
 #include "umd/device/tt_xy_pair.h"
 #include "umd/device/types/xy_pair.h"
