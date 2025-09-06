@@ -1,23 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <testsuites tests="30" failures="0" disabled="0" errors="0" time="3.503" timestamp="2025-02-13T20:04:07.344" name="AllTests">
-  <testsuite name="N300DeviceFixture" tests="5" failures="0" disabled="0" skipped="5" errors="0" time="0.001" timestamp="2025-02-13T20:04:07.344">
-    <testcase name="EthValidateEthernetConnectivity" file="/work/tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp" line="21" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:07.344" classname="N300DeviceFixture">
+  <testsuite name="N300MeshDeviceFixture" tests="5" failures="0" disabled="0" skipped="5" errors="0" time="0.001" timestamp="2025-02-13T20:04:07.344">
+    <testcase name="EthValidateEthernetConnectivity" file="/work/tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp" line="21" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:07.344" classname="N300MeshDeviceFixture">
       <skipped message="/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48
 ]]></skipped>
     </testcase>
-    <testcase name="EthInvalidLogicalEthernetCore" file="/work/tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp" line="77" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:07.345" classname="N300DeviceFixture">
+    <testcase name="EthInvalidLogicalEthernetCore" file="/work/tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp" line="77" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:07.345" classname="N300MeshDeviceFixture">
       <skipped message="/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48
 ]]></skipped>
     </testcase>
-    <testcase name="EthValidateAllEthernetCoreMapping" file="/work/tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp" line="83" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:07.345" classname="N300DeviceFixture">
+    <testcase name="EthValidateAllEthernetCoreMapping" file="/work/tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp" line="83" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:07.345" classname="N300MeshDeviceFixture">
       <skipped message="/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48
 ]]></skipped>
     </testcase>
-    <testcase name="EthValidatePhysicalCoreConversion" file="/work/tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp" line="110" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:07.345" classname="N300DeviceFixture">
+    <testcase name="EthValidatePhysicalCoreConversion" file="/work/tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp" line="110" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:07.345" classname="N300MeshDeviceFixture">
       <skipped message="/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48
 ]]></skipped>
     </testcase>
-    <testcase name="EthValidatePhysicalCoreConversion" file="/work/tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp" line="139" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:07.345" classname="N300DeviceFixture">
+    <testcase name="EthValidatePhysicalCoreConversion" file="/work/tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp" line="139" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:07.345" classname="N300MeshDeviceFixture">
       <skipped message="/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/common/multi_device_fixture.hpp:48
 ]]></skipped>
     </testcase>
