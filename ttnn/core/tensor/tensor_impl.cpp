@@ -675,6 +675,10 @@ struct PinnedMemoryWrapper {
 };
 std::deque<PinnedMemoryWrapper> pinned_memories_cache;
 
+void clear_pinned_memories_cache() {
+    pinned_memories_cache.clear();
+}
+
 template <typename T>
 void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blocking, ttnn::QueueId cq_id) {
     ZoneScoped;
