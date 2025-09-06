@@ -359,7 +359,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         });
     }
 
-    barrier_address_params barrier_params;
+    tt::umd::barrier_address_params barrier_params;
     barrier_params.tensix_l1_barrier_base =
         hal_.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::BARRIER);
     barrier_params.dram_barrier_base = hal_.get_dev_addr(tt_metal::HalDramMemAddrType::BARRIER);
@@ -815,7 +815,7 @@ void Cluster::read_sysmem(
 
 void Cluster::verify_sw_fw_versions(
     int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const {
-    tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));
+    tt::umd::tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));
     log_info(
         tt::LogDevice,
         "Software version {}, Ethernet FW version {} (Device {})",
@@ -823,7 +823,7 @@ void Cluster::verify_sw_fw_versions(
         fw_first_eth_core.str(),
         device_id);
     for (std::uint32_t &fw_version : fw_versions) {
-        tt_version fw(fw_version);
+        tt::umd::tt_version fw(fw_version);
 
         TT_FATAL(fw == fw_first_eth_core, "FW versions are not the same across different ethernet cores");
         TT_FATAL(sw.major == fw.major, "SW/FW major version number out of sync");
