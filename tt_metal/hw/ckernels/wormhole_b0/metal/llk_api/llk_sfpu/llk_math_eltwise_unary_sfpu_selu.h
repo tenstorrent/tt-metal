@@ -13,7 +13,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_selu_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::selu, APPROXIMATE>(sfpu::selu_init);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::selu, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
