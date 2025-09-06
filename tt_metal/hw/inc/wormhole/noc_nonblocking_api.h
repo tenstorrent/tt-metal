@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <limits>
 #include "noc_parameters.h"
 #include "dev_msgs.h"
 #include "noc_overlay_parameters.h"
@@ -1392,7 +1393,7 @@ template <
     enum CQNocWait wait = CQ_NOC_WAIT,
     bool update_counter = true,
     bool posted = false>
-inline __attribute__((always_inline)) void noc_write_with_state(
+inline __attribute__((always_inline)) void noc_wwrite_with_state(
     uint32_t noc, uint32_t src_addr, uint32_t dst_noc_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
     if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
         if constexpr (posted) {
@@ -1421,7 +1422,6 @@ inline __attribute__((always_inline)) void noc_write_with_state(
     }
     if constexpr (send) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-        // Ensure to increment once only by conditioning on "send"
         if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
             if constexpr (posted) {
                 noc_posted_writes_num_issued[noc] += 1;
@@ -1447,9 +1447,10 @@ inline __attribute__((always_inline)) void noc_write_with_state(
         dst_noc_addr = (uint32_t)(dst_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
     }
     if constexpr (flags & CQ_NOC_FLAG_DST) {
-        dst_addr = dst_addr & std::numeric<uint32_t>.max();
+        dst_addr = dst_addr & std::numeric_limits<uint32_t>::max();
     }
-    noc_write_with_state(noc, src_addr, dst_noc_addr, dst_addr, size, ndests);
+    noc_wwrite_with_state<noc_mode, cmd_buf, flags, send, wait, update_counter, posted>(
+        noc, src_addr, dst_noc_addr, dst_addr, size, ndests);
 }
 
 // clang-format off
