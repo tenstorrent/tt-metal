@@ -120,15 +120,6 @@ enum dispatch_core_processor_classes {
     DISPATCH_CLASS_MAX = 3,
 };
 
-enum dispatch_core_processor_masks {
-    DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0 = 1 << DISPATCH_CLASS_TENSIX_DM0,
-    DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1 = 1 << DISPATCH_CLASS_TENSIX_DM1,
-    DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE = 1 << DISPATCH_CLASS_TENSIX_COMPUTE,
-
-    DISPATCH_CLASS_MASK_ETH_DM0 = 1 << DISPATCH_CLASS_ETH_DM0,
-    DISPATCH_CLASS_MASK_ETH_DM1 = 1 << DISPATCH_CLASS_ETH_DM1,
-};
-
 enum noc_index {
     NOC_0 = 0,
     NOC_1 = 1,
@@ -155,10 +146,6 @@ enum dispatch_enable_flags : uint8_t {
 };
 
 struct kernel_config_msg_t {
-    volatile uint16_t watcher_kernel_ids[NUM_PROCESSORS_PER_CORE_TYPE];
-    volatile uint8_t pad0[4];
-    volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
-
     // Ring buffer of kernel configuration data
     volatile uint32_t kernel_config_base[NUM_PROGRAMMABLE_CORE_TYPES];
     volatile uint16_t sem_offset[NUM_PROGRAMMABLE_CORE_TYPES];
@@ -180,9 +167,14 @@ struct kernel_config_msg_t {
     // [30:10]: program id
     // [31:31]: 0 (specifies that this id corresponds to a program running on device)
     volatile uint32_t host_assigned_id;
+    // bit i set => processor i enabled
+    volatile uint32_t enables;
+    volatile uint16_t watcher_kernel_ids[NUM_PROCESSORS_PER_CORE_TYPE];
+    volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
+
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
-    volatile uint8_t enables;
+    volatile uint8_t pad3[1];              // CODEGEN:skip
 
     volatile uint8_t preload;  // Must be at end, so it's only written when all other data is written.
 } __attribute__((packed));
