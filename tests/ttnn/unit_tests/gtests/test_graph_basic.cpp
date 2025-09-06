@@ -205,8 +205,8 @@ TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
             std::vector<std::string>(
                 {"tt::tt_metal::create_device_tensor",
                  "ttnn::softmax",
-                 "ttnn::prim::old_infra_device_operation",
-                 "Softmax",
+                 "ttnn::prim::softmax",
+                 "SoftmaxDeviceOperation",
                  "tt::tt_metal::create_device_tensor"}));
     }
 

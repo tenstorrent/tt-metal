@@ -17,6 +17,8 @@
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_to_flatbuffer.hpp"
 
+#include "impl/program/program_impl.hpp"
+
 namespace tt::tt_metal {
 
 //////////////////////////////////////////////////////////////
@@ -310,7 +312,7 @@ void CaptureCreateKernel(
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
     auto& ctx = LightMetalCaptureContext::get();
 
-    std::shared_ptr<Kernel> kernel = program.get_kernel(kernel_id);
+    std::shared_ptr<Kernel> kernel = program.impl().get_kernel(kernel_id);
     uint32_t kernel_global_id = ctx.add_to_map(kernel.get());
     uint32_t program_global_id = ctx.get_global_id(&program);
     log_debug(
@@ -346,7 +348,7 @@ void CaptureSetRuntimeArgsUint32(
     tt::stl::Span<const uint32_t> runtime_args) {
     auto& ctx = LightMetalCaptureContext::get();
 
-    std::shared_ptr<Kernel> kernel = program.get_kernel(kernel_id);
+    std::shared_ptr<Kernel> kernel = program.impl().get_kernel(kernel_id);
     uint32_t program_global_id = ctx.get_global_id(&program);
     uint32_t kernel_global_id = ctx.get_global_id(kernel.get());
     log_debug(
@@ -373,7 +375,7 @@ void CaptureSetRuntimeArgsUint32VecPerCore(
     const std::vector<std::vector<uint32_t>>& runtime_args) {
     auto& ctx = LightMetalCaptureContext::get();
 
-    std::shared_ptr<Kernel> kernel = program.get_kernel(kernel_id);
+    std::shared_ptr<Kernel> kernel = program.impl().get_kernel(kernel_id);
     uint32_t program_global_id = ctx.get_global_id(&program);
     uint32_t kernel_global_id = ctx.get_global_id(kernel.get());
     log_debug(

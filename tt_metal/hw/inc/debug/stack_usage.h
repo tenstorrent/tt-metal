@@ -43,7 +43,7 @@ static inline void record_stack_usage(uint32_t stack_free) {
         // not computed
         return;
 
-    debug_stack_usage_t::usage_t tt_l1_ptr* usage = &GET_MAILBOX_ADDRESS_DEV(watcher.stack_usage)->cpu[PROCESSOR_INDEX];
+    auto tt_l1_ptr* usage = &GET_MAILBOX_ADDRESS_DEV(watcher.stack_usage)->cpu[PROCESSOR_INDEX];
     // min_free is initialized to zero, which we want to compare as
     // least noteworthy, and an offset free stack of one as the most
     // noteworthy. Decrement the former, so zero wraps around before
