@@ -9,7 +9,6 @@
 #include "core_coord.hpp"
 
 namespace tt {
-enum class ARCH;
 
 namespace tt_metal {
 // Returns an ordered list of DRAM Bank ID to optimally placed worker cores. Placing DRAM reader or writer

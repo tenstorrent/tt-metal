@@ -21,7 +21,6 @@
 #include <vector>
 
 namespace tt {
-enum class ARCH;
 namespace tt_metal {
 enum class ClusterType : std::uint8_t;
 }  // namespace tt_metal

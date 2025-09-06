@@ -33,8 +33,6 @@ enum class AddressableCoreType : uint8_t;
 
 namespace tt {
 
-enum class ARCH;
-
 namespace tt_metal {
 
 // Struct of core type, processor class, and processor type to uniquely identify any processor.

@@ -38,7 +38,6 @@
 #include <umd/device/types/cluster_types.hpp>
 
 namespace tt {
-enum class ARCH;
 namespace llrt {
 class RunTimeOptions;
 }
