@@ -1,7 +1,7 @@
-name: "(TG) TG demo all-post-commit tests"
+name: "(Galaxy) APC fast tests"
 
 on:
-  workflow_dispatch:  # Manual trigger only used to test TG demo all-post-commit tests
+  workflow_dispatch:  # Manual trigger only used to test galaxy apc fast tests
 
 jobs:
   build-artifact:
@@ -12,10 +12,10 @@ jobs:
     with:
       version: 22.04
       build-wheel: true
-  tg-demo-all-post-commit-tests:
+  galaxy-apc-fast-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/tg-demo-all-post-commit-impl.yaml
+    uses: ./.github/workflows/galaxy-apc-fast-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
