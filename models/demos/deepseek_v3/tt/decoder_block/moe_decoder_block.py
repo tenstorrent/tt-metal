@@ -132,6 +132,7 @@ class MoEDecoderBlock(DecoderBlockBase):
             "shared_expert": SharedExpert.create_state(hf_config, mesh_device, ccl),
             "revert_dp": {
                 "multi_device_global_semaphore": ccl.get_gather_sem(0),
+                "barrier_semaphore": ccl.get_barrier_sem(1),
             },
         }
 
