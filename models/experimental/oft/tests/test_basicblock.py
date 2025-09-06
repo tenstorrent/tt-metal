@@ -11,6 +11,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters_resnet
+from loguru import logger
 
 
 @pytest.mark.parametrize(
@@ -42,12 +43,12 @@ def test_tt_basicblock(device, n, in_ch, out_ch, h, w, stride, sharding, is_slic
     ttnn_x = ttnn.from_torch(x_for_ttnn, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     ttnn_out = block.forward(device, ttnn_x, gn_shard=sharding)
 
-    print(f"Output shape: {ttnn_out.shape}, torch out {out.shape}")
+    logger.info(f"Output shape: {ttnn_out.shape}, torch out {out.shape}")
     B, C, H, W = out.shape
     ttnn_out = ttnn.to_torch(ttnn_out)
     out = out.permute(0, 2, 3, 1).reshape(1, 1, B * H * W, C)
     pcc, message = assert_with_pcc(ttnn_out, out, 0.99)
-    print(f"PCC: {pcc}, Message: {message}")
+    logger.info(f"PCC: {pcc}, Message: {message}")
 
 
 @pytest.mark.parametrize(
@@ -96,4 +97,4 @@ def test_tt_topdownblock_with_8_basicblocks(device, n, in_ch, out_ch, h, w, stri
     B, C, H, W = out_ref.shape
     out_ref = out_ref.permute(0, 2, 3, 1).reshape(1, 1, B * H * W, C)
     pcc, message = assert_with_pcc(ttnn_out, out_ref, 0.99)
-    print(f"PCC for topdown block with 8 BasicBlocks: {pcc}, Message: {message}")
+    logger.info(f"PCC for topdown block with 8 BasicBlocks: {pcc}, Message: {message}")

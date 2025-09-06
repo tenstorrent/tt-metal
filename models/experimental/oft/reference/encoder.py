@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-
+from loguru import logger
 from collections import namedtuple
 
 ObjectData = namedtuple("ObjectData", ["classname", "position", "dimensions", "angle", "score"])
@@ -86,13 +86,13 @@ def non_maximum_suppression(heatmaps, sigma=1.0, thresh=0.05, max_peaks=50):
     _, height, width = heatmaps.size()
     flat_inds = torch.arange(height * width).type_as(max_inds).view(height, width)
     peaks = flat_inds == max_inds
-    print(f"PEAKS {peaks.long().sum()}")
+    logger.debug(f"PEAKS {peaks.long().sum()}")
     peaks = peaks & (heatmaps > thresh)
     if peaks.long().sum() > max_peaks:
         scores = heatmaps[peaks]
         scores, _ = torch.sort(scores, descending=True)
         peaks = peaks & (heatmaps > scores[max_peaks - 1])
 
-    print(f"TORCH: Final PEAKS value {peaks.long().sum()}")
+    logger.debug(f"TORCH: Final PEAKS value {peaks.long().sum()}")
 
     return peaks, max_inds

@@ -1,5 +1,6 @@
 import ttnn
 import math
+from loguru import logger
 
 
 def _nearest_32_per_core(x, core):
@@ -31,10 +32,10 @@ class Conv:
         is_sliced=False,
     ) -> None:
         self.weights = parameters.weight
-        # print(f"Conv weights: {self.weights.shape}")
-        # print(f"Conv parameters: {self.weights}")
+        # logger.debug(f"Conv weights: {self.weights.shape}")
+        # logger.debug(f"Conv parameters: {self.weights}")
         self.conv_pt = conv_pt
-        # print(f"Conv: {self.conv_pt}")
+        # logger.debug(f"Conv: {self.conv_pt}")
         self.has_bias = has_bias
         if self.has_bias:
             self.bias = parameters.bias
@@ -43,7 +44,7 @@ class Conv:
         self.stride = conv_pt.stride  # stride
         self.padding = conv_pt.padding  # padding
         self.out_channels = conv_pt.out_channels
-        # print(f"Conv out channels: {self.out_channels}")
+        # logger.debug(f"Conv out channels: {self.out_channels}")
         self.act_block_h = act_block_h
         self.reshard = reshard
         self.dtype = dtype
@@ -72,7 +73,7 @@ class Conv:
         return f"Conv: {self.weights.shape} {self.bias.shape if self.has_bias else ''} {self.kernel_size}"
 
     def __call__(self, device, input_tensor):
-        # print(f"ULAZ: Conv output layout: {self.output_layout}")
+        # logger.debug(f"ULAZ: Conv output layout: {self.output_layout}")
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
             shard_layout=self.shard_layout,
@@ -90,7 +91,7 @@ class Conv:
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
 
-        # print(
+        # logger.debug(
         #     f"inpit_tensor shape: {input_tensor.shape}, conv_pt: {self.conv_pt} stride: {self.stride}, padding: {self.padding}"
         # )
         [output_tensor, [out_h, out_w]] = ttnn.conv2d(
@@ -111,8 +112,8 @@ class Conv:
             return_output_dim=True,
             slice_config=self.slice_config,
         )
-        # print(f"Output tensor shape: {output_tensor.shape}, out_h: {out_h}, out_w: {out_w}")
-        # print(
+        # logger.debug(f"Output tensor shape: {output_tensor.shape}, out_h: {out_h}, out_w: {out_w}")
+        # logger.debug(
         #     f"Output tensor dtype: {output_tensor.dtype}, layout: {output_tensor.layout}, memory config: {output_tensor.memory_config}"
         # )
         return output_tensor, out_h, out_w
@@ -135,7 +136,7 @@ class GroupNorm:
         grid_size = ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
         grid_y = grid_size.y
         grid_x = grid_size.x
-        print(f"{grid_x=}, {grid_y=}, {shard=}, {num_splits=} {self.is_sliced=}")
+        logger.debug(f"{grid_x=}, {grid_y=}, {shard=}, {num_splits=} {self.is_sliced=}")
         # spliting tensor into multiple splits for very large tensors
 
         if shard == "HS":
@@ -173,9 +174,9 @@ class GroupNorm:
         grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
         if shard == "HS":
-            # print(f"Shard height: {H}, width: {W}, grid_size: {grid_size}")
+            # logger.debug(f"Shard height: {H}, width: {W}, grid_size: {grid_size}")
             shard_shape = (H * W) // grid_size.x // grid_size.y, self.channels
-            # print(f"Shard shape: {shard_shape}")
+            # logger.debug(f"Shard shape: {shard_shape}")
             shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
             sharded_mem_config = ttnn.MemoryConfig(
                 ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
@@ -186,7 +187,7 @@ class GroupNorm:
             sharded_mem_config = ttnn.MemoryConfig(
                 ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
             )
-        # print(
+        # logger.debug(
         #     f"input tensor shape: {input_tensor.shape}, layout: {input_tensor.layout} memory config: {input_tensor.memory_config}"
         # )
         input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
@@ -219,7 +220,7 @@ class GroupNormDRAM:
     def __call__(self, device, input_tensor, H, W, shard="HS", num_splits=1):
         compute_grid = device.compute_with_storage_grid_size()
         grid_x, grid_y = compute_grid.x, compute_grid.y
-        print(f"DRAM {grid_x=}, {grid_y=}, {shard=}, {num_splits=} {self.is_sliced=}")
+        logger.debug(f"DRAM {grid_x=}, {grid_y=}, {shard=}, {num_splits=} {self.is_sliced=}")
         if num_splits > 4:
             grid_y = 2
 
@@ -234,11 +235,11 @@ class GroupNormDRAM:
             _nearest_32_per_core(unpadded_shape[2], grid_x),
             _nearest_32_per_core(unpadded_shape[3], grid_y),
         ]
-        print(f"unpadded_shape: {unpadded_shape} out_shape: {out_shape}")
+        logger.debug(f"unpadded_shape: {unpadded_shape} out_shape: {out_shape}")
         input_tensor_tilized = ttnn.tilize_with_val_padding(
             input_tensor, output_tensor_shape=out_shape, pad_value=0, use_multicore=True
         )
-        print(
+        logger.debug(
             f"input_tensor_tilized shape: {input_tensor_tilized.shape} padded shape: {input_tensor_tilized.padded_shape}"
         )
         [gamma_t, beta_t], input_mask_tensor = ttnn.dram_group_norm_params_from_torch(
@@ -246,7 +247,7 @@ class GroupNormDRAM:
         )
 
         # groupnorm
-        print(f"DRAM {grid_size=}")
+        logger.debug(f"DRAM {grid_size=}")
         output_tensor = ttnn.group_norm(
             input_tensor_tilized,
             num_groups=self.num_groups,

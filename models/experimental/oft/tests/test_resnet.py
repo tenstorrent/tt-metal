@@ -11,6 +11,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters_resnet
+from loguru import logger
 
 
 @pytest.mark.parametrize(
@@ -51,26 +52,26 @@ def test_resnetfeatures_forward(device, input_shape, layers):
         layers,
     )
     ttnn_feats8, ttnn_feats16, ttnn_feats32 = tt_module.forward(device, ttnn_input)
-    print("-----------------------------------------")
-    print(
+    logger.info("-----------------------------------------")
+    logger.info(
         f"TTNN feats8 shape: {ttnn_feats8.shape} dtype: {ttnn_feats8.dtype}, layout: {ttnn_feats8.layout}, memory_config: {ttnn_feats8.memory_config()}"
     )
-    print(
+    logger.info(
         f"TTNN feats16 shape: {ttnn_feats16.shape} dtype: {ttnn_feats16.dtype},layout: {ttnn_feats16.layout}, memory_config: {ttnn_feats16.memory_config()}"
     )
-    print(
+    logger.infot(
         f"TTNN feats32 shape: {ttnn_feats32.shape} dtype: {ttnn_feats32.dtype},layout: {ttnn_feats32.layout}, memory_config: {ttnn_feats32.memory_config()}"
     )
-    print("------------------------------------------")
+    logger.info("------------------------------------------")
 
     ttnn_feats8 = ttnn.to_torch(ttnn_feats8)
     ttnn_feats16 = ttnn.to_torch(ttnn_feats16)
-    print(f"TTNN feats16 shape: {ttnn_feats16.shape}")
+    logger.info(f"TTNN feats16 shape: {ttnn_feats16.shape}")
     ttnn_feats32 = ttnn.to_torch(ttnn_feats32)
 
     message, pcc = assert_with_pcc(ttnn_feats8, feats8, 0.99)
-    print(f"Passing: {message}, PCC: {pcc}")
+    logger.info(f"Passing: {message}, PCC: {pcc}")
     message, pcc = assert_with_pcc(ttnn_feats16, feats16, 0.99)
-    print(f"Passing: {message}, PCC: {pcc}")
+    logger.info(f"Passing: {message}, PCC: {pcc}")
     message, pcc = assert_with_pcc(ttnn_feats32, feats32, 0.99)
-    print(f"Passing: {message}, PCC: {pcc}")
+    logger.info(f"Passing: {message}, PCC: {pcc}")

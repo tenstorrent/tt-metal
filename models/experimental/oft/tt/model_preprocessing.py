@@ -48,7 +48,7 @@ def create_OFT_model_parameters_resnet(model, input_tensor: torch.Tensor, device
     )
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
-    # print(f"Parameters conv_args: {parameters.conv_args}")
+    # logger.debug(f"Parameters conv_args: {parameters.conv_args}")
     parameters["model_args"] = model
 
     return parameters
@@ -91,14 +91,14 @@ def create_OFT_model_parameters(model: OftNet, input_tensors: tuple[torch.Tensor
     parameters.oft32.conv3d.bias = ttnn.to_device(parameters.oft32.conv3d.bias, device=device)
 
     input1, input2, input3 = input_tensors
-    # print(f"Input1 shape: {input1.shape}, Input2 shape: {input2.shape}, Input3 shape: {input3.shape}")
+    # logger.debug(f"Input1 shape: {input1.shape}, Input2 shape: {input2.shape}, Input3 shape: {input3.shape}")
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(
         model=model,
         run_model=lambda model: model(input1, input2, input3),
         device=None,
     )
-    # print(f"Parameters conv_args: {parameters.conv_args}")
+    # logger.debug(f"Parameters conv_args: {parameters.conv_args}")
 
     parameters["model_args"] = model
 
@@ -114,7 +114,7 @@ def create_decoder_model_parameters(model, input_tensor: torch.Tensor, device):
     )
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
-    # print(f"Parameters conv_args: {parameters.conv_args}")
+    # logger.debug(f"Parameters conv_args: {parameters.conv_args}")
     parameters["model_args"] = model
 
     return parameters

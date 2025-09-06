@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.model_zoo as model_zoo
 
+from loguru import logger
 
 model_urls = {
     "resnet18": "https://download.pytorch.org/models/resnet18-5c106cde.pth",
@@ -21,11 +22,11 @@ def conv1x1(in_planes, out_planes, stride=1):
     return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
 
 
-def print_tensor_shape(tensor, name):
+def printdebug_tensor_shape(tensor, name):
     if tensor is not None:
-        print(f"{name} shape: {tensor.shape=}")
+        logger.debug(f"{name} shape: {tensor.shape=}")
     else:
-        print(f"{name} is None")
+        logger.debug(f"{name} is None")
 
 
 class BasicBlock(nn.Module):
@@ -47,19 +48,19 @@ class BasicBlock(nn.Module):
 
     def forward(self, x):
         identity = x
-        # print_tensor_shape(identity, "identity")
+        # printdebug_tensor_shape(identity, "identity")
         out = F.relu(self.bn1(self.conv1(x)), inplace=True)
-        # print_tensor_shape(out, "out")
+        # printdebug_tensor_shape(out, "out")
         out = self.bn2(self.conv2(out))
         # return out
         if self.downsample is not None:
-            # print_tensor_shape(identity, "identity")
+            # printdebug_tensor_shape(identity, "identity")
             identity = self.downsample(x)
 
-        # print_tensor_shape(out, "out")
-        # print_tensor_shape(identity, "identity")
+        # printdebug_tensor_shape(out, "out")
+        # printdebug_tensor_shape(identity, "identity")
         out += identity
-        # print_tensor_shape(out, "out")
+        # printdebug_tensor_shape(out, "out")
         out = F.relu(out, inplace=True)
 
         return out
@@ -160,7 +161,7 @@ def test_basicblock_forward(inplanes, planes, stride, input_shape):
 )
 def test_resnetfeatures_forward(input_shape, layers):
     torch.manual_seed(0)
-    print(f"Testing ResNetFeatures with input shape: {input_shape} and layers: {layers}")
+    logger.debug(f"Testing ResNetFeatures with input shape: {input_shape} and layers: {layers}")
     model = ResNetFeatures(BasicBlock, layers)
     x = torch.randn(*input_shape)
     feats8, feats16, feats32 = model(x)
@@ -178,4 +179,4 @@ def test_resnetfeatures_forward(input_shape, layers):
     assert feats16.shape[2] == h16 and feats16.shape[3] == w16
     assert feats32.shape[2] == h32 and feats32.shape[3] == w32
     assert feats8.shape[0] == b and feats16.shape[0] == b and feats32.shape[0] == b
-    print("ResNetFeatures forward test passed.")
+    logger.debug("ResNetFeatures forward test passed.")

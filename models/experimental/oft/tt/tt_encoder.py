@@ -1,7 +1,7 @@
 import torch
 import ttnn
 
-# from .. import utils
+from loguru import logger
 
 from collections import namedtuple
 
@@ -64,7 +64,7 @@ class TTObjectEncoder:
         self.kernel = gaussian_kernel(sigma)
         self.kernel = self.kernel.expand(self.nclass, self.nclass, -1, -1)
         self.ttnn_kernel = ttnn.from_torch(self.kernel, dtype=ttnn.bfloat16)
-        print(f"ttnn {self.kernel.shape=}")
+        logger.debug(f"ttnn {self.kernel.shape=}")
 
     def decode(self, device, heatmaps, pos_offsets, dim_offsets, ang_offsets, grid):
         positions = self._decode_positions(device, pos_offsets, grid)
@@ -188,7 +188,7 @@ def ttnn_non_maximum_suppression_dbg(
     max_inds = max_inds.squeeze(0)
     flat_inds = torch.arange(out_h * out_w).type_as(max_inds).view(out_h, out_w)
     peaks = flat_inds == max_inds
-    print(f"PEAKS {peaks.long().sum()}")
+    logger.debug(f"PEAKS {peaks.long().sum()}")
     peaks = peaks & (heatmaps_torch > thresh)
     # Keep only the top N peaks
     if peaks.long().sum() > max_peaks:
@@ -196,7 +196,7 @@ def ttnn_non_maximum_suppression_dbg(
         scores, _ = torch.sort(scores, descending=True)
         peaks = peaks & (heatmaps_torch > scores[max_peaks - 1])
 
-    print(f"{peaks.shape=}, {peaks.dtype=}")
-    print(f"TTNN: Final PEAKS value {peaks.long().sum()}")
+    logger.debug(f"{peaks.shape=}, {peaks.dtype=}")
+    logger.debug(f"TTNN: Final PEAKS value {peaks.long().sum()}")
     # max_inds return for max_pool2d validation
     return peaks, max_inds

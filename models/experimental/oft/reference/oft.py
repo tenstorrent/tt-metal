@@ -6,9 +6,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# from .. import utils
+from loguru import logger
+
 EPSILON = 1e-6
-EPSILON2 = 1
 
 
 def perspective(matrix, vector):
@@ -34,14 +34,14 @@ class OFT(nn.Module):
         self.scale = scale
 
     def forward(self, features, calib, grid):
-        # print(f"TORCH: features shape: {features.shape}, dtype: {features.dtype}")
+        # logger.debug(f"TORCH: features shape: {features.shape}, dtype: {features.dtype}")
         corners = grid.unsqueeze(1) + self.y_corners.view(-1, 1, 1, 3)
-        # print(f"corners shape: {corners.shape}, dtype: {corners.dtype}")
+        # logger.debug(f"corners shape: {corners.shape}, dtype: {corners.dtype}")
 
         img_corners = perspective(calib.view(-1, 1, 1, 1, 3, 4), corners)
         img_height, img_width = features.size()[2:]
         img_size = corners.new([img_width, img_height]) / self.scale
-        print(f"img_size {img_size}, shape: {img_size.shape}, dtype: {img_size.dtype}")
+        logger.debug(f"img_size {img_size}, shape: {img_size.shape}, dtype: {img_size.dtype}")
         norm_corners = (2 * img_corners / img_size - 1).clamp(-1, 1)
 
         bbox_corners = torch.cat(
@@ -53,7 +53,7 @@ class OFT(nn.Module):
         )
 
         batch, _, depth, width, _ = bbox_corners.size()
-        # print("TORCH: bbox corners shape: ", bbox_corners.shape)
+        # logger.debug("TORCH: bbox corners shape: ", bbox_corners.shape)
         bbox_corners = bbox_corners.flatten(2, 3)
 
         area = (
@@ -74,10 +74,10 @@ class OFT(nn.Module):
         vox_feats = vox_feats / area
 
         vox_feats = vox_feats * visible.float()
-        print(f"TORCH: vox_feats after visibility mask shape: {vox_feats.shape}, dtype: {vox_feats.dtype}")
+        logger.debug(f"TORCH: vox_feats after visibility mask shape: {vox_feats.shape}, dtype: {vox_feats.dtype}")
 
         vox_feats = vox_feats.permute(0, 3, 1, 2).flatten(0, 1).flatten(1, 2)
-        print(f"TORCH: vox_feats shape: {vox_feats.shape}, dtype: {vox_feats.dtype}")
+        logger.debug(f"TORCH: vox_feats shape: {vox_feats.shape}, dtype: {vox_feats.dtype}")
         # return vox_feats
         # Flatten to orthographic feature map
         ortho_feats = self.conv3d(vox_feats).view(batch, depth, width, -1)

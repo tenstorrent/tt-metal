@@ -1,6 +1,7 @@
 import ttnn
 import torch
 import torch.nn.functional as F
+from loguru import logger
 
 try:
     from tracy import signpost
@@ -9,14 +10,14 @@ try:
 except ModuleNotFoundError:
     use_signpost = False
 
-EPSILON = 1e-6
+from models.experimental.oft.reference.oft import EPSILON
 
 
 def plot_tensor(x, a="x"):
-    print(f"{a}'s  shape: {x.shape}")
-    print(f"{a}'s  layout: {x.layout}")
-    print(f"{a}'s  dtype: {x.dtype}")
-    print(f"{a}'s config: {x.memory_config()}")
+    logger.debug(f"{a}'s  shape: {x.shape}")
+    logger.debug(f"{a}'s  layout: {x.layout}")
+    logger.debug(f"{a}'s  dtype: {x.dtype}")
+    logger.debug(f"{a}'s config: {x.memory_config()}")
 
 
 def perspective(matrix, vector):
@@ -53,13 +54,13 @@ def calculate_initialization_parameters(device, channels, cell_size, grid_height
         (bbox_corners[..., 2:] - bbox_corners[..., :2]).prod(dim=-1) * img_height * img_width * 0.25 + EPSILON
     ).unsqueeze(1)
     visible = area > EPSILON
-    # print(f"visible shape: {visible.shape}, dtype: {visible.dtype}")
+    # logger.debug(f"visible shape: {visible.shape}, dtype: {visible.dtype}")
 
     area = 1 / area
     area_nhwc = area.permute(0, 2, 3, 1)  # Convert to NHWC format
     visible_nhwc = visible.permute(0, 2, 3, 1)  # Convert to NHWC format
     top_left_bc = bbox_corners[..., [0, 1]]
-    # print(f"TTNN: top_left_bc shape: {top_left_bc.shape}, dtype: {top_left_bc.dtype}")
+    # logger.debug(f"TTNN: top_left_bc shape: {top_left_bc.shape}, dtype: {top_left_bc.dtype}")
     btm_right_bc = bbox_corners[..., [2, 3]]
     top_right_bc = bbox_corners[..., [2, 1]]
     btm_left_bc = bbox_corners[..., [0, 3]]
@@ -112,7 +113,7 @@ class OFT:
         vox_feats = ttnn.mul(vox_feats, self.visible)
 
         n, h, w, c = vox_feats.shape
-        print(f"TTNN: {n=}, {h=}, {w=}, {c=}")
+        logger.debug(f"TTNN: {n=}, {h=}, {w=}, {c=}")
         vox_feats = ttnn.permute(vox_feats, (0, 2, 3, 1))
         vox_feats = ttnn.reshape(vox_feats, (1, 1, w, h * c))  # PCC 0.0019216915015543698
 

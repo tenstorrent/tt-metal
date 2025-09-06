@@ -1,5 +1,6 @@
 import ttnn
 from models.experimental.oft.tt.common import Conv, GroupNorm, GroupNormDRAM
+from loguru import logger
 
 try:
     from tracy import signpost
@@ -14,7 +15,7 @@ class TTBasicBlock:
 
     def __init__(self, device, parameters, conv_pt, inplanes, planes, stride=1, scale=1, is_sliced=False):
         self.is_sliced = is_sliced
-        print(f"TTBasicBlock: {inplanes=},\n {planes=},\n {stride=},\n {is_sliced=}")
+        logger.debug(f"TTBasicBlock: {inplanes=}, {planes=}, {stride=}, {is_sliced=}")
         self.conv1 = Conv(
             parameters.conv1, conv_pt.conv1, stride=stride, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=is_sliced
         )
@@ -47,27 +48,27 @@ class TTBasicBlock:
         if use_signpost:
             signpost(header="TTBasicBlock forward started")
         out, out_h, out_w = self.conv1(device, x)
-        print(f"FORWARD X Input shape: {x.shape}, dtype: {x.dtype}, layout: {x.layout}")
+        logger.debug(f"FORWARD X Input shape: {x.shape}, dtype: {x.dtype}, layout: {x.layout}")
         out = ttnn.move(out)
-        # print(f"SSHARDING {gn_shard=}")
+        # logger.debug(f"SSHARDING {gn_shard=}")
         out = self.bn1(device, out, out_h, out_w, shard=gn_shard, num_splits=num_splits)
-        print(f"BN1 output shape: {out.shape}")
+        logger.debug(f"BN1 output shape: {out.shape}")
         # if not self.is_sliced:
         out1 = ttnn.relu(out)
         ttnn.deallocate(out)  # added for tracy pass
         out = ttnn.move(out1)  # added for tracy pass
 
         out, out_h, out_w = self.conv2(device, out)
-        print(f"Conv2 output shape: {out.shape}")
+        logger.debug(f"Conv2 output shape: {out.shape}")
         out = ttnn.move(out)
         out = self.bn2(device, out, out_h, out_w, shard=gn_shard, num_splits=num_splits)
-        print(f"BN2 output shape: {out.shape}")
+        logger.debug(f"BN2 output shape: {out.shape}")
 
         if self.downsample is not None:
             x, out_h_ds, out_w_ds = self.downsample_conv(device, x)
             x = self.downsample_bn(device, x, out_h_ds, out_w_ds, shard=gn_shard)
         else:
-            print(f"reshape x shape: {x.shape} self.downsample: {self.downsample}")
+            logger.debug(f"reshape x shape: {x.shape} self.downsample: {self.downsample}")
             # x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
 
         if gn_shard == "HS":
@@ -144,7 +145,7 @@ class TTResNetFeatures:
         return layers
 
     def _run_layer(self, device, x, layer, gn_shard="HS"):
-        # print(f"Running layer with gn_shard: {gn_shard}")
+        # logger.debug(f"Running layer with gn_shard: {gn_shard}")
         for block in layer:
             x = block.forward(device, x, gn_shard)
         return x

@@ -6,6 +6,7 @@ from models.experimental.oft.reference.oft import OFT as ReferenceOFT
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters_oft
 from models.experimental.oft.reference.utils import make_grid
+from loguru import logger
 
 
 @pytest.mark.parametrize(
@@ -51,5 +52,4 @@ def test_oft_forward(device, input_shape, channels, cell_size, grid_height, scal
     n, c, h, w = ref_out.shape
     ref_out = ref_out.permute(0, 2, 3, 1).view(1, 1, h * w, c)
     message, pcc = assert_with_pcc(tt_out, ref_out, pcc_threshold)
-
-    print(f"Passing: {message}, PCC: {pcc} seed: {seed}")
+    logger.info(f"Passing: {message}, PCC: {pcc} seed: {seed}")

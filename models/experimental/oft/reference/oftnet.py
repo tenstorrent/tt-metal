@@ -5,6 +5,8 @@ import torch.nn.functional as F
 from models.experimental.oft.reference import resnet
 from models.experimental.oft.reference.oft import OFT
 
+from loguru import logger
+
 
 class OftNet(nn.Module):
     def __init__(self, num_classes=1, frontend="resnet18", topdown_layers=8, grid_res=0.5, grid_height=4.0):
@@ -12,7 +14,7 @@ class OftNet(nn.Module):
 
         assert frontend in ["resnet18", "resnet34"], "unrecognised frontend"
         self.frontend = getattr(resnet, frontend)(pretrained=False)
-        # print(f"Frontend: {self.frontend}")
+        # logger.debug(f"Frontend: {self.frontend}")
         self.lat8 = nn.Conv2d(128, 256, 1)
         self.lat16 = nn.Conv2d(256, 256, 1)
         self.lat32 = nn.Conv2d(512, 256, 1)
@@ -31,34 +33,34 @@ class OftNet(nn.Module):
 
     def forward(self, image, calib, grid):
         image = (image - self.mean.view(3, 1, 1)) / self.std.view(3, 1, 1)
-        print("FRONTEND started")
+        logger.debug("FRONTEND started")
         feats8, feats16, feats32 = self.frontend(image)
-        print("FRONTEND finished")
+        logger.debug("FRONTEND finished")
         # return feats8, feats16, feats32
-        print("middle block started")
+        logger.debug("middle block started")
         lat8 = F.relu(self.bn8(self.lat8(feats8)))
         lat16 = F.relu(self.bn16(self.lat16(feats16)))
         lat32 = F.relu(self.bn32(self.lat32(feats32)))
         # torch.save(lat8, 'lat8_torch.pt')
         # torch.save(lat16, 'lat16_torch.pt')
         # torch.save(lat32, 'lat32_torch.pt')
-        print("middle block finished")
+        logger.debug("middle block finished")
         # return lat8, lat16, lat32
-        print("OFT started")
+        logger.debug("OFT started")
         ortho8 = self.oft8(lat8, calib, grid)
         ortho16 = self.oft16(lat16, calib, grid)
         ortho32 = self.oft32(lat32, calib, grid)
         ortho = ortho8 + ortho16 + ortho32
         # return ortho, ortho16, ortho32
-        print("OFT finished")
-        print("Topdown started")
+        logger.debug("OFT finished")
+        logger.debug("Topdown started")
         topdown = self.topdown(ortho)
-        print(f"TORCH::::Topdown output shape: {topdown.shape}, dtype: {topdown.dtype}")
+        logger.debug(f"TORCH::::Topdown output shape: {topdown.shape}, dtype: {topdown.dtype}")
         # return topdown
-        print("Topdown finished")
+        logger.debug("Topdown finished")
         batch, _, depth, width = topdown.size()
         outputs1 = self.head(topdown)
-        print(f"TORCH::::Head output shape: {outputs1.shape}, dtype: {outputs1.dtype}")
+        logger.debug(f"TORCH::::Head output shape: {outputs1.shape}, dtype: {outputs1.dtype}")
         outputs = outputs1.view(batch, -1, 9, depth, width)
         # return outputs
         scores, pos_offsets, dim_offsets, ang_offsets = torch.split(outputs, [1, 3, 3, 2], dim=2)
