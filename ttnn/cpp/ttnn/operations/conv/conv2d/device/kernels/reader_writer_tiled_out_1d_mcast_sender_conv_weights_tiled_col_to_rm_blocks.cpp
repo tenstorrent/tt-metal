@@ -50,7 +50,7 @@ void kernel_main() {
 #else
     constexpr uint32_t ct_arg_idx = 27;
 #endif
-#else 
+#else
     constexpr uint32_t ct_arg_idx = 18;
 #endif
 
@@ -187,14 +187,8 @@ void kernel_main() {
                 readers_process_full_image_widths,
                 image_width_tiles,
                 output_image_width,
-                window_reuse_offset,
-                need_to_push_remaining_tiles>(
-                packed_reader_indices_ptr,
-                act_l1_read_addr,
-                l1_write_addr_act,
-                reader_idx,
-                cb_start_addr,
-                remaining_tiles_to_push);
+                window_reuse_offset>(
+                packed_reader_indices_ptr, act_l1_read_addr, l1_write_addr_act, reader_idx, cb_start_addr);
 #endif
 #endif
 
@@ -331,4 +325,13 @@ void kernel_main() {
         start_reader_idx = reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
 #endif
     }  // out_num_blocks_h
+
+#if defined(SPLIT_READER) && defined(ACTIVATION_REUSE)
+    // Last core sometimes has less work to do, but we still need to push the same number of tiles
+    // to avoid blocking compute kernels
+    if constexpr (need_to_push_remaining_tiles) {
+        push_remaining_tiles<cb_id_act_second_reader, act_block_w_tiles, image_width_tiles>(
+            remaining_tiles_to_push, cb_start_addr);
+    }
+#endif
 }
