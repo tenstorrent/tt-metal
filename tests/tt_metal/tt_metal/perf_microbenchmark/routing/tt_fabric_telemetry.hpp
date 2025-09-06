@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-// 
+//
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -32,14 +32,9 @@ struct TelemetryEntry {
     uint32_t connected_eth_channel;
 };
 
-double calc_bw_gbps(uint32_t total_words, uint64_t cycles) {
-    return (total_words * 16.0) / static_cast<double>(cycles);
-}
-
-double calc_pps(uint32_t num_packets, uint64_t cycles) {
-    // Assuming 1GHz clock
-    double time_s = static_cast<double>(cycles) / 1e9;
-    return num_packets / time_s;
+double calc_bw_bytes_per_cycle(uint32_t total_words, uint64_t cycles) {
+    constexpr uint32_t bytes_per_eth_word = 16;
+    return (total_words * bytes_per_eth_word) / static_cast<double>(cycles);
 }
 
 const uint32_t telemetry_addr = ::tt::tt_metal::hal::get_erisc_l1_unreserved_base();

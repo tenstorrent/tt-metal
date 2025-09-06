@@ -28,6 +28,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
+#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 
 using MeshDevice = tt::tt_metal::distributed::MeshDevice;
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
@@ -363,6 +364,22 @@ public:
             results.emplace(core, core_data);
         }
 
+        return results;
+    }
+
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_ethernet_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        uint32_t size_bytes) const {
+        std::unordered_map<CoreCoord, std::vector<uint32_t>> results;
+        auto device = mesh_device_->get_device(device_coord);
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        for (const auto& logical_core : cores) {
+            auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
+            std::vector<uint32_t> core_data = cluster.read_core(device->id(), virtual_core, address, size_bytes);
+            results.emplace(logical_core, core_data);
+        }
         return results;
     }
 

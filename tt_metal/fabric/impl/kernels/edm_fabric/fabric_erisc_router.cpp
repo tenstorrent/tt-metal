@@ -258,6 +258,7 @@ write to the same receiver channel.
 ////////////////////////////////////////////////
 
 static constexpr bool PERF_TELEMETRY_DISABLED = perf_telemetry_mode == PerfTelemetryRecorderType::NONE;
+static_assert(!PERF_TELEMETRY_DISABLED, "Telemetry disabled");
 static constexpr bool PERF_TELEMETRY_LOW_RESOLUTION_BANDWIDTH =
     perf_telemetry_mode == PerfTelemetryRecorderType::LOW_RESOLUTION_BANDWIDTH;
 using PerfTelemetryRecorder = std::conditional_t<

@@ -132,6 +132,10 @@ int main(int argc, char** argv) {
         const auto& topology = test_config.fabric_setup.topology;
         const auto& routing_type = test_config.fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
+        if (test_config.benchmark_mode) {
+            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(true);
+        }
+
         log_info(
             tt::LogTest,
             "Opening devices with topology: {}, routing type: {}, and fabric_tensix_config: {}",
@@ -140,10 +144,6 @@ int main(int argc, char** argv) {
             fabric_tensix_config);
         test_context.open_devices(test_config.fabric_setup);
         device_opened = true;
-
-        if (test_config.benchmark_mode) {
-            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(true);
-        }
 
         log_info(tt::LogTest, "Building tests");
         auto built_tests = builder.build_tests({test_config}, cmdline_parser);
@@ -179,10 +179,10 @@ int main(int argc, char** argv) {
 
             if (test_context.get_telemetry_enabled()) {
                 test_context.read_telemetry();
-                test_context.clear_telemetry();
                 test_context.process_telemetry_for_golden();
                 test_context.dump_raw_telemetry_csv(built_test);
                 // Optionally override profile_results
+                test_context.clear_telemetry();
             }
 
             test_context.validate_results();

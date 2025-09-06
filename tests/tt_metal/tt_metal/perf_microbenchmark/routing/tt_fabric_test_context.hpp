@@ -11,13 +11,11 @@
 #include <filesystem>
 #include <memory>
 #include <algorithm>
-#include <chrono>
 #include <fstream>
 #include <iomanip>
 #include <optional>
 #include <set>
 #include <sstream>
-#include <enchantum/enchantum.hpp>
 
 #include "tt_fabric_test_config.hpp"
 #include "tt_fabric_test_common.hpp"
@@ -45,6 +43,12 @@ using TestTrafficConfig = tt::tt_fabric::fabric_tests::TestTrafficConfig;
 using TestTrafficSenderConfig = tt::tt_fabric::fabric_tests::TestTrafficSenderConfig;
 using TestTrafficReceiverConfig = tt::tt_fabric::fabric_tests::TestTrafficReceiverConfig;
 using TestWorkerType = tt::tt_fabric::fabric_tests::TestWorkerType;
+
+// Helper function to convert enums to strings
+template <typename T>
+std::string enum_to_string(T value) {
+    return std::to_string(static_cast<int>(value));
+}
 
 using ChipSendType = tt::tt_fabric::ChipSendType;
 using NocSendType = tt::tt_fabric::NocSendType;
@@ -519,7 +523,6 @@ public:
         return 0.0;
     }
 
-public:
     void read_telemetry() {
         telemetry_entries_.clear();
         auto& ctx = tt::tt_metal::MetalContext::instance();
@@ -534,37 +537,51 @@ public:
             auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
             auto active_eth_cores = control_plane.get_active_ethernet_cores(physical_chip_id);
             auto freq_mhz = cluster.get_device_aiclk(physical_chip_id);
-            double freq_ghz = freq_mhz / 1000.0;
+            double freq_ghz = double(freq_mhz) / 1000.0;
             for (const auto& eth_core : active_eth_cores) {
                 // TODO: Filter tunneler/router
                 // For now, skip if not link up
                 if (!cluster.is_ethernet_link_up(physical_chip_id, eth_core)) continue;
-                // Add if (device_eth_routing_info_.at(physical_chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) continue; // Assume to ignore router
+
                 std::vector<CoreCoord> cores = {eth_core};
-                auto data = fixture_->read_buffer_from_cores(coord, cores, telemetry_addr, 24);
-                if (data.empty()) continue;
-                auto core_data = data.at(eth_core);
-                if (core_data.size() < 6) continue;
-                LowResolutionBandwidthTelemetry tel;
+                auto data = fixture_->read_buffer_from_ethernet_cores(coord, cores, telemetry_addr, 24);
+
+                const auto& core_data = data.at(eth_core);
+
+                LowResolutionBandwidthTelemetry tel{};
                 tel.timestamp_start.lo = core_data[0];
                 tel.timestamp_start.hi = core_data[1];
                 tel.timestamp_end.lo = core_data[2];
                 tel.timestamp_end.hi = core_data[3];
                 tel.num_words_sent = core_data[4];
                 tel.num_packets_sent = core_data[5];
-                uint64_t cycles = tel.timestamp_end.full - tel.timestamp_start.full;
-                if (cycles == 0 || tel.num_words_sent == 0) continue;
-                double bpc = calc_bw_gbps(tel.num_words_sent, cycles);
-                double bw_gbps = bpc * freq_ghz;
-                double time_s = static_cast<double>(cycles) / (freq_ghz * 1e9);
+                uint64_t cycles = tel.timestamp_start.full;
+                if (cycles == 0 || tel.num_words_sent == 0 || tel.timestamp_end.lo != 0) {
+                    log_info(tt::LogTest, "No telemetry data read from coord {}", coord);
+                    continue;
+                }
+                double bytes_per_cycle = calc_bw_bytes_per_cycle(tel.num_words_sent, cycles);
+                double bw_GB_s = bytes_per_cycle * double(freq_ghz);
+                double time_s = static_cast<double>(cycles) / (freq_mhz * 1e6);
                 double pps = static_cast<double>(tel.num_packets_sent) / time_s;
                 uint32_t eth_channel = soc_desc.logical_eth_core_to_chan_map.at(eth_core);
-                if (eth_channel < 4) continue; // ignore tunneler/router placeholder
+                log_info(
+                    tt::LogTest,
+                    "Telemetry from {} core {}: BW (GB/s)={:.6f}, pps={:.6f}, cycles={:d}, eth_words_sent={:d}, "
+                    "packets_sent={:d}",
+                    coord,
+                    eth_core.str(),
+                    bw_GB_s,
+                    pps,
+                    cycles,
+                    tel.num_words_sent,
+                    tel.num_packets_sent);
                 auto [connected_physical_id, connected_eth_core] = cluster.get_connected_ethernet_core({physical_chip_id, eth_core});
                 auto connected_device_id = control_plane.get_fabric_node_id_from_physical_chip_id(connected_physical_id);
                 ::tt::tt_metal::distributed::MeshCoordinate connected_coord = fixture_->get_device_coord(connected_device_id);
                 uint32_t connected_eth_channel = cluster.get_soc_desc(connected_physical_id).logical_eth_core_to_chan_map.at(connected_eth_core);
-                telemetry_entries_.push_back({coord, eth_channel, bw_gbps, pps, connected_coord, connected_eth_channel});
+                telemetry_entries_.push_back(
+                    {coord, eth_channel, bw_GB_s, pps, connected_coord, connected_eth_channel});
             }
         }
     }
@@ -1097,10 +1114,10 @@ private:
         if (!config.senders.empty() && !config.senders[0].patterns.empty()) {
             const auto& first_pattern = config.senders[0].patterns[0];
             if (first_pattern.ftype.has_value()) {
-                ftype_str = enchantum::to_string(first_pattern.ftype.value()).data();
+                ftype_str = enum_to_string(first_pattern.ftype.value());
             }
             if (first_pattern.ntype.has_value()) {
-                ntype_str = enchantum::to_string(first_pattern.ntype.value()).data();
+                ntype_str = enum_to_string(first_pattern.ntype.value());
             }
         }
 
@@ -1114,9 +1131,9 @@ private:
         // Write data rows (header already written in initialize_csv_file)
         for (const auto& result : bandwidth_results_) {
             csv_stream << config.name << "," << ftype_str << "," << ntype_str << ","
-                       << enchantum::to_string(config.fabric_setup.topology) << "," << result.num_devices << ","
+                       << enum_to_string(config.fabric_setup.topology) << "," << result.num_devices << ","
                        << result.device_id << "," << config.fabric_setup.num_links << ","
-                       << enchantum::to_string(result.direction) << "," << result.total_traffic_count << ","
+                       << enum_to_string(result.direction) << "," << result.total_traffic_count << ","
                        << result.num_packets << "," << result.packet_size << "," << result.cycles << "," << std::fixed
                        << std::setprecision(6) << result.bandwidth_gb_s << "," << std::fixed << std::setprecision(3)
                        << result.packets_per_second << "\n";
@@ -1145,7 +1162,7 @@ private:
             }
             num_devices_str += "]";
 
-            std::string topology_str = enchantum::to_string(config.fabric_setup.topology).data();
+            std::string topology_str = enum_to_string(config.fabric_setup.topology);
             double tolerance = get_tolerance_percent(
                 config.name,
                 ftype_str,
@@ -1172,7 +1189,7 @@ private:
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
 
         // Convert cluster type enum to lowercase string
-        std::string cluster_name = enchantum::to_string(cluster_type).data();
+        std::string cluster_name = enum_to_string(cluster_type);
         std::transform(cluster_name.begin(), cluster_name.end(), cluster_name.begin(), ::tolower);
 
         std::string file_name = "golden_bandwidth_summary_" + arch_name + "_" + cluster_name + ".csv";
@@ -1274,10 +1291,10 @@ private:
         if (!config.senders.empty() && !config.senders[0].patterns.empty()) {
             const auto& first_pattern = config.senders[0].patterns[0];
             if (first_pattern.ftype.has_value()) {
-                ftype_str = enchantum::to_string(first_pattern.ftype.value()).data();
+                ftype_str = enum_to_string(first_pattern.ftype.value());
             }
             if (first_pattern.ntype.has_value()) {
-                ntype_str = enchantum::to_string(first_pattern.ntype.value()).data();
+                ntype_str = enum_to_string(first_pattern.ntype.value());
             }
         }
 
@@ -1293,7 +1310,7 @@ private:
             }
             num_devices_str += "]";
 
-            std::string topology_str = enchantum::to_string(config.fabric_setup.topology).data();
+            std::string topology_str = enum_to_string(config.fabric_setup.topology);
 
             // Find matching golden entry
             auto golden_it =
