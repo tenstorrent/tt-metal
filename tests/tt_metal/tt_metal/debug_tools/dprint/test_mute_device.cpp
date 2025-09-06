@@ -42,7 +42,6 @@ void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice
     // Set up program and command queue
     constexpr CoreCoord core = {0, 0}; // Print on first core only
     distributed::MeshWorkload workload;
-    auto device = mesh_device->get_devices()[0];
     auto device_range =
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0));
     Program program = Program();

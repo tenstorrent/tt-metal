@@ -284,7 +284,6 @@ TEST_F(MeshDeviceFixture, TensixIncrementStreamRegWrite) {
         tt_metal::Program program = tt_metal::CreateProgram();
         distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
         auto& program_ = workload.get_programs().at(device_range);
-        auto device = mesh_device->get_devices()[0];
 
         CoreCoord logical_grid_size = mesh_device->compute_with_storage_grid_size();
         CoreCoord end_core{logical_grid_size.x - 1, logical_grid_size.y - 1};
