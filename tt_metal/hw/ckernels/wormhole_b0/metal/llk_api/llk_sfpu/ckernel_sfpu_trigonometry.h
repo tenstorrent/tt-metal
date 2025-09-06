@@ -173,11 +173,8 @@ sfpi_inline vFloat sfpu_atan_maclaurin_series(vFloat val) {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_atan() {
-    // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat val = dst_reg[0];
-        val = sfpu_atan_maclaurin_series<APPROXIMATION_MODE>(val);
-        dst_reg[0] = val;
+        dst_reg[0] = sfpu_atan_maclaurin_series<APPROXIMATION_MODE>(dst_reg[0]);
         dst_reg++;
     }
 }
