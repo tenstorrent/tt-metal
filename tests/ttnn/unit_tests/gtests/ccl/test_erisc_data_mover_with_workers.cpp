@@ -47,7 +47,6 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/types.hpp"
-#include "umd/device/tt_xy_pair.h"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
