@@ -71,8 +71,8 @@ inline std::vector<std::string> backtrace(int size = 64, int skip = 1) {
     for (size_t i = skip; i < s; ++i) {
         bt.push_back(demangle(strings[i]));
     }
-    free(strings);
-    free(array);
+    free(strings);  // NOLINT(bugprone-multi-level-implicit-pointer-conversion)
+    free(array);    // NOLINT(bugprone-multi-level-implicit-pointer-conversion)
 
     return bt;
 }
