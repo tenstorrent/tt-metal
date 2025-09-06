@@ -17,7 +17,7 @@ namespace tt::tt_metal {
 inline tt::ARCH get_physical_architecture() {
     auto arch = tt::ARCH::Invalid;
     // This map holds PCI info for each mmio chip.
-    auto devices_info = PCIDevice::enumerate_devices_info();
+    auto devices_info = tt::umd::PCIDevice::enumerate_devices_info();
     if (devices_info.size() > 0) {
         arch = devices_info.begin()->second.get_arch();
         for (auto& [device_id, device_info] : devices_info) {
@@ -64,7 +64,7 @@ inline tt::ARCH get_physical_architecture() {
  * @endcode
  *
  * @see tt::get_arch_from_string
- * @see PCIDevice::enumerate_devices_info
+ * @see tt::umd::PCIDevice::enumerate_devices_info
  */
 
 inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtoptions) {
