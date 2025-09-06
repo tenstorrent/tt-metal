@@ -31,18 +31,18 @@ uint16_t fp32_to_bf16_bits_round_to_nearest_even(float val) {
 
 }  // namespace
 
-bfloat16::bfloat16(float float_num) { uint16_data = fp32_to_bf16_bits_round_to_nearest_even(float_num); }
+bfloat16::bfloat16(float float_num) : uint16_data(fp32_to_bf16_bits_round_to_nearest_even(float_num)) {}
 
 bfloat16 bfloat16::truncate(float float_num) {
     uint32_t U32 = std::bit_cast<uint32_t>(float_num);
     return bfloat16(U32 >> 16);
 }
 
-bfloat16::bfloat16(uint32_t uint32_data) { uint16_data = (uint16_t)uint32_data; }
+bfloat16::bfloat16(uint32_t uint32_data) : uint16_data((uint16_t)uint32_data) {}
 
-bfloat16::bfloat16(uint16_t uint16_data_) { uint16_data = uint16_data_; }
+bfloat16::bfloat16(uint16_t uint16_data_) : uint16_data(uint16_data_) {}
 
-bfloat16::bfloat16(int int_data) { uint16_data = (uint16_t)int_data; }
+bfloat16::bfloat16(int int_data) : uint16_data((uint16_t)int_data) {}
 
 std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16) {
     os << bfp16.to_uint16();

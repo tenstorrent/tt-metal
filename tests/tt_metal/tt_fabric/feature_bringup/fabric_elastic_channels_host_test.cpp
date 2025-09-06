@@ -60,11 +60,10 @@ struct WorkerTimingStats {
 
 class N300TestDevice {
 public:
-    N300TestDevice() : device_open(false) {
+    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()), device_open(false) {
         tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
-        num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
             tt::tt_metal::GetNumPCIeDevices() >= 1) {
             std::vector<chip_id_t> ids(num_devices_, 0);

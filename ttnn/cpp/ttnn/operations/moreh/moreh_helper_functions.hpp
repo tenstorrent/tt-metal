@@ -129,9 +129,8 @@ struct CircularBufferArg {
     tt::DataFormat data_format;
     std::optional<std::variant<CoreCoord, CoreRange, CoreRangeSet>> core_range = std::nullopt;
 
-    CircularBufferArg(uint32_t buffer_index, uint32_t num_tiles) : buffer_index(buffer_index), num_tiles(num_tiles) {
-        data_format = tt::DataFormat::Invalid;
-    }
+    CircularBufferArg(uint32_t buffer_index, uint32_t num_tiles) :
+        buffer_index(buffer_index), num_tiles(num_tiles), data_format(tt::DataFormat::Invalid) {}
     CircularBufferArg(uint32_t buffer_index, uint32_t num_tiles, tt::DataFormat data_format) :
         buffer_index(buffer_index), num_tiles(num_tiles), data_format(data_format) {}
 };
