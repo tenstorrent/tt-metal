@@ -26,6 +26,11 @@ namespace tt::tt_metal::blackhole {
 // Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
 #include "core_config.h"
 
+// This file is intended to be wrapped inside arch/core-specific namespace.
+namespace active_eth_dev_msgs {
+#include "hal/generated/dev_msgs_impl.hpp"
+}
+
 HalCoreInfoType create_active_eth_mem_map() {
     std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
@@ -122,7 +127,8 @@ HalCoreInfoType create_active_eth_mem_map() {
         mem_map_sizes,
         fw_mailbox_addr,
         false /*supports_cbs*/,
-        false /*supports_receiving_multicast_cmds*/};
+        false /*supports_receiving_multicast_cmds*/,
+        active_eth_dev_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::blackhole
