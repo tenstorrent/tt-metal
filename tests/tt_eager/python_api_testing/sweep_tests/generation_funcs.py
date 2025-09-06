@@ -45,35 +45,52 @@ def gen_func_with_cast(gen_func, dtype, tilize_input=False):
 
 
 def gen_func_with_cast_tt(gen_func, dtype):
+    # Be tolerant to both symbolic dtype aliases (ttnn.bfloat16) and enum values (ttnn.DataType.BFLOAT16)
+    DataType = getattr(ttnn, "DataType", None)
+
+    def norm_name(x):
+        try:
+            return str(x).split(".")[-1].upper()
+        except Exception:
+            return str(x)
+
+    def is_dtype(target, *candidates):
+        tname = norm_name(target)
+        for c in candidates:
+            if c is None:
+                continue
+            if tname == norm_name(c):
+                return True
+        return False
+
     def tensor_to_dtype(x):
-        if dtype == ttnn.bfloat16:
+        if is_dtype(dtype, ttnn.bfloat16, getattr(DataType, "BFLOAT16", None)):
             x = x.to(torch.bfloat16)
 
-        elif dtype == ttnn.bfloat8_b:
+        elif is_dtype(dtype, ttnn.bfloat8_b, getattr(DataType, "BFLOAT8_B", None)):
             tt_tensor = ttnn.from_torch(
                 x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None
             )
-
             x = ttnn.to_torch(tt_tensor)
 
-        elif dtype == ttnn.bfloat4_b:
+        elif is_dtype(dtype, ttnn.bfloat4_b, getattr(DataType, "BFLOAT4_B", None)):
             tt_tensor = ttnn.from_torch(
                 x, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None
             )
-
             x = ttnn.to_torch(tt_tensor)
 
-        elif dtype == ttnn.uint16:
+        elif is_dtype(dtype, ttnn.uint16, getattr(DataType, "UINT16", None)):
             x = x.to(torch.int16)
 
-        elif dtype == ttnn.uint32:
+        elif is_dtype(dtype, ttnn.uint32, getattr(DataType, "UINT32", None)):
             x = x.to(torch.int32)
 
-        elif dtype == ttnn.int32:
+        elif is_dtype(dtype, ttnn.int32, getattr(DataType, "INT32", None)):
             x = x.to(torch.int32)
 
-        elif dtype == ttnn.float32:
-            pass
+        elif is_dtype(dtype, ttnn.float32, getattr(DataType, "FLOAT32", None)):
+            if x.dtype != torch.float32:
+                x = x.to(torch.float32)
 
         else:
             logger.warning(f"Unknown dtype {dtype} passed to gen_func_with_cast_tt")

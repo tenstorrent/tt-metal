@@ -418,7 +418,7 @@ class RunStatus(Enum):
     Status of the run execution.
     """
 
-    passed = "pass"
+    passed = "passed"
     fail = "fail"
     did_not_finish = "did_not_finish"
     exception = "exception"
