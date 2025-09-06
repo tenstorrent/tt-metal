@@ -15,7 +15,7 @@
 #include <tt-metalium/device.hpp>
 #include "multi_device_fixture.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 #include "umd/device/types/xy_pair.h"
 
 namespace tt::tt_metal {
