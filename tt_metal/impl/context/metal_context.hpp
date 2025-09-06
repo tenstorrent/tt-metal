@@ -30,6 +30,7 @@ class ControlPlane;
 }  // namespace tt::tt_fabric
 
 namespace tt::tt_metal {
+class ProfilerStateManager;
 
 namespace inspector {
 class Data;
@@ -61,6 +62,8 @@ public:
     }
     std::unique_ptr<DPrintServer>& dprint_server() { return dprint_server_; }
     std::unique_ptr<WatcherServer>& watcher_server() { return watcher_server_; }
+
+    std::unique_ptr<ProfilerStateManager>& profiler_state_manager() { return profiler_state_manager_; }
 
     void initialize(
         const DispatchCoreConfig& dispatch_core_config,
@@ -155,6 +158,7 @@ private:
     std::unique_ptr<inspector::Data> inspector_data_;
     std::unique_ptr<DPrintServer> dprint_server_;
     std::unique_ptr<WatcherServer> watcher_server_;
+    std::unique_ptr<ProfilerStateManager> profiler_state_manager_;
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;

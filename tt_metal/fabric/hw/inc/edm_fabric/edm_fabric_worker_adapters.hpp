@@ -10,6 +10,7 @@
 #include "tt_metal/hw/inc/ethernet/dataflow_api.h"
 #include "edm_fabric_utils.hpp"
 #include "fabric_edm_packet_header_validate.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "fabric_stream_regs.hpp"
 #include "fabric_edm_types.hpp"
 #include "hostdevcommon/fabric_common.h"
@@ -22,8 +23,6 @@
 #include <array>
 
 namespace tt::tt_fabric {
-
-inline constexpr uint8_t edm_fabric_write_noc_index = 0;
 
 /*
  * The WorkerToFabricEdmSenderImpl acts as an adapter between the worker and the EDM, it hides details
@@ -51,7 +50,6 @@ struct WorkerToFabricEdmSenderImpl {
 #else
         false;
 #endif
-    static constexpr uint32_t sender_channel_0_free_slots_stream_id = 17;
     static constexpr bool USER_DEFINED_NUM_BUFFER_SLOTS = EDM_NUM_BUFFER_SLOTS != 0;
     // Temporary flag to distinguish between worker and EDM users of this adapter until we split it into
     // two separate adapters (they've started diverging quite a bit by now)
@@ -59,9 +57,6 @@ struct WorkerToFabricEdmSenderImpl {
     static constexpr bool IS_WORKER = !I_USE_STREAM_REG_FOR_CREDIT_RECEIVE;
     static constexpr bool IS_POW2_NUM_BUFFERS = USER_DEFINED_NUM_BUFFER_SLOTS && is_power_of_2(EDM_NUM_BUFFER_SLOTS);
     static constexpr size_t BUFFER_SLOT_PTR_WRAP = EDM_NUM_BUFFER_SLOTS * 2;
-    static constexpr uint32_t unused_connection_value = 0;
-    static constexpr uint32_t open_connection_value = 1;
-    static constexpr uint32_t close_connection_request_value = 2;
     // HACK: Need a way to properly set this up
 
     WorkerToFabricEdmSenderImpl() = default;
@@ -120,7 +115,7 @@ struct WorkerToFabricEdmSenderImpl {
             auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
             writer_send_sem_addr =
                 reinterpret_cast<volatile uint32_t*>(get_semaphore<my_core_type>(writer_send_sem_id));
-            worker_free_slots_stream_id = sender_channel_0_free_slots_stream_id;
+            worker_free_slots_stream_id = tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id;
         }
 
         // DEAD CODE
@@ -325,7 +320,6 @@ struct WorkerToFabricEdmSenderImpl {
     FORCE_INLINE void send_payload_non_blocking_from_address_with_trid(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         send_payload_from_address_with_trid_impl<
-            EDM_IO_BLOCKING_MODE::NON_BLOCKING,
             enable_deadlock_avoidance,
             vc1_has_different_downstream_dest,
             EDM_TO_DOWNSTREAM_NOC,
@@ -445,7 +439,10 @@ struct WorkerToFabricEdmSenderImpl {
         }
 
         noc_inline_dw_write<InlineWriteDst::DEFAULT, posted>(
-            edm_connection_handshake_noc_addr, open_connection_value, 0xf, WORKER_HANDSHAKE_NOC);
+            edm_connection_handshake_noc_addr,
+            tt::tt_fabric::connection_interface::open_connection_value,
+            0xf,
+            WORKER_HANDSHAKE_NOC);
         *this->worker_teardown_addr = 0;
         if constexpr (!USER_DEFINED_NUM_BUFFER_SLOTS) {
             this->edm_buffer_addr =
@@ -479,7 +476,8 @@ struct WorkerToFabricEdmSenderImpl {
             noc_inline_dw_write(remote_buffer_index_addr, this->get_buffer_slot_index());
         }
         const uint64_t dest_edm_connection_state_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
-        noc_inline_dw_write(dest_edm_connection_state_addr, close_connection_request_value);
+        noc_inline_dw_write(
+            dest_edm_connection_state_addr, tt::tt_fabric::connection_interface::close_connection_request_value);
     }
 
     // Advanced usage API:
@@ -643,7 +641,6 @@ private:
         post_send_payload_increment_pointers();
     }
     template <
-        EDM_IO_BLOCKING_MODE blocking_mode,
         bool enable_deadlock_avoidance,
         bool vc1_has_different_downstream_dest,
         uint8_t EDM_TO_DOWNSTREAM_NOC,
@@ -655,7 +652,7 @@ private:
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
-            send_chunk_from_address_with_trid<blocking_mode, stateful_api, vc1_has_different_downstream_dest>(
+            send_chunk_from_address_with_trid<stateful_api, vc1_has_different_downstream_dest>(
                 source_address,
                 1,
                 size_bytes,
@@ -665,7 +662,7 @@ private:
                 EDM_TO_DOWNSTREAM_NOC,
                 this->data_noc_cmd_buf);
         } else {
-            send_chunk_from_address_with_trid<blocking_mode, stateful_api, vc1_has_different_downstream_dest>(
+            send_chunk_from_address_with_trid<stateful_api, vc1_has_different_downstream_dest>(
                 source_address,
                 1,
                 size_bytes,

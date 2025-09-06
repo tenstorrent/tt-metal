@@ -31,18 +31,18 @@ uint16_t fp32_to_bf16_bits_round_to_nearest_even(float val) {
 
 }  // namespace
 
-bfloat16::bfloat16(float float_num) { uint16_data = fp32_to_bf16_bits_round_to_nearest_even(float_num); }
+bfloat16::bfloat16(float float_num) : uint16_data(fp32_to_bf16_bits_round_to_nearest_even(float_num)) {}
 
 bfloat16 bfloat16::truncate(float float_num) {
     uint32_t U32 = std::bit_cast<uint32_t>(float_num);
     return bfloat16(U32 >> 16);
 }
 
-bfloat16::bfloat16(uint32_t uint32_data) { uint16_data = (uint16_t)uint32_data; }
+bfloat16::bfloat16(uint32_t uint32_data) : uint16_data((uint16_t)uint32_data) {}
 
-bfloat16::bfloat16(uint16_t uint16_data_) { uint16_data = uint16_data_; }
+bfloat16::bfloat16(uint16_t uint16_data_) : uint16_data(uint16_data_) {}
 
-bfloat16::bfloat16(int int_data) { uint16_data = (uint16_t)int_data; }
+bfloat16::bfloat16(int int_data) : uint16_data((uint16_t)int_data) {}
 
 std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16) {
     os << bfp16.to_uint16();
@@ -105,17 +105,6 @@ std::vector<bfloat16> create_random_vector_of_bfloat16_native(
         vec[i] = bfloat16(num_1_float);
     }
     return vec;
-}
-
-void print_golden_metalium_vectors(std::vector<bfloat16>& golden_vec, std::vector<bfloat16>& result_vec) {
-    std::cout << "-- index -- golden -- metalium --" << std::endl;
-    for (size_t i = 0; i < result_vec.size(); i++) {
-        float a1 = golden_vec[i].to_float();
-        float a2 = result_vec[i].to_float();
-        if (i % 128 == 0) {
-            std::cout << "-- " << i << " -- " << a1 << " <--> " << a2 << std::endl;
-        }
-    }
 }
 
 std::vector<std::uint32_t> create_random_vector_of_bfloat16(

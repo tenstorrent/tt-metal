@@ -477,6 +477,7 @@ class TtTransformer(LightweightModule):
         page_table=None,
         kv_cache=None,
         tt_out_logits_saved=None,
+        is_cur_pos_sharded=False,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -507,9 +508,13 @@ class TtTransformer(LightweightModule):
             tt_out_logits = tt_out_logits[0, 0, 0, :128256]
             tt_out_logits_saved.copy_(tt_out_logits)
 
+        # Increment current position and rot_mat_idxs
+        # NOTE: if cur pos sharded, each L1 needs to update their own local copy of cur pos
         ttnn.plus_one(
             current_pos,
-            sub_core_grids=self.args.sub_core_grids,
+            sub_core_grids=self.args.sub_core_grids
+            if is_cur_pos_sharded
+            else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
         ttnn.plus_one(
             rot_mat_idxs,

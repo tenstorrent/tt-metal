@@ -9,7 +9,7 @@
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
-#include "tt_metal/fabric/serialization/physical_desc.hpp"
+#include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 
 namespace tt::tt_metal {
 
@@ -304,7 +304,7 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
     }
 
     if (sender_ranks.find(my_rank) != sender_ranks.end()) {
-        auto serialized_desc = serialize_physical_descriptor_to_bytes(*this);
+        auto serialized_desc = serialize_physical_system_descriptor_to_bytes(*this);
         std::size_t desc_size = serialized_desc.size();
 
         for (auto rank : receiver_ranks) {
@@ -332,7 +332,7 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
                     tt::stl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
                 Rank{rank},
                 Tag{0});
-            auto peer_desc = deserialize_physical_descriptor_from_bytes(serialized_peer_desc);
+            auto peer_desc = deserialize_physical_system_descriptor_from_bytes(serialized_peer_desc);
             this->merge(std::move(peer_desc));
         }
     }
@@ -461,6 +461,10 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
     } else {
         std::cout << root << std::endl;
     }
+}
+
+void PhysicalSystemDescriptor::emit_to_text_proto(const std::optional<std::string>& file_path) {
+    emit_physical_system_descriptor_to_text_proto(*this, file_path);
 }
 
 void PhysicalSystemDescriptor::validate_graphs() {

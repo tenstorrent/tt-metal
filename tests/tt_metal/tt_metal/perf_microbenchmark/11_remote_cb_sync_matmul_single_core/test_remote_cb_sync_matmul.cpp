@@ -57,6 +57,7 @@
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include "tt_metal/test_utils/bfloat_utils.hpp"
 
 using std::vector;
 using namespace tt;
@@ -773,7 +774,7 @@ int main(int argc, char** argv) {
             for (uint32_t i = 0; i < num_layers; ++i) {
                 auto input_vec_tilized = tilize_swizzled(in1_tensor_fp8.get_values(), k, n);
                 std::vector<uint32_t> packed_input_vec_tile_layout =
-                    pack_fp32_vec_as_bfp8_tiles(input_vec_tilized, true, false);
+                    pack_as_bfp8_tiles(tt::stl::make_const_span(input_vec_tilized), true, false);
                 in1_buffers[i] = create_and_transfer_data_sharded_cb(
                     device.get(),
                     packed_input_vec_tile_layout,
@@ -787,7 +788,7 @@ int main(int argc, char** argv) {
 
             // in0
             auto activations_tilized = tilize_swizzled(in0_tensor_fp8.get_values(), m, k * num_receivers);
-            std::vector<uint32_t> activations = pack_fp32_vec_as_bfp8_tiles(activations_tilized, true, false);
+            std::vector<uint32_t> activations = pack_as_bfp8_tiles(tt::stl::make_const_span(activations_tilized), true, false);
             in0_buffer = create_and_transfer_data_sharded_cb(
                 device.get(),
                 activations,
@@ -799,7 +800,7 @@ int main(int argc, char** argv) {
                 num_receivers);
 
             // output
-            vector<uint32_t> outputs = create_constant_vector_of_bfp8(mt * nt * single_tile_size, 0, false);
+            vector<uint32_t> outputs = test_utils::create_constant_vector_of_bfp8(mt * nt * single_tile_size, 0, false);
             output_buffer = create_and_transfer_data_sharded_cb(
                 device.get(),
                 outputs,

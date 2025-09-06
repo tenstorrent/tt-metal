@@ -12,6 +12,8 @@
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/kernel.hpp>
 
 namespace tt::tt_metal {
 class TraceDescriptor;
@@ -77,7 +79,6 @@ public:
     void execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* command);
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* command);
     void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd);
-    void execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsCommand* command);
     void execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* command);
     void execute(const tt::tt_metal::flatbuffer::LightMetalCompareCommand* command);
 

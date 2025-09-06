@@ -102,7 +102,7 @@ run_async_ccl_T3000_test() {
         echo "Verifying test results"
         runDate=$(ls $PROFILER_OUTPUT_DIR/)
         LINE_COUNT=128 #8 devices x 16 iterations
-        res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT" "AllGatherAsync")
+        res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT" "AllGatherCommandProcessorAsync")
         echo $res
     fi
 }

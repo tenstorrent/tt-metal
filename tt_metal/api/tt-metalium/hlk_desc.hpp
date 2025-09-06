@@ -40,12 +40,8 @@ public:
     uint32_t buf_tile_c_dim_arr[NUM_CIRCULAR_BUFFERS]{};
     uint32_t buf_tile_size_arr[NUM_CIRCULAR_BUFFERS]{};
 
-    tt_hlk_desc() {
-        math_fidelity = MathFidelity::Invalid;
-        hlk_args = nullptr;
-        hlk_args_size = 0;
-        approximation_mode = true;
-
+    tt_hlk_desc() :
+        math_fidelity(MathFidelity::Invalid), hlk_args(nullptr), hlk_args_size(0), approximation_mode(true) {
         for (int i = 0; i < NUM_CIRCULAR_BUFFERS; ++i) {
             buf_dataformat_arr[i] = DataFormat::Invalid;
             buf_num_faces_arr[i] = constants::TILE_HW / constants::FACE_HW;

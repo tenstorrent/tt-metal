@@ -227,8 +227,7 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
     kernelSizes["IDLE_ETH_DM_0_max_kernel_size"] = 0;
     kernelSizes["IDLE_ETH_DM_1_max_kernel_size"] = 0;
 
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        auto kernel = tt::tt_metal::detail::GetKernel(program, kernel_id).get();
+    for (const auto& kernel : program.kernels()) {
         auto core_type = kernel->get_kernel_programmable_core_type();
         auto processor_class = kernel->get_kernel_processor_class();
         auto num_binaries = kernel->expected_num_binaries();

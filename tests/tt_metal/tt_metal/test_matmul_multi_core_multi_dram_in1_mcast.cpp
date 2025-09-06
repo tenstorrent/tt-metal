@@ -8,6 +8,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/tilize_utils.hpp>
@@ -125,12 +126,16 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
+    std::vector<uint32_t> reader_receiver_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs().append_to(reader_receiver_compile_time_args);
     auto mm_reader_kernel_receiver = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in1_mcast_receiver.cpp",
         mcast_receivers,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = reader_receiver_compile_time_args});
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program,
