@@ -53,9 +53,15 @@ std::pair<TrayID, ASICLocation> get_asic_position(
             }
         }
         // Derive Tray ID based on the Physical PCIe slot for N300 systems
-        uint32_t tray_id =
-            1 + std::distance(
-                    sorted_pcie_slots.begin(), sorted_pcie_slots.find(cluster.get_physical_slot(chip_id).value()));
+        uint32_t tray_id = 0;
+        uint32_t curr_pcie_slot = 0;
+        if (cluster.get_physical_slot(chip_id).has_value()) {
+            tray_id =
+                1 + std::distance(
+                        sorted_pcie_slots.begin(), sorted_pcie_slots.find(cluster.get_physical_slot(chip_id).value()));
+        } else {
+            tray_id = 1 + std::distance(sorted_pcie_slots.begin(), sorted_pcie_slots.find(curr_pcie_slot));
+        }
         return {TrayID{tray_id}, asic_location};
     } else {
         TT_THROW("Unrecognized board type. Cannot determine asic position.");
@@ -181,9 +187,13 @@ void PhysicalSystemDescriptor::run_local_discovery() {
     std::set<uint32_t, std::greater<uint32_t>> sorted_pcie_slots = {};
     auto& asic_graph = system_graph_.asic_connectivity_graph[hostname];
     auto& exit_nodes = exit_node_connection_table_[hostname];
-
+    uint32_t curr_pcie_slot = 0;
     for (const auto& [chip_id, unique_id] : chip_unique_ids) {
-        sorted_pcie_slots.insert(cluster.get_physical_slot(chip_id).value());
+        if (cluster.get_physical_slot(chip_id).has_value()) {
+            sorted_pcie_slots.insert(cluster.get_physical_slot(chip_id).value());
+        } else {
+            sorted_pcie_slots.insert(curr_pcie_slot++);
+        }
     }
 
     for (const auto& [src, conn] : eth_connections) {
