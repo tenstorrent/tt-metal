@@ -216,12 +216,12 @@ void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
 std::atomic<uint64_t> detail::ProgramImpl::program_counter = 0;
 
 detail::ProgramImpl::ProgramImpl() :
+    programmable_core_count_(MetalContext::instance().hal().get_programmable_core_type_count()),
     id(program_counter++),
     runtime_id(0),
     local_circular_buffer_allocation_needed_(false),
     finalized_(false),
     cached_device_hash_(std::nullopt) {
-    programmable_core_count_ = MetalContext::instance().hal().get_programmable_core_type_count();
     for (uint32_t i = 0; i < programmable_core_count_; i++) {
         kernels_.push_back({});
         grid_extent_.push_back({});
@@ -423,10 +423,9 @@ KernelGroup::KernelGroup(
     uint32_t local_cb_mask,
     uint32_t min_remote_cb_start_index,
     const CoreRangeSet& new_ranges) :
-    core_ranges(CoreRangeSet()) {
-    this->programmable_core_type_index = programmable_core_type_index;
+    programmable_core_type_index(programmable_core_type_index), core_ranges(CoreRangeSet()), kernel_ids(kernel_ids) {
     this->core_ranges = this->core_ranges.merge(new_ranges);
-    this->kernel_ids = kernel_ids;
+
     this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DEDICATED_NOC;
 
     std::memset(&this->launch_msg, 0, sizeof(launch_msg_t));

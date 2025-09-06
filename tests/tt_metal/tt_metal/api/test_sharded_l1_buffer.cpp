@@ -72,6 +72,7 @@ struct L1Config {
         num_cores_height = std::min(min_dims.second, num_cores_height);
 
         // if core grid changes, we must recalculate the values that depend on it
+        // NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer)
         size_bytes = 1 * num_cores_height * num_tiles_per_core_height * tt::constants::TILE_HEIGHT * num_cores_width *
                      num_tiles_per_core_width * tt::constants::TILE_WIDTH * element_size;
     }
