@@ -17,7 +17,8 @@ from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 def run_neighbor_pad_impl(
     t3k_mesh_device,
     input_shape,
-    dim,
+    halo_shard_dim,
+    other_shard_dim,
     padding_left,
     padding_right,
     padding_mode,
@@ -61,48 +62,63 @@ def run_neighbor_pad_impl(
 
     ##### Neighbor pad input setup #####
     logger.info(f"Neighbor pad input shape: {input_shape}")
-    logger.info(f"Neighbor pad dim: {dim}")
+    logger.info(f"Neighbor pad dim: {halo_shard_dim}")
 
     input_tensor_mesh_list = []
     np_output_tensor_goldens_list = []
 
+    # Make sure input shape is padded
+    input_shape[halo_shard_dim] = (
+        math.ceil(input_shape[halo_shard_dim] / t3k_mesh_device.shape[cluster_axis])
+        * t3k_mesh_device.shape[cluster_axis]
+    )
+    input_shape[other_shard_dim] = (
+        math.ceil(input_shape[other_shard_dim] / t3k_mesh_device.shape[1 - cluster_axis])
+        * t3k_mesh_device.shape[1 - cluster_axis]
+    )
+
     for i in range(num_iters):
         input_tensor = torch.rand(input_shape).bfloat16()
         num_chunks = t3k_mesh_device.shape[cluster_axis]
-        chunks = torch.chunk(input_tensor, num_chunks, dim)
+        chunks = torch.chunk(input_tensor, num_chunks, halo_shard_dim)
         np_output_tensor = []
         # pad left
         if padding_mode == "zeros":
             slice_shape = list(chunks[0].shape)
-            slice_shape[dim] = 1
+            slice_shape[halo_shard_dim] = 1
             first_slice_front = torch.zeros(slice_shape)
         else:
-            first_slice_front = torch.narrow(chunks[0], dim, 0, 1)
-        first_slice = torch.cat((first_slice_front, chunks[0]), dim=dim)
+            first_slice_front = torch.narrow(chunks[0], halo_shard_dim, 0, 1)
+        first_slice = torch.cat((first_slice_front, chunks[0]), dim=halo_shard_dim)
         np_output_tensor.append(first_slice)
         for p in range(padding_left - 1):
-            np_output_tensor[0] = torch.cat((first_slice_front, np_output_tensor[0]), dim=dim)
+            np_output_tensor[0] = torch.cat((first_slice_front, np_output_tensor[0]), dim=halo_shard_dim)
         for k in range(1, num_chunks):
-            prev_halo = torch.narrow(chunks[k - 1], dim, chunks[k - 1].shape[dim] - padding_left, padding_left)
-            np_output_tensor.append(torch.cat((prev_halo, chunks[k]), dim=dim))
+            prev_halo = torch.narrow(
+                chunks[k - 1], halo_shard_dim, chunks[k - 1].shape[halo_shard_dim] - padding_left, padding_left
+            )
+            np_output_tensor.append(torch.cat((prev_halo, chunks[k]), dim=halo_shard_dim))
 
         # pad right
         if padding_mode == "zeros":
             slice_shape = list(np_output_tensor[num_chunks - 1].shape)
-            slice_shape[dim] = 1
+            slice_shape[halo_shard_dim] = 1
             last_slice_back = torch.zeros(slice_shape)
         else:
-            last_slice_size = np_output_tensor[num_chunks - 1].shape[dim]
-            last_slice_back = torch.narrow(np_output_tensor[num_chunks - 1], dim, last_slice_size - 1, 1)
+            last_slice_size = np_output_tensor[num_chunks - 1].shape[halo_shard_dim]
+            last_slice_back = torch.narrow(np_output_tensor[num_chunks - 1], halo_shard_dim, last_slice_size - 1, 1)
         for p in range(padding_right):
-            np_output_tensor[num_chunks - 1] = torch.cat((np_output_tensor[num_chunks - 1], last_slice_back), dim=dim)
+            np_output_tensor[num_chunks - 1] = torch.cat(
+                (np_output_tensor[num_chunks - 1], last_slice_back), dim=halo_shard_dim
+            )
         for k in range(0, num_chunks - 1):
-            next_halo = torch.narrow(chunks[k + 1], dim, 0, padding_right)
-            np_output_tensor[k] = torch.cat((np_output_tensor[k], next_halo), dim=dim)
-        np_output_tensor_goldens_list.append(torch.cat(np_output_tensor, dim=dim))
+            next_halo = torch.narrow(chunks[k + 1], halo_shard_dim, 0, padding_right)
+            np_output_tensor[k] = torch.cat((np_output_tensor[k], next_halo), dim=halo_shard_dim)
+        np_output_tensor_goldens_list.append(torch.cat(np_output_tensor, dim=halo_shard_dim))
 
         dims = [None, None]
-        dims[cluster_axis] = dim
+        dims[cluster_axis] = halo_shard_dim
+        dims[1 - cluster_axis] = other_shard_dim
         input_tensor_mesh = ttnn.from_torch(
             input_tensor,
             device=t3k_mesh_device,
@@ -120,7 +136,7 @@ def run_neighbor_pad_impl(
     def run_op(i):
         tt_neighbor_pad_out_tensor = ttnn.experimental.neighbor_pad_async(
             input_tensor_mesh_list[i],
-            dim=dim,
+            dim=halo_shard_dim,
             padding_left=padding_left,
             padding_right=padding_right,
             padding_mode=padding_mode,
@@ -169,14 +185,12 @@ def run_neighbor_pad_impl(
         tt_np_out_tensor = tt_neighbor_pad_out_tensor_list[i]
         torch_np_out_tensor = np_output_tensor_goldens_list[i if not enable_trace else 0]
         tt_np_out = ttnn.from_device(tt_np_out_tensor)
-        dims[cluster_axis] = dim
-        other_dim = (dim + 1) % len(tt_np_out.shape)
-        dims[1 - cluster_axis] = other_dim
+        dims[cluster_axis] = halo_shard_dim
+        dims[1 - cluster_axis] = other_shard_dim
         tt_np_out = ttnn.to_torch(
             tt_np_out,
             mesh_composer=ConcatMesh2dToTensor(t3k_mesh_device, mesh_shape=tuple(t3k_mesh_device.shape), dims=dims),
         )
-        tt_np_out = torch.narrow(tt_np_out, other_dim, 0, torch_np_out_tensor.shape[other_dim])
         eq, output = comp_pcc(tt_np_out, torch_np_out_tensor, 1)
         logger.info(f"{output}, iteration {i}")
         assert eq, f"{i} FAILED np: {output}"
@@ -197,16 +211,16 @@ def run_neighbor_pad_impl(
 )
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "input_shape, dim, layout, input_dtype, padding_left, padding_right, padding_mode, cluster_axis",
+    "input_shape, halo_shard_dim, other_shard_dim, layout, input_dtype, padding_left, padding_right, padding_mode, cluster_axis",
     [
-        ([32, 60, 106, 768], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1),
-        ([88, 120, 212, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1),
-        ([168, 240, 424, 256], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1),
-        ([168, 480, 848, 128], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1),
-        ([32, 60, 106, 768], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "replicate", 1),
-        ([32, 60, 106, 768], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "replicate", 0),
-        ([32, 60, 106, 768], 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "replicate", 0),
-        ([1, 1, 106, 768], 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "zeros", 0),
+        ([28, 60, 106, 768], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1),
+        ([82, 120, 212, 512], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1),
+        ([163, 240, 424, 256], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1),
+        ([163, 480, 848, 128], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 0, "replicate", 1),
+        ([28, 60, 106, 768], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "replicate", 1),
+        ([28, 60, 106, 768], 0, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "replicate", 0),
+        ([28, 60, 106, 768], 2, 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "replicate", 0),
+        ([28, 60, 106, 768], 2, 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 2, "zeros", 0),
     ],
     ids=[
         "mochi_vae_1",
@@ -247,7 +261,8 @@ def run_neighbor_pad_impl(
 def test_neighbor_pad_async(
     mesh_device,
     input_shape,
-    dim,
+    halo_shard_dim,
+    other_shard_dim,
     padding_left,
     padding_right,
     padding_mode,
@@ -264,7 +279,8 @@ def test_neighbor_pad_async(
     run_neighbor_pad_impl(
         mesh_device,
         input_shape=input_shape,
-        dim=dim,
+        halo_shard_dim=halo_shard_dim,
+        other_shard_dim=other_shard_dim,
         padding_left=padding_left,
         padding_right=padding_right,
         padding_mode=padding_mode,
