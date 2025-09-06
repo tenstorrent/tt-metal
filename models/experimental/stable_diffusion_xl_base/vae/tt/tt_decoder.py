@@ -65,7 +65,6 @@ class TtDecoder(LightweightModule):
         )
 
         self.compute_in_config = model_config.get_conv_compute_config(module_path="decoder.conv_in")
-        self.conv_in_config = model_config.get_conv_config(conv_path="decoder.conv_in")
         (
             self.tt_conv_in_weights,
             self.tt_conv_in_bias,
@@ -73,12 +72,12 @@ class TtDecoder(LightweightModule):
         ) = prepare_conv_params(
             conv_in_weights,
             conv_in_bias,
-            self.conv_in_config.weights_dtype,
+            model_config.conv_w_dtype,
         )
         self.conv_in_slice_config = get_DRAM_conv_config(None, 1)
+        self.conv_in_config = model_config.get_conv_config(conv_path="decoder.conv_in")
 
         self.compute_out_config = model_config.get_conv_compute_config(module_path="decoder.conv_out")
-        self.conv_out_config = model_config.get_conv_config(conv_path="decoder.conv_out")
         (
             self.tt_conv_out_weights,
             self.tt_conv_out_bias,
@@ -86,9 +85,10 @@ class TtDecoder(LightweightModule):
         ) = prepare_conv_params(
             conv_out_weights,
             conv_out_bias,
-            self.conv_out_config.weights_dtype,
+            model_config.conv_w_dtype,
         )
         self.conv_out_slice_config = get_DRAM_conv_config(None, 2)
+        self.conv_out_config = model_config.get_conv_config(conv_path="decoder.conv_out")
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def forward(self, sample, input_shape):

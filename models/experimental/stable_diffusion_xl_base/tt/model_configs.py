@@ -36,17 +36,6 @@ class ModelOptimisations:
             act_block_w_div=1,
             act_block_h_override=256,
         )
-        self.conv_configs["ABH_256_NO_ADB_HS"] = ttnn.Conv2dConfig(
-            weights_dtype=self.conv_ws_dtype,
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            deallocate_activation=True,
-            reallocate_halo_output=False,
-            enable_act_double_buffer=False,
-            enable_split_reader=True,
-            reshard_if_not_optimal=True,
-            act_block_w_div=1,
-            act_block_h_override=256,
-        )
         self.conv_configs["ABH_128_NO_ADB_HS"] = ttnn.Conv2dConfig(
             weights_dtype=conv_w_dtype,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -58,29 +47,6 @@ class ModelOptimisations:
             act_block_w_div=1,
             act_block_h_override=128,
         )
-        self.conv_configs["ABH_0_ADB_HS"] = ttnn.Conv2dConfig(
-            weights_dtype=self.conv_ws_dtype,
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            deallocate_activation=True,
-            reallocate_halo_output=False,
-            enable_act_double_buffer=True,
-            enable_split_reader=True,
-            reshard_if_not_optimal=True,
-            act_block_w_div=1,
-            act_block_h_override=0,
-        )
-
-        self.conv_configs["ABH_32_ADB_HS"] = ttnn.Conv2dConfig(
-            weights_dtype=self.conv_ws_dtype,
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            deallocate_activation=True,
-            reallocate_halo_output=False,
-            enable_act_double_buffer=True,
-            enable_split_reader=False,
-            reshard_if_not_optimal=True,
-            act_block_w_div=1,
-            act_block_h_override=32,
-        )
 
         # BLOCK SHARDED
         self.conv_configs["ABH_0_ADB_WDB_BS"] = ttnn.Conv2dConfig(
@@ -89,6 +55,19 @@ class ModelOptimisations:
             deallocate_activation=True,
             reallocate_halo_output=True,
             enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=0,
+        )
+
+        self.conv_configs["ABH_0_NO_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=False,
             enable_weights_double_buffer=True,
             enable_split_reader=False,
             reshard_if_not_optimal=True,
@@ -108,6 +87,52 @@ class ModelOptimisations:
             act_block_w_div=1,
             act_block_h_override=0,
         )
+        self.conv_configs["ABH_32_NO_ADB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=32,
+        )
+        self.conv_configs["ABH_64_NO_ADB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=64,
+        )
+        self.conv_configs["ABH_64_NO_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=64,
+        )
+        self.conv_configs["ABH_64_NO_ADB_WDB_MOVE_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=64,
+        )
         self.conv_configs["ABH_64_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -120,11 +145,82 @@ class ModelOptimisations:
             act_block_w_div=1,
             act_block_h_override=64,
         )
+
+        self.conv_configs["ABH_0_ADB_WDB_BS_BF16"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_w_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=True,
+            enable_split_reader=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=0,
+        )
+
+        self.conv_configs["ABH_128_ADB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=128,
+        )
         self.conv_configs["ABH_128_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=True,
             reallocate_halo_output=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=128,
+        )
+        self.conv_configs["ABH_128_NO_ADB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=128,
+        )
+        self.conv_configs["ABH_128_NO_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=128,
+        )
+        self.conv_configs["ABH_128_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=False,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=128,
+        )
+        self.conv_configs["ABH_128_NO_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=False,
+            reallocate_halo_output=True,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             enable_split_reader=False,
@@ -150,6 +246,30 @@ class ModelOptimisations:
             deallocate_activation=True,
             reallocate_halo_output=False,
             enable_act_double_buffer=False,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=256,
+        )
+        self.conv_configs["ABH_256_NO_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=256,
+        )
+        self.conv_configs["ABH_256_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=False,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
             enable_split_reader=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
@@ -182,19 +302,6 @@ class ModelOptimisations:
             act_block_h_override=256,
         )
 
-        self.conv_configs["ABH_512_NO_ADB_BS"] = ttnn.Conv2dConfig(
-            weights_dtype=self.conv_ws_dtype,
-            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            deallocate_activation=True,
-            reallocate_halo_output=True,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=False,
-            enable_split_reader=False,
-            reshard_if_not_optimal=True,
-            act_block_w_div=1,
-            act_block_h_override=512,
-        )
-
         self.conv_configs["ABH_512_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -208,10 +315,49 @@ class ModelOptimisations:
             act_block_h_override=512,
         )
 
+        self.conv_configs["ABH_512_NO_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=512,
+        )
+
         self.conv_configs["ABH_512_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=False,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=512,
+        )
+
+        # WIDTH SHARDED
+        self.conv_configs["ABH_256_NO_ADB_WS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=256,
+        )
+        self.conv_configs["ABH_512_NO_ADB_WS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            deallocate_activation=True,
             reallocate_halo_output=True,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
@@ -234,6 +380,39 @@ class ModelOptimisations:
         )
 
         # DRAM CONF
+        self.conv_configs["ABH_64_NO_ADB_DRAM"] = ttnn.Conv2dConfig(
+            weights_dtype=conv_w_dtype,
+            shard_layout=None,
+            deallocate_activation=False,
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=64,
+            output_layout=ttnn.TILE_LAYOUT,
+        )
+        self.conv_configs["ABH_128_NO_ADB_DRAM"] = ttnn.Conv2dConfig(
+            weights_dtype=conv_w_dtype,
+            shard_layout=None,
+            deallocate_activation=False,
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=128,
+            output_layout=ttnn.TILE_LAYOUT,
+        )
+        self.conv_configs["ABH_512_NO_ADB_DRAM"] = ttnn.Conv2dConfig(
+            weights_dtype=conv_w_dtype,
+            shard_layout=None,
+            deallocate_activation=False,
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=512,
+            output_layout=ttnn.TILE_LAYOUT,
+        )
         self.conv_configs["DEFAULT_DRAM"] = ttnn.Conv2dConfig(
             weights_dtype=conv_w_dtype,
             shard_layout=None,
@@ -244,6 +423,17 @@ class ModelOptimisations:
             act_block_w_div=1,
             act_block_h_override=0,
             output_layout=ttnn.TILE_LAYOUT,
+        )
+        self.conv_configs["ABH_256_NO_ADB_HS"] = ttnn.Conv2dConfig(
+            weights_dtype=conv_w_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=False,
+            enable_split_reader=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=256,
         )
 
         self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_4096"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -836,30 +1026,24 @@ class ModelOptimisations:
                 return self.conv_configs["DEFAULT"]
         else:
             # VAE
-            # DECODER CONV IN
             if "decoder.conv_in" == conv_path:
-                return self.conv_configs["ABH_0_ADB_HS"]
-            # MID BLOCK and UP BLOCK 0
-            elif "decoder.mid_block.resnet" in conv_path or "decoder.up_blocks.0.resnet" in conv_path:
-                return self.conv_configs["ABH_512_NO_ADB_BS"]
-            elif "decoder.up_blocks.0.upsamplers" in conv_path:
-                return self.conv_configs["ABH_256_NO_ADB_BS"]
-            # UP BLOCK 1
-            elif "decoder.up_blocks.1.resnet" in conv_path:
-                return self.conv_configs["ABH_256_NO_ADB_BS"]
-            elif "decoder.up_blocks.1.upsamplers" in conv_path:
-                return self.conv_configs["ABH_256_NO_ADB_BS"]
-            # UP BLOCK 2
-            elif "decoder.up_blocks.2.resnet" in conv_path:
-                return self.conv_configs["ABH_512_NO_ADB_BS"]
-            elif "decoder.up_blocks.1.upsamplers" in conv_path:
-                return self.conv_configs["ABH_512_NO_ADB_BS"]
-            # UP BLOCK 3
-            elif "decoder.up_blocks.3.resnet" in conv_path:
-                return self.conv_configs["ABH_32_ADB_HS"]
-            # DECODER CONV OUT
-            elif "decoder.conv_out" == conv_path:
                 return self.conv_configs["ABH_256_NO_ADB_HS"]
+            elif ("decoder.up_blocks.2.resnet.0" in conv_path) and ("conv1" in conv_path):
+                return self.conv_configs["ABH_128_NO_ADB_DRAM"]
+            elif ("decoder.up_blocks.2.resnet" in conv_path) and ("conv1" in conv_path):
+                return self.conv_configs["ABH_64_NO_ADB_DRAM"]  # should be 128, OOM in demo
+            # elif ("decoder.up_blocks.2.resnet" in conv_path) and ("conv2" in conv_path):
+            #     return self.conv_configs["ABH_32_NO_ADB_DRAM"] # Note: ABH should be 128 (OOM)
+            elif "decoder.up_blocks.2.upsamplers.0" == conv_path:
+                return self.conv_configs["ABH_64_NO_ADB_DRAM"]  # should be 128, OOM in demo
+            elif "decoder.conv_out" == conv_path:
+                return self.conv_configs["ABH_512_NO_ADB_DRAM"]
+            elif (
+                "decoder.mid_block.resnet" in conv_path
+                or "decoder.up_blocks.0.resnet" in conv_path
+                and not "upsampler" in conv_path
+            ):
+                return self.conv_configs["ABH_128_NO_ADB_BS"]
             else:
                 return self.conv_configs["DEFAULT_DRAM"]
 
