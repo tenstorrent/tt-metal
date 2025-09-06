@@ -75,7 +75,7 @@
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include <tt-metalium/control_plane.hpp>
-#include <umd/device/coordinate_manager.h>
+#include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/tensix_soft_reset_options.hpp>
 #include <umd/device/types/xy_pair.hpp>
