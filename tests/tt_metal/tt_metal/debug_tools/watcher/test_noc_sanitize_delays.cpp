@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <fmt/ranges.h>
 #include <gtest/gtest.h>
 #include <stddef.h>
 #include <tt-metalium/bfloat16.hpp>
@@ -168,8 +169,9 @@ void RunDelayTestOnCore(
         device->get_dev_addr(virtual_core, HalL1MemAddrType::WATCHER) + offsetof(watcher_msg_t, debug_insert_delays),
         sizeof(debug_insert_delays_msg_t));
 
-    log_info(tt::LogTest, "Read back debug_insert_delays: 0x{:x}", read_vec[0]);
-    EXPECT_TRUE((read_vec[0] >> 24) == 0x3);
+    log_info(tt::LogTest, "Read back debug_insert_delays: {:x}", fmt::join(read_vec, ","));
+    const debug_insert_delays_msg_t* read_back = reinterpret_cast<const debug_insert_delays_msg_t*>(read_vec.data());
+    EXPECT_EQ(read_back->feedback, 0x3);
 }
 
 TEST_F(MeshWatcherDelayFixture, TensixTestWatcherSanitizeInsertDelays) {

@@ -405,19 +405,6 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
             static_assert(sizeof(debug_sanitize_noc_addr_msg_t) % sizeof(uint32_t) == 0);
             debug_insert_delays_msg_t delay_setup;
 
-            // Create the mask based on the feature
-            uint32_t hart_mask = rtoptions.get_feature_riscv_mask(delay_feature);
-            switch (delay_feature) {
-                case tt::llrt::RunTimeDebugFeatureReadDebugDelay: delay_setup.read_delay_riscv_mask = hart_mask; break;
-                case tt::llrt::RunTimeDebugFeatureWriteDebugDelay:
-                    delay_setup.write_delay_riscv_mask = hart_mask;
-                    break;
-                case tt::llrt::RunTimeDebugFeatureAtomicDebugDelay:
-                    delay_setup.atomic_delay_riscv_mask = hart_mask;
-                    break;
-                default: break;
-            }
-
             for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
                 const auto& delayed_cores = rtoptions.get_feature_cores(delay_feature);
                 if (delayed_cores.count(core_type) == 0) {
@@ -435,12 +422,31 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
                         valid_logical_core = false;
                     }
                     if (valid_logical_core) {
+                        auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
+                        // Create the mask based on the feature
+                        uint32_t processor_mask =
+                            rtoptions.get_feature_processors(delay_feature).get_processor_mask(programmable_core_type);
+                        switch (delay_feature) {
+                            case tt::llrt::RunTimeDebugFeatureReadDebugDelay:
+                                delay_setup.read_delay_processor_mask = processor_mask;
+                                break;
+                            case tt::llrt::RunTimeDebugFeatureWriteDebugDelay:
+                                delay_setup.write_delay_processor_mask = processor_mask;
+                                break;
+                            case tt::llrt::RunTimeDebugFeatureAtomicDebugDelay:
+                                delay_setup.atomic_delay_processor_mask = processor_mask;
+                                break;
+                            default: break;
+                        }
+
                         // Update the masks for the core
                         if (debug_delays_val.find(virtual_core) != debug_delays_val.end()) {
-                            debug_delays_val[virtual_core].read_delay_riscv_mask |= delay_setup.read_delay_riscv_mask;
-                            debug_delays_val[virtual_core].write_delay_riscv_mask |= delay_setup.write_delay_riscv_mask;
-                            debug_delays_val[virtual_core].atomic_delay_riscv_mask |=
-                                delay_setup.atomic_delay_riscv_mask;
+                            debug_delays_val[virtual_core].read_delay_processor_mask |=
+                                delay_setup.read_delay_processor_mask;
+                            debug_delays_val[virtual_core].write_delay_processor_mask |=
+                                delay_setup.write_delay_processor_mask;
+                            debug_delays_val[virtual_core].atomic_delay_processor_mask |=
+                                delay_setup.atomic_delay_processor_mask;
                         } else {
                             debug_delays_val.insert({virtual_core, delay_setup});
                         }
@@ -469,9 +475,9 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
             "write_delay_cores_mask=0x{:x}, atomic_delay_cores_mask=0x{:x}. Delay cycles: {}",
             device_id,
             delay.first.str().c_str(),
-            delay.second.read_delay_riscv_mask,
-            delay.second.write_delay_riscv_mask,
-            delay.second.atomic_delay_riscv_mask,
+            delay.second.read_delay_processor_mask,
+            delay.second.write_delay_processor_mask,
+            delay.second.atomic_delay_processor_mask,
             rtoptions.get_watcher_debug_delay());
     }
 
