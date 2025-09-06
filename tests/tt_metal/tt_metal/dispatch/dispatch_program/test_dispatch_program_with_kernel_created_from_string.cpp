@@ -11,7 +11,7 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include "program_with_kernel_created_from_string_fixture.hpp"
 
 namespace tt::tt_metal {

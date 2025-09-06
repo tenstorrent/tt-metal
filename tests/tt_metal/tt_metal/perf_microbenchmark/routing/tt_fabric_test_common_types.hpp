@@ -14,7 +14,7 @@
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
 
