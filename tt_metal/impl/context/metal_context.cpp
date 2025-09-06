@@ -686,7 +686,7 @@ void MetalContext::assert_cores(chip_id_t device_id) {
             CoreCoord virtual_eth_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
             TensixSoftResetOptions reset_val =
-                TENSIX_ASSERT_SOFT_RESET &
+                tt::umd::TENSIX_ASSERT_SOFT_RESET &
                 static_cast<TensixSoftResetOptions>(
                     ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
             cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_eth_core), reset_val);
@@ -875,7 +875,7 @@ void MetalContext::initialize_firmware(
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: {
             bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
-            TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
+            TensixSoftResetOptions reset_val = tt::umd::TENSIX_ASSERT_SOFT_RESET;
             if (not is_idle_eth) {
                 reset_val =
                     reset_val & static_cast<TensixSoftResetOptions>(
@@ -1176,11 +1176,11 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     for (const auto& worker_core : not_done_cores) {
         if (active_eth_cores.find(worker_core) != active_eth_cores.end()) {
             // bit 12 needs to be deasserted to run second erisc on BH
-            reset_val = TENSIX_DEASSERT_SOFT_RESET &
+            reset_val = tt::umd::TENSIX_DEASSERT_SOFT_RESET &
                         static_cast<TensixSoftResetOptions>(
                             ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::TRISC0));
         } else {
-            reset_val = TENSIX_DEASSERT_SOFT_RESET;
+            reset_val = tt::umd::TENSIX_DEASSERT_SOFT_RESET;
         }
         cluster_->deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }
