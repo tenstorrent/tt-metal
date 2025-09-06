@@ -227,35 +227,35 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
     kernelSizes["IDLE_ETH_DM_0_max_kernel_size"] = 0;
     kernelSizes["IDLE_ETH_DM_1_max_kernel_size"] = 0;
 
-    for (const auto& kernel : program.kernels()) {
-        auto core_type = kernel->get_kernel_programmable_core_type();
-        auto processor_class = kernel->get_kernel_processor_class();
-        auto num_binaries = kernel->expected_num_binaries();
-        json kernelObj;
-        kernelObj["source"] = kernel->kernel_source().source_;
-        kernelObj["name"] = kernel->get_full_kernel_name();
-        if (processor_class == HalProcessorClassType::COMPUTE) {
-            MathFidelity mathFidelity = std::get<ComputeConfig>(kernel->config()).math_fidelity;
-            kernelObj["math_fidelity"] = enchantum::to_string(mathFidelity);
-            computeKernels.push_back(std::move(kernelObj));
-        } else {
-            datamovementKernels.push_back(std::move(kernelObj));
-        }
-        if (device != nullptr) {
-            auto core_type_name = enchantum::to_string(core_type);
-            auto processor_class_name = enchantum::to_string(processor_class);
-            for (int i = 0; i < num_binaries; i++) {
-                auto key = fmt::format(
-                    "{}_{}_{}_max_kernel_size",
-                    core_type_name,
-                    processor_class_name,
-                    kernel->get_kernel_processor_type(i));
-                if (kernelSizes.value(key, 0) < kernel->get_binary_packed_size(device, i)) {
-                    kernelSizes[key] = kernel->get_binary_packed_size(device, i);
-                }
-            }
-        }
-    }
+    // for (const auto& kernel : program.kernels()) {
+    //     auto core_type = kernel->get_kernel_programmable_core_type();
+    //     auto processor_class = kernel->get_kernel_processor_class();
+    //     auto num_binaries = kernel->expected_num_binaries();
+    //     json kernelObj;
+    //     kernelObj["source"] = kernel->kernel_source().source_;
+    //     kernelObj["name"] = kernel->get_full_kernel_name();
+    //     if (processor_class == HalProcessorClassType::COMPUTE) {
+    //         MathFidelity mathFidelity = std::get<ComputeConfig>(kernel->config()).math_fidelity;
+    //         kernelObj["math_fidelity"] = enchantum::to_string(mathFidelity);
+    //         computeKernels.push_back(std::move(kernelObj));
+    //     } else {
+    //         datamovementKernels.push_back(std::move(kernelObj));
+    //     }
+    //     if (device != nullptr) {
+    //         auto core_type_name = enchantum::to_string(core_type);
+    //         auto processor_class_name = enchantum::to_string(processor_class);
+    //         for (int i = 0; i < num_binaries; i++) {
+    //             auto key = fmt::format(
+    //                 "{}_{}_{}_max_kernel_size",
+    //                 core_type_name,
+    //                 processor_class_name,
+    //                 kernel->get_kernel_processor_type(i));
+    //             if (kernelSizes.value(key, 0) < kernel->get_binary_packed_size(device, i)) {
+    //                 kernelSizes[key] = kernel->get_binary_packed_size(device, i);
+    //             }
+    //         }
+    //     }
+    // }
     json ret;
     ret["compute_kernels"] = std::move(computeKernels);
     ret["datamovement_kernels"] = std::move(datamovementKernels);
