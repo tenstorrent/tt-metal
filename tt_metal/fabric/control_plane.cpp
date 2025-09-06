@@ -845,9 +845,11 @@ void ControlPlane::generate_intermesh_connectivity() {
         auto intermesh_connections = this->pair_logical_intermesh_ports(exit_node_port_id_table, my_rank, my_host);
         this->routing_table_generator_->load_intermesh_connections(intermesh_connections);
     } else {
+        std::cout << "Generating intermesh connectivity for single-host case" << std::endl;
         // Intermesh Connectivity generation for the single-host case (th)
         auto intermesh_connections = this->generate_intermesh_connections_for_local_host();
         this->routing_table_generator_->load_intermesh_connections(intermesh_connections);
+        std::cout << "Intermesh connectivity generated for single-host case" << std::endl;
     }
 }
 
@@ -855,27 +857,36 @@ void ControlPlane::init_control_plane(
     const std::string& mesh_graph_desc_file,
     std::optional<std::reference_wrapper<const std::map<FabricNodeId, chip_id_t>>>
         logical_mesh_chip_id_to_physical_chip_id_mapping) {
+    std::cout << "Create routing table generator" << std::endl;
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
+    std::cout << "Create physical system descriptor" << std::endl;
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>();
+    std::cout << "Initialize local mesh binding" << std::endl;
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
+    std::cout << "Initialize distributed contexts" << std::endl;
     this->initialize_distributed_contexts();
 
-    // Printing, only enabled with log_debug
-    this->routing_table_generator_->mesh_graph->print_connectivity();
-
+    std::cout << "Load physical chip mapping" << std::endl;
     if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
         this->load_physical_chip_mapping(get_logical_chip_to_physical_chip_mapping(mesh_graph_desc_file));
     }
-
+    std::cout << "Generate intermesh connectivity" << std::endl;
     this->generate_intermesh_connectivity();
 
+    // Printing, only enabled with log_debug
+    std::cout << "Printing mesh graph connectivity" << std::endl;
+    this->routing_table_generator_->mesh_graph->print_connectivity();
+    std::cout << "Initialize intermesh eth links" << std::endl;
     this->initialize_intermesh_eth_links();
+    std::cout << "Control plane initialized" << std::endl;
 }
 
 ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
+    std::cout << "Calling ControlPlane constructor" << std::endl;
     init_control_plane(mesh_graph_desc_file, std::nullopt);
+    std::cout << "ControlPlane constructor finished" << std::endl;
 }
 
 ControlPlane::ControlPlane(
