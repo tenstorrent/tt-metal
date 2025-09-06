@@ -1,0 +1,15 @@
+[
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "image",
+                "image": "https://gist.github.com/gwangTT/ae3ac698de56020bc459018c7c2bff08/raw/a91b2df96c61234d83a7f61c4495bfc826786c74/paper.png"
+            },
+            {
+                "type": "text",
+                "text": "Transcribe the text in the image."
+            }
+        ]
+    }
+]

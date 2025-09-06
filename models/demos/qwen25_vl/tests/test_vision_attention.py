@@ -134,7 +134,7 @@ def test_vision_attention_inference(
 
     tt_out = tt_model(
         attention_input,
-        cu_seqlens=cu_seqlens,
+        cu_seqlens=ttnn.from_torch(cu_seqlens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device),
         rot_mats=rot_mats,
     )
     tt_out = ttnn.to_torch(
