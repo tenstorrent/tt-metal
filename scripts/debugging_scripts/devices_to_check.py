@@ -29,7 +29,7 @@ script_config = ScriptConfig(
 def get_devices(devices: list[str], inspector_data: InspectorData | None, context: Context) -> list[Device]:
     if len(devices) == 1 and devices[0].lower() == "in_use":
         if inspector_data is not None:
-            device_ids = list(inspector_data.devices_in_use)
+            device_ids = list(inspector_data.getDevicesInUse().deviceIds)
             if len(device_ids) == 0:
                 print(
                     f"  {ORANGE}No devices in use found in inspector data. Switching to use all available devices. If you are using ttnn check if you have enabled program cache.{RST}"
