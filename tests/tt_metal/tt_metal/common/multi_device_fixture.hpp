@@ -18,7 +18,7 @@
 #include "mesh_dispatch_fixture.hpp"
 #include "system_mesh.hpp"
 #include <umd/device/types/arch.hpp>
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 
 namespace tt::tt_metal {
