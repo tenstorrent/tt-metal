@@ -62,13 +62,24 @@ class OFT:
     def forward(self, device, features, calib, grid):
         if use_signpost:
             signpost(header=f"OFT block started {features.shape=}_{self.scale=}_{self.use_precomputed_grid=}")
-        # print(f"TTNN: features shape: {features.shape}, dtype: {features.dtype}")
-        integral_image = ttnn_integral_image_channel_last(features)
+
+        HOST_FALLBACK = False
+        if HOST_FALLBACK:
+            host_features = ttnn.to_torch(features, dtype=torch.float32).permute(0, 3, 1, 2)  # Convert to NCHW format
+            host_integral_image = torch.cumsum(torch.cumsum(host_features, dim=-1), dim=-2).permute(
+                0, 2, 3, 1
+            )  # convert to NHWC
+            integral_image = ttnn.from_torch(
+                host_integral_image, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+        else:
+            integral_image = ttnn_integral_image_channel_last(features)
         # print(
         #     f"TTNN: integral_image shape: {integral_image.shape}, dtype: {integral_image.dtype}, layout: {integral_image.layout}, memory_config: {integral_image.memory_config()}"
         # )
         if integral_image.get_layout() == ttnn.TILE_LAYOUT:
             integral_image = ttnn.to_layout(integral_image, ttnn.ROW_MAJOR_LAYOUT)
+        host_integral_image = ttnn.from_device(integral_image)
         # print(
         #     f"TTNN: integral_image shape: {integral_image.shape}, dtype: {integral_image.dtype}, layout: {integral_image.layout}, memory_config: {integral_image.memory_config()}"
         # )
@@ -110,31 +121,51 @@ class OFT:
             integral_image, self.bbox_corners[3], use_precomputed_grid=self.use_precomputed_grid
         )
 
-        vox_feats = ttnn.subtract(top_left, top_right)
-        vox_feats = ttnn.add(vox_feats, btm_right)
-        vox_feats = ttnn.subtract(vox_feats, btm_left)
-        # return vox_feats
-        print(
-            f"vox_feats shape: {vox_feats.shape}, dtype: {vox_feats.dtype}, layout: {vox_feats.layout}, memory_config: {vox_feats.memory_config()}"
-        )
-        # return vox_feats
-        # vox_feats = ttnn.subtract(vox_feats, 0.005, dtype=ttnn.bfloat16)
-        # return vox_feats #pcc na vox_feats 0.9831520098479232
-        # if vox_feats.get_layout() != ttnn.TILE_LAYOUT:
-        #     vox_feats = ttnn.to_layout(vox_feats, ttnn.TILE_LAYOUT)
-        # if self.area.get_layout() != ttnn.TILE_LAYOUT:
-        #     self.area = ttnn.to_layout(self.area, ttnn.TILE_LAYOUT)
-        # vox_feats = ttnn.div(vox_feats, self.area, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # print(f"TTNN: visible shape: {self.visible.shape}, dtype: {self.visible.dtype}")
-        # print(f"TTNN: visible layout: {self.visible.layout}, memory_config: {self.visible.memory_config()}")
-        # print(f"TTNN: area shape: {self.area.shape}, dtype: {self.area.dtype}")
-        # print(f"TTNN: area layout: {self.area.layout}, memory_config: {self.area.memory_config()}")
-        # print(f"TTNN: vox_feats before visibility mask shape: {vox_feats.shape}, dtype: {vox_feats.dtype}")
-        # print(f"TTNN: vox_feats before visibility mask layout: {vox_feats.layout}, memory_config: {vox_feats.memory_config()}")
-        # return vox_feats
-        # vox_feats = vox_feats #- EPSILON
-        vox_feats = ttnn.mul(vox_feats, self.area)
-
+        HOST_FALLBACK = 1
+        if HOST_FALLBACK == 1:
+            host_features = ttnn.to_torch(features, dtype=torch.float32).permute(0, 3, 1, 2)  # Convert to NCHW format
+            host_integral_image = torch.cumsum(torch.cumsum(host_features, dim=-1), dim=-2)
+            # host_integral_image = ttnn.to_torch(integral_image, dtype=torch.float32).permute(0,3,1,2)  # Convert to NCHW for torch
+            bbox_tl = ttnn.to_torch(self.bbox_corners[0], dtype=torch.float32)  # .permute(0,3,1,2)
+            bbox_br = ttnn.to_torch(self.bbox_corners[1], dtype=torch.float32)  # .permute(0,3,1,2)
+            bbox_tr = ttnn.to_torch(self.bbox_corners[2], dtype=torch.float32)  # .permute(0,3,1,2)
+            bbox_bl = ttnn.to_torch(self.bbox_corners[3], dtype=torch.float32)  # .permute(0,3,1,2)
+            host_top_left = F.grid_sample(host_integral_image, bbox_tl)  # .to(torch.bfloat16))
+            host_btm_right = F.grid_sample(host_integral_image, bbox_br)  # .to(torch.bfloat16))
+            host_top_right = F.grid_sample(host_integral_image, bbox_tr)  # .to(torch.bfloat16))
+            host_btm_left = F.grid_sample(host_integral_image, bbox_bl)  # .to(torch.bfloat16))
+            host_integral_image = ttnn.to_torch(integral_image, dtype=torch.float32)  # .permute(0,2,3,1)
+            # host_top_left = ttnn.to_torch(top_left, dtype=torch.float32)
+            # host_btm_right = ttnn.to_torch(btm_right, dtype=torch.float32)
+            # host_top_right = ttnn.to_torch(top_right, dtype=torch.float32)
+            # host_btm_left = ttnn.to_torch(btm_left, dtype=torch.float32)
+            host_vox_feats = host_top_left + host_btm_right - host_top_right - host_btm_left
+            host_vox_feats_ = host_vox_feats.clone().permute(0, 2, 3, 1)
+            # host_vox_feats = ttnn.to_torch(vox_feats, dtype=torch.float32)
+            host_vox_feats = host_vox_feats.permute(0, 2, 3, 1)  # Convert to NHWC for TTNN
+            host_area = ttnn.to_torch(self.area, dtype=torch.float32)
+            host_vox_feats = host_vox_feats * host_area
+            vox_feats = ttnn.from_torch(
+                host_vox_feats, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+        elif HOST_FALLBACK == 2:
+            vox_feats = ttnn.subtract(top_left, top_right)
+            vox_feats = ttnn.add(vox_feats, btm_right)
+            vox_feats = ttnn.subtract(vox_feats, btm_left)
+            host_vox_feats_ = ttnn.to_torch(vox_feats, dtype=torch.float32)
+            host_area = ttnn.to_torch(self.area, dtype=torch.float32)  ### <----
+            host_vox_feats = host_vox_feats_ * host_area
+            # host_vox_feats = host_vox_feats.permute(0, 2, 3, 1)  # Convert to NHWC for TTNN
+            vox_feats = ttnn.from_torch(
+                host_vox_feats, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+        else:
+            vox_feats = ttnn.subtract(top_left, top_right)
+            vox_feats = ttnn.add(vox_feats, btm_right)
+            vox_feats = ttnn.subtract(vox_feats, btm_left)
+            host_vox_feats_ = ttnn.from_device(vox_feats)
+            vox_feats = ttnn.multiply(vox_feats, self.area)
+        host_vox_feats_over_area = ttnn.from_device(vox_feats)
         # return vox_feats # -> pcc 0.008397531667143535
         # print(f"TTNN: vox_feats shape before division: {vox_feats.shape}, dtype: {vox_feats.dtype}")
         # print(f"TTNN: area shape: {self.area.shape}, dtype: {self.area.dtype}")
@@ -158,6 +189,8 @@ class OFT:
         # print(f"TTNN: vox_feats shape after division: {vox_feats.shape}, dtype: {vox_feats.dtype}")
         # print(f"TTNN: visible shape: {self.visible.shape}, dtype: {self.visible.dtype}")
         vox_feats = ttnn.mul(vox_feats, self.visible)
+        host_vox_feats = ttnn.from_device(vox_feats)
+        host_visible = ttnn.from_device(self.visible)
         # print(f"TTNN: vox_feats shape after division: {vox_feats.shape}, dtype: {vox_feats.dtype}")
         # return vox_feats
         n, h, w, c = vox_feats.shape
@@ -185,7 +218,20 @@ class OFT:
         print(f"TTNN: ortho_feats shape after relu: {ortho_feats.shape}, dtype: {ortho_feats.dtype}")
         if use_signpost:
             signpost(header="OFT block ended")
-        return ortho_feats
+        # return ortho_feats
+        host_area = ttnn.from_device(self.area)
+        return ortho_feats, (
+            host_integral_image,
+            top_left,
+            btm_right,
+            top_right,
+            btm_left,
+            host_vox_feats_,
+            host_vox_feats_over_area,
+            host_vox_feats,
+            host_area,
+            host_visible,
+        )
 
     def calculate_initialization_parameters(
         self, device, channels, cell_size, grid_height, feature_shape_hw, calib, grid, scale, use_precomputed_grid
@@ -264,8 +310,9 @@ class OFT:
                 btm_left_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
             )
 
-        visible_tt = ttnn.from_torch(visible_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        visible_tt = ttnn.from_torch(visible_nhwc, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         area_tt = ttnn.from_torch(area_nhwc, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        # area_tt = ttnn.from_torch(area_nhwc, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         return (
             [top_left_bc_tt, btm_right_bc_tt, top_right_bc_tt, btm_left_bc_tt],
             visible_tt,

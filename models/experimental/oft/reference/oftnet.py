@@ -48,9 +48,9 @@ class OftNet(nn.Module):
         print("middle block finished")
         # return lat8, lat16, lat32
         print("OFT started")
-        ortho8 = self.oft8(lat8, calib, grid)
-        ortho16 = self.oft16(lat16, calib, grid)
-        ortho32 = self.oft32(lat32, calib, grid)
+        ortho8, intermediates8 = self.oft8(lat8, calib, grid)
+        ortho16, intermediates16 = self.oft16(lat16, calib, grid)
+        ortho32, intermediates32 = self.oft32(lat32, calib, grid)
         ortho = ortho8 + ortho16 + ortho32
         # return ortho, ortho16, ortho32
         print("OFT finished")
@@ -70,4 +70,10 @@ class OftNet(nn.Module):
         print(f"TORCH::::Pos offsets shape: {pos_offsets.shape}, dtype: {pos_offsets.dtype}")
         print(f"TORCH::::Dim offsets shape: {dim_offsets.shape}, dtype: {dim_offsets.dtype}")
         print(f"TORCH::::Ang offsets shape: {ang_offsets.shape}, dtype: {ang_offsets.dtype}")
-        return scores.squeeze(2), pos_offsets, dim_offsets, ang_offsets
+        return (
+            scores.squeeze(2),
+            pos_offsets,
+            dim_offsets,
+            ang_offsets,
+            (intermediates8, intermediates16, intermediates32),
+        )

@@ -166,11 +166,11 @@ class TTOftNet:
         # ortho8 = self.oft8(lat8_torch, calib, grid)  # ortho8
         # ortho16 = self.oft16(lat16_torch, calib, grid)
         # ortho32 = self.oft32(lat32_torch, calib, grid)
-        ortho8 = self.oft8.forward(device, lat8, calib, grid)  # ortho8
+        ortho8, intermediates8 = self.oft8.forward(device, lat8, calib, grid)  # ortho8
         ttnn.deallocate(lat8)
-        ortho16 = self.oft16.forward(device, lat16, calib, grid)
+        ortho16, intermediates16 = self.oft16.forward(device, lat16, calib, grid)
         ttnn.deallocate(lat16)
-        ortho32 = self.oft32.forward(device, lat32, calib, grid)
+        ortho32, intermediates32 = self.oft32.forward(device, lat32, calib, grid)
         ttnn.deallocate(lat32)
         ortho = ortho8 + ortho16 + ortho32
         print(
@@ -235,4 +235,4 @@ class TTOftNet:
         if use_signpost:
             signpost(header="Slicing finished")
             signpost(header="OftNet finished")
-        return parts  # ortho, ortho16, ortho32 #input_tensor
+        return parts, (intermediates8, intermediates16, intermediates32)

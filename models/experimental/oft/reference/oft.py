@@ -9,7 +9,6 @@ import torch.nn.functional as F
 
 # from .. import utils
 EPSILON = 1e-6
-EPSILON2 = 1
 
 
 def perspective(matrix, vector):
@@ -98,8 +97,10 @@ class OFT(nn.Module):
         btm_left = F.grid_sample(integral_img, bbox_corners[..., [0, 3]])  # .to(torch.bfloat16))
         # return btm_left
         vox_feats = top_left + btm_right - top_right - btm_left
+        ref_vox_feats_ = vox_feats.clone()
         # return vox_feats
         vox_feats = vox_feats / area
+        ref_vox_feats_over_area = vox_feats.clone()
         # vox_feats = (top_left + btm_right - btm_left )/area
         # return vox_feats
         # print(f"TORCH: visible shape: {visible.shape}, dtype: {visible.dtype}")
@@ -109,6 +110,7 @@ class OFT(nn.Module):
 
         # print(f"TORCH: vox_feats shape: {vox_feats.shape}, dtype: {vox_feats.dtype}")
         vox_feats = vox_feats * visible.float()
+        ref_vox_feats = vox_feats.clone()
         print(f"TORCH: vox_feats after visibility mask shape: {vox_feats.shape}, dtype: {vox_feats.dtype}")
         # vox_feats = vox_feats.view(batch, -1, depth, width)
         # return vox_feats
@@ -122,7 +124,18 @@ class OFT(nn.Module):
         # Block gradients to pixels which are not visible in the image
         # print(f"TORCH: ortho_feats shape: {ortho_feats.shape}, dtype: {ortho_feats.dtype}")
 
-        return ortho_feats
+        return ortho_feats, (
+            integral_img,
+            top_left,
+            btm_right,
+            top_right,
+            btm_left,
+            ref_vox_feats_,
+            ref_vox_feats_over_area,
+            ref_vox_feats,
+            1 / area,
+            visible,
+        )
 
 
 def integral_image(features):

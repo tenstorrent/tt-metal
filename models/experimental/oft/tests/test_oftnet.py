@@ -9,6 +9,7 @@ from models.experimental.oft.tests.test_oft import make_grid
 # from models.experimental.oft.tt.tt_oftnet import OftNet
 from tests.ttnn.utils_for_testing import check_with_pcc
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters
+from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 
 
 def pretty_print_torch(tensor, tensor_name):
@@ -30,6 +31,7 @@ def pretty_print_ttnn(tensor, tensor_name):
     [4],
 )
 def test_oftnet(device, grid_height, cell_size):
+    skip_if_not_blackhole_20_cores(device)
     # disable_persistent_kernel_cache()
 
     torch.manual_seed(42)

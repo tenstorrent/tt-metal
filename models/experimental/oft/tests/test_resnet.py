@@ -11,6 +11,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters_resnet
+from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 
 
 @pytest.mark.parametrize(
@@ -22,6 +23,7 @@ from models.experimental.oft.tt.model_preprocessing import create_OFT_model_para
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
 def test_resnetfeatures_forward(device, input_shape, layers):
+    skip_if_not_blackhole_20_cores(device)
     torch.manual_seed(0)
     model = resnet18(pretrained=False)
     # model = ResNetFeatures(BasicBlock, layers)
