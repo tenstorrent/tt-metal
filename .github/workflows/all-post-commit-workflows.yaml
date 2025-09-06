@@ -237,7 +237,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  # 6U-apc-fast-tests:
+  # galaxy-apc-fast-tests:
   #   if: ${{ github.event.pull_request.head.repo.fork == false }}
   #   needs: build-artifact
   #   secrets: inherit
