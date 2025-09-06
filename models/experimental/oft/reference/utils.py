@@ -35,3 +35,13 @@ def load_calib(filename):
                 return calib.view(3, 4)
 
     raise Exception("Could not find entry for P2 in calib file {}".format(filename))
+
+
+def perspective(matrix, vector):
+    """
+    Applies perspective projection to a vector using projection matrix
+    """
+    vector = vector.unsqueeze(-1)
+    homogenous = torch.matmul(matrix[..., :-1], vector) + matrix[..., [-1]]
+    homogenous = homogenous.squeeze(-1)
+    return homogenous[..., :-1] / homogenous[..., [-1]]
