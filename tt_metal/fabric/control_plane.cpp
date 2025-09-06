@@ -468,11 +468,13 @@ ControlPlane::generate_intermesh_connections_for_local_host() {
     const auto& physical_system_descriptor = this->physical_system_descriptor_;
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-    std::unordered_map<FabricNodeId, std::set<FabricNodeId>> paired_exit_nodes;
     std::unordered_map<uint32_t, std::set<std::string>> assigned_ports_per_mesh;
     std::set<std::pair<uint32_t, uint32_t>> processed_neighbors;
     std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>> intermesh_connections;
-    std::unordered_map<uint32_t, uint32_t> num_connections;  // TODO: src + dst hash
+    std::unordered_map<uint64_t, uint32_t> num_connections;  // TODO: src + dst hash
+
+    const auto& requested_intermesh_connections = mesh_graph->get_requested_intermesh_connections();
+
     for (const auto& local_mesh_id : local_mesh_binding_.mesh_ids) {
         const auto& mesh_edges = mesh_graph->get_mesh_edge_ports_to_chip_id().at(*local_mesh_id);
 
@@ -485,25 +487,37 @@ ControlPlane::generate_intermesh_connections_for_local_host() {
         for (const auto& node : exit_nodes) {
             auto physical_chip_id = logical_mesh_chip_id_to_physical_chip_id_mapping_.at(node);
             auto asic_id = cluster.get_unique_chip_ids().at(physical_chip_id);
-
             const auto& asic_neighbors = physical_system_descriptor->get_asic_neighbors(tt::tt_metal::AsicID{asic_id});
 
             for (const auto& asic_neighbor : asic_neighbors) {
                 auto neighbor_node = this->get_fabric_node_id_from_asic_id(*asic_neighbor);
-                if (neighbor_node.mesh_id != local_mesh_id ||
-                    processed_neighbors.find({*neighbor_node.mesh_id, *local_mesh_id}) != processed_neighbors.end()) {
-                    if (num_connections[*local_mesh_id + *neighbor_node.mesh_id] >= 2) {
+                if (neighbor_node.mesh_id != local_mesh_id &&
+                    processed_neighbors.find({*neighbor_node.mesh_id, *local_mesh_id}) == processed_neighbors.end()) {
+                    if (requested_intermesh_connections.find(*local_mesh_id) == requested_intermesh_connections.end() ||
+                        requested_intermesh_connections.at(*local_mesh_id).find(*neighbor_node.mesh_id) ==
+                            requested_intermesh_connections.at(*local_mesh_id).end()) {
                         continue;
                     }
-                    paired_exit_nodes[node].insert(neighbor_node);
+
+                    if (num_connections[(1 << *local_mesh_id) | (1 << *neighbor_node.mesh_id)] >=
+                        requested_intermesh_connections.at(*local_mesh_id).at(*neighbor_node.mesh_id)) {
+                        continue;
+                    }
+                    auto physical_neighbor_chip_id =
+                        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(neighbor_node);
+                    auto connected_eth_chans =
+                        physical_system_descriptor_->get_eth_connections(tt::tt_metal::AsicID{asic_id}, asic_neighbor);
                     std::string src_port;
                     std::string dst_port;
                     uint32_t num_connections_assigned = 0;
+                    std::optional<RoutingDirection> local_dir = std::nullopt;
+                    std::optional<RoutingDirection> neighbor_dir = std::nullopt;
                     for (const auto& [local_port_id, local_chip_id] : mesh_edges) {
-                        if (num_connections_assigned >= 2) {
+                        if (num_connections_assigned >= connected_eth_chans.size()) {
                             break;
                         }
-                        if (node.chip_id == local_chip_id) {
+                        if (node.chip_id == local_chip_id &&
+                            ((!local_dir.has_value()) || local_dir.value() == local_port_id.first)) {
                             std::string local_port_tag = std::string(enchantum::to_string(local_port_id.first)) +
                                                          std::to_string(local_port_id.second);
                             if (assigned_ports_per_mesh[*local_mesh_id].find(local_port_tag) ==
@@ -512,7 +526,9 @@ ControlPlane::generate_intermesh_connections_for_local_host() {
                                 src_port = local_port_tag;
                                 for (const auto& [neighbor_port_id, neighbor_chip_id] :
                                      mesh_graph->get_mesh_edge_ports_to_chip_id().at(*neighbor_node.mesh_id)) {
-                                    if (neighbor_node.chip_id == neighbor_chip_id) {
+                                    if (neighbor_node.chip_id == neighbor_chip_id &&
+                                        ((!neighbor_dir.has_value()) ||
+                                         neighbor_dir.value() == neighbor_port_id.first)) {
                                         std::string neighbor_port_tag =
                                             std::string(enchantum::to_string(neighbor_port_id.first)) +
                                             std::to_string(neighbor_port_id.second);
@@ -520,16 +536,20 @@ ControlPlane::generate_intermesh_connections_for_local_host() {
                                             assigned_ports_per_mesh[*neighbor_node.mesh_id].end()) {
                                             assigned_ports_per_mesh[*neighbor_node.mesh_id].insert(neighbor_port_tag);
                                             dst_port = neighbor_port_tag;
-                                            std::cout << "pairing exit nodes: " << *local_mesh_id << " " << src_port
-                                                      << " and " << *neighbor_node.mesh_id << " " << dst_port
-                                                      << std::endl;
                                             processed_neighbors.insert({*local_mesh_id, *neighbor_node.mesh_id});
                                             intermesh_connections.push_back(
                                                 {{*local_mesh_id, src_port}, {*neighbor_node.mesh_id, dst_port}});
                                             intermesh_connections.push_back(
                                                 {{*neighbor_node.mesh_id, dst_port}, {*local_mesh_id, src_port}});
-                                            num_connections[*local_mesh_id + *neighbor_node.mesh_id]++;
+                                            exit_node_directions_[node][connected_eth_chans[num_connections_assigned]
+                                                                            .src_chan] = local_port_id.first;
+                                            exit_node_directions_[neighbor_node]
+                                                                 [connected_eth_chans[num_connections_assigned]
+                                                                      .dst_chan] = neighbor_port_id.first;
+                                            num_connections[(1 << *local_mesh_id) | (1 << *neighbor_node.mesh_id)]++;
                                             num_connections_assigned++;
+                                            local_dir = local_port_id.first;
+                                            neighbor_dir = neighbor_port_id.first;
                                             break;
                                         } else {
                                             continue;
@@ -814,16 +834,21 @@ ControlPlane::pair_logical_intermesh_ports(PortIdTable& port_id_table, uint32_t 
 }
 
 void ControlPlane::generate_intermesh_connectivity() {
-    const auto& physical_system_descriptor = this->physical_system_descriptor_;
-    const auto& my_host = physical_system_descriptor->my_host_name();
-    const auto my_rank = physical_system_descriptor->get_rank_for_hostname(my_host);
+    if (*(tt_metal::MetalContext::instance().global_distributed_context().size()) > 1) {
+        // Intermesh Connectivity generation for the multi-host case
+        const auto& physical_system_descriptor = this->physical_system_descriptor_;
+        const auto& my_host = physical_system_descriptor->my_host_name();
+        const auto my_rank = physical_system_descriptor->get_rank_for_hostname(my_host);
 
-    // auto intermesh_connections = this->generate_intermesh_connections_for_local_host();
-    // this->routing_table_generator_->load_intermesh_connections(intermesh_connections);
-    auto exit_node_port_id_table = this->generate_exit_node_port_id_table();
-    this->exchange_exit_node_port_id_tables(exit_node_port_id_table, my_rank, my_host);
-    auto intermesh_connections = this->pair_logical_intermesh_ports(exit_node_port_id_table, my_rank, my_host);
-    this->routing_table_generator_->load_intermesh_connections(intermesh_connections);
+        auto exit_node_port_id_table = this->generate_exit_node_port_id_table();
+        this->exchange_exit_node_port_id_tables(exit_node_port_id_table, my_rank, my_host);
+        auto intermesh_connections = this->pair_logical_intermesh_ports(exit_node_port_id_table, my_rank, my_host);
+        this->routing_table_generator_->load_intermesh_connections(intermesh_connections);
+    } else {
+        // Intermesh Connectivity generation for the single-host case (th)
+        auto intermesh_connections = this->generate_intermesh_connections_for_local_host();
+        this->routing_table_generator_->load_intermesh_connections(intermesh_connections);
+    }
 }
 
 void ControlPlane::init_control_plane(

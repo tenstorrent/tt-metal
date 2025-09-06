@@ -897,6 +897,31 @@ std::unordered_map<chip_id_t, std::vector<CoreCoord>> Cluster::get_ethernet_core
     }
     return connected_chips;
 }
+
+std::unordered_map<chip_id_t, std::vector<std::pair<tt_fabric::chan_id_t, tt_fabric::chan_id_t>>>
+Cluster::get_ethernet_connections_grouped_by_connected_chips(chip_id_t chip_id) const {
+    std::unordered_map<chip_id_t, std::vector<std::pair<tt_fabric::chan_id_t, tt_fabric::chan_id_t>>> connected_chips;
+    const auto& all_eth_connections = this->cluster_desc_->get_ethernet_connections();
+    if (all_eth_connections.find(chip_id) == all_eth_connections.end()) {
+        return {};
+    }
+    for (const auto& [eth_chan, connected_chip_chan] : all_eth_connections.at(chip_id)) {
+        const auto& other_chip_id = std::get<0>(connected_chip_chan);
+        if (connected_chips.find(other_chip_id) == connected_chips.end()) {
+            std::vector<std::pair<tt_fabric::chan_id_t, tt_fabric::chan_id_t>> active_ethernet_connections;
+            for (const auto& channel_pair :
+                 this->cluster_desc_->get_directly_connected_ethernet_channels_between_chips(chip_id, other_chip_id)) {
+                tt_fabric::chan_id_t local_chip_chan = std::get<0>(channel_pair);
+                active_ethernet_connections.emplace_back(local_chip_chan, std::get<1>(channel_pair));
+            }
+            connected_chips.insert({other_chip_id, active_ethernet_connections});
+        } else {
+            continue;
+        }
+    }
+    return connected_chips;
+}
+
 #define MAX_TUNNEL_DEPTH 4
 void Cluster::set_tunnels_from_mmio_device() {
     for (const auto& mmio_chip_id : this->driver_->get_target_mmio_device_ids()) {

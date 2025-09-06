@@ -238,7 +238,6 @@ void PhysicalSystemDescriptor::run_global_discovery() {
         this->validate_graphs();
     }
     this->exchange_metadata(false);
-    distributed_context.barrier();
 }
 
 void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
@@ -282,7 +281,9 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t controller_rank = 0;
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-
+    if (*(distributed_context.size()) == 1) {
+        return;
+    }
     auto my_rank = *(distributed_context.rank());
     std::set<uint32_t> sender_ranks;
     std::set<uint32_t> receiver_ranks;

@@ -300,6 +300,9 @@ public:
     std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
         chip_id_t chip_id) const;
 
+    std::unordered_map<chip_id_t, std::vector<std::pair<tt_fabric::chan_id_t, tt_fabric::chan_id_t>>>
+    get_ethernet_connections_grouped_by_connected_chips(chip_id_t chip_id) const;
+
     // Returns vector of unique tunnels originating from mmio device.
     // Each vector entry is another vector of remote devices on that tunnel.
     std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio_device(chip_id_t mmio_chip_id) const {
