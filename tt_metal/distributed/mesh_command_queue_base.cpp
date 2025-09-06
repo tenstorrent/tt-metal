@@ -6,6 +6,7 @@
 
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
+#include <pinned_memory.hpp>
 #include <optional>
 
 #include "buffer.hpp"
@@ -267,8 +268,10 @@ void MeshCommandQueueBase::enqueue_read_shards_nolock(
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
     std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
+    bool has_pinned_memory = false;
     for (const auto& shard_data_transfer : shard_data_transfers) {
         if (mesh_device_->is_local(shard_data_transfer.shard_coord)) {
+            has_pinned_memory = has_pinned_memory || shard_data_transfer.pinned_memory != nullptr;
             this->read_shard_from_device(
                 *buffer,
                 shard_data_transfer.shard_coord,
@@ -278,6 +281,15 @@ void MeshCommandQueueBase::enqueue_read_shards_nolock(
         }
     }
     this->submit_memcpy_request(num_txns_per_device, blocking);
+
+    if (!blocking && has_pinned_memory) {
+        auto event = this->enqueue_record_event_to_host_nolock();
+        for (const auto& shard_data_transfer : shard_data_transfers) {
+            if (mesh_device_->is_local(shard_data_transfer.shard_coord)) {
+                shard_data_transfer.pinned_memory->add_barrier_event(event);
+            }
+        }
+    }
 }
 
 void MeshCommandQueueBase::enqueue_read_shards(
