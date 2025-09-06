@@ -11,7 +11,6 @@
 #include <umd/device/cluster.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
-class tt_device;
 struct metal_SocDescriptor;
 
 namespace ll_api {
