@@ -29,6 +29,8 @@ class TTOftNet:
         topdown_layers=8,
         grid_res=0.5,
         grid_height=4,
+        host_fallback_model=None,
+        OFT_fallback=False,
     ):
         self.frontend = TTResNetFeatures(device, parameters.frontend, conv_pt.frontend, block, layers)
         self.lat8 = Conv(parameters.lat8, conv_pt.lat8, output_layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -99,6 +101,9 @@ class TTOftNet:
             std, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
 
+        self.host_fallback_model = host_fallback_model
+        self.OFT_fallback = OFT_fallback
+
     def forward(self, device, input_tensor, calib, grid):
         signpost(header="OftNet module started")
 
@@ -137,6 +142,29 @@ class TTOftNet:
         lat32 = ttnn.to_layout(lat32, ttnn.TILE_LAYOUT)
 
         signpost(header="Oft module")
+        if self.host_fallback_model is not None and self.OFT_fallback:
+            logger.warning("Using host fallback OFT model")
+            import torch
+
+            lat8_torch = ttnn.to_torch(lat8, dtype=torch.float32).permute((0, 3, 1, 2)).contiguous()
+            lat16_torch = ttnn.to_torch(lat16, dtype=torch.float32).permute((0, 3, 1, 2)).contiguous()
+            lat32_torch = ttnn.to_torch(lat32, dtype=torch.float32).permute((0, 3, 1, 2)).contiguous()
+            ref_torch_ortho8 = self.host_fallback_model.oft8(
+                lat8_torch,
+                calib=ttnn.to_torch(calib, dtype=torch.float32),
+                grid=ttnn.to_torch(grid, dtype=torch.float32),
+            )
+            ref_torch_ortho16 = self.host_fallback_model.oft16(
+                lat16_torch,
+                calib=ttnn.to_torch(calib, dtype=torch.float32),
+                grid=ttnn.to_torch(grid, dtype=torch.float32),
+            )
+            ref_torch_ortho32 = self.host_fallback_model.oft32(
+                lat32_torch,
+                calib=ttnn.to_torch(calib, dtype=torch.float32),
+                grid=ttnn.to_torch(grid, dtype=torch.float32),
+            )
+
         # Apply OFT and sum
         ortho8 = self.oft8.forward(device, lat8, calib, grid)  # ortho8
         ttnn.deallocate(lat8)
@@ -144,6 +172,42 @@ class TTOftNet:
         ttnn.deallocate(lat16)
         ortho32 = self.oft32.forward(device, lat32, calib, grid)
         ttnn.deallocate(lat32)
+
+        if self.OFT_fallback:
+            host_ortho8 = ttnn.to_torch(ortho8).permute((0, 3, 1, 2)).reshape(ref_torch_ortho8.shape)
+            host_ortho16 = ttnn.to_torch(ortho16).permute((0, 3, 1, 2)).reshape(ref_torch_ortho16.shape)
+            host_ortho32 = ttnn.to_torch(ortho32).permute((0, 3, 1, 2)).reshape(ref_torch_ortho32.shape)
+            from tests.ttnn.utils_for_testing import check_with_pcc
+
+            orth8_pcc_passed, orth8_pcc = check_with_pcc(host_ortho8, ref_torch_ortho8, 0.99)
+            orth16_pcc_passed, orth16_pcc = check_with_pcc(host_ortho16, ref_torch_ortho16, 0.99)
+            orth32_pcc_passed, orth32_pcc = check_with_pcc(host_ortho32, ref_torch_ortho32, 0.99)
+            logger.warning(
+                f"{orth8_pcc_passed=}, {orth8_pcc=}, {orth16_pcc_passed=}, {orth16_pcc=}, {orth32_pcc_passed=}, {orth32_pcc=}"
+            )
+            logger.warning("OFT_fallback")
+            ref_ortho8 = ref_torch_ortho8.permute((0, 2, 3, 1))
+            ref_ortho8 = ref_ortho8.reshape(
+                ref_ortho8.shape[0], 1, ref_ortho8.shape[1] * ref_ortho8.shape[2], ref_ortho8.shape[3]
+            )
+            ref_ortho16 = ref_torch_ortho16.permute((0, 2, 3, 1))
+            ref_ortho16 = ref_ortho16.reshape(
+                ref_ortho16.shape[0], 1, ref_ortho16.shape[1] * ref_ortho16.shape[2], ref_ortho16.shape[3]
+            )
+            ref_ortho32 = ref_torch_ortho32.permute((0, 2, 3, 1))
+            ref_ortho32 = ref_ortho32.reshape(
+                ref_ortho32.shape[0], 1, ref_ortho32.shape[1] * ref_ortho32.shape[2], ref_ortho32.shape[3]
+            )
+            ref_ortho8 = ttnn.from_torch(ref_ortho8, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            ref_ortho16 = ttnn.from_torch(ref_ortho16, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            ref_ortho32 = ttnn.from_torch(ref_ortho32, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            ref_ortho8 = ttnn.to_layout(ref_ortho8, ttnn.TILE_LAYOUT)
+            ref_ortho16 = ttnn.to_layout(ref_ortho16, ttnn.TILE_LAYOUT)
+            ref_ortho32 = ttnn.to_layout(ref_ortho32, ttnn.TILE_LAYOUT)
+            ortho8 = ref_ortho8
+            ortho16 = ref_ortho16
+            ortho32 = ref_ortho32
+
         ortho = ortho8 + ortho16 + ortho32
         signpost(header="Oft module finished")
         logger.debug(f"Ortho shape: {ortho.shape}, dtype: {ortho.dtype}")
