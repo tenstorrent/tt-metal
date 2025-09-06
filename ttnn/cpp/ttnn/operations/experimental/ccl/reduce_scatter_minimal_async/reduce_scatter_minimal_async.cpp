@@ -23,7 +23,7 @@ bool use_composite_reduce_scatter(
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
-    uint32_t num_devices;
+    uint32_t num_devices = 0;
     if (cluster_axis.has_value()) {
         auto mesh_device = input_tensor.device();
         const auto& mesh_view = mesh_device->get_view();
@@ -70,7 +70,7 @@ ttnn::Tensor composite_reduce_scatter(
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
-    uint32_t num_devices;
+    uint32_t num_devices = 0;
     if (cluster_axis.has_value()) {
         auto mesh_device = input_tensor.device();
         const auto& mesh_view = mesh_device->get_view();

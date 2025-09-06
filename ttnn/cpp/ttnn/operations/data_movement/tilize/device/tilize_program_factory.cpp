@@ -334,8 +334,8 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
     uint32_t start_row_id = 0;
     uint32_t start_column_id = 0;
     uint32_t tile_start_id = 0;
-    uint32_t single_block_size_row_arg;
-    uint32_t single_block_size_col_arg;
+    uint32_t single_block_size_row_arg = 0;
+    uint32_t single_block_size_col_arg = 0;
 
     uint32_t total_row_cores = full_cores_per_row;
     if (has_cliff_row) {

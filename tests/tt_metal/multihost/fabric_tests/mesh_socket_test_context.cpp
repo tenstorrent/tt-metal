@@ -261,7 +261,7 @@ std::unordered_map<Rank, tt::tt_fabric::MeshId> MeshSocketTestContext::create_ra
 
     std::unordered_map<Rank, tt::tt_fabric::MeshId> rank_to_mesh_id;
     for (uint32_t rank = 0; rank < world_size; ++rank) {
-        uint32_t mesh_id_val;
+        uint32_t mesh_id_val = 0;
         std::memcpy(&mesh_id_val, recv_buffer.data() + rank * sizeof(uint32_t), sizeof(uint32_t));
         log_info(tt::LogTest, "Rank {} is in mesh {}", rank, mesh_id_val);
         TT_FATAL(
@@ -278,7 +278,7 @@ std::unordered_map<Rank, tt::tt_fabric::MeshId> MeshSocketTestContext::create_ra
 }
 
 void MeshSocketTestContext::share_seed() {
-    uint32_t seed;
+    uint32_t seed = 0;
 
     if (*local_rank_ == 0) {
         // Rank 0 generates and sends the seed

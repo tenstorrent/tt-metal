@@ -144,7 +144,7 @@ SoftmaxProgramFactoryGeneralWSmall::cached_program_t SoftmaxProgramFactoryGenera
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -278,7 +278,7 @@ SoftmaxProgramFactoryGeneralWLarge::cached_program_t SoftmaxProgramFactoryGenera
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -413,7 +413,7 @@ SoftmaxProgramFactoryGeneralHSmall::cached_program_t SoftmaxProgramFactoryGenera
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         const CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -549,7 +549,7 @@ SoftmaxProgramFactoryGeneralHLarge::cached_program_t SoftmaxProgramFactoryGenera
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -690,7 +690,7 @@ SoftmaxProgramFactoryGeneralCLarge::cached_program_t SoftmaxProgramFactoryGenera
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -1358,7 +1358,7 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
     uint32_t in2_CB_size = 1 * scale_tile_size;
     // attention mask
-    uint32_t in3_CB_size;
+    uint32_t in3_CB_size = 0;
     if (attributes.is_causal_mask) {
         if (tensor_args.mask.value().is_sharded()) {
             in3_CB_size = program_config.block_w * program_config.block_h * mask_tile_size;

@@ -215,8 +215,8 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-        KernelHandle compute_kernel_id;
-        uint32_t num_tiles_per_core;
+        KernelHandle compute_kernel_id = 0;
+        uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_cols_per_core_group_1;
             compute_kernel_id = compute_kernels_id_1;

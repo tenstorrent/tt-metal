@@ -73,7 +73,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     bfloat16 bfloat_zero = bfloat16(0.0f);
-    uint32_t packed_pad_value;
+    uint32_t packed_pad_value = 0;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;
     } else {
@@ -215,7 +215,7 @@ operation::ProgramWithCallbacks pad_tile(
     tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
-    uint32_t packed_pad_value;
+    uint32_t packed_pad_value = 0;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;
     } else {
@@ -313,7 +313,8 @@ inline void log_rt_args(const CoreCoord& core, std::vector<uint32_t>& args) {
 // This is currently mostly hardcoded for resnet shapes
 inline std::tuple<uint32_t, uint32_t, uint32_t, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t, uint32_t, uint32_t>
 split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint32_t ntiles_h, uint32_t ntiles_w) {
-    uint32_t ncores, ncores_h, ncores_w, ntiles_per_core_h, ntiles_per_core_w, nbatch_per_core_h, ncores_per_batch_h;
+    uint32_t ncores = 0, ncores_h = 0, ncores_w = 0, ntiles_per_core_h = 0, ntiles_per_core_w = 0,
+             nbatch_per_core_h = 0, ncores_per_batch_h = 0;
 
     ncores_h = 1;
 
@@ -519,7 +520,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     bfloat16 bfloat_zero = bfloat16(0.0f);
-    uint32_t packed_pad_value;
+    uint32_t packed_pad_value = 0;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;
     } else {
@@ -722,7 +723,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     for (uint32_t i = 0, curr_sticks_read = 0, curr_sticks_write = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-        uint32_t num_sticks_per_core;
+        uint32_t num_sticks_per_core = 0;
         if (core_group_1.contains(core)) {
             num_sticks_per_core = num_w_sticks_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -845,7 +846,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
-    uint32_t packed_pad_value;
+    uint32_t packed_pad_value = 0;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;
     } else {
@@ -1254,7 +1255,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
     tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
-    uint32_t packed_pad_value;
+    uint32_t packed_pad_value = 0;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;
     } else {
@@ -1394,7 +1395,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
 
     uint32_t W_padding_front_bytes = input_tensor_start[-3] * input_tensor.element_size();
 
-    uint32_t padding_value_as_u32;
+    uint32_t padding_value_as_u32 = 0;
     if (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16) {
         uint16_t bfloat_pad_value_bits = bfloat16(pad_value).to_uint16();
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&bfloat_pad_value_bits);

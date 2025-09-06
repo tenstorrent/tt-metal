@@ -138,7 +138,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     // Set Runtime Args
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
-        uint32_t units_per_core;
+        uint32_t units_per_core = 0;
         if (core_group_1.contains(core)) {
             units_per_core = units_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -312,7 +312,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     // Set Runtime Args
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
-        uint32_t units_per_core;
+        uint32_t units_per_core = 0;
         if (core_group_1.contains(core)) {
             units_per_core = units_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -499,7 +499,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     // Set Runtime Args
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
-        uint32_t units_per_core;
+        uint32_t units_per_core = 0;
         if (core_group_1.contains(core)) {
             units_per_core = units_per_core_group_1;
         } else if (core_group_2.contains(core)) {

@@ -503,7 +503,7 @@ TEST_F(DPrintMeshFixture, ConfigRegPackTestPrint) {
         field_values_pack_config = field_values_pack_config_blackhole;
     }
 
-    int num_of_registers;
+    int num_of_registers = 0;
     if (this->arch_ == ARCH::BLACKHOLE) {
         num_of_registers = 1;
     } else {
@@ -581,7 +581,7 @@ TEST_F(DPrintMeshFixture, ConfigRegPackEdgeOffsetTestPrint) {
     std::vector<std::string> field_names_pack_edge_offset = field_names_pack_edge_offset_all;
     std::vector<uint32_t> field_values_pack_edge_offset = field_values_pack_edge_offset_all;
 
-    int num_of_registers;
+    int num_of_registers = 0;
     if (this->arch_ == ARCH::BLACKHOLE) {
         num_of_registers = 1;
     } else {
@@ -609,7 +609,7 @@ TEST_F(DPrintMeshFixture, ConfigRegPackCountersTestPrint) {
     std::vector<std::string> field_names_pack_counters = field_names_pack_counters_all;
     std::vector<uint32_t> field_values_pack_counters = field_values_pack_counters_all;
 
-    int num_of_registers;
+    int num_of_registers = 0;
     if (this->arch_ == ARCH::BLACKHOLE) {
         num_of_registers = 1;
     } else {

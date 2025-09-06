@@ -32,7 +32,7 @@ inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
 }
 
 inline uint16_t bfloat16(float float_num) {
-    uint32_t uint32_data;
+    uint32_t uint32_data = 0;
     TT_FATAL(
         sizeof float_num == sizeof uint32_data,
         "Float size ({}) must equal uint32 size ({})",

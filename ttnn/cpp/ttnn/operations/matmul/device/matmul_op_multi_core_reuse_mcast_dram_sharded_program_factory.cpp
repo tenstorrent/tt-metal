@@ -224,10 +224,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
 
     // get the max page size based on num tiles
-    uint32_t in1_buffer_page_size, in1_buffer_num_pages;
+    uint32_t in1_buffer_page_size = 0, in1_buffer_num_pages = 0;
     get_max_page_size_and_num_pages(in1_block_tiles, in1_single_tile_size, in1_buffer_page_size, in1_buffer_num_pages);
 
-    uint32_t bias_buffer_page_size, bias_buffer_num_pages;
+    uint32_t bias_buffer_page_size = 0, bias_buffer_num_pages = 0;
     get_max_page_size_and_num_pages(
         in3_block_tiles, bias_single_tile_size, bias_buffer_page_size, bias_buffer_num_pages);
 
@@ -601,7 +601,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
         std::vector<uint32_t> mm_in0_sender_args;
 
         // mcast sender - 1, mcast sender + compute core - 2
-        uint32_t worker_core_type;
+        uint32_t worker_core_type = 0;
         if (find(storage_worker_common.begin(), storage_worker_common.end(), core) != storage_worker_common.end()) {
             worker_core_type = 2;
         } else {

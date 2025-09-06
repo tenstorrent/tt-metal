@@ -36,7 +36,7 @@ void validate(
     auto device_ids = input_tensor.device()->get_device_ids();
     std::unordered_set<chip_id_t> found_device_ids;
     for (const auto& connection : socket_connection_config) {
-        chip_id_t device_id;
+        chip_id_t device_id = 0;
         if constexpr (socket_type == tt::tt_metal::distributed::SocketEndpoint::SENDER) {
             device_id = socket_mesh_device->get_device(connection.sender_core.device_coord)->id();
         } else {

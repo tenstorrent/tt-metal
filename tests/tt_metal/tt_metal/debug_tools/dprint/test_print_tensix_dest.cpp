@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cmath>
 #include <stdint.h>
 #include <string.h>
 #include <tt-metalium/bfloat16.hpp>
@@ -105,7 +106,7 @@ public:
 
 protected:
     void print_datum(std::stringstream& ss, uint32_t datum) override {
-        float value;
+        float value = NAN;
         memcpy(&value, &datum, sizeof(float));
         ss << std::setw(8) << value << " ";
     }
@@ -132,7 +133,7 @@ protected:
         uint32_t shifted_value1 = (datum & 0x0000ffff) << 16;
         uint32_t shifted_value2 = datum & 0xffff0000;
 
-        float value1, value2;
+        float value1 = NAN, value2 = NAN;
         memcpy(&value1, &shifted_value1, sizeof(float));
         memcpy(&value2, &shifted_value2, sizeof(float));
 

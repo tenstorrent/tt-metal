@@ -216,7 +216,7 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
         std::vector<std::vector<uint32_t>> all_compute_runtime_args = {cores.size(), compute_runtime_args};
 
         // Set runtime args
-        uint32_t num_blocks_per_core;
+        uint32_t num_blocks_per_core = 0;
         for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
             if (i < g1_numcores) {
                 num_blocks_per_core = num_blocks_per_core_group_1;

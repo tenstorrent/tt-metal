@@ -26,10 +26,9 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     const Tensor& input, const Tensor& output, bool keep_l1_aligned, uint32_t num_slices, uint32_t slice_index) {
     tt::tt_metal::Program program{};
     keep_l1_aligned = true;
-    uint32_t num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
-        num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_per_shard_height_last,
-        num_units_per_shard_width_last, padded_offset_bytes;
-
+    uint32_t num_units_per_shard = 0, input_unit_size = 0, output_unit_size = 0, num_units_per_shard_width = 0,
+             num_units_per_shard_height = 0, num_units_offset = 0, num_units_per_row = 0,
+             num_units_per_shard_height_last = 0, num_units_per_shard_width_last = 0, padded_offset_bytes = 0;
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -114,7 +113,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
     uint32_t dram_alignment = hal::get_dram_alignment();
     if (src_is_dram && input_unit_size % dram_alignment != 0 or is_blackhole or keep_l1_aligned) {
-        uint32_t scratch_cb_page_size;
+        uint32_t scratch_cb_page_size = 0;
         //scratchpad going to be used to align DRAM (64B) to L1 (16B)
         if (is_blackhole) {
             scratch_cb_page_size = tt::align(input_unit_size, hal::get_l1_alignment());
@@ -128,7 +127,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         tt::tt_metal::CreateCircularBuffer(program, all_cores, scratch_cb_out_config);
     }
 
-    tt::tt_metal::KernelHandle unary_reader_kernel_id;
+    tt::tt_metal::KernelHandle unary_reader_kernel_id = 0;
     if (input.layout() == Layout::TILE) {
         std::vector<uint32_t> reader_compile_time_args = {input_cb_index, all_cores.num_cores()};
         tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
@@ -292,7 +291,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             bool aligned = (src_is_dram ? (curr_idx_w % dram_alignment == 0) && (padded_offset_bytes % dram_alignment == 0) : true);
             //for blackhole and keep_l1_aligned cases, always enforce unaligned kernel call
             aligned = aligned and !(is_blackhole);
-            uint32_t aligned_width_offset, aligned_shard_width, aligned_offset;
+            uint32_t aligned_width_offset = 0, aligned_shard_width = 0, aligned_offset = 0;
             if (!aligned) {
                 //TODO: is this right, leaving non BH case the same for now, should investigate
                 if(!is_blackhole) {

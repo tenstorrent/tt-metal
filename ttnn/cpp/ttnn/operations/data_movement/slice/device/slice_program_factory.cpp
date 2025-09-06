@@ -91,7 +91,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(input_tensor, output_tensor_start);
     for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_sticks_per_core;
+        uint32_t num_sticks_per_core = 0;
         if (core_group_1.contains(core)) {
             num_sticks_per_core = num_sticks_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -797,7 +797,7 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
     const uint32_t num_used_cores = num_cores_group_1 + num_cores_group_2;
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; ++i) {
         const CoreCoord& core = cores[i];
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
         if (i < num_cores_group_1) {
             num_tiles_per_core = num_tiles_per_core_group_1;
         } else if (i < num_used_cores) {

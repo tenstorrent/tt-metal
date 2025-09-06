@@ -121,7 +121,7 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
             for (chip_id_t dst_chip_id = 0; dst_chip_id < this->intra_mesh_table_[mesh_id_val].size(); dst_chip_id++) {
                 auto src_mesh_coord = this->mesh_graph->chip_to_coordinate(mesh_id, src_chip_id);
                 auto dst_mesh_coord = this->mesh_graph->chip_to_coordinate(mesh_id, dst_chip_id);
-                uint32_t next_chip_id;
+                uint32_t next_chip_id = 0;
                 // X first routing, traverse rows first
                 if (src_mesh_coord[0] != dst_mesh_coord[0]) {
                     // If source and destination are in different rows, we need to move in the X direction first

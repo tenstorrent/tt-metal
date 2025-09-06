@@ -305,8 +305,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     auto max_program_kernels_sizeB = mesh_workload.impl().max_program_kernels_sizeB_;
     bool use_prefetcher_cache = mesh_workload.impl().use_prefetcher_cache_;
     if (use_prefetcher_cache) {
-        bool is_cached;
-        uint32_t cache_offset;
+        bool is_cached = false;
+        uint32_t cache_offset = 0;
         std::tie(is_cached, cache_offset) =
             this->query_prefetcher_cache(mesh_workload.impl().get_id(), max_program_kernels_sizeB);
         TT_ASSERT(

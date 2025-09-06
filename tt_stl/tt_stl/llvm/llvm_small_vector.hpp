@@ -401,7 +401,7 @@ protected:
 
     void growAndAssign(size_t NumElts, const T& Elt) {
         // Grow manually in case Elt is an internal reference.
-        size_t NewCapacity;
+        size_t NewCapacity = 0;
         T* NewElts = mallocForGrow(NumElts, NewCapacity);
         std::uninitialized_fill_n(NewElts, NumElts, Elt);
         this->destroy_range(this->begin(), this->end());
@@ -412,7 +412,7 @@ protected:
     template <typename... ArgTypes>
     T& growAndEmplaceBack(ArgTypes&&... Args) {
         // Grow manually in case one of Args is an internal reference.
-        size_t NewCapacity;
+        size_t NewCapacity = 0;
         T* NewElts = mallocForGrow(0, NewCapacity);
         ::new ((void*)(NewElts + this->size())) T{std::forward<ArgTypes>(Args)...};
         moveElementsForGrow(NewElts);
@@ -443,7 +443,7 @@ public:
 // Define this out-of-line to dissuade the C++ compiler from inlining it.
 template <typename T, bool TriviallyCopyable>
 void SmallVectorTemplateBase<T, TriviallyCopyable>::grow(size_t MinSize) {
-    size_t NewCapacity;
+    size_t NewCapacity = 0;
     T* NewElts = mallocForGrow(MinSize, NewCapacity);
     moveElementsForGrow(NewElts);
     takeAllocationForGrow(NewElts, NewCapacity);

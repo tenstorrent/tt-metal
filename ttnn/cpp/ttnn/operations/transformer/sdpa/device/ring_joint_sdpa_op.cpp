@@ -320,7 +320,7 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
         this->all_gather_struct.ring_size, device_index, this->all_gather_struct.topology);
 
     // This is how ring_joint_sdpa expects the number of forward and backward writes
-    uint32_t forward_writes_expected, backward_writes_expected;
+    uint32_t forward_writes_expected = 0, backward_writes_expected = 0;
     if (this->all_gather_struct.topology == ttnn::ccl::Topology::Linear) {
         forward_writes_expected = num_targets_backward;
         backward_writes_expected = num_targets_forward;

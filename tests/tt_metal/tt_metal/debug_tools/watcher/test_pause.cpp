@@ -89,7 +89,7 @@ void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevic
         has_ieth_cores = false;
 
     if (has_eth_cores) {
-        KernelHandle erisc_kid;
+        KernelHandle erisc_kid = 0;
         std::set<CoreRange> eth_core_ranges;
         for (const auto& core : device->get_active_ethernet_cores(true)) {
             log_info(
@@ -107,7 +107,7 @@ void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevic
         }
     }
     if (has_ieth_cores) {
-        KernelHandle ierisc_kid;
+        KernelHandle ierisc_kid = 0;
         std::set<CoreRange> eth_core_ranges;
         for (const auto& core : device->get_inactive_ethernet_cores()) {
             log_info(

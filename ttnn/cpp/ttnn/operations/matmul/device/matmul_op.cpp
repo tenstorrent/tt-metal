@@ -145,7 +145,7 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
 
 std::tuple<uint32_t, uint32_t> get_subblock_sizes(
     uint32_t m_tiles_per_core, uint32_t n_tiles_per_core, bool fp32_dest_acc_en) {
-    uint32_t out_subblock_h, out_subblock_w;
+    uint32_t out_subblock_h = 0, out_subblock_w = 0;
     for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
         out_subblock_w = std::get<0>(subblock_hw);
         out_subblock_h = std::get<1>(subblock_hw);
@@ -382,9 +382,9 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     }
 
     bool is_wide = !is_tall;
-    uint32_t batch_and_m_tiles_per_core;
-    uint32_t k_tiles_per_core;
-    uint32_t n_tiles_per_core;
+    uint32_t batch_and_m_tiles_per_core = 0;
+    uint32_t k_tiles_per_core = 0;
+    uint32_t n_tiles_per_core = 0;
     if (is_tall) {
         batch_and_m_tiles_per_core = div_up(batch_and_m_tiles, num_cores);
         k_tiles_per_core = div_up(k_tiles, num_cores);
@@ -445,7 +445,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
                             : input_tensor_a.padded_shape()[-2];
     uint32_t K = input_tensor_a.padded_shape()[-1];
     uint32_t N = input_tensor_b.padded_shape()[-1];
-    uint32_t per_core_M, per_core_N;
+    uint32_t per_core_M = 0, per_core_N = 0;
     auto in0_tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
     auto in1_tile_shape = input_tensor_b.tensor_spec().tile().get_tile_shape();
     if (mcast_in0) {
@@ -521,8 +521,8 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "input tensor needs to be on device");
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t per_core_M, per_core_N, out_subblock_h, out_subblock_w;
-    uint32_t num_blocks_x, num_blocks_y;
+    uint32_t per_core_M = 0, per_core_N = 0, out_subblock_h = 0, out_subblock_w = 0;
+    uint32_t num_blocks_x = 0, num_blocks_y = 0;
 
     bool all_dram_interleaved = input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
                                 mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
@@ -691,9 +691,9 @@ MatmulProgramConfig create_matmul_program_config(
         }
     }
 
-    uint32_t m_tiles_per_core;
-    uint32_t n_tiles_per_core;
-    uint32_t k_tiles_per_core;
+    uint32_t m_tiles_per_core = 0;
+    uint32_t n_tiles_per_core = 0;
+    uint32_t k_tiles_per_core = 0;
     if (input_b_is_batched) {
         TT_FATAL(!fused_activation.has_value(), "Cannot use activation with batched input b");
         if (!a_is_sharded && !input_tensor_b.is_sharded()) {
@@ -893,10 +893,10 @@ MatmulProgramConfig get_matmul_program_config(
             uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
             auto shard_shape = input_tensor_a.shard_spec().value().shape;
 
-            bool mcast_in0;
-            uint32_t per_core_M;
-            uint32_t per_core_N;
-            uint32_t in0_block_w;
+            bool mcast_in0 = false;
+            uint32_t per_core_M = 0;
+            uint32_t per_core_N = 0;
+            uint32_t in0_block_w = 0;
             if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
                 mcast_in0 = true;
                 per_core_M = M;
@@ -1261,7 +1261,7 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
         !(per_core_M_equals_subblock_h_constraint and per_core_N_equals_subblock_w_constraint),
         "Only one constraint may be true for h or w!");
 
-    uint32_t out_subblock_h, out_subblock_w;
+    uint32_t out_subblock_h = 0, out_subblock_w = 0;
     for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
         out_subblock_h = std::get<0>(subblock_hw);
         out_subblock_w = std::get<1>(subblock_hw);

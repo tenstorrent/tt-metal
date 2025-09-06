@@ -32,7 +32,7 @@ inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
 }
 
 inline uint16_t bfloat16(float float_num) {
-    uint32_t uint32_data;
+    uint32_t uint32_data = 0;
     TT_FATAL(sizeof float_num == sizeof uint32_data, "sizeof data types not equal");
 
     uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
@@ -669,7 +669,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
     // get sharded addr
     auto in0_addr = a.buffer()->address();
-    bool b_sharded;
+    bool b_sharded = false;
     auto out_addr = output.buffer()->address();
     // b, gamma, beta addr
     auto in1_dram_addr = b ? b.value().buffer()->address() : 0;
@@ -736,7 +736,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         stats_reduced_cb_size = pre_all_gather_stats_block_tiles * single_tile_size;
     }
     // output buffer size
-    uint32_t out_CB_size;
+    uint32_t out_CB_size = 0;
     if (is_pre_all_gather) {
         out_CB_size = pre_all_gather_stats_block_tiles * out_single_tile_size;
     } else {
@@ -791,7 +791,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     CoreRangeSet all_to_all_cores;
     CoreRangeSet all_to_all_workers_except_sender;
     CoreRangeSet not_all_to_all_workers;
-    uint32_t num_cores_x_mcast, num_cores_y_mcast;
+    uint32_t num_cores_x_mcast = 0, num_cores_y_mcast = 0;
     if (mcast_1d) {
         sender_cores = {start_core, start_core};
         CoreCoord all_core_grid_size;
@@ -1321,14 +1321,14 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         auto cb_in6 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in6_cb_config);
     }
     // x
-    uint32_t x_cb_index;
+    uint32_t x_cb_index = 0;
     x_cb_index = tt::CBIndex::c_24;
     tt::tt_metal::CircularBufferConfig x_cb_config =
         tt::tt_metal::CircularBufferConfig(x_CB_size, {{x_cb_index, cb_data_format}})
             .set_page_size(x_cb_index, single_tile_size);
     auto cb_x = tt::tt_metal::CreateCircularBuffer(program, all_cores, x_cb_config);
     // xmm
-    uint32_t xmm_cb_index;
+    uint32_t xmm_cb_index = 0;
     xmm_cb_index = tt::CBIndex::c_18;
     tt::tt_metal::CircularBufferConfig xmm_cb_config =
         tt::tt_metal::CircularBufferConfig(xmm_CB_size, {{xmm_cb_index, cb_data_format}})
@@ -1379,7 +1379,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             .set_page_size(ex_global_cb_index, single_tile_size);
     auto cb_ex_global = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_global_cb_config);
     // ex2pe
-    uint32_t cb_ex2pe_index;
+    uint32_t cb_ex2pe_index = 0;
     cb_ex2pe_index = tt::CBIndex::c_20;
     tt::tt_metal::CircularBufferConfig ex2pe_cb_config =
         tt::tt_metal::CircularBufferConfig(ex2pe_CB_size, {{cb_ex2pe_index, cb_data_format}})
@@ -1389,7 +1389,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     CBHandle cb_stats = 0;
     if (is_post_all_gather) {
         // cb_stats
-        uint32_t cb_stats_index;
+        uint32_t cb_stats_index = 0;
         cb_stats_index = tt::CBIndex::c_7;
         tt::tt_metal::CircularBufferConfig stats_cb_config =
             tt::tt_metal::CircularBufferConfig(stats_cb_size, {{cb_stats_index, cb_data_format}})
@@ -1397,7 +1397,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                 .set_globally_allocated_address(*stats.value().buffer());
         cb_stats = tt::tt_metal::CreateCircularBuffer(program, sender_cores, stats_cb_config);
         // cb_stats_reduced
-        uint32_t cb_stats_reduced_index;
+        uint32_t cb_stats_reduced_index = 0;
         cb_stats_reduced_index = tt::CBIndex::c_21;
         tt::tt_metal::CircularBufferConfig stats_reduced_cb_config =
             tt::tt_metal::CircularBufferConfig(stats_reduced_cb_size, {{cb_stats_reduced_index, cb_data_format}})
@@ -1501,7 +1501,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
         uint32_t width_index_two_stage = width_index % num_blocks_first_stage;
 
-        uint32_t all_to_all_worker_tile_offset_size_bytes;
+        uint32_t all_to_all_worker_tile_offset_size_bytes = 0;
         if (use_two_stage_reduce) {
             all_to_all_worker_tile_offset_size_bytes =
                 (width_index_two_stage * num_rows_per_all_to_all_worker) * single_tile_size;
@@ -1521,7 +1521,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         std::vector<uint32_t> compute_args{num_reduce_tiles_per_block_h};
         if ((not use_two_stage_reduce and width_index < num_cores_all_to_all) or
             (use_two_stage_reduce and width_index_two_stage < num_cores_all_to_all_first_stage)) {
-            uint32_t num_rows;
+            uint32_t num_rows = 0;
             if (use_two_stage_reduce) {
                 num_rows = width_index_two_stage == num_cores_all_to_all_first_stage - 1
                                ? num_rows_per_all_to_all_worker_last
@@ -1532,7 +1532,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             }
             compute_args.push_back(num_rows);
             compute_args.push_back((uint32_t)use_two_stage_reduce);
-            bool is_second_stage_reader;
+            bool is_second_stage_reader = false;
             if (use_two_stage_reduce) {
                 is_second_stage_reader = width_index < num_cores_all_to_all_first_stage;
             } else {
@@ -1605,7 +1605,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             (not use_two_stage_reduce and width_index < num_cores_all_to_all) or
             (use_two_stage_reduce and width_index_two_stage < num_cores_all_to_all_first_stage)) {
             std::vector<uint32_t> mcast_receiver_args;
-            bool is_last_all_to_all_worker;
+            bool is_last_all_to_all_worker = false;
             if (use_two_stage_reduce) {
                 is_last_all_to_all_worker = width_index_two_stage == num_cores_all_to_all_first_stage - 1;
             } else {
@@ -1613,7 +1613,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             }
             mcast_receiver_args.push_back(is_last_all_to_all_worker);
             mcast_receiver_args.push_back(all_to_all_worker_tile_offset_size_bytes);
-            bool is_second_stage_reader;
+            bool is_second_stage_reader = false;
             if (use_two_stage_reduce and width_index < num_cores_all_to_all_first_stage) {
                 is_second_stage_reader = true;
                 mcast_receiver_args.push_back((uint32_t)is_second_stage_reader);

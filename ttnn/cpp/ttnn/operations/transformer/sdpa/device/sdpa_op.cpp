@@ -382,7 +382,7 @@ operation::OpPerformanceModel ScaledDotProductAttention::create_op_performance_m
     const auto Sk = (is_chunked_prefill) ? q_shape[-2] + chunk_start_idx.value() : k_shape[2];
     const auto DH = q_shape[3];
 
-    uint32_t Sv, DV;
+    uint32_t Sv = 0, DV = 0;
     if (use_mla) {
         Sv = k_shape[2];
         DV = k_shape[3];

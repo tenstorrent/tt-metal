@@ -349,7 +349,7 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::available_addresses(
 
 size_t FreeListOpt::alloc_meta_block(
     DeviceAddr address, DeviceAddr size, ssize_t prev_block, ssize_t next_block, bool is_allocated) {
-    size_t idx;
+    size_t idx = 0;
     if (free_meta_block_indices_.empty()) {
         idx = block_address_.size();
         block_address_.push_back(address);

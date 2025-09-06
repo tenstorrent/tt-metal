@@ -161,7 +161,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
     }
 
     uint64_t asU64() const {
-        uint64_t ret;
+        uint64_t ret = 0;
         std::memcpy(&ret, this, sizeof(uint64_t));
         return ret;
     }

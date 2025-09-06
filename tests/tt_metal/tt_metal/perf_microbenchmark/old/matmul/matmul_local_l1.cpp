@@ -137,15 +137,15 @@ int main(int argc, char** argv) {
         //                      Initial Runtime Args Parse
         ////////////////////////////////////////////////////////////////////////////
         std::vector<std::string> input_args(argv, argv + argc);
-        uint32_t dprint;
-        uint32_t print_tensor;
-        uint32_t debug;
-        uint32_t Mt;
-        uint32_t Nt;
-        uint32_t Kt;
-        uint32_t num_cores_r;
-        uint32_t num_cores_c;
-        uint32_t validation;
+        uint32_t dprint = 0;
+        uint32_t print_tensor = 0;
+        uint32_t debug = 0;
+        uint32_t Mt = 0;
+        uint32_t Nt = 0;
+        uint32_t Kt = 0;
+        uint32_t num_cores_r = 0;
+        uint32_t num_cores_c = 0;
+        uint32_t validation = 0;
         try {
             std::tie(debug, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--debug", 0);

@@ -203,7 +203,7 @@ process_agmm_fusion_program_and_create_override_variables(
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
 
     uint32_t src1_cb_index = base_cb_index + 1;
-    tt::tt_metal::CBHandle cb_src1;
+    tt::tt_metal::CBHandle cb_src1 = 0;
     uint32_t remote_cb_index = tt::CBIndex::c_31;
     if (use_global_cb) {
         uint32_t in1_block_size_bytes = in1_single_tile_size * in1_block_num_tiles;

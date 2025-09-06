@@ -240,7 +240,7 @@ public:
         // Wait until all tasks have completed (task_counter_ == 0)
         // To avoid spinning, sleep until notified by the worker threads
         // or task_counter_ changes (this only happens with a spurious wakeup)
-        int current;
+        int current = 0;
         while ((current = task_counter_.load(std::memory_order_acquire)) > 0) {
             task_counter_.wait(current, std::memory_order_relaxed);
         }

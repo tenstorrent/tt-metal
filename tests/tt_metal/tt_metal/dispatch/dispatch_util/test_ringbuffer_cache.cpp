@@ -132,7 +132,7 @@ TEST_P(RingbufferCacheRandomizedTestsFixture, RandomizedQueries) {
     std::mt19937 gen_pgm_size(rd2);
     std::uniform_int_distribution<uint64_t> dist_pgm_id(pgm_ids.first, pgm_ids.second - 1);
     std::uniform_int_distribution<uint64_t> dist_pgm_size(pgm_sizes.first, pgm_sizes.second - 1);
-    uint64_t pgm_id, pgm_size;
+    uint64_t pgm_id = 0, pgm_size = 0;
     constexpr size_t num_iterations = 10'000'000;
     for (size_t i = 0; i < num_iterations; ++i) {
         pgm_id = dist_pgm_id(gen_pgm_id);

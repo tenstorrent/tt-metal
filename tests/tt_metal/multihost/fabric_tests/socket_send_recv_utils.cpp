@@ -74,7 +74,7 @@ bool test_socket_send_recv(
 
     if (!gen.has_value()) {
         // Exchange seed between sender and receiver and create local generator
-        uint32_t seed;
+        uint32_t seed = 0;
         if (distributed_context->rank() == sender_rank) {
             seed = std::chrono::steady_clock::now().time_since_epoch().count();
             log_info(tt::LogTest, "Sending seed {} to rank {}", seed, *recv_rank);

@@ -202,7 +202,7 @@ DataFormat get_single_pack_src_format(
         TT_FATAL(arch == tt::ARCH::BLACKHOLE, "Fp8 E4M3 mode only available in Blackhole");
     }
 
-    DataFormat pack_src_format;
+    DataFormat pack_src_format = DataFormat::Invalid;
     const ExpPrecision input_exp_width = get_exp_precision(data_format);
     const ExpPrecision output_exp_width = get_exp_precision(data_format);
     const ExpPrecision fp32_condition_exp_width = get_exp_precision(unpack_conditional_dst_format);
@@ -316,11 +316,10 @@ std::vector<DataFormat> get_pack_src_formats(
     bool int_fpu_en,
     tt::ARCH arch) {
     std::vector<DataFormat> pack_src_formats;
-    DataFormat pack_src_format;
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
-        pack_src_format = get_single_pack_src_format(
-            data_formats[i], unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, int_fpu_en, arch);
-        pack_src_formats.push_back(pack_src_format);
+    pack_src_formats.reserve(NUM_CIRCULAR_BUFFERS);
+for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+        pack_src_formats.emplace_back(get_single_pack_src_format(
+            data_formats[i], unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, int_fpu_en, arch));
     }
 
     return pack_src_formats;

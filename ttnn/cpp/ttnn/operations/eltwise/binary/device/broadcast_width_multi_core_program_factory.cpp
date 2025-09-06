@@ -140,7 +140,7 @@ BinaryDeviceOperation::BroadcastWidthMultiCore::cached_program_t BinaryDeviceOpe
 
     for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores_total; i++) {
         const CoreCoord& core = cores.at(i);
-        uint32_t Wt_per_core;
+        uint32_t Wt_per_core = 0;
         if (core_group_1.contains(core)) {
             Wt_per_core = Wt_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -270,7 +270,7 @@ void BinaryDeviceOperation::BroadcastWidthMultiCore::override_runtime_arguments(
 
     for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores_total; i++) {
         const CoreCoord& core = cores.at(i);
-        uint32_t Wt_per_core;
+        uint32_t Wt_per_core = 0;
 
         auto& binary_reader_args = cached_reader_args.at(core.x).at(core.y);
         auto& bcast_kernel_args = cached_eltwise_args.at(core.x).at(core.y);

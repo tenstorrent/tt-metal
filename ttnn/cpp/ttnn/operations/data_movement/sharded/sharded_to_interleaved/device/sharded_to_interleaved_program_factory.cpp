@@ -23,10 +23,9 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     const Tensor& input, const Tensor& output, bool is_l1_aligned, uint32_t num_slices, uint32_t slice_index) {
     tt_metal::Program program{};
     is_l1_aligned = true;
-    uint32_t num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
-        num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_height, num_units_per_shard_height_last,
-        num_units_per_shard_width_last;
-
+    uint32_t num_units_per_shard = 0, input_unit_size = 0, output_unit_size = 0, num_units_per_shard_width = 0,
+             num_units_per_shard_height = 0, num_units_offset = 0, num_units_per_row = 0, num_units_height = 0,
+             num_units_per_shard_height_last = 0, num_units_per_shard_width_last = 0;
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -115,7 +114,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
-    tt_metal::KernelHandle unary_writer_kernel_id;
+    tt_metal::KernelHandle unary_writer_kernel_id = 0;
     if (input.layout() == Layout::TILE) {
         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)out_cb_index};
         TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);

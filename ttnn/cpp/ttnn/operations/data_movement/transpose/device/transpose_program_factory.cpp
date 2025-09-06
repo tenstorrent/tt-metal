@@ -57,7 +57,7 @@ void override_runtime_args_mc_cn(
 
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
 
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -244,7 +244,7 @@ void override_runtime_args_mc_hc(
 
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
 
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -337,7 +337,7 @@ void override_runtime_args_mc_hc_rm(
 
     for (uint32_t i = 0, curr_sticks_read = 0, curr_sticks_write = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_sticks_per_core;
+        uint32_t num_sticks_per_core = 0;
 
         if (core_group_1.contains(core)) {
             num_sticks_per_core = num_w_sticks_per_core_group_1;
@@ -451,8 +451,8 @@ void override_runtime_args_mc_hc_tiled_interleaved(
     uint32_t start_idx = 0;
     uint32_t padded_start_idx = 0;
     for (const auto& core : cores) {
-        uint32_t num_tiles_per_core;
-        uint32_t padded_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
+        uint32_t padded_tiles_per_core = 0;
 
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -1256,7 +1256,7 @@ void override_runtime_args_wh(
 
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
 
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -1371,7 +1371,7 @@ void override_runtime_args_wh_rm(
 
     for (uint32_t i = 0, num_sticks_read = 0, num_sticks_write = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_hw_blocks_per_core;
+        uint32_t num_hw_blocks_per_core = 0;
 
         if (core_group_1.contains(core)) {
             num_hw_blocks_per_core = num_hw_blocks_per_core_group_1;
@@ -1885,8 +1885,8 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
     uint32_t ht = (H + TILE_HEIGHT - 1) / TILE_HEIGHT;
     uint32_t wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;
 
-    uint32_t output_page_size, pack_num_pages, pack_num_pages_last_col, pack_num_pages_last_row,
-        pack_num_pages_last_row_col;
+    uint32_t output_page_size = 0, pack_num_pages = 0, pack_num_pages_last_col = 0, pack_num_pages_last_row = 0,
+             pack_num_pages_last_row_col = 0;
     if ((W % TILE_WIDTH) != 0 and (H % TILE_HEIGHT) != 0) {
         output_page_size = (W % TILE_WIDTH) * (H % TILE_HEIGHT) * output.element_size();
         pack_num_pages = dst_single_tile_size / output_page_size;

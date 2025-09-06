@@ -16,7 +16,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsBoltzOperatio
     const std::optional<MemoryConfig>& memory_config,
     std::optional<std::vector<std::optional<Tensor>>> optional_output_tensors) {
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_q_heads);
-    uint32_t head_dim;
+    uint32_t head_dim = 0;
     if (input_tensor_kv.has_value()) {
         TT_FATAL(input_tensor_q.padded_shape()[3] % num_q_heads == 0, "Unsupported input shape");
         TT_FATAL(input_tensor_kv.value().padded_shape()[3] % (2 * num_kv_heads_val) == 0, "Unsupported input shape");

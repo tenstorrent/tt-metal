@@ -444,7 +444,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     HEURISTIC_MAX_CHUNKS_PER_SYNC));
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
-                uint32_t self_write_done_semaphore;
+                uint32_t self_write_done_semaphore = 0;
                 if (fuse_op) {
                     self_write_done_semaphore = CreateSemaphore(program, {core}, 0);
                 }

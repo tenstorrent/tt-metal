@@ -43,7 +43,7 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
     const uint32_t min_red_dim_units_per_core,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     CoreRangeSet all_cores, cores0, cores1;
-    uint32_t red_dim_units0, red_dim_units1;
+    uint32_t red_dim_units0 = 0, red_dim_units1 = 0;
 
     if (sub_core_grids.has_value()) {
         all_cores = sub_core_grids.value();
@@ -77,7 +77,7 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
     } else {
         // We pick as many cores as possible, but each core will read a multiple of min_red_dim_units_per_core
         const auto core_grid = device->compute_with_storage_grid_size();
-        uint32_t num_total_cores;
+        uint32_t num_total_cores = 0;
         std::tie(num_total_cores, all_cores, cores0, cores1, red_dim_units0, red_dim_units1) =
             tt::tt_metal::split_work_to_cores(core_grid, tt::div_up(red_dim_units, min_red_dim_units_per_core));
         red_dim_units0 *= min_red_dim_units_per_core;
@@ -381,7 +381,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     // of data We calculate that number here
     const int ideal_red_dim_units = num_cores0 * red_dim_units0 + num_cores1 * red_dim_units1;
 
-    uint32_t red_dim_units_last0, red_dim_units_last1;
+    uint32_t red_dim_units_last0 = 0, red_dim_units_last1 = 0;
     if (num_cores1 > 0) {
         red_dim_units_last0 = red_dim_units0;
         red_dim_units_last1 = ideal_red_dim_units == red_dim_units

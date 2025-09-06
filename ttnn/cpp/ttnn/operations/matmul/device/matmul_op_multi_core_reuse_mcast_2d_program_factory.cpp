@@ -163,8 +163,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     ////////////////////////////////////////////////////////////////////////////
     uint32_t num_cores_c = num_cores_with_work_c;
     uint32_t num_cores_r = num_cores_with_work_r;
-    uint32_t in0_mcast_receiver_grid_diff_coord_start;
-    uint32_t in0_mcast_receiver_grid_diff_coord_end;
+    uint32_t in0_mcast_receiver_grid_diff_coord_start = 0;
+    uint32_t in0_mcast_receiver_grid_diff_coord_end = 0;
     std::vector<uint32_t> in0_mcast_noc_x;
     std::vector<uint32_t> in0_mcast_noc_y;
     uint32_t in0_sender_num_cores_along_width = 0;
@@ -958,7 +958,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
         // in0 sender
         if (in0_block_sharded) {
-            uint32_t in0_mcast_receiver_grid_same_coord;
+            uint32_t in0_mcast_receiver_grid_same_coord = 0;
             std::vector<uint32_t> mm_in0_sender_args;
             if (transpose_mcast) {
                 in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).x;

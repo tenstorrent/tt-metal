@@ -947,7 +947,7 @@ void Cluster::set_tunnels_from_mmio_device() {
             device_ids.erase(tunnel[0]);
         }
 
-        bool tunneled_device_hit;
+        bool tunneled_device_hit = false;
         while (!device_ids.empty()) {
             tunneled_device_hit = false;
             for (auto &dev_vec : tunnels_from_mmio) {

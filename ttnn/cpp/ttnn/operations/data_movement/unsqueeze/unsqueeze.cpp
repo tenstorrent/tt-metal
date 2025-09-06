@@ -15,7 +15,7 @@ ttnn::Tensor UnsqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const 
 
     SmallVector<uint32_t> output_shape_vector;
 
-    int normal_dim;
+    int normal_dim = 0;
     // Handle negative dimension by converting it to positive
     TT_FATAL(
         (dim >= min_dim) && (dim <= max_dim),

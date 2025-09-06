@@ -103,7 +103,7 @@ public:
         const auto& routing_type = fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = fabric_setup.fabric_tensix_config.value();
 
-        FabricConfig new_fabric_config;
+        FabricConfig new_fabric_config = FabricConfig::DISABLED;
         if (topology == Topology::Torus) {
             const auto& torus_config = fabric_setup.torus_config.value();
             auto it = torus_topology_to_fabric_config_map.find({topology, torus_config, routing_type});
@@ -599,7 +599,7 @@ public:
 
         // Calculate ring neighbors based on position on perimeter
         // forward always try to go right/up first, backward always try to go left/down first
-        chip_id_t forward_chip_id, backward_chip_id;
+        chip_id_t forward_chip_id = 0, backward_chip_id = 0;
 
         if (row == 0 && col == 0) {
             // Top-left corner (0): forward=1, backward=4 (4x4 mesh)
@@ -651,7 +651,7 @@ public:
     }
 
     uint32_t get_num_sync_devices() const {
-        uint32_t num_devices;
+        uint32_t num_devices = 0;
         switch (topology_) {
             case tt::tt_fabric::Topology::Linear: {
                 num_devices = mesh_shape_[NS_DIM] + mesh_shape_[EW_DIM] - 1;

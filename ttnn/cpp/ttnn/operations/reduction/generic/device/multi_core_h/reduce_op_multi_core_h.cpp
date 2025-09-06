@@ -96,7 +96,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
 
     uint32_t output_cb_index = CBIndex::c_3;
-    CBHandle cb_output;
+    CBHandle cb_output = 0;
     if (use_width_sharding) {
         uint32_t num_output_tiles = output.shard_spec().value().numel() / TILE_HW;
         tt_metal::CircularBufferConfig cb_output_config =
@@ -115,7 +115,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
     }
     tt_metal::Buffer* src0_buffer = a.buffer();
-    tt_metal::KernelHandle reader_kernel_id;
+    tt_metal::KernelHandle reader_kernel_id = 0;
     bfloat16 bfloat_scaler_value = bfloat16(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
 
@@ -144,7 +144,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     }
 
     tt_metal::Buffer* dst_buffer = output.buffer();
-    tt_metal::KernelHandle writer_kernel_id;
+    tt_metal::KernelHandle writer_kernel_id = 0;
 
     if (use_width_sharding) {
         std::vector<uint32_t> writer_ct_args = {

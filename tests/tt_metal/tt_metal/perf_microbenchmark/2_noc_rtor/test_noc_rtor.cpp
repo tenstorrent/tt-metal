@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
 
     bool pass = true;
     std::vector<unsigned long> elapsed_us;
-    unsigned long elapsed_cc;
+    unsigned long elapsed_cc = 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Initial Runtime Args Parse

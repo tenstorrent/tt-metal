@@ -88,7 +88,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
 
     uint32_t num_tiles = a.physical_volume() / TILE_HW;
 
-    uint32_t num_cores, num_tiles_per_core_group_1, num_tiles_per_core_group_2, num_cores_total;
+    uint32_t num_cores = 0, num_tiles_per_core_group_1 = 0, num_tiles_per_core_group_2 = 0, num_cores_total = 0;
     if (zero_start_grid) {
         num_cores_total = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     } else {
@@ -97,9 +97,9 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
 
     uint32_t block_size_per_core_group_1 = 1, block_size_per_core_group_2 = 1;
 
-    uint32_t block_cnt_per_core_group_1, block_cnt_per_core_group_2;
+    uint32_t block_cnt_per_core_group_1 = 0, block_cnt_per_core_group_2 = 0;
 
-    bool row_major;
+    bool row_major = false;
     uint32_t block_height = 0, block_width = 0, block_size = 0, output_width = 0, last_unpadded_block_height = 0,
              last_unpadded_block_width = 0;
     CoreCoord end_core;

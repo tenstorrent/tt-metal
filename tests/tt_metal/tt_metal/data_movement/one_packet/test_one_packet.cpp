@@ -67,7 +67,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OnePacketConf
         (uint32_t)test_config.num_packets, (uint32_t)test_config.packet_size_bytes, (uint32_t)test_config.test_id};
 
     // Kernel
-    tt::tt_metal::KernelHandle kernel;
+    tt::tt_metal::KernelHandle kernel = 0;
     if (test_config.read) {
         kernel = CreateKernel(
             program,

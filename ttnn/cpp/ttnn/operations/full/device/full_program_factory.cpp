@@ -98,7 +98,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     uint32_t page_offset = 0;
 
     for (const auto& core : cores) {
-        uint32_t num_pages_per_core;
+        uint32_t num_pages_per_core = 0;
         if (core_group_1.contains(core)) {
             num_pages_per_core = num_pages_per_core_group_1;
         } else if (core_group_2.contains(core)) {

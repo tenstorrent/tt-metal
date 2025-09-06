@@ -117,8 +117,8 @@ void create_and_run_row_pipeline(
         tt_metal::CreateCircularBuffer(program, core, cb_config);
     }
 
-    uint32_t src_address;
-    uint32_t dst_address;
+    uint32_t src_address = 0;
+    uint32_t dst_address = 0;
 
     tt_metal::BufferType buff_type =
         test_config.IO_data_in_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1;

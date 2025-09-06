@@ -178,8 +178,8 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
 }
 
 std::pair<uint32_t, uint32_t> DispatchMemMap::get_device_l1_info(const CoreType& core_type) const {
-    uint32_t l1_base;
-    uint32_t l1_size;
+    uint32_t l1_base = 0;
+    uint32_t l1_size = 0;
     if (core_type == CoreType::WORKER) {
         l1_base = MetalContext::instance().hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);

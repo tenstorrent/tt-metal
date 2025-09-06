@@ -125,7 +125,7 @@ MorehSoftmaxOperation::MorehSoftmaxHLargeFactory::create(
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
         } else if (core_group_2.contains(core)) {

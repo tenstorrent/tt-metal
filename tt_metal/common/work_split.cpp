@@ -297,7 +297,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         return std::make_tuple(0, CoreRangeSet(), CoreRangeSet(), CoreRangeSet(), 0, 0);
     }
     uint32_t num_cores_x = grid_size.x, num_cores_y = grid_size.y, max_num_cores = num_cores_x * num_cores_y,
-             target_num_cores;
+             target_num_cores = 0;
     CoreRangeSet all_cores;
     if (units_to_divide >= max_num_cores) {
         target_num_cores = max_num_cores;
@@ -362,7 +362,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     if (units_to_divide == 0) {
         return std::make_tuple(0, CoreRangeSet(), CoreRangeSet(), CoreRangeSet(), 0, 0);
     }
-    uint32_t max_num_cores = core_grid.num_cores(), target_num_cores;
+    uint32_t max_num_cores = core_grid.num_cores(), target_num_cores = 0;
     TT_FATAL(max_num_cores > 0, "Core grid must contain at least one core");
     auto start_core = core_grid.ranges().begin()->start_coord;
     CoreRangeSet all_cores;
@@ -394,7 +394,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
             num_cores_to_corerangeset_in_subcoregrids(start_core, num_core_group_1_cores, core_grid, row_wise);
         const auto& last_core_group_1 = (*core_group_1.ranges().rbegin()).end_coord;
         const auto& core_grid_ranges = core_grid.ranges();
-        uint32_t num_cores_counted = 0, i;
+        uint32_t num_cores_counted = 0, i = 0;
         for (i = 0; i < core_grid_ranges.size(); i++) {
             num_cores_counted += core_grid_ranges[i].size();
             if (num_cores_counted >= num_core_group_1_cores) {

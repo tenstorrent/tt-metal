@@ -470,7 +470,7 @@ bool single_block_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device, u
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
-    int failed_index;
+    int failed_index = 0;
     pass &= is_close_packed_vectors<bfloat16, uint32_t>(
         dest_buffer_data,
         packed_golden,
@@ -647,7 +647,7 @@ bool blocked_matmul(std::shared_ptr<distributed::MeshDevice> mesh_device, uint32
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
-    int failed_index;
+    int failed_index = 0;
     pass &= is_close_packed_vectors<bfloat16, uint32_t>(
         dest_buffer_data,
         packed_golden,

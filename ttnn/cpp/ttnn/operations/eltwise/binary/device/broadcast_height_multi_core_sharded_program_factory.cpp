@@ -80,7 +80,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
     uint32_t num_tile_per_core = (shard_size_in_bytes + input_tile_size - 1) / TILE_HW;  // ceil value
     TT_FATAL(input_tile_size <= shard_size_in_bytes, "Input tile size should be less than shard size");
 
-    uint32_t Wt, Ht;
+    uint32_t Wt = 0, Ht = 0;
     if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
         ncores_x = all_cores.ranges().begin()->end_coord.y + 1;
         Wt = shard_spec.shape[1] / TILE_WIDTH;

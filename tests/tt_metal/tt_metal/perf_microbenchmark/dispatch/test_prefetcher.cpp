@@ -344,7 +344,7 @@ void add_prefetcher_debug_prologue(vector<uint32_t>& cmds) {
 
 void add_prefetcher_debug_epilogue(vector<uint32_t>& cmds, size_t prior_end) {
     if (debug_g) {
-        CQPrefetchCmd* debug_cmd_ptr;
+        CQPrefetchCmd* debug_cmd_ptr = nullptr;
         debug_cmd_ptr = (CQPrefetchCmd*)&cmds[prior_end];
         debug_cmd_ptr->debug.size = (cmds.size() - prior_end) * sizeof(uint32_t) - sizeof(CQPrefetchCmd);
         debug_cmd_ptr->debug.stride = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
@@ -1722,9 +1722,9 @@ void gen_terminate_cmds(vector<uint32_t>& prefetch_cmds, vector<uint32_t>& cmd_s
 void nt_memcpy(uint8_t* __restrict dst, const uint8_t* __restrict src, size_t n) {
     size_t num_lines = n / CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 
-    size_t i;
+    size_t i = 0;
     for (i = 0; i < num_lines; i++) {
-        size_t j;
+        size_t j = 0;
         for (j = 0; j < CQ_PREFETCH_CMD_BARE_MIN_SIZE / sizeof(__m128i); j++) {
             // __m128i blk = _mm_stream_load_si128((__m128i *)src);
             __m128i blk = _mm_loadu_si128((const __m128i*)src);
@@ -2355,7 +2355,7 @@ int main(int argc, char** argv) {
         tt_metal::Program program = tt_metal::CreateProgram();
         tt_metal::Program program_r = tt_metal::CreateProgram();
 
-        void* host_hugepage_base;
+        void* host_hugepage_base = nullptr;
         uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t l1_unreserved_base_aligned = tt::align(
             l1_unreserved_base,

@@ -111,7 +111,7 @@ Tensor accumulation_invoke(
 
     Tensor wip_tensor = input_tensor;
     ttnn::SmallVector<int64_t> permutation;
-    int32_t accumulation_axis;
+    int32_t accumulation_axis = 0;
     wip_tensor = common::preprocess_input_tensor(wip_tensor, cum_axis, permutation, accumulation_axis, dtype);
     wip_tensor = ttnn::prim::accumulation(
         queue_id,

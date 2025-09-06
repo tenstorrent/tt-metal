@@ -108,7 +108,7 @@ bool RingbufferCacheManager::invalidate_sufficient_blocks(int required_space, in
 
 std::optional<typename RingbufferCacheManager::CacheOffset> RingbufferCacheManager::get_cache_offset(
     uint64_t pgm_id, uint32_t lengthB) {
-    uint32_t cache_offset;
+    uint32_t cache_offset = 0;
     CacheOffset query_result;
 
     const int required_space = (lengthB + cache_block_sizeB_ - 1) / cache_block_sizeB_;

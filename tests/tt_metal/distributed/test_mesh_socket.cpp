@@ -675,7 +675,7 @@ void test_single_connection_multi_device_socket(
 
     auto recv_program = CreateProgram();
 
-    KernelHandle recv_kernel;
+    KernelHandle recv_kernel = 0;
     if (use_cbs) {
         auto data_format = tt::DataFormat::UInt32;
         auto tile_size_bytes = tile_size(data_format);

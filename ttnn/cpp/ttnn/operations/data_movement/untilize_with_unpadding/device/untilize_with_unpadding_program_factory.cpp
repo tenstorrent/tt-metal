@@ -250,8 +250,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
             ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col);
 
     uint32_t total_tiles_per_row = full_cores_per_row * single_block_size + has_cliff_row * single_block_size_cliff_row;
-    uint32_t padded_row_size_bytes;
-    uint32_t unpadded_row_size_bytes;
+    uint32_t padded_row_size_bytes = 0;
+    uint32_t unpadded_row_size_bytes = 0;
 
     uint32_t el_size = a.element_size();
     if (a.dtype() == DataType::BFLOAT8_B) {
@@ -417,8 +417,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
     uint32_t start_row_id = 0;
     uint32_t start_column_id = 0;
     uint32_t tile_start_id = 0;
-    uint32_t single_block_size_row_arg;
-    uint32_t single_block_size_col_arg;
+    uint32_t single_block_size_row_arg = 0;
+    uint32_t single_block_size_col_arg = 0;
 
     uint32_t total_row_cores = full_cores_per_row;
     if (has_cliff_row) {
@@ -528,7 +528,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
 
     bool has_cliff = core_range_cliff.size() > 0;
 
-    uint32_t unpadded_row_size_bytes;
+    uint32_t unpadded_row_size_bytes = 0;
 
     uint32_t el_size = a.element_size();
     if (a.dtype() == DataType::BFLOAT8_B) {
@@ -602,7 +602,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
 
     // RUNTIME ARGS
     const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
-    uint32_t number_blocks_per_core;
+    uint32_t number_blocks_per_core = 0;
     for (uint32_t i = 0; i < ncores; ++i) {
         const auto& core = cores[i];
 
@@ -709,8 +709,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
 
     bool has_cliff = core_range_cliff.size() > 0;
 
-    uint32_t padded_row_size_bytes;
-    uint32_t unpadded_row_size_bytes;
+    uint32_t padded_row_size_bytes = 0;
+    uint32_t unpadded_row_size_bytes = 0;
 
     if (a.dtype() == DataType::BFLOAT8_B) {
         padded_row_size_bytes = input_shape[-1] * output.element_size();
@@ -961,7 +961,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
 
     /** reader
      */
-    KernelHandle unary_reader_kernel_id;
+    KernelHandle unary_reader_kernel_id = 0;
     std::vector<uint32_t> reader_ct_args = {(std::uint32_t)src0_cb_index};
 
     unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -972,7 +972,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
 
     /** writer
      */
-    KernelHandle unary_writer_kernel_id;
+    KernelHandle unary_writer_kernel_id = 0;
     if (out_sharded) {
         std::vector<uint32_t> writer_ct_args = {
             (uint32_t)output_cb_index, (uint32_t)sharded_output_cb_index, aligned_page_size};
@@ -1060,8 +1060,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
             CoreCoord& core = cores[i];
 
             // writer runtime args
-            uint32_t block_start_row_offset;
-            uint32_t block_start_row_id_offset;
+            uint32_t block_start_row_offset = 0;
+            uint32_t block_start_row_id_offset = 0;
             uint32_t row_size_unpadded = block_row_size;
             uint32_t num_rows_unpadded = num_rows_block;
             if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {

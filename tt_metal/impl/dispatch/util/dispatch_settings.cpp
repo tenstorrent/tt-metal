@@ -62,7 +62,7 @@ DispatchSettingsContainer& get_store() {
 }  // namespace
 
 DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs) {
-    uint32_t prefetch_q_entries;
+    uint32_t prefetch_q_entries = 0;
     if (cluster.is_galaxy_cluster()) {
         prefetch_q_entries = 1532 / num_hw_cqs;
     } else {
