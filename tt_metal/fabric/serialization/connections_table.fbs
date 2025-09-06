@@ -1,0 +1,17 @@
+namespace tt.tt_fabric.flatbuffer;
+
+table ConnectionEndpoint {
+  id: uint32;
+  name: string;
+}
+
+table ConnectionPair {
+  first: ConnectionEndpoint;
+  second: ConnectionEndpoint;
+}
+
+table ConnectionsTable {
+  connections: [ConnectionPair];
+}
+
+root_type ConnectionsTable;

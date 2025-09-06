@@ -1,0 +1,31 @@
+namespace tt.tt_fabric.flatbuffer;
+
+table MeshId {
+  value: uint32;
+}
+
+table PortIdentifier {
+  port_tag: string;
+  connection_hash: uint64;
+}
+
+table MeshIdPair {
+  source_mesh_id: MeshId;
+  dest_mesh_id: MeshId;
+}
+
+table PortIdEntry {
+  mesh_pair: MeshIdPair;
+  port_identifiers: [PortIdentifier];  // Changed to vector of PortIdentifiers
+}
+
+table MeshPortIdMap {
+  source_mesh_id: MeshId;
+  entries: [PortIdEntry];
+}
+
+table PortIdTable {
+  mesh_maps: [MeshPortIdMap];
+}
+
+root_type PortIdTable;
