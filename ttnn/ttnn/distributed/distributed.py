@@ -424,13 +424,24 @@ def _create_replication_color_mapping(sharding_info):
             device_to_group[device_id] = slice_key_to_group[slice_key]
     else:
         mesh_device = sharding_info.tensor.device()
-        rows, cols = mesh_device.shape
-        for r in range(rows):
-            for c in range(cols):
-                coord = ttnn.MeshCoordinate(r, c)
-                device_id = mesh_device.get_device_id(coord)
+
+        # Only assign colors to devices that actually have tensor shards
+        for device_id in sharding_info.device_to_shard_map.keys():
+            # Get the coordinate for this device ID to compute slice ranges
+            rows, cols = mesh_device.shape
+            coord = None
+            for r in range(rows):
+                for c in range(cols):
+                    test_coord = ttnn.MeshCoordinate(r, c)
+                    if mesh_device.get_device_id(test_coord) == device_id:
+                        coord = test_coord
+                        break
+                if coord is not None:
+                    break
+
+            if coord is not None:
                 # Use physical coordinate for slice range computation
-                slice_ranges = _compute_global_slice_ranges(ttnn.MeshCoordinate(r, c), sharding_info)
+                slice_ranges = _compute_global_slice_ranges(coord, sharding_info)
                 slice_key = tuple(slice_ranges)
 
                 if slice_key not in slice_key_to_group:
