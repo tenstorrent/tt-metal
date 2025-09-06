@@ -301,14 +301,16 @@ template <bool flush_prefetch, bool inline_data>
 void DeviceCommand<hugepage_write>::add_dispatch_write_linear(
     uint8_t num_mcast_dests,
     uint32_t noc_xy_addr,
-    uint32_t addr,
-    uint32_t data_sizeB,
+    DeviceAddr addr,
+    DeviceAddr data_sizeB,
     const void* data,
     uint32_t write_offset_index) {
-    uint32_t payload_sizeB = sizeof(CQDispatchCmd) + (flush_prefetch ? data_sizeB : 0);
+    // payload to prefetch relay inline will always be limited to the length of the cmddat queue, i.e. < 64 bits
+    // Conversely if data_sizeB > 32-bits, then the data won't be inline
+    uint32_t payload_sizeB = static_cast<uint32_t>(sizeof(CQDispatchCmdLarge) + (flush_prefetch ? data_sizeB : 0));
     this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
-    auto initialize_write_cmd = [&](CQDispatchCmd* write_cmd) {
+    auto initialize_write_cmd = [&](CQDispatchCmdLarge* write_cmd) {
         write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
         write_cmd->write_linear.num_mcast_dests = num_mcast_dests;
         write_cmd->write_linear.write_offset_index = write_offset_index;
@@ -316,12 +318,12 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_linear(
         write_cmd->write_linear.addr = addr;
         write_cmd->write_linear.length = data_sizeB;
     };
-    CQDispatchCmd* write_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
+    CQDispatchCmdLarge* write_cmd_dst = this->reserve_space<CQDispatchCmdLarge*>(sizeof(CQDispatchCmdLarge));
 
     if constexpr (hugepage_write) {
-        alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_cmd{};
+        alignas(MEMCPY_ALIGNMENT) CQDispatchCmdLarge write_cmd{};
         initialize_write_cmd(&write_cmd);
-        this->memcpy(write_cmd_dst, &write_cmd, sizeof(CQDispatchCmd));
+        this->memcpy(write_cmd_dst, &write_cmd, sizeof(CQDispatchCmdLarge));
     } else {
         initialize_write_cmd(write_cmd_dst);
     }
@@ -1002,13 +1004,13 @@ template void DeviceCommand<true>::add_dispatch_write_paged<true>(bool, uint8_t,
 template void DeviceCommand<false>::add_dispatch_write_paged<false>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, const void*);
 template void DeviceCommand<false>::add_dispatch_write_paged<true>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, const void*);
 
-template void DeviceCommand<true>::add_dispatch_write_linear<true, false>(uint8_t, uint32_t, uint32_t, uint32_t, const void*, uint32_t);
-template void DeviceCommand<true>::add_dispatch_write_linear<true, true>(uint8_t, uint32_t, uint32_t, uint32_t, const void*, uint32_t);
-template void DeviceCommand<true>::add_dispatch_write_linear<false, false>(uint8_t, uint32_t, uint32_t, uint32_t, const void*, uint32_t);
-template void DeviceCommand<true>::add_dispatch_write_linear<false, true>(uint8_t, uint32_t, uint32_t, uint32_t, const void*, uint32_t);
-template void DeviceCommand<false>::add_dispatch_write_linear<true, false>(uint8_t, uint32_t, uint32_t, uint32_t, const void*, uint32_t);
-template void DeviceCommand<false>::add_dispatch_write_linear<true, true>(uint8_t, uint32_t, uint32_t, uint32_t, const void*, uint32_t);
-template void DeviceCommand<false>::add_dispatch_write_linear<false, false>(uint8_t, uint32_t, uint32_t, uint32_t, const void*, uint32_t);
-template void DeviceCommand<false>::add_dispatch_write_linear<false, true>(uint8_t, uint32_t, uint32_t, uint32_t, const void*, uint32_t);
+template void DeviceCommand<true>::add_dispatch_write_linear<true, false>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
+template void DeviceCommand<true>::add_dispatch_write_linear<true, true>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
+template void DeviceCommand<true>::add_dispatch_write_linear<false, false>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
+template void DeviceCommand<true>::add_dispatch_write_linear<false, true>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
+template void DeviceCommand<false>::add_dispatch_write_linear<true, false>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
+template void DeviceCommand<false>::add_dispatch_write_linear<true, true>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
+template void DeviceCommand<false>::add_dispatch_write_linear<false, false>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
+template void DeviceCommand<false>::add_dispatch_write_linear<false, true>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
 // clang-format on
 }  // namespace tt::tt_metal

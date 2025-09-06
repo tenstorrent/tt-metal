@@ -619,21 +619,24 @@ inline void generate_random_payload(
     const CoreRange& workers,
     DeviceData& data,
     uint32_t length_words,
-    CQDispatchCmd cmd,
+    std::variant<CQDispatchCmd, CQDispatchCmdLarge> cmd,
     bool is_mcast = false,
     bool prepend_cmd = false) {
     static uint32_t coherent_count = 0;
 
+    auto num_uint32s = std::visit(
+        ttsl::overloaded{
+            [](const CQDispatchCmd& cmd1) { return sizeof(CQDispatchCmd) / sizeof(uint32_t); },
+            [](const CQDispatchCmdLarge& cmd1) { return sizeof(CQDispatchCmdLarge) / sizeof(uint32_t); }},
+        cmd);
+
     // Host data puts the command in the datastream...
     if (prepend_cmd) {
-        uint32_t datum = *(uint32_t*)&cmd;
-        data.push_range(workers, datum, is_mcast);
-        datum = *(((uint32_t*)&cmd) + 1);
-        data.push_range(workers, datum, is_mcast);
-        datum = *(((uint32_t*)&cmd) + 2);
-        data.push_range(workers, datum, is_mcast);
-        datum = *(((uint32_t*)&cmd) + 3);
-        data.push_range(workers, datum, is_mcast);
+        // just get a pointer
+        uint32_t* cmdp = reinterpret_cast<uint32_t*>(&cmd);
+        for (int i = 0; i < num_uint32s; ++i) {
+            data.push_range(workers, cmdp[i], is_mcast);
+        }
     }
 
     // Note: the dst address marches in unison regardless of whether or not a core is written to
@@ -759,10 +762,17 @@ inline void generate_random_packed_large_payload(
     }
 }
 
-inline void add_bare_dispatcher_cmd(std::vector<uint32_t>& cmds, CQDispatchCmd cmd) {
+inline void add_bare_dispatcher_cmd(std::vector<uint32_t>& cmds, std::variant<CQDispatchCmd, CQDispatchCmdLarge> cmd) {
     static_assert(
         sizeof(CQDispatchCmd) % sizeof(uint32_t) == 0, "CQDispatchCmd size must be a multiple of uint32_t size");
-    const size_t num_uint32s = sizeof(CQDispatchCmd) / sizeof(uint32_t);
+    static_assert(
+        sizeof(CQDispatchCmdLarge) % sizeof(uint32_t) == 0,
+        "CQDispatchCmdLarge size must be a multiple of uint32_t size");
+    const size_t num_uint32s = std::visit(
+        ttsl::overloaded{
+            [](const CQDispatchCmd& cmd) { return sizeof(CQDispatchCmd) / sizeof(uint32_t); },
+            [](const CQDispatchCmdLarge& cmd) { return sizeof(CQDispatchCmdLarge) / sizeof(uint32_t); }},
+        cmd);
     uint32_t buf[num_uint32s];
 
     memcpy(buf, &cmd, sizeof(cmd));
@@ -806,7 +816,8 @@ inline void debug_epilogue(std::vector<uint32_t>& cmds, size_t prior_end) {
     }
 }
 
-inline void add_dispatcher_cmd(std::vector<uint32_t>& cmds, CQDispatchCmd cmd, uint32_t length) {
+inline void add_dispatcher_cmd(
+    std::vector<uint32_t>& cmds, std::variant<CQDispatchCmd, CQDispatchCmdLarge> cmd, uint32_t length) {
     size_t prior_end = debug_prologue(cmds);
 
     add_bare_dispatcher_cmd(cmds, cmd);
@@ -820,7 +831,7 @@ inline void add_dispatcher_cmd(
     std::vector<uint32_t>& cmds,
     const CoreRange& workers,
     DeviceData& device_data,
-    CQDispatchCmd cmd,
+    std::variant<CQDispatchCmd, CQDispatchCmdLarge> cmd,
     uint32_t length,
     bool is_mcast = false,
     bool prepend_cmd = false) {
@@ -873,8 +884,8 @@ inline void add_dispatcher_packed_cmd(
 // bare: doesn't generate random payload data, for use w/ eg, dram reads
 inline void gen_bare_dispatcher_unicast_write_cmd(
     IDevice* device, std::vector<uint32_t>& cmds, CoreCoord worker_core, DeviceData& device_data, uint32_t length) {
-    CQDispatchCmd cmd{};
-    memset(&cmd, 0, sizeof(CQDispatchCmd));
+    CQDispatchCmdLarge cmd{};
+    memset(&cmd, 0, sizeof(CQDispatchCmdLarge));
 
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
     const uint32_t bank_id = 0;  // No interleaved pages here.
@@ -894,8 +905,8 @@ inline void gen_bare_dispatcher_unicast_write_cmd(
 
 inline void gen_dispatcher_unicast_write_cmd(
     IDevice* device, std::vector<uint32_t>& cmds, CoreCoord worker_core, DeviceData& device_data, uint32_t length) {
-    CQDispatchCmd cmd{};
-    memset(&cmd, 0, sizeof(CQDispatchCmd));
+    CQDispatchCmdLarge cmd{};
+    memset(&cmd, 0, sizeof(CQDispatchCmdLarge));
 
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
     const uint32_t bank_id = 0;  // No interleaved pages here.
@@ -920,8 +931,8 @@ inline void gen_dispatcher_multicast_write_cmd(
     // TODO Hmm, ideally only need to relevel the core range
     device_data.relevel(CoreType::WORKER);
 
-    CQDispatchCmd cmd{};
-    memset(&cmd, 0, sizeof(CQDispatchCmd));
+    CQDispatchCmdLarge cmd{};
+    memset(&cmd, 0, sizeof(CQDispatchCmdLarge));
 
     CoreCoord physical_start = device->worker_core_from_logical_core(worker_core_range.start_coord);
     CoreCoord physical_end = device->worker_core_from_logical_core(worker_core_range.end_coord);

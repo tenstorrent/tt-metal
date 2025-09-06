@@ -217,8 +217,8 @@ struct CQDispatchWriteCmd {
     uint8_t write_offset_index;
     uint8_t pad1;
     uint32_t noc_xy_addr;
-    uint32_t addr;
-    uint32_t length;
+    uint64_t addr;
+    uint64_t length;
 } __attribute__((packed));
 
 struct CQDispatchWriteHostCmd {
@@ -382,7 +382,6 @@ struct CQDispatchCmd {
     CQDispatchBaseCmd base;
 
     union {
-        CQDispatchWriteCmd write_linear;
         CQDispatchWriteHostCmd write_linear_host;
         CQDispatchWritePagedCmd write_paged;
         CQDispatchWritePackedCmd write_packed;
@@ -396,6 +395,15 @@ struct CQDispatchCmd {
         CQDispatchNotifySubordinateGoSignalCmd notify_dispatch_s_go_signal;
         CQDispatchSetNumWorkerSemsCmd set_num_worker_sems;
         CQDispatchSetGoSignalNocDataCmd set_go_signal_noc_data;
+    } __attribute__((packed));
+};
+
+// 32 byte commands.
+struct CQDispatchCmdLarge {
+    CQDispatchBaseCmd base;
+    union {
+        CQDispatchWriteCmd write_linear;
+        uint8_t padding[32 - sizeof(CQDispatchBaseCmd)];
     } __attribute__((packed));
 };
 
