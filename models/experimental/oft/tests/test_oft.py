@@ -45,7 +45,18 @@ def test_oft_forward(device, input_shape, channels, cell_size, grid_height, scal
     tt_calib = ttnn.from_torch(calib, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     tt_grid = ttnn.from_torch(grid, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    tt_oft = OFT(device, params, channels, cell_size, grid_height, features, calib, grid, scale=scale)
+    tt_oft = OFT(
+        device,
+        params,
+        channels,
+        cell_size,
+        grid_height,
+        features.shape[2:],
+        calib,
+        grid,
+        scale=scale,
+        use_precomputed_grid=False,
+    )
     tt_out = tt_oft.forward(device, tt_features, tt_calib, tt_grid)
     tt_out = ttnn.to_torch(tt_out)
 

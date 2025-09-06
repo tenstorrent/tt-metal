@@ -23,7 +23,7 @@ class TTOftNet:
         layers,
         mean,
         std,
-        features,
+        input_shape_hw,
         calib,
         grid,
         topdown_layers=8,
@@ -40,9 +40,42 @@ class TTOftNet:
         self.lat32 = Conv(parameters.lat32, conv_pt.lat32, output_layout=ttnn.ROW_MAJOR_LAYOUT)
         self.bn32 = GroupNorm(parameters.bn32, num_groups=16, channels=256, eps=1e-5, dtype=ttnn.bfloat8_b)
 
-        self.oft8 = TtOFT(device, parameters.oft8, 256, grid_res, grid_height, features, calib, grid)
-        self.oft16 = TtOFT(device, parameters.oft16, 256, grid_res, grid_height, features, calib, grid)
-        self.oft32 = TtOFT(device, parameters.oft32, 256, grid_res, grid_height, features, calib, grid)
+        self.oft8 = TtOFT(
+            device,
+            parameters.oft8,
+            256,
+            grid_res,
+            grid_height,
+            [int(x * 1 / 8) for x in input_shape_hw],
+            calib,
+            grid,
+            scale=1 / 8,
+            use_precomputed_grid=False,
+        )
+        self.oft16 = TtOFT(
+            device,
+            parameters.oft16,
+            256,
+            grid_res,
+            grid_height,
+            [int(x * 1 / 16) for x in input_shape_hw],
+            calib,
+            grid,
+            scale=1 / 16,
+            use_precomputed_grid=False,
+        )
+        self.oft32 = TtOFT(
+            device,
+            parameters.oft32,
+            256,
+            grid_res,
+            grid_height,
+            [int(x * 1 / 32) for x in input_shape_hw],
+            calib,
+            grid,
+            scale=1 / 32,
+            use_precomputed_grid=False,
+        )
 
         self.topdown = [
             block(

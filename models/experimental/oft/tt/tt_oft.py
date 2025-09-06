@@ -11,23 +11,12 @@ except ModuleNotFoundError:
     use_signpost = False
 
 from models.experimental.oft.reference.oft import EPSILON
+from models.experimental.oft.reference.utils import perspective
 
 
-def plot_tensor(x, a="x"):
-    logger.debug(f"{a}'s  shape: {x.shape}")
-    logger.debug(f"{a}'s  layout: {x.layout}")
-    logger.debug(f"{a}'s  dtype: {x.dtype}")
-    logger.debug(f"{a}'s config: {x.memory_config()}")
-
-
-def perspective(matrix, vector):
-    vector = vector.unsqueeze(-1)
-    homogenous = torch.matmul(matrix[..., :-1], vector) + matrix[..., [-1]]
-    homogenous = homogenous.squeeze(-1)
-    return homogenous[..., :-1] / homogenous[..., [-1]]
-
-
-def calculate_initialization_parameters(device, channels, cell_size, grid_height, features, calib, grid, scale):
+def calculate_initialization_parameters(
+    device, channels, cell_size, grid_height, feature_shape_hw, calib, grid, scale, use_precomputed_grid
+):
     y_corners = torch.arange(0, grid_height, cell_size) - grid_height / 2.0
     y_corners = F.pad(y_corners.view(-1, 1, 1, 1), [1, 1])
     # Expand the grid in the y dimension
@@ -35,10 +24,9 @@ def calculate_initialization_parameters(device, channels, cell_size, grid_height
 
     # Project grid corners to image plane and normalize to [-1, 1]
     img_corners = perspective(calib.view(-1, 1, 1, 1, 3, 4), corners)
-    img_height, img_width = features.size()[2:]
+    feature_height, feature_width = feature_shape_hw
     # Normalize to [-1, 1]
-    img_size = corners.new([img_width, img_height]) / scale
-
+    img_size = corners.new([feature_width, feature_height]) / scale
     norm_corners = (2 * img_corners / img_size - 1).clamp(-1, 1)
     # Get top-left and bottom-right coordinates of voxel bounding boxes
     bbox_corners = torch.cat(
@@ -51,25 +39,47 @@ def calculate_initialization_parameters(device, channels, cell_size, grid_height
     batch, _, depth, width, _ = bbox_corners.size()
     bbox_corners = bbox_corners.flatten(2, 3)
     area = (
-        (bbox_corners[..., 2:] - bbox_corners[..., :2]).prod(dim=-1) * img_height * img_width * 0.25 + EPSILON
+        (bbox_corners[..., 2:] - bbox_corners[..., :2]).prod(dim=-1) * feature_height * feature_width * 0.25 + EPSILON
     ).unsqueeze(1)
     visible = area > EPSILON
-    # logger.debug(f"visible shape: {visible.shape}, dtype: {visible.dtype}")
 
     area = 1 / area
     area_nhwc = area.permute(0, 2, 3, 1)  # Convert to NHWC format
     visible_nhwc = visible.permute(0, 2, 3, 1)  # Convert to NHWC format
     top_left_bc = bbox_corners[..., [0, 1]]
-    # logger.debug(f"TTNN: top_left_bc shape: {top_left_bc.shape}, dtype: {top_left_bc.dtype}")
     btm_right_bc = bbox_corners[..., [2, 3]]
     top_right_bc = bbox_corners[..., [2, 1]]
     btm_left_bc = bbox_corners[..., [0, 3]]
 
+    batch_size, grid_h, grid_w, _ = top_left_bc.shape
+    input_shape_nhwc = [batch_size, feature_height, feature_width, channels]
+
     # bbox_corners_tt = ttnn.from_torch(bbox_corners, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    top_left_bc_tt = ttnn.from_torch(top_left_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    btm_right_bc_tt = ttnn.from_torch(btm_right_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    top_right_bc_tt = ttnn.from_torch(top_right_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    btm_left_bc_tt = ttnn.from_torch(btm_left_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    if use_precomputed_grid:
+        prepare_grid_lambda = lambda torch_grid_bf16, input_shape_nhwc: ttnn.to_device(
+            ttnn.prepare_grid_sample_grid(
+                ttnn.from_torch(torch_grid_bf16, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32),
+                input_shape_nhwc,
+                padding_mode="zeros",
+                output_dtype=ttnn.bfloat16,
+            ),
+            device,
+        )
+        top_left_bc_tt = prepare_grid_lambda(top_left_bc, input_shape_nhwc)
+        btm_right_bc_tt = prepare_grid_lambda(btm_right_bc, input_shape_nhwc)
+        top_right_bc_tt = prepare_grid_lambda(top_right_bc, input_shape_nhwc)
+        btm_left_bc_tt = prepare_grid_lambda(btm_left_bc, input_shape_nhwc)
+
+    else:
+        top_left_bc_tt = ttnn.from_torch(top_left_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        btm_right_bc_tt = ttnn.from_torch(
+            btm_right_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        top_right_bc_tt = ttnn.from_torch(
+            top_right_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        btm_left_bc_tt = ttnn.from_torch(btm_left_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
     visible_tt = ttnn.from_torch(visible_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     area_tt = ttnn.from_torch(area_nhwc, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     return (
@@ -82,14 +92,26 @@ def calculate_initialization_parameters(device, channels, cell_size, grid_height
 
 
 class OFT:
-    def __init__(self, device, parameters, channels, cell_size, grid_height, features, calib, grid, scale=1):
+    def __init__(
+        self,
+        device,
+        parameters,
+        channels,
+        cell_size,
+        grid_height,
+        features_shape_hw,
+        calib,
+        grid,
+        scale,
+        use_precomputed_grid,
+    ):
         # params for conv3d
         self.linear_weight = parameters.conv3d.weight
         self.linear_bias = parameters.conv3d.bias
         self.scale = scale
 
         self.bbox_corners, self.visible, self.area, self.shape = calculate_initialization_parameters(
-            device, channels, cell_size, grid_height, features, calib, grid, self.scale
+            device, channels, cell_size, grid_height, features_shape_hw, calib, grid, self.scale, use_precomputed_grid
         )
 
     def forward(self, device, features, calib, grid):

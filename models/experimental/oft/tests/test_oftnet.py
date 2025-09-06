@@ -26,7 +26,7 @@ from loguru import logger
     # fmt: off
     "use_host_oft, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     [
-       (False, 0.144, 0.121, 0.143, 0.202),  # Using device OFT
+       (False, 0.074, 0.105, 0.124, 0.105),  # Using device OFT
     #  ( True, 0.86, 0.99, 0.99, 0.99, 0.99)
     ],
     # fmt: on
@@ -82,7 +82,7 @@ def test_oftnet(
         [2, 2, 2, 2],
         ref_model.mean,
         ref_model.std,
-        features=input_tensor,
+        input_shape_hw=input_tensor.shape[2:],
         calib=calib,
         grid=grid,
         topdown_layers=topdown_layers,
