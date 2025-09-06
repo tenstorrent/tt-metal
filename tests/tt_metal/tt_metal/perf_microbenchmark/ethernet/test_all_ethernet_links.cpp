@@ -112,12 +112,13 @@ tt_metal::IDevice* find_device_with_id(const std::vector<tt_metal::IDevice*>& de
     return nullptr;
 }
 
+// NOLINTBEGIN(cppcoreguidelines-prefer-member-initializer)
 class ConnectedDevicesHelper {
 private:
     std::map<chip_id_t, tt_metal::IDevice*> devices_map;
 
 public:
-    ConnectedDevicesHelper(const TestParams& params) : device_open_(false) {
+    ConnectedDevicesHelper(const TestParams& params) {
         this->arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         this->num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -296,8 +297,9 @@ private:
         }
     }
 
-    bool device_open_;
+    bool device_open_ = false;
 };
+// NOLINTEND(cppcoreguidelines-prefer-member-initializer)
 
 std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper, const TestParams& params) {
     std::vector<tt_metal::Program> programs(device_helper.num_devices);
