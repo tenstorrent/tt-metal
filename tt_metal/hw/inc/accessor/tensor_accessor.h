@@ -450,11 +450,11 @@ public:
     AbstractTensorAccessorWrapper() = default;
 
     template <typename Accessor>
-    AbstractTensorAccessorWrapper(const Accessor& accessor) : accessor_ptr(&accessor) {
-        get_noc_addr_fn = [](const void* accessor, uint32_t page_idx, uint32_t offset, uint8_t noc) {
+    AbstractTensorAccessorWrapper(const Accessor& accessor) :
+        accessor_ptr(&accessor),
+        get_noc_addr_fn([](const void* accessor, uint32_t page_idx, uint32_t offset, uint8_t noc) {
             return static_cast<const Accessor*>(accessor)->get_noc_addr(page_idx, offset, noc);
-        };
-    }
+        }) {}
 
     uint64_t get_noc_addr(uint32_t page_idx, uint32_t offset = 0, uint8_t noc = noc_index) const {
         return get_noc_addr_fn(accessor_ptr, page_idx, offset, noc);

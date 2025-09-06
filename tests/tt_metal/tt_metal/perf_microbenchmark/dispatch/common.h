@@ -113,16 +113,14 @@ DeviceData::DeviceData(
     uint32_t dram_data_addr,
     void* pcie_data_addr,
     bool is_banked,
-    uint32_t dram_data_size_words) {
+    uint32_t dram_data_size_words) :
+    banked(is_banked), amt_written(0) {
     this->base_data_addr[static_cast<int>(CoreType::WORKER)] = l1_data_addr;
     this->base_data_addr[static_cast<int>(CoreType::PCIE)] = (uint64_t)pcie_data_addr;
     this->base_data_addr[static_cast<int>(CoreType::DRAM)] = dram_data_addr;
     this->base_result_data_addr[static_cast<int>(CoreType::WORKER)] = l1_data_addr;
     this->base_result_data_addr[static_cast<int>(CoreType::PCIE)] = (uint64_t)pcie_data_addr;
     this->base_result_data_addr[static_cast<int>(CoreType::DRAM)] = dram_data_addr;
-
-    this->banked = is_banked;
-    this->amt_written = 0;
 
     const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
     const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());

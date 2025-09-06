@@ -87,10 +87,10 @@ public:
     ShardOrientation shard_orientation = ShardOrientation::ROW_MAJOR;
 
     BufferStressTestConfigSharded(std::array<uint32_t, 2> pages_per_core, std::array<uint32_t, 2> cores) :
-        max_num_pages_per_core(pages_per_core), max_num_cores(cores) {
-        this->num_pages_per_core = pages_per_core;
-        this->num_cores = cores;
-    }
+        max_num_pages_per_core(pages_per_core),
+        max_num_cores(cores),
+        num_pages_per_core(pages_per_core),
+        num_cores(cores) {}
 
     std::array<uint32_t, 2> tensor2d_shape_in_pages() {
         return {num_pages_per_core[0] * num_cores[0], num_pages_per_core[1] * num_cores[1]};
