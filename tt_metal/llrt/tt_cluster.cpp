@@ -32,7 +32,6 @@
 #include "tracy/Tracy.hpp"
 #include "tt_metal/llrt/tlb_config.hpp"
 #include <umd/device/cluster.hpp>
-#include <umd/device/hugepage.h>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/simulation/simulation_device.hpp>
 #include <umd/device/types/arch.hpp>
