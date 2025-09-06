@@ -40,9 +40,8 @@ struct ActivationReuseConfig {
     bool readers_process_full_image_widths = false;
     uint32_t tilized_cb_row_offset = 0;
     uint32_t tilized_cb_second_reader_offset = 0;
-    uint32_t total_remaining_tiles_to_push = 0;
-    uint32_t cores_pushing_remaining_tiles = 0;
-    uint32_t partial_core_remaining_tiles = 0;
+    uint32_t reader_remaining_tiles_to_push = 0;
+    uint32_t writer_remaining_tiles_to_push = 0;
 };
 
 ActivationReuseConfig calculate_activation_reuse_params(
@@ -56,8 +55,9 @@ ActivationReuseConfig calculate_activation_reuse_params(
     uint32_t tilized_act_tile_size,
     uint32_t act_block_w_ntiles,
     uint32_t act_block_h_ntiles,
-    uint32_t total_active_num_cores,
-    uint32_t output_matrix_height_tiles,
+    uint32_t single_core_height_ntiles,
+    uint32_t total_output_height_ntiles,
+    uint32_t padded_total_output_height_ntiles,
     const std::vector<CBInfo>& cb_info,
     bool enable_split_reader) {
     ActivationReuseConfig config;
@@ -102,14 +102,25 @@ ActivationReuseConfig calculate_activation_reuse_params(
 
     // Last cores sometime have less work to do, but we still need to push the same number of tiles
     // to avoid blocking compute kernels; Here we compute how many cores will be pushing the remaining tiles
-    config.total_remaining_tiles_to_push = act_block_h_ntiles * total_active_num_cores - output_matrix_height_tiles;
-    if (config.total_remaining_tiles_to_push > 0) {
-        config.cores_pushing_remaining_tiles = tt::div_up(config.total_remaining_tiles_to_push, act_block_h_ntiles);
+    uint32_t total_remaining_tiles_to_push = padded_total_output_height_ntiles - total_output_height_ntiles;
+    TT_FATAL(
+        total_remaining_tiles_to_push <= single_core_height_ntiles,
+        "Only last core can have less work to do than the rest of the grid");
 
-        config.partial_core_remaining_tiles = config.total_remaining_tiles_to_push % act_block_h_ntiles;
-        if (config.partial_core_remaining_tiles == 0) {
-            config.partial_core_remaining_tiles = act_block_h_ntiles;
+    if (enable_split_reader) {
+        uint32_t full_remaining_act_blocks_to_push = total_remaining_tiles_to_push / act_block_h_ntiles;
+        config.reader_remaining_tiles_to_push = full_remaining_act_blocks_to_push * act_block_h_nsubblocks_split;
+        config.writer_remaining_tiles_to_push = full_remaining_act_blocks_to_push * act_block_h_nsubblocks_split_last;
+
+        uint32_t leftover_tiles_to_push = total_remaining_tiles_to_push % act_block_h_ntiles;
+        if (leftover_tiles_to_push > act_block_h_nsubblocks_split_last) {
+            config.writer_remaining_tiles_to_push += act_block_h_nsubblocks_split_last;
+            config.reader_remaining_tiles_to_push += leftover_tiles_to_push - act_block_h_nsubblocks_split_last;
+        } else {
+            config.writer_remaining_tiles_to_push += leftover_tiles_to_push;
         }
+    } else {
+        config.reader_remaining_tiles_to_push = total_remaining_tiles_to_push;
     }
 
     return config;
@@ -182,6 +193,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     // parallelization config
     CoreRangeSet input_cores = a.memory_config().shard_spec().value().grid;
+    CoreCoord last_input_core = input_cores.ranges().back().end_coord;
     CoreRangeSet output_cores = output.memory_config().shard_spec().value().grid;
     TT_ASSERT(
         input_cores == output_cores || block_sharded,
@@ -568,7 +580,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const uint32_t batch = sliding_window_config.get_output_shape()[0];
     const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     const uint32_t output_image_height = sliding_window_config.get_output_shape()[1];
-    const uint32_t output_matrix_height_tiles =
+    const uint32_t total_output_height_ntiles =
         (batch * output_image_height * output_image_width) / tt::constants::TILE_HEIGHT;
 
     Conv2dConfig conv_config = Conv2dConfig{
@@ -655,8 +667,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             tilized_act_tile_size,
             act_block_w_ntiles,
             act_block_h_ntiles,
-            total_active_num_cores,
-            output_matrix_height_tiles,
+            out_block_h_ntiles,
+            total_output_height_ntiles,
+            act_matrix_height_ntiles,
             cb_info,
             enable_split_reader);
     }
@@ -700,7 +713,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             activation_reuse_config.image_width_tiles,
             output_image_width,
             activation_reuse_config.reuse_window_offset,
-            static_cast<uint32_t>(activation_reuse_config.total_remaining_tiles_to_push != 0)};
+            static_cast<uint32_t>(activation_reuse_config.reader_remaining_tiles_to_push != 0)};
 
         reader_compile_time_args.insert(
             reader_compile_time_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
@@ -803,7 +816,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                     activation_reuse_config.image_width_tiles,
                     output_image_width,
                     activation_reuse_config.reuse_window_offset,
-                    static_cast<uint32_t>(activation_reuse_config.total_remaining_tiles_to_push != 0)};
+                    static_cast<uint32_t>(activation_reuse_config.writer_remaining_tiles_to_push != 0)};
                 split_reader_args.insert(
                     split_reader_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
             }
@@ -916,41 +929,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                         : std::vector<uint32_t>{end_x, end_y, start_x, start_y};
     };
 
-    // Last cores sometime have less work to do, but we still need to push the same number of tiles
-    // to avoid blocking compute kernels
-    std::vector<uint32_t> reader_remaining_tiles_to_push_args;
-    std::vector<uint32_t> writer_remaining_tiles_to_push_args;
-    if (enable_activation_reuse) {
-        int reader_remaining_tiles_to_push = 0;
-        int writer_remaining_tiles_to_push = 0;
-        for (uint32_t core_i = 0; core_i < total_active_num_cores; core_i++) {
-            // Core pushing at least 1 tile in height of real data
-            if (core_i == total_active_num_cores - activation_reuse_config.cores_pushing_remaining_tiles) {
-                reader_remaining_tiles_to_push = activation_reuse_config.partial_core_remaining_tiles;
-                if (enable_split_reader) {
-                    if (activation_reuse_config.partial_core_remaining_tiles > act_block_h_nsubblocks_split_last) {
-                        writer_remaining_tiles_to_push = act_block_h_nsubblocks_split_last;
-                        reader_remaining_tiles_to_push =
-                            activation_reuse_config.partial_core_remaining_tiles - act_block_h_nsubblocks_split_last;
-                    } else {
-                        writer_remaining_tiles_to_push = activation_reuse_config.partial_core_remaining_tiles;
-                        reader_remaining_tiles_to_push = 0;
-                    }
-                }
-                // Cores with no meaningful work
-            } else if (core_i > total_active_num_cores - activation_reuse_config.cores_pushing_remaining_tiles) {
-                reader_remaining_tiles_to_push = act_block_h_ntiles;
-                if (enable_split_reader) {
-                    reader_remaining_tiles_to_push = act_block_h_nsubblocks_split;
-                    writer_remaining_tiles_to_push = act_block_h_nsubblocks_split_last;
-                }
-            }
-
-            reader_remaining_tiles_to_push_args.push_back(reader_remaining_tiles_to_push);
-            writer_remaining_tiles_to_push_args.push_back(writer_remaining_tiles_to_push);
-        }
-    }
-
     // Setup reader runtime arguments
     if (block_sharded) {
         const uint32_t in_num_cores_x = input_cores.bounding_box().end_coord.x + 1;
@@ -1011,9 +989,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         }
     } else if (enable_activation_reuse) {
         uint32_t core_i = 0;
-        for (const CoreRange& core_range : all_cores.ranges()) {
+        for (const CoreRange& core_range : input_cores.ranges()) {
             for (const CoreCoord& core : core_range) {
-                std::vector<uint32_t> reader_rt_args{reader_remaining_tiles_to_push_args[core_i]};
+                std::vector<uint32_t> reader_rt_args{
+                    core.x == last_input_core.x && core.y == last_input_core.y
+                        ? activation_reuse_config.reader_remaining_tiles_to_push
+                        : 0};
                 SetRuntimeArgs(program, reader_id, core, reader_rt_args);
                 core_i++;
             }
@@ -1100,7 +1081,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                  weights_mcast_sender_semaphore_id,
                  weights_mcast_receiver_semaphore_id});
             if (enable_split_reader && enable_activation_reuse) {
-                sender_rt_args.push_back(writer_remaining_tiles_to_push_args[core_i]);
+                sender_rt_args.push_back(
+                    core.x == last_input_core.x && core.y == last_input_core.y
+                        ? activation_reuse_config.writer_remaining_tiles_to_push
+                        : 0);
             }
             SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
         }
@@ -1136,7 +1120,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                     weights_mcast_sender_semaphore_id,
                     weights_mcast_receiver_semaphore_id};
                 if (enable_split_reader && enable_activation_reuse) {
-                    receiver_args.push_back(writer_remaining_tiles_to_push_args[core_i]);
+                    receiver_args.push_back(
+                        core.x == last_input_core.x && core.y == last_input_core.y
+                            ? activation_reuse_config.writer_remaining_tiles_to_push
+                            : 0);
                 }
             }
             SetRuntimeArgs(program, writer_mcast_receiver_id, core, receiver_args);

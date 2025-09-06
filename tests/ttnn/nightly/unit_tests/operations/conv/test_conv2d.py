@@ -4653,7 +4653,7 @@ def test_conv2d_activation_reuse(
 
 
 @skip_for_blackhole()
-@pytest.mark.parametrize("enable_activation_reuse", [True])
+@pytest.mark.parametrize("enable_activation_reuse", [False, True])
 @pytest.mark.parametrize("enable_split_reader", [False, True])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(

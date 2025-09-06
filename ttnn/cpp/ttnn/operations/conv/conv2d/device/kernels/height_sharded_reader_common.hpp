@@ -149,15 +149,13 @@ template <
     bool readers_process_full_image_widths,
     uint32_t image_width_tiles,
     uint32_t output_image_width,
-    uint32_t window_reuse_offset,
-    bool need_to_push_remaining_tiles>
+    uint32_t window_reuse_offset>
 FORCE_INLINE void read_sticks_activation_reuse(
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr,
     uint32_t reader_offset,
     uint32_t& l1_write_addr_act,
     uint32_t& reader_idx,
-    uint32_t cb_start_addr,
-    uint32_t remaining_tiles_to_push) {
+    uint32_t cb_start_addr) {
     constexpr uint32_t image_width_padded_to_tile = image_width_tiles * tt::constants::TILE_HEIGHT;
     constexpr bool output_image_width_full_tile = output_image_width == image_width_padded_to_tile;
     constexpr uint32_t reuse_outer = window_outer - 1;
@@ -170,12 +168,6 @@ FORCE_INLINE void read_sticks_activation_reuse(
     cb_reserve_back(cb_id_act, act_cb_tiles);
 
     if (num_elems == 0) {
-        // If split reader is enabled, last core's BRISC might have no work to do,
-        // but we still need to push the same number of tiles to avoid blocking compute kernels
-        if constexpr (need_to_push_remaining_tiles) {
-            push_remaining_tiles<cb_id_act, act_cb_w_tiles, image_width_tiles>(remaining_tiles_to_push, cb_start_addr);
-        }
-
         return;
     }
 
@@ -307,12 +299,6 @@ FORCE_INLINE void read_sticks_activation_reuse(
         reader_idx++;
         start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
         end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
-    }
-
-    // Last core sometimes has less work to do, but we still need to push the same number of tiles
-    // to avoid blocking compute kernels
-    if constexpr (need_to_push_remaining_tiles) {
-        push_remaining_tiles<cb_id_act, act_cb_w_tiles, image_width_tiles>(remaining_tiles_to_push, cb_start_addr);
     }
 }
 #endif
