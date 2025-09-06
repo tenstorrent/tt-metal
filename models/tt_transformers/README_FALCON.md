@@ -4,13 +4,13 @@ This document summarizes the changes and usage to run the following Hugging Face
 
 - tiiuae/Falcon-H1-0.5B-Instruct
 - tiiuae/Falcon3-1B-Instruct
-- tiiuae/Falcon-H1-7B-Instruct
+- tiiuae/Falcon3-7B-Instruct
 
 ### What changed in this repo
 
 - Model config updates (`models/tt_transformers/tt/model_config.py`):
   - Enable `trust_remote_code` automatically for `falcon-h1` and `falcon3` HF repos.
-  - Add tokenizer fallback mappings for `Falcon-H1-0.5B`, `Falcon3-1B`, `Falcon-H1-7B`.
+  - Add tokenizer fallback mappings for `Falcon-H1-0.5B`, `Falcon3-1B`, `Falcon3-7B`.
   - Provide conservative per-device prefill chunk sizes for Falcon variants.
 - HF weight loading (`models/tt_transformers/tt/load_checkpoints.py`):
   - Normalize Falcon-style paths from `transformer.*` to `model.*` and unify attention names.
@@ -66,8 +66,8 @@ Numbers captured from demo logs on N300; tokens/s/user are greedy decode. Throug
 | Falcon-H1-0.5B | 32 | ~10.9 | ~91.0 | ~2911 |
 | Falcon3-1B | 1 | ~12.2 | ~83.5 | ~83.5 |
 | Falcon3-1B | 32 | ~13.1 | ~76.3 | ~2440 |
-| Falcon-H1-7B | 1 | ~81.3 | ~45.3 | ~45.3 |
-| Falcon-H1-7B | 32 | ~64 | ~40.9 | ~1305 |
+| Falcon3-7B | 1 | ~81.3 | ~45.3 | ~45.3 |
+| Falcon3-7B | 32 | ~64 | ~40.9 | ~1305 |
 
 ### Validation and notes
 
