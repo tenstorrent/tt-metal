@@ -47,7 +47,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include "umd/device/tt_io.hpp"
 #include "umd/device/tt_xy_pair.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/utils.hpp>
 
 #define CQ_PREFETCH_CMD_BARE_MIN_SIZE \
