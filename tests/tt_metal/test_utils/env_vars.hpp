@@ -5,7 +5,7 @@
 #pragma once
 #include <tt-metalium/utils.hpp>
 
-#include "umd/device/device_api_metal.h"
+#include <umd/device/driver_atomics.hpp>
 #include "umd/device/tt_cluster_descriptor.h"
 #include "umd/device/tt_simulation_device.h"
 #include "impl/context/metal_context.hpp"
