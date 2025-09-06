@@ -33,9 +33,15 @@ class TensorShardingInfo:
         self.shards = shards
         self.topology = tensor.tensor_topology()
         self.placements = self.topology.placements()
-        self.mesh_shape = list(self.topology.mesh_shape())
+        self.override_shape = list(self.topology.mesh_shape())
+        self.mesh_shape = list(tensor.device().shape) if tensor.device() else list(tensor.host_buffer().shape())
         self.mesh_coords = self.topology.mesh_coords()
         self.mesh_rank = len(self.mesh_shape)
+        self.override_rank = len(self.override_shape)
+
+        # Determine distribution mode and create coordinate mapping
+        self.distribution_mode = self._compute_distribution_mode()
+        self.coord_mapper = self._create_coordinate_mapper()
 
         self.dim_to_axis = self._compute_dim_to_axis_mapping()
         self.global_tensor_shape = self._compute_global_tensor_shape()
@@ -54,32 +60,160 @@ class TensorShardingInfo:
                     mapping[tensor_dim] = axis
         return mapping
 
+    def _compute_distribution_mode(self):
+        """Determine if ROW_MAJOR or SUBMESH distribution mode is used.
+        Uses the C++ compute_distribution_mode() function for consistency."""
+        # Convert Python shapes to ttnn MeshShape objects
+        override_mesh_shape = ttnn.MeshShape(*self.override_shape)
+        device_mesh_shape = ttnn.MeshShape(*self.mesh_shape)
+
+        # Use the C++ function to avoid code duplication
+        return ttnn.compute_distribution_mode_string(override_mesh_shape, device_mesh_shape)
+
+    def _create_coordinate_mapper(self):
+        """Create mapping from logical override coordinates to physical mesh coordinates."""
+        if self.distribution_mode == "SUBMESH":
+            return lambda logical_coord: logical_coord
+
+        # ROW_MAJOR: Generate physical coordinates in row-major order
+        def generate_coords(shape):
+            if len(shape) == 1:
+                return [(i,) for i in range(shape[0])]
+            elif len(shape) == 2:
+                return [(r, c) for r in range(shape[0]) for c in range(shape[1])]
+            else:
+                # General N-dimensional case
+                coords = []
+
+                def _recursive_gen(dims, current=[]):
+                    if len(current) == len(dims):
+                        coords.append(tuple(current))
+                        return
+                    for i in range(dims[len(current)]):
+                        _recursive_gen(dims, current + [i])
+
+                _recursive_gen(shape)
+                return coords
+
+        physical_coords = generate_coords(self.mesh_shape)
+
+        # Create logical -> physical mapping in row-major order
+        coord_map = {}
+        coord_idx = 0
+
+        for logical_coord in generate_coords(self.override_shape):
+            if coord_idx < len(physical_coords):
+                coord_map[logical_coord] = physical_coords[coord_idx]
+                coord_idx += 1
+
+        # Return mapper function that handles different input formats
+        def mapper(logical_coord):
+            if isinstance(logical_coord, (tuple, list)):
+                key = tuple(logical_coord)
+            else:
+                key = (logical_coord,) if self.override_rank == 1 else logical_coord
+            return coord_map.get(key, physical_coords[0] if physical_coords else (0,))
+
+        return mapper
+
+    def _physical_to_logical_coord(self, physical_tuple):
+        """Convert physical coordinate to logical coordinate using reverse lookup."""
+        if self.distribution_mode == "SUBMESH":
+            return physical_tuple
+
+        # For ROW_MAJOR, find which logical coordinate maps to this physical coordinate
+        def generate_logical_coords():
+            if self.override_rank == 1:
+                return [(i,) for i in range(self.override_shape[0])]
+            elif self.override_rank == 2:
+                return [(r, c) for r in range(self.override_shape[0]) for c in range(self.override_shape[1])]
+            else:
+                coords = []
+
+                def _gen(dims, current=[]):
+                    if len(current) == len(dims):
+                        coords.append(tuple(current))
+                        return
+                    for i in range(dims[len(current)]):
+                        _gen(dims, current + [i])
+
+                _gen(self.override_shape)
+                return coords
+
+        for logical_coord in generate_logical_coords():
+            mapped_physical = self.coord_mapper(logical_coord)
+            # Handle both tuple and single value comparisons
+            if isinstance(mapped_physical, tuple) and isinstance(physical_tuple, tuple):
+                if (
+                    len(mapped_physical) >= len(physical_tuple)
+                    and mapped_physical[: len(physical_tuple)] == physical_tuple
+                ):
+                    return logical_coord
+            elif mapped_physical == physical_tuple[0] if isinstance(physical_tuple, tuple) else physical_tuple:
+                return logical_coord
+
+        # Fallback
+        return physical_tuple
+
     def _compute_global_tensor_shape(self):
-        """Compute the global tensor shape."""
+        """Compute the global tensor shape using override_shape for scaling."""
         shape = list(self.tensor.shape)
         for tensor_dim, axis in self.dim_to_axis.items():
-            shape[tensor_dim] *= self.mesh_shape[axis]
+            shape[tensor_dim] *= self.override_shape[axis]
         return ttnn.Shape(shape)
 
     def _compute_axis_representatives(self):
-        """Find representative device for each axis partition."""
-        mapping = {axis: {} for axis in range(self.mesh_rank)}
+        """Find representative device for each axis partition in override coordinate space."""
+        mapping = {axis: {} for axis in range(self.override_rank)}
 
         if self.tensor.storage_type() == ttnn.StorageType.HOST:
-            for host_idx, buffer_coord in enumerate(self.mesh_coords):
-                for axis in range(self.mesh_rank):
-                    part_index = int(buffer_coord[axis])
+            # For host tensors, mesh_coords are PHYSICAL coordinates, convert to logical
+            for host_idx, physical_coord_obj in enumerate(self.mesh_coords):
+                physical_tuple = tuple(int(physical_coord_obj[i]) for i in range(physical_coord_obj.dims()))
+                logical_tuple = self._physical_to_logical_coord(physical_tuple)
+
+                # Use logical coordinates for axis representatives
+                for axis in range(min(self.override_rank, len(logical_tuple))):
+                    part_index = int(logical_tuple[axis])
                     if part_index not in mapping[axis]:
                         mapping[axis][part_index] = host_idx
         else:
             mesh_device = self.tensor.device()
-            coord_range = ttnn.MeshCoordinateRange(mesh_device.shape)
-            for coord in coord_range:
-                device_id = mesh_device.get_device_id(coord)
-                for axis in range(self.mesh_rank):
-                    part_index = int(coord[axis])
-                    if part_index not in mapping[axis]:
-                        mapping[axis][part_index] = device_id
+            # Create reverse mapping from physical coordinates to logical coordinates
+            logical_to_physical = {}
+
+            # Generate all logical override coordinates and map to physical
+            if self.override_rank == 1:
+                for logical_i in range(self.override_shape[0]):
+                    physical_coord = self.coord_mapper(logical_i)
+                    logical_to_physical[logical_i] = physical_coord
+            elif self.override_rank == 2:
+                for logical_r in range(self.override_shape[0]):
+                    for logical_c in range(self.override_shape[1]):
+                        physical_coord = self.coord_mapper((logical_r, logical_c))
+                        logical_to_physical[(logical_r, logical_c)] = physical_coord
+
+            # Map each logical coordinate to device ID
+            for logical_coord, physical_coord in logical_to_physical.items():
+                try:
+                    if isinstance(physical_coord, tuple) and len(physical_coord) >= 2:
+                        mesh_coord = ttnn.MeshCoordinate(physical_coord[0], physical_coord[1])
+                    elif isinstance(physical_coord, tuple) and len(physical_coord) == 1:
+                        mesh_coord = ttnn.MeshCoordinate(physical_coord[0], 0)
+                    else:
+                        continue
+
+                    device_id = mesh_device.get_device_id(mesh_coord)
+
+                    # Record representative for each logical axis
+                    if self.override_rank == 1:
+                        mapping[0][logical_coord] = device_id
+                    elif self.override_rank == 2:
+                        mapping[0][logical_coord[0]] = device_id
+                        mapping[1][logical_coord[1]] = device_id
+                except:
+                    continue
+
         return mapping
 
     def _compute_device_to_shard_mapping(self):
@@ -92,34 +226,44 @@ class TensorShardingInfo:
         mapping = {}
         try:
             mesh_device = self.tensor.device()
-            coord_range = ttnn.MeshCoordinateRange(mesh_device.shape)
-            for coord in coord_range:
-                dev_id = mesh_device.get_device_id(coord)
-                for i, mc in enumerate(self.mesh_coords):
-                    if int(mc[0]) == int(coord[0]) and int(mc[1]) == int(coord[1]):
-                        mapping[dev_id] = i
-                        break
-        except Exception:
+
+            # mesh_coords are already in PHYSICAL coordinate space, not logical!
+            # They represent the actual physical coordinates where shards are placed
+            for i, physical_coord_obj in enumerate(self.mesh_coords):
+                physical_tuple = tuple(int(physical_coord_obj[j]) for j in range(physical_coord_obj.dims()))
+
+                # Get device ID directly from physical coordinate (no conversion needed)
+                if len(physical_tuple) >= 2:
+                    mesh_coord = ttnn.MeshCoordinate(physical_tuple[0], physical_tuple[1])
+                elif len(physical_tuple) == 1:
+                    mesh_coord = ttnn.MeshCoordinate(physical_tuple[0], 0)
+                else:
+                    continue
+
+                dev_id = mesh_device.get_device_id(mesh_coord)
+                mapping[dev_id] = i
+
+        except Exception as e:
             logger.warning(
-                "Fallback in TensorShardingInfo._compute_device_to_shard_mapping: assuming device ID equals shard index. "
-                "This may not be valid in complex distributed scenarios. Please verify your device/shard mapping."
+                f"Fallback in TensorShardingInfo._compute_device_to_shard_mapping: {e}. "
+                "Assuming device ID equals shard index. This may not be valid in complex distributed scenarios."
             )
             mapping = {i: i for i in range(len(self.shards))}
 
         return mapping
 
     def _compute_axis_offsets_and_sizes(self):
-        """Compute offset and size information for each axis."""
+        """Compute offset and size information for each axis using override_shape."""
         axis_offsets = {}
         axis_sizes = {}
 
-        max_axis = min(len(self.mesh_shape), len(self.placements))
+        max_axis = min(len(self.override_shape), len(self.placements))
 
         for axis in range(max_axis):
             placement = self.placements[axis]
             if isinstance(placement, ttnn.PlacementShard):
                 tensor_dim = placement.dim
-                parts = int(self.mesh_shape[axis])
+                parts = int(self.override_shape[axis])
                 sizes = []
 
                 for p in range(parts):
@@ -199,11 +343,20 @@ def _compute_global_slice_ranges(device_coord, sharding_info):
     tensor_shape = list(sharding_info.tensor.shape)
     slice_ranges = []
 
+    # Convert physical device coordinate to logical override coordinate
+    if hasattr(device_coord, "dims"):  # MeshCoordinate object
+        device_tuple = tuple(int(device_coord[i]) for i in range(device_coord.dims()))
+    else:  # Regular tuple
+        device_tuple = device_coord
+
+    logical_coord = sharding_info._physical_to_logical_coord(device_tuple)
+
     for tensor_dim, dim_size in enumerate(tensor_shape):
         if tensor_dim in sharding_info.dim_to_axis:
             axis = sharding_info.dim_to_axis[tensor_dim]
             try:
-                part_index = int(device_coord[axis])
+                # Use logical coordinate to get the part index
+                part_index = int(logical_coord[axis]) if axis < len(logical_coord) else 0
                 if (
                     axis in sharding_info.axis_offsets
                     and axis in sharding_info.axis_sizes
@@ -276,7 +429,8 @@ def _create_replication_color_mapping(sharding_info):
             for c in range(cols):
                 coord = ttnn.MeshCoordinate(r, c)
                 device_id = mesh_device.get_device_id(coord)
-                slice_ranges = _compute_global_slice_ranges(coord, sharding_info)
+                # Use physical coordinate for slice range computation
+                slice_ranges = _compute_global_slice_ranges(ttnn.MeshCoordinate(r, c), sharding_info)
                 slice_key = tuple(slice_ranges)
 
                 if slice_key not in slice_key_to_group:

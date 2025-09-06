@@ -533,6 +533,13 @@ std::unique_ptr<TensorToMesh> create_mesh_mapper(MeshDevice& mesh_device, const 
     return std::make_unique<TensorToMesh>(TensorToMesh::create(mesh_device, config));
 }
 
+std::string compute_distribution_mode_string(
+    const std::optional<tt::tt_metal::distributed::MeshShape>& mesh_shape_override,
+    const tt::tt_metal::distributed::MeshShape& device_shape) {
+    DistributionMode mode = compute_distribution_mode(mesh_shape_override, device_shape);
+    return mode == DistributionMode::ROW_MAJOR ? "ROW_MAJOR" : "SUBMESH";
+}
+
 std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(MeshDevice& mesh_device, int dim) {
     return std::make_unique<MeshToTensor>(MeshToTensor::create(
         mesh_device, MeshComposerConfig{.dims = {dim}, .mesh_shape_override = MeshShape(mesh_device.num_devices())}));

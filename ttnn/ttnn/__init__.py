@@ -109,6 +109,7 @@ from ttnn._ttnn.multi_device import (
     create_mesh_mapper,
     concat_mesh_to_tensor_composer,
     create_mesh_composer,
+    compute_distribution_mode_string,
     aggregate_tensor,
     distribute_tensor,
     using_distributed_env,

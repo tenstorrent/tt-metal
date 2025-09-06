@@ -569,7 +569,8 @@ void py_module(py::module& module) {
     auto py_tensor_topology = static_cast<py::class_<TensorTopology>>(module.attr("TensorTopology"));
     py_tensor_topology.def("mesh_shape", &TensorTopology::mesh_shape, py::return_value_policy::reference_internal)
         .def("placements", &TensorTopology::placements, py::return_value_policy::reference_internal)
-        .def("mesh_coords", &TensorTopology::mesh_coords, py::return_value_policy::reference_internal);
+        .def("mesh_coords", &TensorTopology::mesh_coords, py::return_value_policy::reference_internal)
+        .def("mesh_shape", &TensorTopology::mesh_shape, py::return_value_policy::reference_internal);
 
     module.def(
         "get_device_tensors",
@@ -634,6 +635,23 @@ void py_module(py::module& module) {
 
        Returns:
            TensorToMesh: A mapper providing the desired sharding.
+   )doc");
+    module.def(
+        "compute_distribution_mode_string",
+        [](const std::optional<MeshShape>& mesh_shape_override, const MeshShape& device_shape) -> std::string {
+            return compute_distribution_mode_string(mesh_shape_override, device_shape);
+        },
+        py::arg("mesh_shape_override"),
+        py::arg("device_shape"),
+        R"doc(
+       Determines the distribution mode that would be used for given mesh shapes.
+
+       Args:
+           mesh_shape_override (Optional[MeshShape]): The override mesh shape, or None.
+           device_shape (MeshShape): The physical device mesh shape.
+
+       Returns:
+           str: "ROW_MAJOR" or "SUBMESH" depending on the distribution mode.
    )doc");
     module.def(
         "concat_mesh_to_tensor_composer",

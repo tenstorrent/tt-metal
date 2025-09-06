@@ -55,6 +55,12 @@ private:
 // Creates an ND mesh mapper that distributes a tensor according to the `config`.
 std::unique_ptr<TensorToMesh> create_mesh_mapper(MeshDevice& mesh_device, const MeshMapperConfig& config);
 
+// Determines the distribution mode that would be used for given mesh shapes.
+// Returns "ROW_MAJOR" or "SUBMESH" as string.
+std::string compute_distribution_mode_string(
+    const std::optional<tt::tt_metal::distributed::MeshShape>& mesh_shape_override,
+    const tt::tt_metal::distributed::MeshShape& device_shape);
+
 // Creates a mapper that replicates a tensor across all devices.
 // Shorthand for specifying a MeshMapperConfig that replicates the tensor over the entire mesh.
 std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_device);
