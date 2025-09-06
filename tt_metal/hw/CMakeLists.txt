@@ -402,10 +402,10 @@ install(
     FILE_SET
     jit_api
         DESTINATION
-            ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/hw # FIXME: fix the include paths for jit_build
+            ${CMAKE_INSTALL_PREFIX}/tt_metal/hw # FIXME: fix the include paths for jit_build
         COMPONENT metalium-runtime
     FILE_SET
     toolchain
-        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium
+        DESTINATION ${CMAKE_INSTALL_PREFIX}
         COMPONENT metalium-runtime
 )

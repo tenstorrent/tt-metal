@@ -220,7 +220,7 @@ if(TT_INSTALL)
         FILE_SET
         jit_api
             DESTINATION
-                ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal # FIXME: fix the include paths for jit_build
+                ${CMAKE_INSTALL_PREFIX}/tt_metal # FIXME: fix the include paths for jit_build
             COMPONENT metalium-runtime
     )
 
@@ -237,6 +237,6 @@ if(TT_INSTALL)
         FILE_SET
         api
             COMPONENT metalium-dev
-            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/metalium-thirdparty
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     )
 endif()

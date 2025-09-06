@@ -411,7 +411,9 @@ set_target_properties(
         EXPORT_NAME
             TTNN
         PREFIX
-            "_"
+            "lib"
+        OUTPUT_NAME
+            "ttnn"
         BUILD_RPATH
             "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
         INSTALL_RPATH
@@ -422,6 +424,10 @@ set_target_properties(
             "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_'${LIBRARY_NAME}'.so;${PROJECT_SOURCE_DIR}/ttnn/'${LIBRARY_NAME}'.egg-info" # FIXME: Confirm this is a relic of the past and can be deleted; No generated files should land in the source tree!
         INTERFACE_HEADER_SETS_TO_VERIFY
             api
+        VERSION
+            ${PROJECT_VERSION}
+        SOVERSION
+            ${PROJECT_VERSION_MAJOR}
 )
 
 file(GLOB_RECURSE ttnn_kernels cpp/ttnn/operations/copy/typecast/device/kernels/*)
@@ -542,7 +548,19 @@ target_link_libraries(
         TTNN::Ops::Normalization
         TTNN::Ops::Rand
 )
+
+add_custom_command(
+    TARGET ttnncpp
+    POST_BUILD
+    COMMAND
+        ${CMAKE_COMMAND} -E create_symlink "$<TARGET_FILE_NAME:ttnncpp>" "_ttnncpp$<TARGET_FILE_SUFFIX:ttnncpp>"
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:ttnncpp>"
+    COMMENT "Creating symlink _ttnncpp.so -> libttnn.so"
+)
+
 if(TT_INSTALL)
+    install(FILES "$<TARGET_FILE_DIR:ttnncpp>/_ttnncpp$<TARGET_FILE_SUFFIX:ttnncpp>" DESTINATION lib)
+
     install(
         TARGETS
             ttnncpp
