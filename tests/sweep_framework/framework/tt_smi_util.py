@@ -10,17 +10,15 @@ from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logge
 
 
 class ResetUtil:
+    SUPPORTED_ARCHS = {"wormhole_b0", "blackhole"}
+
     def __init__(self, arch: str):
+        if arch not in self.SUPPORTED_ARCHS:
+            raise ValueError(f"SWEEPS: Unsupported Architecture for TT-SMI Reset: {arch}")
+
         self.arch = arch
-        self.command = os.getenv("TT_SMI_RESET_COMMAND")
-        self.args = []
-        if arch not in ["wormhole_b0", "blackhole"]:
-            raise Exception(f"SWEEPS: Unsupported Architecture for TT-SMI Reset: {arch}")
-        if self.command is not None:
-            command_parts = self.command.split()
-            self.command = command_parts[0]
-            self.args = command_parts[1:]
-            return
+        self.command, self.args = self._find_command()
+        self.reset()
 
         self.smi_options = ["tt-smi"]
         for smi_option in self.smi_options:
@@ -42,21 +40,32 @@ class ResetUtil:
 
                 self.command = executable
                 self.args = args
+        self.reset()
+        return
+    
+    def _find_command(self):
+        custom_command = os.getenv("TT_SMI_RESET_COMMAND")
+        if custom_command:
+            parts = custom_command.split()
+            command, args = parts[0], parts[1:]
+            if not shutil.which(command):
+                raise FileNotFoundError(f"SWEEPS: Custom command not found: {command}")
+            return command, args
 
-                self.reset()
-                return
+        executable = shutil.which("tt-smi")
+        if not executable:
+            raise FileNotFoundError("SWEEPS: Unable to locate tt-smi executable")
 
         if self.command is None:
             raise Exception(f"SWEEPS: Unable to locate tt-smi executable")
             
-        self.reset()
-        return
         
+        logger.info(f"tt-smi executable: {executable}")
+        return executable, ["-r"]
 
     def reset(self):
-        smi_process = subprocess.run([self.command, *self.args], stdout=subprocess.DEVNULL)
-        if smi_process.returncode == 0:
-            logger.info("TT-SMI Reset Complete Successfully")
-            return
-        else:
-            raise Exception(f"SWEEPS: TT-SMI Reset Failed with Exit Code: {smi_process.returncode}")
+        """Execute the reset command."""
+        result = subprocess.run([self.command, *self.args], stdout=subprocess.DEVNULL)
+        if result.returncode != 0:
+            raise RuntimeError(f"SWEEPS: TT-SMI Reset Failed with Exit Code: {result.returncode}")
+        logger.info("TT-SMI Reset Complete Successfully")
