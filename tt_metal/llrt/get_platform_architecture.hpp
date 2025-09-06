@@ -8,7 +8,7 @@
 
 #include "assert.hpp"
 #include "llrt/rtoptions.hpp"
-#include <umd/device/pci_device.hpp>
+#include <umd/device/pcie/pci_device.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/tt_simulation_device.h>
 
