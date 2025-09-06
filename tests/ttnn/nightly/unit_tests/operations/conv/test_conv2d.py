@@ -4562,13 +4562,13 @@ def test_conv_bs_grid(
 
 
 # fmt: off
-@pytest.mark.parametrize("enable_activation_reuse", [True])
-@pytest.mark.parametrize("enable_split_reader", [True])
+@pytest.mark.parametrize("enable_activation_reuse", [False, True])
+@pytest.mark.parametrize("enable_split_reader", [False, True])
 @pytest.mark.parametrize(
     "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, input_dtype, input_layout, groups, kernel, stride, padding, dilation, auto_shard, act_block_h_override, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc",
     (
         # model kiwi new convs
-        # ( 1,  4,    32, 1024,   128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (5, 5), (1, 1), [2, 2, 2, 2], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
+        ( 1,  4,    32, 1024,   128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (5, 5), (1, 1), [2, 2, 2, 2], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
         ( 1,  32,   32, 512,    40, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (5, 5), (1, 1), [2, 2, 2, 2], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
         ( 1,  3,    45, 512,    60, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (5, 5), (1, 1), [2, 2, 2, 2], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
         ( 1,  7,    32, 1024,   140, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (4, 4), (1, 1), [2, 2, 2, 2], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
