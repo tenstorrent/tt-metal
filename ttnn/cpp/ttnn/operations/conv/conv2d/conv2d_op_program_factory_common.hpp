@@ -104,6 +104,6 @@ bool is_split_reader_viable(
     uint32_t weights_block_ntiles,
     uint32_t weights_tile_size,
     uint32_t dilation_w,
-    uint32_t act_block_h_ntiles_per_core);
+    uint32_t num_blocks_act_h);
 }  // namespace conv2d
 }  // namespace ttnn::operations::conv

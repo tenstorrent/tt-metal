@@ -524,7 +524,7 @@ bool is_split_reader_viable(
     uint32_t weights_block_ntiles,
     uint32_t weights_tile_size,
     uint32_t dilation_w,
-    uint32_t act_block_h_ntiles_per_core) {
+    uint32_t num_blocks_act_h) {
     // Calculate activation transfer cost
     const uint32_t input_bytes_per_element = (input_datatype == DataType::FLOAT32) ? 4 : 2;
     // For dilated convs the kernel_width number of channels isn't sequential in the L1, so we transfer 1 channel at a
@@ -546,7 +546,7 @@ bool is_split_reader_viable(
         static_cast<float>(weights_tile_size * weights_block_ntiles) *
         (1.0f / noc_all_dram_transfer_rate_gbps + 1.0f / noc_mcast_many_l1_linked_transfer_rate_gbps);
 
-    const float comparisson_factor = act_block_h_ntiles_per_core > 1 ? 2.0f : 0.85f;
+    const float comparisson_factor = num_blocks_act_h > 1 ? 2.0f : 1.0f;
 
     // Split reader is viable when activation cost significantly exceeds weight cost
     const bool is_viable = activation_cost > comparisson_factor * weight_cost;
@@ -555,7 +555,7 @@ bool is_split_reader_viable(
         tt::LogOp,
         "Split reader viability: activation_cost={:.3f}, weight_cost={:.3f}, comparisson_factor={}, "
         "weight_tile_size={}, weight_block_ntiles={},local_l1_transfer_unit_bytes={},coallesced_read_channels={}, "
-        "viable={}",
+        "viable={}, num_blocks_act_h={}",
         activation_cost,
         weight_cost,
         comparisson_factor,
@@ -563,7 +563,8 @@ bool is_split_reader_viable(
         weights_block_ntiles,
         noc_local_l1_transfer_unit_bytes,
         coallesced_read_channels,
-        is_viable);
+        is_viable,
+        num_blocks_act_h);
 
     return is_viable;
 }
