@@ -8,6 +8,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/program.hpp>
@@ -17,6 +18,7 @@
 #include <tt-metalium/lightmetal_binary.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/kernel.hpp>
 
 /** @file */
 
