@@ -5,7 +5,7 @@
 #pragma once
 #include <core_coord.hpp>
 #include <stdint.h>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <string>
 
 struct metal_SocDescriptor;

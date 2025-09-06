@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include "device.hpp"
 #include "sub_device_types.hpp"
 

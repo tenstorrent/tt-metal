@@ -10,7 +10,7 @@
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <umd/device/types/arch.hpp>                    // tt::ARCH
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include <cstddef>
 #include <cstdint>
 #include <functional>

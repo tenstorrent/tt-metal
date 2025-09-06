@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include "gtest/gtest.h"
 #include <map>
 #include <tt-metalium/host_api.hpp>
