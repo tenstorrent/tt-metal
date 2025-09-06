@@ -8,9 +8,7 @@
 #include <yaml-cpp/yaml.h>
 #include <string>
 
-#include <umd/device/types/arch.h>
-
-enum BoardType : uint32_t;
+#include <umd/device/types/arch.hpp>
 
 CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const {
     TT_ASSERT(
@@ -206,16 +204,16 @@ void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
 #endif
 }
 
-// UMD initializes and owns tt_SocDescriptor
+// UMD initializes and owns SocDescriptor
 // For architectures with translation tables enabled, UMD will remove the last x rows from the descriptors in
-// tt_SocDescriptor (workers list and worker_log_to_routing_x/y maps) This creates a virtual coordinate system, where
+// SocDescriptor (workers list and worker_log_to_routing_x/y maps) This creates a virtual coordinate system, where
 // translation tables are used to convert virtual core coordinates to the true harvesting state. For architectures
-// without translation tables enabled, UMD updates tt_SocDescriptor to contain the true harvesting state by
+// without translation tables enabled, UMD updates SocDescriptor to contain the true harvesting state by
 // removing the harvested physical coordiniates Metal needs the true harvesting state so we generate physical
 // descriptors from virtual coordinates We also initialize additional lookup tables to translate physical coordinates to
 // virtual coordinates because UMD APIs expect virtual coordinates.
-metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, const BoardType& /*board_type*/) :
-    tt_SocDescriptor(other) {
+metal_SocDescriptor::metal_SocDescriptor(const tt::umd::SocDescriptor& other, const BoardType& /*board_type*/) :
+    tt::umd::SocDescriptor(other) {
     this->load_dram_metadata_from_device_descriptor();
     this->generate_logical_eth_coords_mapping();
     this->generate_physical_routing_to_profiler_flat_id();

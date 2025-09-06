@@ -16,7 +16,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt::tt_metal {
 

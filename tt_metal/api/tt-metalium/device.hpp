@@ -24,6 +24,9 @@
 
 #include <tt_stl/span.hpp>
 
+using tt::umd::chip_id_t;
+using tt::umd::CoreType;
+
 namespace tt {
 
 namespace tt_metal {

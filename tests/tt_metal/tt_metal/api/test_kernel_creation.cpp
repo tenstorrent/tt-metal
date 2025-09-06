@@ -21,7 +21,7 @@
 #include "gtest/gtest.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal {

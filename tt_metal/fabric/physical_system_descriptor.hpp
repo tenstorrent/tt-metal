@@ -10,8 +10,10 @@
 #include <utility>
 #include <vector>
 
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/strong_type.hpp>
+
+using tt::umd::BoardType;
 
 namespace tt::tt_metal {
 

@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <llrt/rtoptions.hpp>
 #include <memory>
 

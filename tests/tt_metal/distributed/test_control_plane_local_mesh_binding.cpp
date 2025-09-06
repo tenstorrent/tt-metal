@@ -15,7 +15,7 @@
 #include "gmock/gmock.h"
 #include <fmt/format.h>
 #include "utils.hpp"
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_fabric {
 namespace {

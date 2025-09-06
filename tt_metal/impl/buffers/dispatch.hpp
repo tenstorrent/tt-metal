@@ -18,7 +18,8 @@
 #include <tt_stl/span.hpp>
 #include "dispatch/system_memory_manager.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
+
 namespace tt {
 namespace tt_metal {
 class IDevice;

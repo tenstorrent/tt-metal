@@ -31,15 +31,13 @@
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/llrt/tlb_config.hpp"
-#include <umd/device/cluster.h>
-#include <umd/device/hugepage.h>
-#include <umd/device/tt_cluster_descriptor.h>
-#include <umd/device/tt_simulation_device.h>
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/arch.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/cluster_types.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/cluster.hpp>
+#include <umd/device/cluster_descriptor.hpp>
+#include <umd/device/simulation/simulation_device.hpp>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/cluster_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <unistd.h>
 
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;
@@ -72,9 +70,9 @@ inline std::string get_soc_description_file(
 namespace tt {
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
-    const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc) {
+    const llrt::RunTimeOptions& rtoptions, const tt::umd::ClusterDescriptor* cluster_desc) {
     if (rtoptions.get_simulator_enabled()) {
-        tt_SimulationDeviceInit init(rtoptions.get_simulator_path());
+        tt::umd::SimulationDeviceInit init(rtoptions.get_simulator_path());
         auto arch = init.get_arch_name();
         if (arch == tt::ARCH::WORMHOLE_B0) {
             return tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0;
@@ -288,7 +286,7 @@ void Cluster::initialize_device_drivers() {
         this->assign_mem_channels_to_devices(mmio_device_id, controlled_devices);
     }
 
-    tt_device_params default_params;
+    tt::umd::device_params default_params;
     this->start_driver(default_params);
     this->generate_virtual_to_umd_coord_mapping();
     this->generate_virtual_to_profiler_flat_id_mapping();
@@ -348,9 +346,9 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     } else if (this->target_type_ == TargetDevice::Mock) {
         // If a cluster descriptor was not provided via constructor, and mock is enabled via rtoptions,
         // load it from the YAML path and pass it into UMD for mock initialization.
-        std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc;
+        std::unique_ptr<tt::umd::ClusterDescriptor> mock_cluster_desc;
         if (rtoptions_.get_mock_enabled()) {
-            mock_cluster_desc = tt::umd::tt_ClusterDescriptor::create_from_yaml(rtoptions_.get_mock_cluster_desc_path());
+            mock_cluster_desc = tt::umd::ClusterDescriptor::create_from_yaml(rtoptions_.get_mock_cluster_desc_path());
             TT_FATAL(mock_cluster_desc != nullptr, "Failed to load mock cluster descriptor from {}", rtoptions_.get_mock_cluster_desc_path());
         }
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
@@ -360,7 +358,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         });
     }
 
-    barrier_address_params barrier_params;
+    tt::umd::barrier_address_params barrier_params;
     barrier_params.tensix_l1_barrier_base =
         hal_.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::BARRIER);
     barrier_params.dram_barrier_base = hal_.get_dev_addr(tt_metal::HalDramMemAddrType::BARRIER);
@@ -372,7 +370,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     this->driver_ = std::move(device_driver);
 }
 
-void Cluster::start_driver(tt_device_params &device_params) const {
+void Cluster::start_driver(tt::umd::device_params& device_params) const {
     device_params.init_device = true;
 
     TT_FATAL(this->sdesc_per_chip_.size(), "Descriptor must be loaded. Try open_driver()");
@@ -816,7 +814,7 @@ void Cluster::read_sysmem(
 
 void Cluster::verify_sw_fw_versions(
     int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const {
-    tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));
+    tt::umd::tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));
     log_info(
         tt::LogDevice,
         "Software version {}, Ethernet FW version {} (Device {})",
@@ -824,7 +822,7 @@ void Cluster::verify_sw_fw_versions(
         fw_first_eth_core.str(),
         device_id);
     for (std::uint32_t &fw_version : fw_versions) {
-        tt_version fw(fw_version);
+        tt::umd::tt_version fw(fw_version);
 
         TT_FATAL(fw == fw_first_eth_core, "FW versions are not the same across different ethernet cores");
         TT_FATAL(sw.major == fw.major, "SW/FW major version number out of sync");

@@ -7,9 +7,10 @@
 #include <cstdint>
 
 #include <tt-metalium/core_coord.hpp>
-#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/soc_descriptor.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
-enum class CoreType;
+using tt::umd::CoreType;
 
 namespace tt {
 

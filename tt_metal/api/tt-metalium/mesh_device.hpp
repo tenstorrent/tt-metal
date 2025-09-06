@@ -32,9 +32,9 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
-enum class CoreType;
 namespace tt {
 namespace tt_metal {
 class Allocator;

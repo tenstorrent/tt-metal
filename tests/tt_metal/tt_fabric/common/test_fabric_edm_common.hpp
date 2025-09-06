@@ -31,8 +31,8 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 
-#include "umd/device/types/arch.h"
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include "gtest/gtest.h"
 
 #include <algorithm>

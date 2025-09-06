@@ -5,10 +5,10 @@
 #include "modules/distributed/linear.hpp"
 
 #include <gtest/gtest.h>
-#include <umd/device/cluster.h>
 
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
+#include <umd/device/cluster.hpp>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -19,7 +19,7 @@
 namespace {
 
 auto check_board_is_n300() {
-    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == BoardType::N300;
+    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::umd::BoardType::N300;
 }
 
 ttml::autograd::TensorPtr get_parameter(auto& parameters, const std::string& name_substring) {

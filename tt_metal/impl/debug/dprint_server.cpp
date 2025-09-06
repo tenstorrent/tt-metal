@@ -37,9 +37,9 @@
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_backend_api_types.hpp"
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_soc_descriptor.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/soc_descriptor.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 using std::cout;
 using std::endl;
@@ -54,6 +54,8 @@ using std::string;
 using std::to_string;
 using std::tuple;
 using std::uint32_t;
+
+using tt::umd::CoreDescriptor;
 
 using namespace tt;
 

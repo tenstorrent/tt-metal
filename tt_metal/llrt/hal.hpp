@@ -27,13 +27,13 @@
 #include "hal/generated/dev_msgs.hpp"
 
 #include <tt_stl/overloaded.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
-enum class CoreType;
+using tt::umd::CoreType;
+
 enum class AddressableCoreType : uint8_t;
 
 namespace tt {
-
-enum class ARCH;
 
 namespace tt_metal {
 

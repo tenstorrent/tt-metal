@@ -12,6 +12,8 @@
 #include "hostdevcommon/dprint_common.h"
 #include "impl/context/metal_context.hpp"
 
+using tt::umd::CoreDescriptor;
+
 namespace tt::tt_metal {
 
 // Helper function for comparing CoreDescriptors for using in sets.

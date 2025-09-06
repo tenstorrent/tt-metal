@@ -25,19 +25,19 @@
 
 #include "assert.hpp"
 #include "core_coord.hpp"
-#include <umd/device/cluster.h>
-#include <umd/device/device_api_metal.h>
-#include <umd/device/tt_cluster_descriptor.h>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/cluster.hpp>
+#include <umd/device/driver_atomics.hpp>
+#include <umd/device/cluster_descriptor.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/tt_io.hpp>
-#include <umd/device/tt_silicon_driver_common.hpp>
-#include <umd/device/tt_soc_descriptor.h>
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/harvesting.h>
+#include <umd/device/types/tensix_soft_reset_options.hpp>
+#include <umd/device/soc_descriptor.hpp>
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/harvesting.hpp>
+#include <umd/device/types/cluster_types.hpp>
 
 namespace tt {
-enum class ARCH;
 namespace llrt {
 class RunTimeOptions;
 }
@@ -49,7 +49,14 @@ namespace tt_metal {
 class Hal;
 }
 }  // namespace tt
-struct tt_device_params;
+
+using tt::umd::BoardType;
+using tt::umd::chip_id_t;
+using tt::umd::CoordSystem;
+using tt::umd::CoreType;
+using tt::umd::eth_coord_t;
+using tt::umd::ethernet_channel_t;
+using tt::umd::TensixSoftResetOptions;
 
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
@@ -66,7 +73,7 @@ class Cluster {
 public:
     // TODO: #21245: Remove these workaround APIs and instead refactor UMD component out of Cluster
     static tt::tt_metal::ClusterType get_cluster_type_from_cluster_desc(
-        const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc = nullptr);
+        const llrt::RunTimeOptions& rtoptions, const tt::umd::ClusterDescriptor* cluster_desc = nullptr);
     static bool is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type);
     Cluster& operator=(const Cluster&) = delete;
     Cluster& operator=(Cluster&& other) noexcept = delete;
@@ -92,7 +99,7 @@ public:
 
     std::set<chip_id_t> all_pci_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
 
-    tt_ClusterDescriptor* get_cluster_desc() const {
+    tt::umd::ClusterDescriptor* get_cluster_desc() const {
         TT_FATAL(this->cluster_desc_ != nullptr, "Cluster descriptor is not initialized.");
         return this->cluster_desc_;
     }
@@ -132,10 +139,10 @@ public:
 
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& physical_chip_coord,
-        const TensixSoftResetOptions& soft_resets = TENSIX_DEASSERT_SOFT_RESET) const;
+        const TensixSoftResetOptions& soft_resets = tt::umd::TENSIX_DEASSERT_SOFT_RESET) const;
     void assert_risc_reset_at_core(
         const tt_cxy_pair& physical_chip_coord,
-        const TensixSoftResetOptions& soft_resets = TENSIX_ASSERT_SOFT_RESET) const;
+        const TensixSoftResetOptions& soft_resets = tt::umd::TENSIX_ASSERT_SOFT_RESET) const;
 
     void write_dram_vec(
         const void* mem_ptr, uint32_t sz_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const;
@@ -200,7 +207,7 @@ public:
     // Returns a writer object which holds a pointer to a static tlb
     // Allows for fast writes when targeting same device core by only doing the lookup once and avoiding repeated stack
     // traversals
-    tt::Writer get_static_tlb_writer(tt_cxy_pair target) const {
+    tt::umd::Writer get_static_tlb_writer(tt_cxy_pair target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
         return driver_->get_static_tlb_writer(target.chip, target_coord);
     }
@@ -363,7 +370,7 @@ private:
     void assign_mem_channels_to_devices(
         chip_id_t mmio_device_id, const std::unordered_set<chip_id_t>& controlled_device_ids);
     void open_driver(const bool& skip_driver_allocs = false);
-    void start_driver(tt_device_params& device_params) const;
+    void start_driver(tt::umd::device_params& device_params) const;
     void validate_harvesting_masks() const;
 
     void get_metal_desc_from_tt_desc();
@@ -393,7 +400,7 @@ private:
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
-    tt_ClusterDescriptor* cluster_desc_ = nullptr;
+    tt::umd::ClusterDescriptor* cluster_desc_ = nullptr;
 
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;

@@ -12,7 +12,7 @@
 #include "llrt_common/mailbox.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include "wormhole/wh_hal.hpp"
 #include "wormhole/wh_hal_eth_asserts.hpp"
 

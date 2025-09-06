@@ -15,7 +15,7 @@
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal::distributed {
 

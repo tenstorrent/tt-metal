@@ -37,7 +37,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 
 using std::vector;
 using namespace tt;

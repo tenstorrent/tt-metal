@@ -8,13 +8,11 @@
 #include <tt_backend_api_types.hpp>
 #include <unordered_map>
 
-#include <umd/device/device_api_metal.h>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/cluster.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
-class tt_device;
-namespace tt {
-enum class ARCH;
-}  // namespace tt
+using tt::umd::chip_id_t;
+
 struct metal_SocDescriptor;
 
 namespace ll_api {

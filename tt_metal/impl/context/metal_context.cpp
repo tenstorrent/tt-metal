@@ -245,13 +245,13 @@ MetalContext& MetalContext::instance() {
 MetalContext::MetalContext() {
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
-    std::unique_ptr<tt_ClusterDescriptor> cluster_desc;
+    std::unique_ptr<tt::umd::ClusterDescriptor> cluster_desc;
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
         custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
     }
 
     if (rtoptions_.get_mock_enabled()) {
-        cluster_desc = tt::umd::tt_ClusterDescriptor::create_from_yaml(rtoptions_.get_mock_cluster_desc_path());
+        cluster_desc = tt::umd::ClusterDescriptor::create_from_yaml(rtoptions_.get_mock_cluster_desc_path());
     }
 
     bool is_base_routing_fw_enabled =
@@ -686,7 +686,7 @@ void MetalContext::assert_cores(chip_id_t device_id) {
             CoreCoord virtual_eth_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
             TensixSoftResetOptions reset_val =
-                TENSIX_ASSERT_SOFT_RESET &
+                tt::umd::TENSIX_ASSERT_SOFT_RESET &
                 static_cast<TensixSoftResetOptions>(
                     ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
             cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_eth_core), reset_val);
@@ -875,7 +875,7 @@ void MetalContext::initialize_firmware(
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: {
             bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
-            TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
+            TensixSoftResetOptions reset_val = tt::umd::TENSIX_ASSERT_SOFT_RESET;
             if (not is_idle_eth) {
                 reset_val =
                     reset_val & static_cast<TensixSoftResetOptions>(
@@ -1052,7 +1052,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     // Determine which noc-coords are harvested
     std::vector<uint32_t> harvested_axis_coord;
     CoreCoord logical_grid_size = cluster_->get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-    uint32_t harvested_noc_coords = CoordinateManager::shuffle_tensix_harvesting_mask_to_noc0_coords(
+    uint32_t harvested_noc_coords = tt::umd::CoordinateManager::shuffle_tensix_harvesting_mask_to_noc0_coords(
         cluster_->get_soc_desc(device_id).arch, cluster_->get_harvesting_mask(device_id));
     uint32_t max_along_axis =
         hal_->get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW ? soc_d.grid_size.y : soc_d.grid_size.x;
@@ -1176,11 +1176,11 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     for (const auto& worker_core : not_done_cores) {
         if (active_eth_cores.find(worker_core) != active_eth_cores.end()) {
             // bit 12 needs to be deasserted to run second erisc on BH
-            reset_val = TENSIX_DEASSERT_SOFT_RESET &
+            reset_val = tt::umd::TENSIX_DEASSERT_SOFT_RESET &
                         static_cast<TensixSoftResetOptions>(
                             ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::TRISC0));
         } else {
-            reset_val = TENSIX_DEASSERT_SOFT_RESET;
+            reset_val = tt::umd::TENSIX_DEASSERT_SOFT_RESET;
         }
         cluster_->deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }

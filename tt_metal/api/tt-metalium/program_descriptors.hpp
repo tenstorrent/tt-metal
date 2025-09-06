@@ -12,7 +12,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/small_vector.hpp>
 
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 #include <optional>
 
@@ -21,6 +21,8 @@
  * Their purpose is to allow users to generate a full program description in a lightweight manner without creating the
  * actual `Program` object.
  */
+
+using tt::umd::CoreType;
 
 namespace tt::tt_metal {
 

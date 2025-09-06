@@ -27,6 +27,8 @@ namespace tt::tt_fabric {
      std::uint32_t asic_id;
  };
 
+ using tt::umd::eth_coord_t;
+
  UbbId get_ubb_id(chip_id_t chip_id);
 
 class FabricContext;

@@ -11,7 +11,7 @@
 #include <queue>
 #include <optional>
 
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>

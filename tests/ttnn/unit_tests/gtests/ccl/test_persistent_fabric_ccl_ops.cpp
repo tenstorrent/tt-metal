@@ -33,7 +33,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 
 TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     const size_t dim = 3;
