@@ -191,7 +191,7 @@ CoreRangeSet::CoreRangeSet(tt::stl::Span<const CoreCoord> core_coords) {
 
 void swap(CoreRangeSet& first, CoreRangeSet& second) { std::swap(first.ranges_, second.ranges_); }
 
-CoreRangeSet::CoreRangeSet(const CoreRangeSet& other) { this->ranges_ = other.ranges_; }
+CoreRangeSet::CoreRangeSet(const CoreRangeSet& other) = default;
 
 CoreRangeSet::CoreRangeSet(CoreRangeSet&& other) noexcept { swap(*this, other); }
 

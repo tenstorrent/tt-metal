@@ -1,2 +1,2 @@
 InheritParentConfig: true
-Checks: -bugprone-reserved-identifier
+Checks: -bugprone-reserved-identifier,-cppcoreguidelines-prefer-member-initializer
