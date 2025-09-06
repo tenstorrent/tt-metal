@@ -30,7 +30,7 @@
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/tt_io.hpp>
-#include <umd/device/tt_silicon_driver_common.hpp>
+#include <umd/device/types/tensix_soft_reset_options.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
