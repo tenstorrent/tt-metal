@@ -20,7 +20,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include "umd/device/types/xy_pair.h"
 
 ////////////////////////////////////////////////////////////////////////////////

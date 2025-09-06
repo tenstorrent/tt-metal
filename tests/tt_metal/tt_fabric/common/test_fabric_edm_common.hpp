@@ -34,7 +34,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "gtest/gtest.h"
 

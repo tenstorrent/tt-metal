@@ -54,7 +54,7 @@
 #include "multi_command_queue_fixture.hpp"
 #include "random_program_fixture.hpp"
 #include <umd/device/types/core_coordinates.hpp>
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 #include "umd/device/types/xy_pair.h"
 
 // Access to internal API: ProgramImpl::get_cb_base_addr, get_kernel
