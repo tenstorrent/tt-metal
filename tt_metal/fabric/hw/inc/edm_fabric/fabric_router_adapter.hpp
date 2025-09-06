@@ -13,6 +13,7 @@
 #include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
+#include "fabric_edm_packet_header_validate.hpp"
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "debug/assert.h"
 
@@ -284,6 +285,9 @@ public:
         close_start();
         close_finish();
     }
+
+    // Only for debug/watcher asserts
+    FORCE_INLINE uint32_t get_worker_credits_stream_id() const { return this->worker_credits_stream_id; }
 
 private:
     mutable uint64_t noc_sem_addr_;
