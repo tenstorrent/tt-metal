@@ -397,10 +397,8 @@ def test_ttnn_whisper(tmp_path, device, ttnn_model, model_name, decoder_sequence
     inputs = feature_extractor(ds[0]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
     input_features = inputs.input_features
     decoder_input_ids = torch.ones(1, decoder_sequence_size).type(torch.int32) * config.decoder_start_token_id
-
     batch_size = 1
     attention_mask = None
-
     model = WhisperModel.from_pretrained(model_name).eval()
 
     expected_last_hidden_state = model(
