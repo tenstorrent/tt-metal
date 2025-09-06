@@ -39,7 +39,7 @@ inline std::string get_env_arch_name() {
 inline std::string get_umd_arch_name() {
 
     if(tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        tt_SimulationDeviceInit init(tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
+        tt::umd::SimulationDeviceInit init(tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
         return tt::arch_to_str(init.get_arch_name());
     }
 

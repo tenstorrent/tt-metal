@@ -78,7 +78,7 @@ inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtopti
         }
         return arch;
     } else if (rtoptions.get_target_device() == tt::TargetDevice::Simulator) {
-        tt_SimulationDeviceInit init(rtoptions.get_simulator_path());
+        tt::umd::SimulationDeviceInit init(rtoptions.get_simulator_path());
         arch = init.get_arch_name();
     } else {
         arch = get_physical_architecture();

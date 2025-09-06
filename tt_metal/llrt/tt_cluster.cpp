@@ -73,7 +73,7 @@ namespace tt {
 tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const tt::umd::ClusterDescriptor* cluster_desc) {
     if (rtoptions.get_simulator_enabled()) {
-        tt_SimulationDeviceInit init(rtoptions.get_simulator_path());
+        tt::umd::SimulationDeviceInit init(rtoptions.get_simulator_path());
         auto arch = init.get_arch_name();
         if (arch == tt::ARCH::WORMHOLE_B0) {
             return tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0;
