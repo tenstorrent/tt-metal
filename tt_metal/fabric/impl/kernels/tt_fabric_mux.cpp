@@ -190,7 +190,7 @@ void kernel_main() {
             connection_handshake_address,
             sender_flow_control_address,
             StreamId{channel_stream_ids[i]},
-            is_persistent_channels[i + NUM_FULL_SIZE_CHANNELS]);
+            is_persistent_channels[i]);
     }
 
     for (uint8_t i = 0; i < NUM_HEADER_ONLY_CHANNELS; i++) {
