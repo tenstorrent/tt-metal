@@ -21,7 +21,7 @@
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/arch.hpp>
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////

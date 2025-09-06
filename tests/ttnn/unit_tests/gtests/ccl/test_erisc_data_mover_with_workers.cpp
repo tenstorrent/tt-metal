@@ -49,7 +49,7 @@
 #include "ttnn/types.hpp"
 #include "umd/device/tt_xy_pair.h"
 #include <umd/device/types/arch.hpp>
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 
 // #include <tt-metalium/kernel_types.hpp>
 

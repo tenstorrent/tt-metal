@@ -21,7 +21,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/arch.hpp>
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for printing from ethernet cores.
