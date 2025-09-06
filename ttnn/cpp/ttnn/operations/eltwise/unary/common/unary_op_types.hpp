@@ -100,6 +100,7 @@ enum class UnaryOpType {
     ZERO_POINT,
     ALT_COMPLEX_ROTATE90,
     MISH,
+    HARDMISH,
     MAXIMUM,
     MINIMUM,
     TANHSHRINK,
