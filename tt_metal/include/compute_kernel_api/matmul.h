@@ -11,6 +11,9 @@
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_matmul_api.h"
 #endif
+#ifdef TRISC_PACK
+#include "llk_pack_sfpu_exp_api.h"
+#endif
 #ifndef MM_THROTTLE
 #define MM_THROTTLE 0
 #endif
@@ -45,7 +48,7 @@ ALWI void mm_init(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, co
 
 // clang-format off
 /**
- * Performs tile-sized matrix multiplication *C=A\*B* between the tiles in two
+ * Performs tile-sized matrix multiplication *C=A*B* between the tiles in two
  * specified input CBs and writes the result to DST. The DST register buffer
  * must be in acquired state via *acquire_dst* call. This call is blocking and
  * is only available on the compute engine.
@@ -74,7 +77,7 @@ ALWI void matmul_tiles(
 
 // clang-format off
 /**
- * Performs tile-sized matrix multiplication *C=A\*B* between the tiles
+ * Performs tile-sized matrix multiplication *C=A*B* between the tiles
  * located in SRCA and SRCB and writes the result to DST. The DST register buffer
  * must be in acquired state via *acquire_dst* call. This call is blocking and
  * is only available on the compute engine.
@@ -85,7 +88,7 @@ ALWI void matmul_tiles(
  * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
  * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
- // clang-format on
+// clang-format on
 template <uint32_t num_faces = 4>
 ALWI void matmul_tiles_math(uint32_t idst) {
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, num_faces>(idst)));
@@ -170,7 +173,7 @@ ALWI void mm_block_init(
 
 // clang-format off
 /**
- * Performs block-sized matrix multiplication *C=A\*B* between the blocks in two
+ * Performs block-sized matrix multiplication *C=A*B* between the blocks in two
  * different input CBs and writes the result to DST. The DST register buffer
  * must be in acquired state via *acquire_dst* call. This call is blocking and
  * is only available on the compute engine.
@@ -292,6 +295,77 @@ ALWI void mm_block_init_short_with_both_dt(
     UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));
     MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));
     mm_block_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+}
+
+// ================== Fused MATMUL + EXP (PACK drives SFPU, MATH drives FPU) ==================
+
+// clang-format off
+/**
+ * Fused initialization for matmul+exp block operation. Configures:
+ *  - UNPACK: AB matmul unpacking
+ *  - MATH:   MATMUL compute
+ *  - PACK:   SFPU EXP configured
+ */
+// clang-format on
+ALWI void mm_exp_block_init_short(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    const uint32_t transpose = 0,
+    uint32_t ct_dim = 1,
+    uint32_t rt_dim = 1,
+    uint32_t kt_dim = 1) {
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+#ifdef TRISC_PACK
+    llk_pack_sfpu_exponential_init<>();
+#endif
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+}
+
+// clang-format off
+/**
+ * Fused matmul+exp on a block tile (basic variant):
+ *  - UNPACK issues AB unpack
+ *  - MATH issues matmul on current DST
+ *  - PACK applies EXP on the same DST (no overlap)
+ */
+// clang-format on
+ALWI void matmul_block_with_pack_exp(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t in0_tile_index,
+    uint32_t in1_tile_index,
+    uint32_t idst,
+    const uint32_t transpose,
+    uint32_t ct_dim,
+    uint32_t rt_dim,
+    uint32_t kt_dim) {
+    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, transpose, ct_dim, rt_dim, kt_dim)));
+#ifdef TRISC_PACK
+    llk_pack_sfpu_exponential<>(idst, (int)VectorMode::C, p_sfpu::kCONST_1_FP16B);
+#endif
+}
+
+// Overload with explicit previous DST tile for pipelined EXP (double buffering)
+ALWI void matmul_block_with_pack_exp(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t in0_tile_index,
+    uint32_t in1_tile_index,
+    uint32_t idst_curr,
+    uint32_t idst_prev_for_exp,
+    const uint32_t transpose,
+    uint32_t ct_dim,
+    uint32_t rt_dim,
+    uint32_t kt_dim) {
+    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
+
+#ifdef TRISC_PACK
+    // PACK drives SFPU on previous dst while MATH computes current dst.
+    llk_pack_sfpu_exponential<>(idst_prev_for_exp, (int)VectorMode::C, p_sfpu::kCONST_1_FP16B);
+#endif
+
+    MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst_curr, transpose, ct_dim, rt_dim, kt_dim)));
 }
 
 }  // namespace ckernel
