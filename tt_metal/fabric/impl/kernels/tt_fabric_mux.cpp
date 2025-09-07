@@ -110,21 +110,23 @@ void forward_data(
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
         fabric_connection.wait_for_empty_write_slot();
-        fabric_connection.send_payload_flush_blocking_from_address(
+
+        fabric_connection.send_payload_flush_non_blocking_from_address(
             (uint32_t)packet_header, packet_header->get_payload_size_including_header());
 
         worker_interface.local_write_counter.increment();
         worker_interface.local_read_counter.increment();
 
+        // not handling/processing acks for now, re-evaluate if needed
+        increment_local_update_ptr_val(my_channel_free_slots_stream_id.get(), 1);
+
+        noc_async_writes_flushed();
         if (is_persistent_channel) {
             constexpr bool enable_deadlock_avoidance = true;  // not used
             worker_interface.template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>(1);
         } else if (channel_connection_established) {
             worker_interface.notify_worker_of_read_counter_update();
         }
-
-        // not handling/processing acks for now, re-evaluate if needed
-        increment_local_update_ptr_val(my_channel_free_slots_stream_id.get(), 1);
     }
 
     if (!is_persistent_channel) {
@@ -190,7 +192,7 @@ void kernel_main() {
             connection_handshake_address,
             sender_flow_control_address,
             StreamId{channel_stream_ids[i]},
-            is_persistent_channels[i + NUM_FULL_SIZE_CHANNELS]);
+            is_persistent_channels[i]);
     }
 
     for (uint8_t i = 0; i < NUM_HEADER_ONLY_CHANNELS; i++) {
