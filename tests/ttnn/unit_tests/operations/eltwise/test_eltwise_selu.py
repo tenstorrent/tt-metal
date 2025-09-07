@@ -93,8 +93,7 @@ def test_selu_arange(device):
     input_tensor = all_bitpatterns.view(torch.bfloat16)
     input_tensor = input_tensor.to(torch.float32)
 
-    # Mask for NaN
-    # Mask for Input: 3.2300240297573456e+38, Calculated: 3.3895313892515355e+38, Golden: 3.393789478323726e+38, ULP: inf
+    # Mask NaN, special values where selu has ULP>1 (Covered in atol test below).
     mask = (
         torch.isnan(input_tensor)
         | ((input_tensor >= -0.30859375) & (input_tensor <= 1.1663108012064884e-38))
