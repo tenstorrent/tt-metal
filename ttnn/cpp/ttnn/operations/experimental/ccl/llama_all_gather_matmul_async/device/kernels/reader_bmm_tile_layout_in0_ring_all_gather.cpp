@@ -7,6 +7,7 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "debug/dprint.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 void kernel_main() {
@@ -55,6 +56,14 @@ void kernel_main() {
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
     constexpr uint32_t multicast_chunk_size_in_tiles = multicast_chunk_width_in_tiles * shard_height_in_tiles;
     constexpr uint32_t multicast_chunk_size_bytes = multicast_chunk_size_in_tiles * in0_single_tile_size_bytes;
+
+    DPRINT << "multicast_chunk_size_in_tiles: " << multicast_chunk_size_in_tiles << ENDL();
+    DPRINT << "multicast_chunk_width_in_tiles: " << multicast_chunk_width_in_tiles << ENDL();
+    DPRINT << "shard_height_in_tiles: " << shard_height_in_tiles << ENDL();
+    DPRINT << "chunk_indices[0]: " << chunk_indices[0] << ENDL();
+    DPRINT << "chunk_indices[1]: " << chunk_indices[1] << ENDL();
+    DPRINT << "chunk_indices[2]: " << chunk_indices[2] << ENDL();
+    DPRINT << "chunk_indices[3]: " << chunk_indices[3] << ENDL();
 
     cb_reserve_back(cb_id_in0, multicast_chunk_size_in_tiles * num_multicast_steps);
     for (uint32_t istep = 0; istep < num_multicast_steps; istep++) {

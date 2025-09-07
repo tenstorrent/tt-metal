@@ -37,6 +37,15 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* tensor_addrs_l1 =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(addrs_cb_id));
 
+    DPRINT << "PF bank id: " << bank_id << ENDL();
+    DPRINT << "PF vc: " << vc << ENDL();
+    DPRINT << "PF total_num_blocks_in_buffer: " << total_num_blocks_in_buffer << ENDL();
+    DPRINT << "PF num_blocks: " << num_blocks[2] << ENDL();
+    DPRINT << "PF max_block_num_tiles: " << max_block_num_tiles << ENDL();
+    DPRINT << "PF max_block_size: " << max_block_size << ENDL();
+    DPRINT << "PF num_layers: " << num_layers << ENDL();
+    DPRINT << "PF num_tensors: " << num_tensors << ENDL();
+
     for (uint32_t layer = 0; layer < num_layers; layer++) {
         for (uint32_t t = 0; t < num_tensors; t++) {
             uint32_t curr_page_size = page_sizes[t];
@@ -69,16 +78,21 @@ void kernel_main() {
 
                 // Issue noc async read commands for current block
                 uint32_t temp_l1_write_addr = l1_write_addr;
-                for (uint32_t h = 0; h < curr_block_num_pages; ++h) {
-                    noc_async_read_tile_dram_sharded_with_state_with_trid<skip_ptr_update>(
-                        src_base_addr, src_read_addr, temp_l1_write_addr, curr_block_trid);
-                    src_read_addr += curr_page_size;
-                    temp_l1_write_addr += curr_page_size;
+
+                {
+                    DeviceZoneScopedN("PF reading curr block");
+                    for (uint32_t h = 0; h < curr_block_num_pages; ++h) {
+                        noc_async_read_tile_dram_sharded_with_state_with_trid<skip_ptr_update>(
+                            src_base_addr, src_read_addr, temp_l1_write_addr, curr_block_trid);
+                        src_read_addr += curr_page_size;
+                        temp_l1_write_addr += curr_page_size;
+                    }
                 }
 
                 if (num_free_blocks_in_buffer == 3) {  // After first block we don't block but continue issuing reads
                     num_free_blocks_in_buffer -= 1;
                 } else {
+                    DeviceZoneScopedN("PF read barr");
                     noc_async_read_barrier_with_trid(block_trid_to_wait);
                     cb_push_back(cb_id, max_block_num_tiles);
                     block_trid_to_wait =

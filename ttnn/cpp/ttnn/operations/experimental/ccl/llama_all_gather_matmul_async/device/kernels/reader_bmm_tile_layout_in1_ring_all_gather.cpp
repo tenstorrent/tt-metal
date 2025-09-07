@@ -9,6 +9,7 @@
 #include "remote_circular_buffer_api.h"
 #include "debug/dprint.h"
 #include "debug/dprint_tile.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
@@ -50,6 +51,14 @@ void do_signaling(uint32_t& rt_args_idx) {
         const uint32_t multicast_end_y = get_arg_val<uint32_t>(rt_args_idx++);
         const uint32_t num_signalling_semaphores = get_arg_val<uint32_t>(rt_args_idx++);
         const uint32_t signalling_semaphore = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
+
+        DPRINT << "reader in1 target_sem_value: " << target_sem_value << ENDL();
+        DPRINT << "reader in1 multicast_start_x: " << multicast_start_x << ENDL();
+        DPRINT << "reader in1 multicast_start_y: " << multicast_start_y << ENDL();
+        DPRINT << "reader in1 multicast_end_x: " << multicast_end_x << ENDL();
+        DPRINT << "reader in1 multicast_end_y: " << multicast_end_y << ENDL();
+        DPRINT << "reader in1 num_signalling_semaphores: " << num_signalling_semaphores << ENDL();
+
         const uint64_t signalling_semaphore_address =
             get_noc_multicast_addr(multicast_start_x, multicast_start_y, multicast_end_x, multicast_end_y, 0) |
             signalling_semaphore;
@@ -97,6 +106,10 @@ void kernel_main() {
         dram_read_offset = get_arg_val<uint32_t>(rt_args_idx++);
     }
 
+    DPRINT << "dram_bank_id: " << dram_bank_id << ENDL();
+    DPRINT << "vc: " << vc << ENDL();
+    DPRINT << "dram_read_offset: " << dram_read_offset << ENDL();
+
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(11);
     constexpr uint32_t sync_cb = get_compile_time_arg_val(12);
     constexpr uint32_t sync_cb2 = get_compile_time_arg_val(13);
@@ -118,6 +131,14 @@ void kernel_main() {
     uint32_t l1_read_addr_in1 = 0;
     uint32_t in1_base_addr = 0;
 
+    DPRINT << "in1_block_height_in_tiles: " << in1_block_height_in_tiles << ENDL();
+    DPRINT << "in1_block_width_in_tiles: " << in1_block_width_in_tiles << ENDL();
+    DPRINT << "in1_block_num_tiles: " << in1_block_num_tiles << ENDL();
+    DPRINT << "in1_tile_hw: " << in1_tile_hw << ENDL();
+    DPRINT << "in1_single_tile_size_bytes: " << in1_single_tile_size_bytes << ENDL();
+    DPRINT << "ring_idx: " << ring_idx << ENDL();
+    DPRINT << "num_blocks: " << num_blocks << ENDL();
+
     if constexpr (in1_is_dram_sharded) {
         in1_shard_width_offset_bytes = in1_shard_width_in_dram * in1_single_tile_size_bytes;
         in1_dram_shard_block_size_bytes = in1_shard_width_offset_bytes * in1_block_height_in_tiles;
@@ -137,25 +158,31 @@ void kernel_main() {
             // DeviceZoneScopedN("data pushing in1");
             cb_push_back(sync_cb2, 1);  // zonescope here
         }
-
+        DPRINT << "we just waited in1 in MM reader..." << ENDL();
         if constexpr (in1_is_dram_interleaved) {
+            DPRINT << "we are dram interleaving..." << ENDL();
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 uint32_t block_idx = (ring_idx + block) % num_blocks;
 
                 cb_reserve_back(cb_id_in1, in1_block_num_tiles);
-                read_block_from_dram(
-                    cb_id_in1,
-                    s1,
-                    in1_tensor_width_in_tiles,
-                    ring_idx,
-                    block_idx,
-                    in1_block_width_in_tiles,
-                    in1_block_height_in_tiles,
-                    in1_single_tile_size_bytes);
-                cb_push_back(cb_id_in1, in1_block_num_tiles);
+                {
+                    DeviceZoneScopedN("in1 data read dram");
+                    read_block_from_dram(
+                        cb_id_in1,
+                        s1,
+                        in1_tensor_width_in_tiles,
+                        ring_idx,
+                        block_idx,
+                        in1_block_width_in_tiles,
+                        in1_block_height_in_tiles,
+                        in1_single_tile_size_bytes);
+                    cb_push_back(cb_id_in1, in1_block_num_tiles);
+                }
             }
         } else if constexpr (in1_is_dram_sharded) {  // when in1 is sharded in DRAM, each core reads from its own bank,
                                                      // two cores on the same row share one bank.
+            DPRINT << "we are dram sharding..." << ENDL();
+
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 uint32_t block_idx = (ring_idx + block) % num_blocks;
                 l1_read_addr_in1 = block_idx * in1_dram_shard_block_size_bytes + dram_read_offset_bytes;
@@ -188,6 +215,7 @@ void kernel_main() {
 
 #ifdef ENABLE_GLOBAL_CB
         cb_wait_front(sync_cb, 1);
+        DPRINT << "we are popping remote cb..." << ENDL();
         experimental::remote_cb_pop_front(remote_cb_id, num_blocks);
         cb_pop_front(sync_cb, 1);
 #endif

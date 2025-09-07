@@ -1113,7 +1113,7 @@ class TT_CCL:
             dim,
             cluster_axis,
             self.mesh_device,
-            self.model_config["CCL_TOPOLOGY"],
+            ttnn.Topology.Linear,
             self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],  # TODO: Fix this
             num_links=num_links,
             ag_memory_config=ag_memory_config,

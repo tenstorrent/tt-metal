@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "dataflow_api.h"
+// #include "dataflow_api.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
@@ -11,6 +11,8 @@
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 
@@ -171,6 +173,18 @@ void MAIN {
     constexpr uint32_t ring_size = num_blocks;
     constexpr bool in1_is_dram = in1_is_dram_interleaved || in1_is_dram_sharded;
 
+    DPRINT << "in0_block_w: " << in0_block_w << ENDL();
+    DPRINT << "in0_num_subblocks: " << in0_num_subblocks << ENDL();
+    DPRINT << "in0_block_num_tiles: " << in0_block_num_tiles << ENDL();
+    DPRINT << "in0_subblock_num_tiles: " << in0_subblock_num_tiles << ENDL();
+    DPRINT << "in1_num_subblocks: " << in1_num_subblocks << ENDL();
+    DPRINT << "in1_block_num_tiles: " << in1_block_num_tiles << ENDL();
+    DPRINT << "num_blocks_per_mcast_step: " << num_blocks_per_mcast_step << ENDL();
+    DPRINT << "out_subblock_h: " << out_subblock_h << ENDL();
+    DPRINT << "out_subblock_w: " << out_subblock_w << ENDL();
+    DPRINT << "out_subblock_num_tiles: " << out_subblock_num_tiles << ENDL();
+    DPRINT << "out_block_num_tiles: " << out_block_num_tiles << ENDL();
+
     // Runtime args
     uint32_t rt_args_idx = 0;
     uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
@@ -197,6 +211,7 @@ void MAIN {
 
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_ids[0], in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+
     for (uint32_t b = 0; b < batch; b++) {
 #ifdef ENABLE_GLOBAL_CB
         uint32_t in1_cb_start_addr = 0;

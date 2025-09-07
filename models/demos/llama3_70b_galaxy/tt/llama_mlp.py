@@ -197,9 +197,11 @@ class TtLlamaMLP(LightweightModule):
         # if self.iter in {0, 9, 10}:
         #     ttnn.device.dump_device_memory_state(self.mesh_device, prefix=f"iter_{self.iter}_before_all_gather_matmul")
         # print input memory config
-        # print(f'w2 memory config: {self.w2.memory_config()}\n\n\n')
-        # print(f'ag memory config: {self.model_config["AG_MM_RECV_MEMCFG"]}\n\n\n')
-        # print(f'mm memory config: {self.model_config["FF2_OUT_RING_MEMCFG"]}\n\n\n')
+        print(f"ff1ff3: {ff1ff3.shape}")
+        print(f"ff1ff3 memory config:{ff1ff3.memory_config()}\n\n\n")
+        print(f"w2 memory config: {self.w2.memory_config()}\n\n\n")
+        print(f'ag memory config: {self.model_config["AG_MM_RECV_MEMCFG"]}\n\n\n')
+        print(f'mm memory config: {self.model_config["FF2_OUT_RING_MEMCFG"]}\n\n\n')
         # print(f'compute_kernel_config: {self.args.compute_kernel_config_hifi2}\n\n\n')
         # print(f'dtype: {ttnn.bfloat8_b}\n\n\n')
         # print(f'global_cb: {self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None}\n\n\n')
