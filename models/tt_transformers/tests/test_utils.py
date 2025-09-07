@@ -53,5 +53,7 @@ def get_ref_model_dype(ref_model, model_name):
             return torch.bfloat16
         if "phi-3-mini" in model_name_lower:
             return torch.bfloat16
+        if "gemma-3" in model_name_lower:
+            return torch.bfloat16
 
     return default_dype
