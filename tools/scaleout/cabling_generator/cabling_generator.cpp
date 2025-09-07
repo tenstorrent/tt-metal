@@ -15,10 +15,10 @@
 #include <tt_stl/span.hpp>
 
 // Add protobuf includes
-#include "protobuf/cluster_config.pb.h"
-#include "protobuf/deployment.pb.h"
-#include "protobuf/factory_system_descriptor.pb.h"
-#include "protobuf/node_config.pb.h"
+#include "cluster_config.pb.h"
+#include "deployment.pb.h"
+#include "factory_system_descriptor.pb.h"
+#include "node_config.pb.h"
 
 namespace tt::scaleout_tools {
 

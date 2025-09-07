@@ -4,7 +4,7 @@
 
 #include "physical_system_descriptor_serialization.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
-#include "protobuf/physical_system_descriptor.pb.h"
+#include "physical_system_descriptor.pb.h"
 
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>

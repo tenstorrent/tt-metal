@@ -20,7 +20,7 @@
 #include <cabling_generator/cabling_generator.hpp>
 
 // Add protobuf includes
-#include "protobuf/factory_system_descriptor.pb.h"
+#include "factory_system_descriptor.pb.h"
 
 namespace tt::scaleout_tools {
 

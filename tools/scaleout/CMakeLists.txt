@@ -37,12 +37,9 @@ target_sources(
         ${GENERATED_PROTO_SRCS}
 )
 
-target_include_directories(
-    scaleout_tools
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_BINARY_DIR} # Protobuf headers
-)
+target_include_directories(scaleout_tools PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_include_directories(scaleout_tools SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/protobuf)
 
 target_link_libraries(
     scaleout_tools
