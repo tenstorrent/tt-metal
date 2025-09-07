@@ -376,7 +376,7 @@ ALWI void cb_matmul_blocks(
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
 
-    mm_block_init_short(
+    mm_exp_block_init_short(
         in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     reconfig_data_format(in1_cb, in0_cb);
@@ -423,103 +423,5 @@ ALWI void cb_matmul_blocks(
         }
         in0_index_offset += subblock_h * in0_block_w;
     }
-    cb_pop_front(in1_cb, K * N);
-}
-
-/**
- * Fused: out_cb = exp(in0_cb @ in1_cb)
- * Uses PACK thread to drive SFPU EXP on previously committed DST while MATH computes the next subblock.
- */
-ALWI void cb_matmul_blocks_with_pack_exp(
-    const uint32_t& in0_cb,
-    const uint32_t& in1_cb,
-    const uint32_t& out_cb,
-    const uint32_t& M,
-    const uint32_t& N,
-    const uint32_t& K,
-    const uint32_t& in0_num_subblocks,
-    const uint32_t& in1_num_subblocks,
-    const uint32_t& in0_block_w,
-    const uint32_t& subblock_h,
-    const uint32_t& subblock_w,
-    const bool& transpose) {
-    // Precondition: in0_cb has M*K produced
-    // Precondition: in1_cb has K*N produced
-    // Postcondition: out_cb has M*N produced where each tile is exp(matmul(...))
-
-    // Configure MATMUL and PACK-side EXP
-    mm_exp_block_init_short(in0_cb, in1_cb, transpose, subblock_w, subblock_h, in0_block_w);
-
-    reconfig_data_format(in1_cb, in0_cb);
-    cb_wait_front(in1_cb, K * N);
-
-    const uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
-    const uint32_t output_num_tiles = M * N;
-
-    uint32_t in0_index_offset = 0;
-    bool prev_pending = false;
-    uint32_t prev_out_row_base = 0;
-    uint32_t prev_out_col_base = 0;
-
-    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        uint32_t in1_index_offset = 0;
-        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
-            // Start computing current subblock into DST (buffer A/B)
-            tile_regs_acquire();
-            uint32_t in0_index = in0_index_offset;
-            uint32_t in1_index = in1_index_offset;
-            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                matmul_block(
-                    in0_cb, in1_cb, in0_index, in1_index, /*idst=*/0, transpose, subblock_w, subblock_h, in0_block_w);
-                in0_index++;
-                in1_index += N;
-            }
-            tile_regs_commit();
-
-            // While current is computing (on other DST buffer), apply EXP + pack on previous committed buffer
-            if (prev_pending) {
-                tile_regs_wait();
-                cb_reserve_back(out_cb, out_subblock_num_tiles);
-                uint32_t dst_idx = 0;
-                for (uint32_t r = 0; r < subblock_h; r++) {
-                    uint32_t out_row_offset = prev_out_row_base + r * N;
-                    for (uint32_t c = 0; c < subblock_w; c++) {
-                        // EXP on PACK for the previous DST tile
-                        llk_pack_sfpu_exponential<>(dst_idx, (int)VectorMode::C, p_sfpu::kCONST_1_FP16B);
-                        pack_tile<true>(dst_idx, out_cb, out_row_offset + prev_out_col_base + c);
-                        dst_idx++;
-                    }
-                }
-                cb_push_back(out_cb, out_subblock_num_tiles);
-                tile_regs_release();
-            }
-
-            // Mark current subblock as previous for next iteration
-            prev_pending = true;
-            prev_out_row_base = (in0_subblock * subblock_h) * N;
-            prev_out_col_base = in1_subblock * subblock_w;
-
-            in1_index_offset += subblock_w;
-        }
-        in0_index_offset += subblock_h * in0_block_w;
-    }
-
-    // Drain the last pending subblock
-    if (prev_pending) {
-        tile_regs_wait();
-        cb_reserve_back(out_cb, out_subblock_num_tiles);
-        uint32_t dst_idx = 0;
-        for (uint32_t r = 0; r < subblock_h; r++) {
-            uint32_t out_row_offset = prev_out_row_base + r * N;
-            for (uint32_t c = 0; c < subblock_w; c++) {
-                llk_pack_sfpu_exponential<>(dst_idx, (int)VectorMode::C, p_sfpu::kCONST_1_FP16B);
-                pack_tile<true>(dst_idx, out_cb, out_row_offset + prev_out_col_base + c);
-                dst_idx++;
-            }
-        }
-        cb_push_back(out_cb, out_subblock_num_tiles);
-        tile_regs_release();
-    }
-
     cb_pop_front(in1_cb, K * N);
 }

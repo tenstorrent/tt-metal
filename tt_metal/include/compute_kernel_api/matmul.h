@@ -304,20 +304,23 @@ ALWI void mm_block_init_short_with_both_dt(
  * Fused initialization for matmul+exp block operation. Configures:
  *  - UNPACK: AB matmul unpacking
  *  - MATH:   MATMUL compute
- *  - PACK:   SFPU EXP configured
+ *  - PACK:   SFPU EXP configured (FAST APPROX defaulted)
  */
 // clang-format on
 ALWI void mm_exp_block_init_short(
+    // matmul init configurations
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
     const uint32_t transpose = 0,
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
-    uint32_t kt_dim = 1) {
+    uint32_t kt_dim = 1,
+    // exp init configurations
+    bool approx = true,
+    bool fast_and_approx = true,
+    uint32_t scale = 0x3F800000) {
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
-#ifdef TRISC_PACK
-    llk_pack_sfpu_exponential_init<>();
-#endif
+    PACK((llk_math_eltwise_unary_sfpu_exponential_init<approx, fast_and_approx, scale>()));
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
 }
 
