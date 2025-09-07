@@ -315,9 +315,9 @@ void set_or_update_runtime_arguments(
             a_num_tiles = a_shard_shape[0] * a_shard_shape[1];
             c_start_id =
                 (i / num_shards_per_width) * (c_shard_height * cWt) + (i % num_shards_per_width) * c_shard_width;
-        } else {
-            c_start_id = start_tile_id;
-        }
+        }  // else {
+        c_start_id = start_tile_id;
+        //}
 
         const bool is_quant_op = operation_attributes.is_quant_op;
         TT_FATAL(
@@ -361,9 +361,9 @@ void set_or_update_runtime_arguments(
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else {
             const auto scalar = *operation_attributes.scalar;
-            // TODO: technically we should use the b_dtype deduced by ProgramFactory::create here, but currently only
-            // quant ops have different dtypes for a & b and we want to force f32 for better accuracy when scale is
-            // passed as a scalar, so we'll leave this here
+            // TODO: technically we should use the b_dtype deduced by ProgramFactory::create here, but currently
+            // only quant ops have different dtypes for a & b and we want to force f32 for better accuracy when
+            // scale is passed as a scalar, so we'll leave this here
             const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), is_quant_op);
             std::array writer_runtime_args = {
                 packed_scalar,
@@ -417,17 +417,17 @@ void set_or_update_runtime_arguments(
 
         start_tile_id += c_num_tiles;
     }
-    if (has_sharding) {
-        if (a.is_sharded()) {
-            UpdateDynamicCircularBufferAddress(program, cb_src_a, *a.buffer());
-        }
-        if (b.has_value() and b->is_sharded()) {
-            UpdateDynamicCircularBufferAddress(program, cb_src_b, *b->buffer());
-        }
-        if (c.is_sharded()) {
-            UpdateDynamicCircularBufferAddress(program, cb_src_c, *c.buffer());
-        }
-    }
+    // if (has_sharding) {
+    //     if (a.is_sharded()) {
+    //         UpdateDynamicCircularBufferAddress(program, cb_src_a, *a.buffer());
+    //     }
+    //     if (b.has_value() and b->is_sharded()) {
+    //         UpdateDynamicCircularBufferAddress(program, cb_src_b, *b->buffer());
+    //     }
+    //     if (c.is_sharded()) {
+    //         UpdateDynamicCircularBufferAddress(program, cb_src_c, *c.buffer());
+    //     }
+    // }
 }
 
 KernelName get_reader_kernel_name_and_defines(
@@ -620,9 +620,9 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         program,
         all_device_cores,
         a_single_tile_size,
-        a_sharded ? a_num_tiles_per_shard : 2,
+        /*a_sharded ? a_num_tiles_per_shard : */ 2,
         a_data_format,
-        a_sharded ? a_buffer : nullptr);
+        /*a_sharded ? a_buffer : */ nullptr);
 
     if (not compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty()) {
         auto a_intermediate_format = is_sfpu_op   ? a_data_format
@@ -639,9 +639,9 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         program,
         all_device_cores,
         b_single_tile_size,
-        b_buffer == nullptr ? 1 : (b_sharded ? b_num_tiles_per_shard : 2),
+        b_buffer == nullptr ? 1 : (/*b_sharded ? b_num_tiles_per_shard : */ 2),
         b_data_format,
-        b_sharded ? b_buffer : nullptr);
+        /*b_sharded ? b_buffer : */ nullptr);
 
     if (not compute_kernel_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty()) {
         auto b_intermediate_format = is_sfpu_op   ? b_data_format
@@ -668,7 +668,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         c_single_tile_size,
         c_sharded ? c_num_tiles_per_shard : 2,
         c_data_format,
-        c_sharded ? c_buffer : nullptr);
+        /*c_sharded ? c_buffer : */ nullptr);
 
     auto kernel_config = CMAKE_UNIQUE_NAMESPACE::BinaryNgKernelConfig(operation_attributes.subtile_broadcast_type);
     // WRITER KERNEL
