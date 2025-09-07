@@ -149,24 +149,12 @@ void create_mux_kernel(
     auto default_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     size_t mux_status_address = mux_kernel_config->get_status_address();
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    std::vector<uint32_t> mux_ct_args = {
-        test_params.num_full_size_channels,
-        test_params.num_buffers_full_size_channel,
-        test_params.buffer_size_bytes_full_size_channel,
-        test_params.num_header_only_channels,
-        test_params.num_buffers_header_only_channel,
-        mux_status_address,
-        mux_kernel_config->get_termination_signal_address(),
-        mux_kernel_config->get_connection_info_address(default_channel_type, 0),
-        mux_kernel_config->get_connection_handshake_address(default_channel_type, 0),
-        mux_kernel_config->get_flow_control_address(default_channel_type, 0),
-        mux_kernel_config->get_channel_base_address(default_channel_type, 0),
-        mux_status_address + noc_address_padding_bytes,  // risky, could change if mux address map is updated
-        drainer_kernel_config->get_status_address(),
-        drainer_kernel_config->get_num_buffers(default_channel_type),
-        test_params.num_full_size_channel_iters,
-        test_params.num_iters_between_teardown_checks,
-        hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX)};
+
+    std::vector<uint32_t> mux_ct_args = mux_kernel_config->get_fabric_mux_compile_time_args();
+    // point to the drainer's status address instead of the worker's status address
+    mux_ct_args[11] = mux_status_address + noc_address_padding_bytes;
+    mux_ct_args[12] = drainer_kernel_config->get_status_address();
+    mux_ct_args[13] = drainer_kernel_config->get_num_buffers(default_channel_type);
 
     // semaphores needed to build connection with drainer core using the build_from_args API
     auto worker_teardown_semaphore_id = tt::tt_metal::CreateSemaphore(program_handle, mux_logical_core, 0);
