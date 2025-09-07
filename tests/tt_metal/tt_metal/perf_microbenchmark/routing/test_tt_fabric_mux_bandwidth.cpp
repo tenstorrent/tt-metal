@@ -209,7 +209,8 @@ void create_mux_kernel(
 void create_drainer_kernel(
     const DrainerTestConfig& drainer_test_config,
     tt::tt_metal::IDevice* device,
-    tt::tt_metal::Program& program_handle) {
+    tt::tt_metal::Program& program_handle,
+    CoreCoord mux_virtual_coord) {
     auto drainer_kernel_config = drainer_test_config.drainer_kernel_config;
     auto drainer_logical_core = drainer_test_config.drainer_logical_core;
     auto drainer_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
@@ -239,6 +240,8 @@ void create_drainer_kernel(
     }
 
     std::vector<uint32_t> drainer_rt_args = memory_regions_to_clear_args;
+    drainer_rt_args.push_back(mux_virtual_coord.x);
+    drainer_rt_args.push_back(mux_virtual_coord.y);
 
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {};
     create_kernel(
@@ -443,7 +446,7 @@ int main(int argc, char** argv) {
 
     create_mux_kernel(test_params, mux_test_config, drainer_test_config, device, program);
 
-    create_drainer_kernel(drainer_test_config, device, program);
+    create_drainer_kernel(drainer_test_config, device, program, mux_test_config.mux_virtual_core);
 
     // keep the receiver noc xy encoding same for all workers, wont matter since we are not committing any
     // packets into receiver's L1
