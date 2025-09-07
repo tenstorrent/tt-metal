@@ -45,8 +45,10 @@ void kernel_main() {
 
     // This mirrors an EDM interface. The Worker -> EDM interface has the worker communicate to the EDM interface via a
     // autoinc stream register where the register holds #slots free.
-    constexpr uint32_t slots_free_stream_id =
-        tt::tt_fabric::WorkerToFabricMuxSender<0>::sender_channel_0_free_slots_stream_id;
+    tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
+        reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
+    const auto conn = &connection_info->read_only[0];
+    const uint32_t slots_free_stream_id = conn->worker_free_slots_stream_id;
     init_ptr_val(slots_free_stream_id, NUM_BUFFERS);
 
     tt::tt_fabric::DrainerChannelBuffer drainer_channel(
