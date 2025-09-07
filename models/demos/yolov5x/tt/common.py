@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import ttnn
 import math
+
+import ttnn
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 
 
@@ -15,8 +16,9 @@ def deallocate_tensors(*tensors):
 
 def interleaved_to_sharded(x):
     x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+    x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
     nhw = x.shape[0] * x.shape[1] * x.shape[2]
-    num_cores = determine_num_cores(nhw, int(math.sqrt(x.shape[2])))
+    num_cores = determine_num_cores(nhw, x.shape[2])
     core_grid = get_core_grid_from_num_cores(num_cores)
     shardspec = ttnn.create_sharded_memory_config_(
         x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
@@ -172,3 +174,15 @@ class TtnnBottleneck:
         if self.label:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
         return ttnn.add(input_tensor, cv1) if self.shortcut else cv1
+
+
+def get_mesh_mappers(device):
+    if device.get_num_devices() > 1:
+        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
