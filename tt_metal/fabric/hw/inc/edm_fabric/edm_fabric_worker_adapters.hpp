@@ -302,9 +302,8 @@ struct WorkerToFabricEdmSenderImpl {
     FORCE_INLINE void send_payload_flush_blocking_from_address(uint32_t source_address, size_t size_bytes) {
         send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING>(source_address, size_bytes);
     }
-    FORCE_INLINE void send_payload_flush_non_blocking_from_address(
-        uint32_t source_address, size_t size_bytes, uint8_t noc = noc_index, uint8_t cmd_buf = write_cmd_buf) {
-        send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes, noc, cmd_buf);
+    FORCE_INLINE void send_payload_flush_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
+        send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
     }
     FORCE_INLINE void send_payload_blocking_from_address(uint32_t source_address, size_t size_bytes) {
         send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::BLOCKING>(source_address, size_bytes);
@@ -635,13 +634,12 @@ private:
             source_address, 1, size_bytes, buffer_address + sizeof(PACKET_HEADER_TYPE));
     }
     template <EDM_IO_BLOCKING_MODE blocking_mode>
-    FORCE_INLINE void send_payload_from_address_impl(
-        uint32_t source_address, size_t size_bytes, uint8_t noc = noc_index, uint8_t cmd_buf = write_cmd_buf) {
+    FORCE_INLINE void send_payload_from_address_impl(uint32_t source_address, size_t size_bytes) {
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
         ASSERT(size_bytes <= this->buffer_size_bytes);
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
-        send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address, noc, cmd_buf);
+        send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
         post_send_payload_increment_pointers();
     }
     template <

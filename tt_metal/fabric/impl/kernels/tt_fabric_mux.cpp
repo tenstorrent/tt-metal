@@ -88,17 +88,6 @@ void setup_channel(
     channel_connection_established = false;
 }
 
-uint8_t get_next_cmd_buf(uint8_t cmd_buf) {
-    if constexpr (noc_mode != DM_DYNAMIC_NOC) {
-        if constexpr ((write_cmd_buf == 0 || write_cmd_buf == 1) && (read_cmd_buf == 0 || read_cmd_buf == 1)) {
-            return 1 - cmd_buf;
-        } else {
-            return cmd_buf == write_cmd_buf ? read_cmd_buf : write_cmd_buf;
-        }
-    }
-    return cmd_buf;
-}
-
 template <uint8_t NUM_BUFFERS>
 void forward_data(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>& channel,
@@ -114,8 +103,7 @@ void forward_data(
     // the substantial performance loss (> 1GB/s), when removed, it's being kept for now. The performance drop was
     // measured in the mux bandwidth tests and was root caused to the isolated change of simply removing this arg.
     // To be root-caused in the future.
-    uint8_t channel_id,
-    uint8_t cmd_buf) {
+    uint8_t channel_id) {
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
     if (has_unsent_payload) {
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_write_counter.get_buffer_index());
@@ -124,8 +112,7 @@ void forward_data(
         fabric_connection.wait_for_empty_write_slot();
 
         fabric_connection.send_payload_flush_non_blocking_from_address(
-            (uint32_t)packet_header, packet_header->get_payload_size_including_header(), noc_index, cmd_buf);
-        cmd_buf = get_next_cmd_buf(cmd_buf);
+            (uint32_t)packet_header, packet_header->get_payload_size_including_header());
 
         worker_interface.local_write_counter.increment();
         worker_interface.local_read_counter.increment();
@@ -254,9 +241,6 @@ void kernel_main() {
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
 #endif
-    // We cycle through the read and write cmd buffer when not in dynamic noc mode
-    // so that we can spend less time blocking on `!noc_cmd_buf_ready`
-    uint8_t cmd_buf = write_cmd_buf;
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
         if (got_graceful_termination) {
@@ -284,8 +268,7 @@ void kernel_main() {
                         full_size_channel_connection_established[channel_id],
                         StreamId{channel_stream_ids[channel_id]},
                         is_persistent_channels[channel_id],
-                        channel_id,
-                        cmd_buf);
+                        channel_id);
                 }
             }
 
@@ -297,8 +280,7 @@ void kernel_main() {
                     header_only_channel_connection_established[channel_id],
                     StreamId{channel_stream_ids[channel_id + NUM_FULL_SIZE_CHANNELS]},
                     is_persistent_channels[channel_id + NUM_FULL_SIZE_CHANNELS],
-                    channel_id + NUM_FULL_SIZE_CHANNELS,
-                    cmd_buf);
+                    channel_id + NUM_FULL_SIZE_CHANNELS);
             }
         }
 #if defined(COMPILE_FOR_IDLE_ERISC)
