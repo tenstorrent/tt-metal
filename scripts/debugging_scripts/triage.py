@@ -14,7 +14,7 @@ Options:
     --initialize-with-noc1           Initialize debugger context with NOC1 enabled. [default: False]
     --verbosity=<verbosity>          Choose output verbosity. 1: ERROR, 2: WARN, 3: INFO, 4: VERBOSE, 5: DEBUG. [default: 3]
     --run=<script>                   Run specific script(s) by name. If not provided, all scripts will be run. [default: all]
-    --skip-version-check    Do not enforce debugger version check. [default: False]
+    --skip-version-check             Do not enforce debugger version check. [default: False]
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
