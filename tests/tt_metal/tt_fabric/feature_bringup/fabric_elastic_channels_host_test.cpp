@@ -60,11 +60,10 @@ struct WorkerTimingStats {
 
 class N300TestDevice {
 public:
-    N300TestDevice() : device_open(false) {
+    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()), device_open(false) {
         tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
-        num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
             tt::tt_metal::GetNumPCIeDevices() >= 1) {
             std::vector<chip_id_t> ids(num_devices_, 0);
@@ -471,8 +470,6 @@ void run_test(
         set_worker_runtime_args(test_resources, local_sender_worker_kernels, remote_sender_worker_kernels, config);
     }
 
-    auto start_time = std::chrono::high_resolution_clock::now();
-
     log_info(tt::LogAlways, "Launching programs");
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         std::thread th2 = std::thread([&] {
@@ -493,9 +490,6 @@ void run_test(
         tt_metal::Finish(test_resources.local_device.device->command_queue());
         tt_metal::Finish(test_resources.remote_device.device->command_queue());
     }
-
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
 
     //
     // Timing Stats Readback

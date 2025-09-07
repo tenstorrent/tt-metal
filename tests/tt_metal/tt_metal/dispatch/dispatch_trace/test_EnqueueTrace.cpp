@@ -48,7 +48,6 @@ using namespace tt;
 
 Program create_simple_unary_program(Buffer& input, Buffer& output) {
     Program program = CreateProgram();
-    IDevice* device = input.device();
     CoreCoord worker = {0, 0};
     auto reader_kernel = CreateKernel(
         program,
@@ -713,7 +712,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace
     distributed::ReleaseTrace(this->device_.get(), trace_id);
 }
 
-TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTrace) {
+TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestProgramsTrace) {
     auto& mesh_command_queue = this->device_->mesh_command_queue();
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
@@ -803,7 +802,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
     distributed::ReleaseTrace(this->device_.get(), trace_id);
 }
 
-TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestAlternatingLargeAndSmallProgramsTrace) {
+TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestAlternatingLargeAndSmallProgramsTrace) {
     auto& mesh_command_queue = this->device_->mesh_command_queue();
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
@@ -830,7 +829,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestAlternatingLargeAndSmallProg
     distributed::ReleaseTrace(this->device_.get(), trace_id);
 }
 
-TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramFollowedBySmallProgramsTrace) {
+TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestLargeProgramFollowedBySmallProgramsTrace) {
     auto& mesh_command_queue = this->device_->mesh_command_queue();
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
