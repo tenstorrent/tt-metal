@@ -151,7 +151,10 @@ void create_mux_kernel(
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
     std::vector<uint32_t> mux_ct_args = mux_kernel_config->get_fabric_mux_compile_time_args();
-    // point to the drainer's status address instead of the worker's status address
+    // Point to the drainer's status address instead of the worker's status address
+    // The drainer's status address is used by the drainer to indicate which state it is in
+    // (i.e. setup, ready for traffic, done). This is needed by mux so mux doesn't send traffic
+    // before the drainer is ready to receive it.
     mux_ct_args[11] = mux_status_address + noc_address_padding_bytes;
     mux_ct_args[12] = drainer_kernel_config->get_status_address();
     mux_ct_args[13] = drainer_kernel_config->get_num_buffers(default_channel_type);
