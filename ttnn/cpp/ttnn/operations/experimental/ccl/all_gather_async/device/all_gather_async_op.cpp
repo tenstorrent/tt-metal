@@ -256,7 +256,6 @@ tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::ve
     auto input_memory_layout = input_tensors[0].layout();
     auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
-    uint32_t semaphore_address = this->semaphore.at(0).address();
     return tt::tt_metal::operation::hash_operation<AllGatherAsync>(
         this->dim,
         this->num_links,

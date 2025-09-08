@@ -76,8 +76,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads(
     tt_metal::Program program = tt_metal::CreateProgram();
     uint32_t src0_cb_index = 0, out_cb_index = 16;
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-
     tt::tt_metal::KernelHandle reader_kernel_id = 0, writer_kernel_id = 0;
     if (in_sharded) {
         std::vector<uint32_t> compile_time_args = {
