@@ -137,7 +137,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             "hidden_size": hf_config.hidden_size,
             "num_experts_per_tok": hf_config.num_experts_per_tok,
             "num_dispatch_devices": tuple(mesh_device.shape)[0],
-            "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode),
+            "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=False),
             "all_to_all_dispatch_output_memory_config": memory_config,
             "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
