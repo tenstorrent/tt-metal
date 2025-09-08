@@ -312,4 +312,3 @@ tt_telemetry/** @btrzynadlowski-tt
 
 # .clang-tidy files - Metalium infra team owns all clang-tidy configuration files
 **/.clang-tidy @tenstorrent/metalium-developers-infra
-
