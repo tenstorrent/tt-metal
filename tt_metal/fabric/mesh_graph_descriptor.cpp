@@ -535,10 +535,10 @@ void MeshGraphDescriptor::validate_legacy_requirements(const proto::MeshGraphDes
     }
 
     // Check that there is only a FABRIC level graph
-    if (proto.graph_descriptors_size() != 1) {
+    if (proto.graph_descriptors_size() > 1) {
         error_messages.push_back(fmt::format(
-            "MGD 1.0 Compatibility requirement: There can only be one FABRIC level graph (Graph: {})",
-            proto.graph_descriptors(0).name()));
+            "MGD 1.0 Compatibility requirement: There can only be one FABRIC level graph or less"
+        ));
     }
 
     for (const auto& graph : proto.graph_descriptors()) {

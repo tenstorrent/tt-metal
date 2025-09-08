@@ -121,27 +121,42 @@ public:
     // Queries
     const std::vector<GlobalNodeId>& instances_by_name(std::string name) const {
         auto it = instances_by_name_.find(name);
-        TT_FATAL(it != instances_by_name_.end(), "No instances found with name {}", name);
+        if (it == instances_by_name_.end()) {
+            static const std::vector<GlobalNodeId> empty_vector;
+            return empty_vector;
+        }
         return it->second;
     }
     const std::vector<GlobalNodeId>& instances_by_type(std::string type) const { // includes "MESH"
         auto it = instances_by_type_.find(type);
-        TT_FATAL(it != instances_by_type_.end(), "No instances found with type {}", type);
+        if (it == instances_by_type_.end()) {
+            static const std::vector<GlobalNodeId> empty_vector;
+            return empty_vector;
+        }
         return it->second;
     }
     const std::vector<ConnectionId>& connections_by_instance_id(const GlobalNodeId instance_id) const {
         auto it = connections_by_instance_id_.find(instance_id);
-        TT_FATAL(it != connections_by_instance_id_.end(), "No connections indexed for instance id {}", instance_id);
+        if (it == connections_by_instance_id_.end()) {
+            static const std::vector<ConnectionId> empty_vector;
+            return empty_vector;
+        }
         return it->second;
     }
     const std::vector<ConnectionId>& connections_by_type(std::string type) const {
         auto it = connections_by_type_.find(type);
-        TT_FATAL(it != connections_by_type_.end(), "No connections found for type {}", type);
+        if (it == connections_by_type_.end()) {
+            static const std::vector<ConnectionId> empty_vector;
+            return empty_vector;
+        }
         return it->second;
     }
     const std::vector<ConnectionId>& connections_by_source_device_id(const GlobalNodeId source_device_id) const {
         auto it = connections_by_source_device_id_.find(source_device_id);
-        TT_FATAL(it != connections_by_source_device_id_.end(), "No connections found for source device id {}", source_device_id);
+        if (it == connections_by_source_device_id_.end()) {
+            static const std::vector<ConnectionId> empty_vector;
+            return empty_vector;
+        }
         return it->second;
     }
 
