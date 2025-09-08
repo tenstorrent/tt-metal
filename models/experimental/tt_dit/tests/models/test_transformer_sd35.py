@@ -106,7 +106,6 @@ def test_sd35_transformer_block(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
-        init=False,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -272,7 +271,6 @@ def test_sd35_transformer2d_model(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
-        init=False,
     )
     if load_cache:
         cache_path = get_cache_path(
@@ -473,7 +471,6 @@ def test_sd35_transformer_model_caching(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
-        init=False,
     )
     start = time.time()
     tt_model.load_state_dict(torch_model.state_dict())
@@ -506,7 +503,6 @@ def test_sd35_transformer_model_caching(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
-        init=False,
     )
     loaded_cache_dict = load_cache_dict(cache_path)
     cache_model.from_cached_state_dict(loaded_cache_dict)

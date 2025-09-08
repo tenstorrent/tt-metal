@@ -9,7 +9,8 @@ from ...utils.tensor import bf16_tensor
 from ...utils.substate import substate, indexed_substates
 from ...parallel.manager import CCLManager
 from ...parallel.config import EncoderParallelConfig
-from ...layers.feedforward import ColParallelLinear, ParallelFeedForward
+from ...layers.feedforward import ParallelFeedForward, FeedForward
+from ...layers.linear import ColParallelLinear, Linear
 from ttnn.distributed.distributed import ConcatMeshToTensor
 
 
@@ -262,15 +263,23 @@ class CLIPEncoderLayer:
         self.layer_norm2 = None
         self.layer_norm_eps = config.layer_norm_eps
         self.self_attn = CLIPAttention(config, mesh_device, ccl_manager, parallel_config)
-        self.mlp = ParallelFeedForward(
-            dim=config.embed_dim,
-            dim_out=config.embed_dim,
-            activation_fn=config.hidden_act,
-            mesh_device=mesh_device,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            ccl_manager=ccl_manager,
-        )
         self.parallel_config = parallel_config
+        if self.parallel_config.tensor_parallel.factor > 1:
+            self.mlp = ParallelFeedForward(
+                dim=config.embed_dim,
+                dim_out=config.embed_dim,
+                activation_fn=config.hidden_act,
+                mesh_device=mesh_device,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                ccl_manager=ccl_manager,
+            )
+        else:
+            self.mlp = FeedForward(
+                dim=config.embed_dim,
+                dim_out=config.embed_dim,
+                activation_fn=config.hidden_act,
+                mesh_device=mesh_device,
+            )
         self.ccl_manager = ccl_manager
 
     def load_state_dict(self, state_dict):
@@ -376,34 +385,40 @@ class CLIPAttention:
         self.scale = self.head_dim**-0.5
         self.attention_dropout = config.attention_dropout
 
-        self.q_proj = ColParallelLinear(
-            in_features=self.embed_dim,
-            out_features=self.embed_dim,
-            bias=True,
-            mesh_device=self.mesh_device,
-            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-        )
-        self.k_proj = ColParallelLinear(
-            in_features=self.embed_dim,
-            out_features=self.embed_dim,
-            bias=True,
-            mesh_device=self.mesh_device,
-            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-        )
-        self.v_proj = ColParallelLinear(
-            in_features=self.embed_dim,
-            out_features=self.embed_dim,
-            bias=True,
-            mesh_device=self.mesh_device,
-            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-        )
-        self.o_proj = ColParallelLinear(
-            in_features=self.embed_dim,
-            out_features=self.embed_dim,
-            bias=True,
-            mesh_device=self.mesh_device,
-            mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-        )
+        if self.parallel_config.tensor_parallel.factor > 1:
+            self.q_proj = ColParallelLinear(
+                in_features=self.embed_dim,
+                out_features=self.embed_dim,
+                bias=True,
+                mesh_device=self.mesh_device,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            )
+            self.k_proj = ColParallelLinear(
+                in_features=self.embed_dim,
+                out_features=self.embed_dim,
+                bias=True,
+                mesh_device=self.mesh_device,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            )
+            self.v_proj = ColParallelLinear(
+                in_features=self.embed_dim,
+                out_features=self.embed_dim,
+                bias=True,
+                mesh_device=self.mesh_device,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            )
+            self.o_proj = ColParallelLinear(
+                in_features=self.embed_dim,
+                out_features=self.embed_dim,
+                bias=True,
+                mesh_device=self.mesh_device,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            )
+        else:
+            self.q_proj = Linear(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
+            self.k_proj = Linear(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
+            self.v_proj = Linear(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
+            self.o_proj = Linear(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
 
     def load_state_dict(self, state_dict):
         self.q_proj.load_state_dict(substate(state_dict, "q_proj"))
