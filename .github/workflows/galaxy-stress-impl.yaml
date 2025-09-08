@@ -16,6 +16,10 @@ on:
         required: false
         type: string
         default: "in-service"
+      topology:
+        required: false
+        type: string
+        default: "topology-6u"
 
 jobs:
   stress-galaxy:
