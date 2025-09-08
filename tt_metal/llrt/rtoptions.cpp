@@ -256,6 +256,11 @@ RunTimeOptions::RunTimeOptions() {
     if (getenv("TT_METAL_LOG_KERNELS_COMPILE_COMMANDS")) {
         this->log_kernels_compilation_commands = true;
     }
+
+    const char* timeout_duration_for_operations_value = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");
+    float timeout_duration_for_operations =
+        timeout_duration_for_operations_value ? std::stof(timeout_duration_for_operations_value) : 0.f;
+    this->timeout_duration_for_operations = std::chrono::duration<float>(timeout_duration_for_operations);
 }
 
 const std::string& RunTimeOptions::get_root_dir() const {
