@@ -107,7 +107,6 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Determine if we should use sharded multi-core program factory
     const auto input_tensor_shape = tensor_args.input_tensor.padded_shape();
-    const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const auto rank = input_tensor_shape.size();
 
     if (operation_attributes.softmax_type == SoftmaxOperationType::SoftmaxInPlace ||
@@ -648,7 +647,7 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
         /*inplace=*/true,
         /*output_mem_config=*/input_tensor.memory_config(),
         /*program_config=*/program_config,
-        /*is_causal_mask=*/false,
+        /*is_causal_mask=*/true,
         /*compute_kernel_config=*/compute_kernel_config_val,
         /*is_scale_causal_mask_hw_dims_softmax=*/true,
         /*numeric_stable=*/numeric_stable);
