@@ -642,8 +642,8 @@ void validate_test_config(const TestConfig& config) {
         exit(-1);
     }
 
-    if (config.chunk_n_pkts == 0 || config.chunk_n_pkts == 0 || config.n_chunks == 0 || config.packet_size == 0 ||
-        config.message_size == 0 || config.total_messages == 0 || config.n_workers == 0) {
+    if (config.chunk_n_pkts == 0 || config.n_chunks == 0 || config.packet_size == 0 || config.message_size == 0 ||
+        config.total_messages == 0 || config.n_workers == 0) {
         log_error(
             tt::LogTest,
             "Invalid test config. Found a zero value. The following are all expected to be non-zero: chunk_n_pkts={}, "
