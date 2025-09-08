@@ -11,7 +11,7 @@ import math
 
 # (num_devices, num_links, rs_input_shape, dim)
 CONFIGS = [
-    # (4, 1, [1, 1, 22528, 3072], 3),  # important shape
+    (4, 1, [1, 1, 22528, 3072], 3),  # important shape
     # (2, 1, [1, 1, 11264, 3072], 3),
     # (2, 4, [1, 1, 5632, 3072], 3),
     # (8, 4, [1, 1, 71680, 3072], 3),
@@ -21,11 +21,13 @@ CONFIGS = [
     # (8, 4,[1, 1, 47104, 3072], 3),
     # (8,4,[1, 1, 38912, 3072],3),
     # (8,4,[1, 1, 34816, 3072],3),
-    # (8, 4, [1, 1, 30720, 3072], 3),
-    # (4,4,[1, 1, 18432, 3072],3),
-    # (8,4,[1, 1, 17408, 3072],3),
-    # (8,4,[1, 1, 16384, 3072],3),
-    # (8,4,[1, 1, 15360, 3072],3),
+    (4, 4, [1, 1, 30720, 3072], 3),
+    (8, 4, [1, 1, 30720, 1536], 3),
+    (4, 4, [1, 1, 30720, 1536], 3),
+    (4, 4, [1, 1, 18432, 3072], 3),
+    (8, 4, [1, 1, 17408, 3072], 3),
+    (8, 4, [1, 1, 16384, 3072], 3),
+    (8, 4, [1, 1, 15360, 3072], 3),
     # (8,4,[1, 1, 14336, 3072],3),
     # (8,4,[1, 1, 13312, 3072],3),
     # (8,4,[1, 1, 12288, 3072],3),
@@ -48,7 +50,7 @@ CONFIGS = [
     # (8,4,[1, 1, 6016, 3072],3),
     # (8,4,[1, 1, 5888, 3072],3),
     # (8,4,[1, 1, 5760, 3072],3),
-    # (8, 4, [1, 1, 5632, 3072], 3),  # important shape
+    (8, 4, [1, 1, 5632, 3072], 3),  # important shape
     # (8,4,[1, 1, 5504, 3072],3),
     # (8,4,[1, 1, 5376, 3072],3),
     # (8,4,[1, 1, 5248, 3072],3),
@@ -63,7 +65,7 @@ CONFIGS = [
     # (8,4,[1, 1, 4096, 3072],3),
     # (8,4,[1, 1, 3968, 3072],3),
     # (8,4,[1, 1, 3840, 3072],3),
-    # (8, 4, [1, 1, 3712, 3072], 3),  # important shape
+    (8, 4, [1, 1, 3712, 3072], 3),  # important shape
     # (8, 4, [1, 1, 3072, 3072], 3),
     # (8, 4, [1, 1, 2048, 3072], 3),
     # (8, 4, [1, 1, 1024, 3072], 3),
@@ -71,7 +73,7 @@ CONFIGS = [
     # (2, 1, [1, 1, 128, 1536], 3),
     # (4, 1, [1, 1, 128, 1536], 3),
     # (2, 4, [1, 1, 128, 1536], 3),
-    # (4, 4, [1, 1, 128, 1536], 3),  # important shape
+    (4, 4, [1, 1, 128, 1536], 3),  # important shape
     # (8,4,[1, 1, 128, 1536],3),
 ]
 
@@ -80,7 +82,7 @@ CONFIGS_IDS = [f"rs_input_shape{i}_" for i in range(len(CONFIGS))]
 WORKERS_PER_LINK = ["OPTIMIZED"]
 WORKERS_PER_LINK_IDS = [f"{worker}-workers" for worker in WORKERS_PER_LINK]
 
-CHUNKS_PER_SYNC = [20, 80, 160, None]
+CHUNKS_PER_SYNC = [20, 80, None]
 CHUNKS_PER_SYNC_IDS = [f"{chunk}-chunks" for chunk in CHUNKS_PER_SYNC]
 
 TOPOLOGY = ["ring", "linear"]
@@ -103,7 +105,7 @@ TOPOLOGY = ["ring", "linear"]
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
+        (True, 5),
     ],
     ids=["perf"],
 )
@@ -121,7 +123,7 @@ TOPOLOGY = ["ring", "linear"]
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("rs_input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("num_outer_iters", [5])
+@pytest.mark.parametrize("num_outer_iters", [4])
 def test_reduce_scatter_chunks_per_sync(
     mesh_device,
     num_devices,
