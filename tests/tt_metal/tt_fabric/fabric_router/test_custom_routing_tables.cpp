@@ -19,8 +19,8 @@ namespace {
 constexpr auto k_FabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
 constexpr auto k_ReliabilityMode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
 
-std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc) {
-    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());
+std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc, const bool version_2 = false) {
+    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string(), version_2);
     control_plane->initialize_fabric_context(k_FabricConfig);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(k_FabricConfig, k_ReliabilityMode);
     return control_plane;
@@ -45,6 +45,14 @@ TEST_F(ControlPlaneFixture, TestCustom2x2MeshAPIs) {
     EXPECT_EQ(
         control_plane.get_physical_mesh_shape(MeshId{0}),
         tt::tt_metal::distributed::MeshShape(2, 2));
+}
+
+// Test for MGD2
+TEST_F(ControlPlaneFixture, TestCustom2x2ControlPlaneInitMGD2) {
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/n300_2x2_mesh_graph_descriptor.textproto";
+    [[maybe_unused]] auto control_plane = make_control_plane(mesh_graph_desc_path, true);
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
