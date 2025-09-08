@@ -245,7 +245,7 @@ def test_multimodal_demo_text(
     else:
         from transformers import AutoProcessor
 
-        processor = AutoProcessor.from_pretrained(model_args[0].CKPT_DIR, use_fast=True)
+        processor = AutoProcessor.from_pretrained(model_args[0].CKPT_DIR, use_fast=True, do_convert_rgb=True)
 
     generator = Generator(model, model_args, mesh_device)
 
