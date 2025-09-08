@@ -183,11 +183,9 @@ void MAIN {
                 /* fp32_transpose */ true>(alias_cb_prev_sum_exp);
             cb_wait_front(alias_cb_prev_sum_exp, onetile);
 
-            // [Debug]: pack exp sum to cb_intermediates
-
-            if (q_head_idx == 0) {
-                pack_intermediate_result(alias_cb_prev_sum_exp, cb_intermediates);
-            }
+            // pack max value per head into intermediates buffer
+            // [Improve]:i need to pack exp sum to intermediates also
+            pack_intermediate_result(alias_cb_prev_sum_exp, cb_intermediates);
 
             cb_reserve_back(cb_output, tiles_per_head);
             pack_reconfig_data_format(cb_output);
@@ -207,6 +205,16 @@ void MAIN {
                 tile_regs_release();
             }
             cb_push_back(cb_output, tiles_per_head);
+
+            // for (uint32_t tile_idx = 0; tile_idx < tiles_per_head; tile_idx++) {
+            //     tile_regs_acquire();
+            //         mul_tiles_bcast_cols(alias_cb_prev_mm_out, alias_cb_prev_sum_exp, tile_idx, 0, 0);
+            //         tile_regs_commit();
+            //         tile_regs_wait();
+            //         pack_tile(0, cb_output);
+            //         tile_regs_release();
+            // }
+            // cb_push_back(cb_output, tiles_per_head);
 
             cb_pop_front(alias_cb_prev_max, onetile);      // pop previous max to make space for next row
             cb_pop_front(alias_cb_prev_sum_exp, onetile);  // pop previous exp sum to make space for next row

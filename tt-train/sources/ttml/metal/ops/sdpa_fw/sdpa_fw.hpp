@@ -16,7 +16,7 @@ struct SDPAForwardOperation {
         const std::optional<ttnn::Tensor>& mask,  // attention mask
         const uint32_t q_heads,                   // num of query heads
         const uint32_t kv_heads,                  // num of key/value heads
-        const float dropout_probability = 0.8F,   // default value?
+        const float dropout_probability = 0.1F,   // default value
         const bool return_intermediates = false);
 };
 

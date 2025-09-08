@@ -80,8 +80,14 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
     const uint32_t q_heads = args.q_heads;    // will be passed by user into args
     const uint32_t kv_heads = args.kv_heads;  // will be passed by user into args
     TT_FATAL(
+        q_heads > 0 && kv_heads > 0,
+        "Number of heads must be greater than zero. Got heads={}, groups={}",
+        q_heads,
+        kv_heads);
+    TT_FATAL(
         q_heads % kv_heads == 0,
-        "Number of heads must be divisible by number of groups, got heads={}, groups={}",
+        "Number of query heads ({}) must be divisible by number of key/value heads ({}) for grouped attention. "
+        "This ensures each key/value group serves an integer number of query heads.",
         q_heads,
         kv_heads);
 
@@ -117,7 +123,23 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             query_shape);
     }
 
-    // TODO[improve]: add check for intermediate tensor when I'll know what exactly I want to return
+    if (args.return_intermediates && tensor_args.preallocated_intermediate.has_value()) {
+        const auto& preallocated_intermediate = tensor_args.preallocated_intermediate.value();
+        check_tensor(
+            preallocated_intermediate,
+            "Preallocated Intermediate",
+            tt::tt_metal::Layout::TILE,
+            tt::tt_metal::DataType::BFLOAT16);
+
+        auto interm_shape = preallocated_intermediate.padded_shape();
+        // intermediate shape: (B, q_heads, S, 1U) - one value per head
+        TT_FATAL(
+            interm_shape[0] == qBt && interm_shape[1] == q_heads && interm_shape[2] == qSt && interm_shape[3] == 1U,
+            "Preallocated intermediate shape must be (B, q_heads, S, 1U). Got preallocated intermediate shape={}, "
+            "q_heads={}",
+            interm_shape,
+            q_heads);
+    }
 }
 
 spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(
@@ -141,7 +163,9 @@ spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(
             output_specs.push_back(tensor_args.preallocated_intermediate->tensor_spec());
         } else {
             auto shape = tensor_args.query.logical_shape();
-            shape[-1] = 1U;  // intermediate is a scalar per row
+            // intermediate shape: (B, q_heads, S, 1U) - one value per head
+            shape[-1] = 1U;           // intermediate is a scaler
+            shape[1] = args.q_heads;  // intermediate is per head
             output_specs.emplace_back(
                 shape,
                 tt::tt_metal::TensorLayout(

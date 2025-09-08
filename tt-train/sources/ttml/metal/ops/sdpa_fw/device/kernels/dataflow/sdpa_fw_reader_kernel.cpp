@@ -54,8 +54,8 @@ void kernel_main() {
     constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_5;
     constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_6;
 
-    constexpr uint32_t qWt = get_compile_time_arg_val(0);  // (vDt / TILE_W)
-    constexpr uint32_t kWt = get_compile_time_arg_val(1);  // (kDt / TILE_W)
+    constexpr uint32_t qWt = get_compile_time_arg_val(0);  // num tile in inner dim in query (d/TILE_W)
+    constexpr uint32_t kWt = get_compile_time_arg_val(1);  // num tile in inner dim in key/value (d/TILE_W)
     constexpr uint32_t Ht = get_compile_time_arg_val(2);   // (S / TILE_H)
     constexpr uint32_t block_size = get_compile_time_arg_val(3);
     constexpr uint32_t q_tiles_per_head = get_compile_time_arg_val(4);  // num of tiles per head in query

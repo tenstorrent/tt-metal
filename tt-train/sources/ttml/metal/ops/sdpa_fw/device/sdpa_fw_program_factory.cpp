@@ -56,7 +56,7 @@ constexpr uint32_t kMaxValueHolderTiles = 1U;
 constexpr uint32_t kExpMaxDiffTiles = 1U;
 constexpr uint32_t kExpSumTiles = 1U;
 constexpr uint32_t kIntermediateTiles = 1U;  // [Debug] should be 2U
-constexpr uint32_t kOnetile = 1U;
+constexpr uint32_t kSingleTileBuffer = 1U;
 
 const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
 
@@ -222,12 +222,12 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
 
-    uint32_t block_size = get_block_size(Wt, 4U);
-    uint32_t twice_block_size = 2 * block_size;
+    uint32_t block_size = get_block_size(q_tiles_per_head, 4U);
 
     //[DEBUG]:
     fmt::print(
-        "SDPA FW: NC={}, Ht_={}, Wt={}, scaler = {}, block_size={}, q_heads = {}, kv_heads = {}, total_rows_to_process "
+        "SDPA FW: NC={}, Ht_={}, Wt={}, scaler = {}, block_size={}, q_heads = {}, kv_heads = {}, heads_per_group = "
+        "{},total_rows_to_process "
         "= {}, num_cores={} ({}x{}), "
         "group1 cores={} rows/core={}, group2 "
         "cores={} "
@@ -239,6 +239,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         block_size,
         q_heads,
         kv_heads,
+        heads_per_group,
         total_rows_to_process,
         num_cores,
         num_cores_x,
@@ -255,20 +256,20 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
 
-    auto cb_query =
-        create_circular_buffer(program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Wt);
+    auto cb_query = create_circular_buffer(
+        program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * q_tiles_per_head);
 
-    auto cb_key =
-        create_circular_buffer(program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Wt);
+    auto cb_key = create_circular_buffer(
+        program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * k_tiles_per_head);
 
-    auto cb_value =
-        create_circular_buffer(program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Wt);
+    auto cb_value = create_circular_buffer(
+        program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * v_tiles_per_head);
 
     auto cb_attn_mask = create_circular_buffer(
         program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumAttnMaskTiles);
 
     auto cb_intermediate = create_circular_buffer(
-        program, all_cores, kIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, Wt);
+        program, all_cores, kIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
     auto cb_reduction_scaler = create_circular_buffer(
         program, all_cores, kReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
@@ -295,17 +296,17 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     auto cb_cur_exp_sum = create_circular_buffer(
         program, all_cores, kCurSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumTiles);
 
-    auto cb_prev_mm_out =
-        create_circular_buffer(program, all_cores, kPrevMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, Wt);
+    auto cb_prev_mm_out = create_circular_buffer(
+        program, all_cores, kPrevMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
     auto cb_cur_mm_out =
-        create_circular_buffer(program, all_cores, kCurMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, Wt);
+        create_circular_buffer(program, all_cores, kCurMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
     auto cb_output =
-        create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, Wt);
+        create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
-    auto cb_mm_result_holder =
-        create_circular_buffer(program, all_cores, tt::CBIndex::c_16, data_format, bfloat16_single_tile_size_bytes, Wt);
+    auto cb_mm_result_holder = create_circular_buffer(
+        program, all_cores, tt::CBIndex::c_16, data_format, bfloat16_single_tile_size_bytes, qWt);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -375,8 +376,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         heads_per_group,   // number of heads per group
         scaler,            // sqrt(Et) - sdpa scale factor
         minus_one,         // used to transform mask from 1/0 to 0/-1
-        custom_inf,        // used to transform mask from 0/-1 to 0/-1e9F
-        Wt                 // old Wt[used only for debug]
+        custom_inf         // used to transform mask from 0/-1 to 0/-1e9F
     };
     kernels.reader = create_reader_kernel(
         program,
@@ -391,8 +391,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         block_size,        // block size (dst_reg_count)
         q_tiles_per_head,  // number of tiles per head in query
         q_heads,           // number of heads in query
-        heads_per_group,
-        Wt  // old Wt[used only for debug]
+        heads_per_group    // number of heads per group
     };
     kernels.writer = create_writer_kernel(
         program, all_cores, /* writer_compile_args */ writer_compile_args, defines, kWriterKernelPath);
@@ -414,8 +413,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         heads_per_group,            // number of heads per group
         scaler,                     // sqrt(Et) - sdpa scaler factor
         minus_one,                  // used to transform mask from 1/0 to 0/-1
-        custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
-        Wt                          // old Wt[used only for debug]
+        custom_inf                  // used to transform mask from 0/-1 to 0/-1e9F
     };
 
     kernels.compute_group_1 = create_compute_kernel(
@@ -435,8 +433,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             heads_per_group,            // number of heads per group
             scaler,                     // sqrt(Et) - sdpa scaler factor
             minus_one,                  // used to transform mask from 1/0 to 0/-1
-            custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
-            Wt                          // old Wt[used only for debug]
+            custom_inf                  // used to transform mask from 0/-1 to 0/-1e9F
         };
 
         kernels.compute_group_2 = create_compute_kernel(
