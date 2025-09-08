@@ -155,7 +155,7 @@ def test_e2e_performant(
     resolution,
     expected_inference_throughput,
 ):
-    pytest.skip("https://github.com/tenstorrent/tt-metal/actions/runs/17535023131/job/49797222185#step:8:4742")
+    pytest.skip("https://github.com/tenstorrent/tt-metal/issues/28113")
     run_perf_e2e_yolov4(
         device,
         batch_size_per_device,
@@ -191,7 +191,7 @@ def test_e2e_performant_dp(
     resolution,
     expected_inference_throughput,
 ):
-    pytest.skip("https://github.com/tenstorrent/tt-metal/actions/runs/17535023131/job/49797222185#step:8:4761")
+    pytest.skip("https://github.com/tenstorrent/tt-metal/issues/28113")
     run_perf_e2e_yolov4(
         mesh_device,
         batch_size_per_device,
