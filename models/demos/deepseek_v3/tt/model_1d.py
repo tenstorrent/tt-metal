@@ -84,7 +84,9 @@ class Model1D(SharedStateAddOn, AbstractModule):
 
         moe_decoder_block_state_dicts = [
             [
-                sub_state_dict(state_dict, f"layers.{layer_idx}.") if layer_idx is not None else None
+                sub_state_dict(state_dict, state_dict_prefix + f"layers.{layer_idx}.")
+                if layer_idx is not None
+                else None
                 for layer_idx in mapping
             ]
             for mapping in moe_meta_layer_mapping
