@@ -16,7 +16,7 @@
 #include "hostdevcommon/dprint_common.h"
 
 // TODO: w/ the hal, this can come from core specific defines
-constexpr static std::uint32_t MAX_RISCV_PER_CORE = 5;
+constexpr static std::uint32_t MAX_RISCV_PER_CORE = 8;
 
 template <uint32_t RiscCount>
 struct profiler_msg_template_t {

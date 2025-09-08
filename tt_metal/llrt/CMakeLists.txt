@@ -16,6 +16,7 @@ add_library(llrt OBJECT ${LLRT_SRC})
 add_library(Metalium::Metal::LLRT ALIAS llrt)
 
 add_subdirectory(hal/tt-1xx)
+add_subdirectory(hal/tt-2xx)
 
 target_link_libraries(
     llrt
@@ -24,6 +25,7 @@ target_link_libraries(
         Metalium::Metal::Hardware
     PRIVATE
         HAL::1xx
+        HAL::2xx
         Tracy::TracyClient
         nlohmann_json::nlohmann_json
         Reflect::Reflect

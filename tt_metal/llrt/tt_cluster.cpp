@@ -625,7 +625,8 @@ std::optional<int> Cluster::get_physical_slot(chip_id_t chip) const {
 void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSoftResetOptions& soft_resets) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(core.chip);
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
-    this->driver_->deassert_risc_reset_at_core(core.chip, core_coord, soft_resets);
+    // this->driver_->deassert_risc_reset_at_core(core.chip, core_coord, soft_resets);
+    this->driver_->get_chip(core.chip)->deassert_tensix_risc_reset(core_coord, umd::RiscType::ALL_NEO_DMS, true);
 }
 
 void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSoftResetOptions& soft_resets) const {
