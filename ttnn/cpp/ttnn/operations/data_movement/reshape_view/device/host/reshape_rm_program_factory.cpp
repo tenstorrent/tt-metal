@@ -142,71 +142,44 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
                 end_of_read = end_of_read < input_log_shape[-2] ? end_of_read : input_log_shape[-2];
 
                 if (can_use_dual_kernel) {
+                    // Split work in half - determine split point and second write position
+                    uint32_t mid_read, second_write_pos;
                     if (source_page_size_bytes >= dest_page_size_bytes) {
-                        // Split input pages in half (source_page_size >= dest_page_size)
+                        // Split by input pages
                         uint32_t half_responsibility = responsibility / 2;
-                        uint32_t mid_read = start_of_read + half_responsibility;
-
-                        // First half of input pages
-                        const std::vector<uint32_t> first_half_args = {
-                            src_buffer->address(),
-                            dst_buffer->address(),
-                            source_read_size_bytes,
-                            start_of_read,
-                            mid_read,
-                            write_start_page,
-                            0,
-                            0};
-                        // Second half of input pages
-                        uint32_t second_write_start =
+                        mid_read = start_of_read + half_responsibility;
+                        second_write_pos =
                             write_start_page + (half_responsibility * source_page_size_bytes / dest_page_size_bytes);
-                        const std::vector<uint32_t> second_half_args = {
-                            src_buffer->address(),
-                            dst_buffer->address(),
-                            source_read_size_bytes,
-                            mid_read,
-                            end_of_read,
-                            second_write_start,
-                            0,
-                            0};
-                        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, first_half_args);
-                        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id2, core, second_half_args);
                     } else {
-                        // Split output pages in half (dest_page_size > source_page_size)
-                        uint32_t output_pages_per_core =
-                            (responsibility * source_page_size_bytes) / dest_page_size_bytes;
-                        uint32_t half_output_pages = output_pages_per_core / 2;
-
-                        // Calculate input pages needed for first half of output pages
-                        uint32_t input_pages_for_first_half =
-                            (half_output_pages * dest_page_size_bytes) / source_page_size_bytes;
-                        uint32_t mid_read = start_of_read + input_pages_for_first_half;
-
-                        // First half of output pages - processes first portion of input pages
-                        const std::vector<uint32_t> first_half_args = {
-                            src_buffer->address(),
-                            dst_buffer->address(),
-                            source_read_size_bytes,
-                            start_of_read,
-                            mid_read,
-                            write_start_page,
-                            0,
-                            0  // Process first half output pages
-                        };
-                        // Second half of output pages - processes remaining input pages
-                        const std::vector<uint32_t> second_half_args = {
-                            src_buffer->address(),
-                            dst_buffer->address(),
-                            source_read_size_bytes,
-                            mid_read,
-                            end_of_read,
-                            write_start_page + half_output_pages,
-                            0,
-                            0  // Process second half output pages
-                        };
-                        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, first_half_args);
-                        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id2, core, second_half_args);
+                        // Split by output pages
+                        uint32_t half_output_pages =
+                            ((responsibility * source_page_size_bytes) / dest_page_size_bytes) / 2;
+                        mid_read = start_of_read + (half_output_pages * dest_page_size_bytes / source_page_size_bytes);
+                        second_write_pos = write_start_page + half_output_pages;
                     }
+
+                    // Common args template: {src_addr, dst_addr, read_size, start_read, end_read, write_pos, 0, 0}
+                    const std::vector<uint32_t> first_args = {
+                        src_buffer->address(),
+                        dst_buffer->address(),
+                        source_read_size_bytes,
+                        start_of_read,
+                        mid_read,
+                        write_start_page,
+                        0,
+                        0};
+                    const std::vector<uint32_t> second_args = {
+                        src_buffer->address(),
+                        dst_buffer->address(),
+                        source_read_size_bytes,
+                        mid_read,
+                        end_of_read,
+                        second_write_pos,
+                        0,
+                        0};
+
+                    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, first_args);
+                    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id2, core, second_args);
                 } else {
                     // Original single kernel approach (remove dead code)
                     const std::vector<uint32_t> reader_runtime_args = {
