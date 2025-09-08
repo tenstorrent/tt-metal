@@ -224,7 +224,8 @@ std::vector<TensorSpec> GridSample::compute_output_specs(const std::vector<Tenso
         const ShardSpec grid_shard_spec = grid_tensor.shard_spec().value();
 
         // Calculate output shard dimensions
-        const uint32_t output_shard_height = grid_shard_spec.shape[0];  // Same height as grid
+        const uint32_t output_shard_height =
+            grid_shard_spec.shape[0] * (batch_output_channels_ ? 1 : grid_batching_factor);  // Same height as grid
         const uint32_t input_padded_channel_width = input_tensor.padded_shape()[-1];
         const uint32_t output_shard_width =
             input_padded_channel_width * (batch_output_channels_ ? grid_batching_factor : 1);  // Input channels * channel extend factor
