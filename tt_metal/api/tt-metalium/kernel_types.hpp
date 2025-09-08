@@ -134,11 +134,20 @@ struct KernelSource {
     }
 };
 
+// These are only used in op_profiler
+
+struct KernelBinaryMeta {
+    // This maps to Kernel::get_kernel_processor_type
+    uint32_t processor_type;
+    uint32_t packed_size;
+};
+
 struct KernelMeta {
     std::string name, source;
     HalProcessorClassType processor_class;
     HalProgrammableCoreType programmable_core_type;
     std::optional<MathFidelity> math_fidelity;
+    std::vector<KernelBinaryMeta> binary_meta;
 };
 
 }  // namespace tt::tt_metal
