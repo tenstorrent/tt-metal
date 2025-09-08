@@ -38,7 +38,6 @@
 #include "hostdevcommon/profiler_common.h"
 #include "impl/context/metal_context.hpp"
 #include "kernel_types.hpp"
-#include <thread_pool.hpp>
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -659,10 +658,8 @@ void InitDeviceProfiler(IDevice* device) {
         if (profiler_state_manager->device_profiler_map.find(device_id) ==
             profiler_state_manager->device_profiler_map.end()) {
             if (firstInit.exchange(false)) {
-                // DeviceProfiler profiler(device, true);
                 profiler_state_manager->device_profiler_map.try_emplace(device_id, device, true);
             } else {
-                // DeviceProfiler profiler(device, false);
                 profiler_state_manager->device_profiler_map.try_emplace(device_id, device, false);
             }
         }
@@ -680,9 +677,6 @@ void InitDeviceProfiler(IDevice* device) {
         profiler.setLastFDReadAsNotDone();
         profiler.profile_buffer_bank_size_bytes = bank_size_bytes;
         profiler.profile_buffer.resize(profiler.profile_buffer_bank_size_bytes * num_dram_banks / sizeof(uint32_t));
-
-        // profiler.thread_pool = profiler_thread_pool;
-        // profiler.profiler_thread_pool_mutex = &profiler_thread_pool_mutex;
 
         std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] =
