@@ -159,8 +159,8 @@ void ElfFile::ReleaseImpl() {
     pimpl_ = nullptr;
 }
 
-void ElfFile::ReadImage(std::string_view path) {
-    int fd = open(path.data(), O_RDONLY | O_CLOEXEC);
+void ElfFile::ReadImage(const std::string& path) {
+    int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
     struct stat st{};
     void* buffer = MAP_FAILED;
     if (fd >= 0 && fstat(fd, &st) >= 0) {

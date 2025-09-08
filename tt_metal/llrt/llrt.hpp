@@ -61,7 +61,7 @@ using WorkerCores = std::vector<WorkerCore>;
 // Return a reference to a potentially shared binary image.
 // The images are cached by path name only.
 const ll_api::memory& get_risc_binary(
-    std::string_view path,
+    const std::string& path,
     ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE,
     std::function<void(ll_api::memory&)> update_callback = nullptr);
 

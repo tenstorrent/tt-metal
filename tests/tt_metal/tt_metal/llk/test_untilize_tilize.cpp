@@ -192,6 +192,7 @@ void run_single_core_tilize_program(
 
     std::string compute_kernel;
     if (test_config.untilize_type.has_value()) {
+        // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
         std::string untilize_type = enchantum::to_string(test_config.untilize_type.value()).data();
         std::transform(untilize_type.begin(), untilize_type.end(), untilize_type.begin(), [](unsigned char c) {
             return std::tolower(c);
