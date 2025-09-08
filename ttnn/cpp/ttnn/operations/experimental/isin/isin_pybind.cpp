@@ -22,11 +22,15 @@ void bind_isin_operation(py::module& module) {
             test_elements tensor.
 
             Parameters:
-                * `elements` (Tensor): integers to be masked with 0s or 1s depending no their extence in test_elements
+                * `elements` (Tensor): integers to be masked with 0s or 1s depending no their existence in test_elements and the invert flag
                 * `test_elements` (Tensor): all integers
 
             Keyword Arguments:
                 * `invert` (bool): invert nonzero output with zeroes and vice versa
+
+            Notes:
+                * `assume_unique` (bool): does nothing for the time being, but is reserved for potential future optimizations
+                * The input tensors should be interleaved and in DRAM
         )doc";
 
     using OperationType = decltype(ttnn::experimental::isin);
@@ -40,17 +44,15 @@ void bind_isin_operation(py::module& module) {
                const Tensor& test_elements,
                const bool& assume_unique,
                const bool& invert,
-               const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& optional_out,
                const QueueId& queue_id = DefaultQueueId) -> Tensor {
-                return self(queue_id, elements, test_elements, assume_unique, invert, memory_config, optional_out);
+                return self(queue_id, elements, test_elements, assume_unique, invert, optional_out);
             },
             py::arg("elements").noconvert(),
             py::arg("test_elements").noconvert(),
             py::kw_only(),
             py::arg("assume_unique") = false,
             py::arg("invert") = false,
-            py::arg("memory_config") = std::nullopt,
             py::arg("out") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
