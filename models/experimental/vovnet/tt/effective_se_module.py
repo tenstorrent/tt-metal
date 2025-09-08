@@ -3,8 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
 import ttnn
 from models.experimental.vovnet.tt.common import Conv
+
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
 
 
 class TtEffectiveSEModule:
@@ -15,8 +23,10 @@ class TtEffectiveSEModule:
         parameters=None,
         device=None,
         base_address=None,
+        lay_idx=1000,
         **_,
     ):
+        self.lay_idx = lay_idx
         self.device = device
         self.base_address = base_address
 
@@ -32,9 +42,25 @@ class TtEffectiveSEModule:
         self.activation = ttnn.hardsigmoid
 
     def forward(self, input: ttnn.Tensor) -> ttnn.Tensor:
+        if use_signpost:
+            signpost(header="effective_se_module")
+
+        input = ttnn.sharded_to_interleaved(input, ttnn.L1_MEMORY_CONFIG)
+        input = ttnn.reshape(
+            input, (input.shape[0], int(math.sqrt(input.shape[-2])), int(math.sqrt(input.shape[-2])), input.shape[-1])
+        )
+        input = ttnn.permute(input, (0, 3, 1, 2))
         out = ttnn.mean(input, dim=[2, 3], keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
-        out = self.fc(out)[0]
+
+        out = ttnn.permute(out, (0, 2, 3, 1))
+        out, _out_height, _out_width = self.fc(out)
+        out = ttnn.sharded_to_interleaved(out, ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.reshape(out, (out.shape[0], _out_height, _out_width, out.shape[-1]))
+        out = ttnn.permute(out, (0, 3, 1, 2))
+
         out = self.activation(out, memory_config=ttnn.L1_MEMORY_CONFIG)
         out = ttnn.multiply(input, out, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(input)
+        out = ttnn.permute(out, (0, 2, 3, 1))
+
         return out

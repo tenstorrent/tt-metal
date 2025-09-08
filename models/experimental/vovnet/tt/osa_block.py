@@ -12,16 +12,19 @@ from models.experimental.vovnet.tt.effective_se_module import (
     TtEffectiveSEModule,
 )
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtOsaBlock:
-    def __init__(
-        self,
-        base_address=None,
-        device=None,
-        parameters=None,
-    ) -> None:
+    def __init__(self, base_address=None, device=None, parameters=None, lay_idx=1000) -> None:
         super().__init__()
         self.device = device
+        self.lay_idx = lay_idx
 
         self.conv_reduction = TtConvNormAct(
             stride=1,
@@ -29,9 +32,12 @@ class TtOsaBlock:
             parameters=parameters,
             base_address=f"{base_address}.conv_reduction",
             device=self.device,
+            lay_idx=f"{self.lay_idx}_0",
         )
 
-        self.conv_mid = TtSequentialAppendList(base_address=f"{base_address}", parameters=parameters, device=device)
+        self.conv_mid = TtSequentialAppendList(
+            base_address=f"{base_address}", parameters=parameters, device=device, lay_idx=f"{self.lay_idx}_1"
+        )
 
         self.conv_concat = TtConvNormAct(
             stride=1,
@@ -39,6 +45,7 @@ class TtOsaBlock:
             parameters=parameters,
             base_address=f"{base_address}.conv_concat",
             device=device,
+            lay_idx=f"{self.lay_idx}_2",
         )
 
         self.attn = TtEffectiveSEModule(
@@ -48,15 +55,21 @@ class TtOsaBlock:
             parameters=parameters,
             base_address=f"{base_address}.attn",
             device=device,
+            lay_idx=f"{self.lay_idx}_3",
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if use_signpost:
+            signpost(header="osa_block")
+
         output = [ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)]
         if self.conv_reduction is not None:
             x = self.conv_reduction.forward(x)
+
         x = self.conv_mid.forward(x[0], output)
         x = self.conv_concat.forward(x)[0]
         if self.attn is not None:
             x = self.attn.forward(x)
+
         del output
         return x

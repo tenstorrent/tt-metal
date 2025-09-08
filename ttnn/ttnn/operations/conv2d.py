@@ -205,7 +205,7 @@ def _golden_function(
         0, 3, 1, 2
     )  # 1, 1, NHW, C -> N, C, H, W
 
-    bias_tensor = bias_tensor.reshape(-1)  # torch expected 1D bias
+    bias_tensor = bias_tensor.reshape(-1) if bias_tensor is not None else None  # torch expected 1D bias
 
     if hasattr(padding, "__len__"):
         if len(padding) == 2:
@@ -238,7 +238,7 @@ def _golden_function(
     output_tensor = torch.nn.functional.conv2d(
         torch_padded_input,
         weight_tensor.float(),
-        bias=bias_tensor.float(),
+        bias=bias_tensor.float() if bias_tensor is not None else bias_tensor,
         stride=stride,
         padding=(0, 0),
         dilation=dilation,

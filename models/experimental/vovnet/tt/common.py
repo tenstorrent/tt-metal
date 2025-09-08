@@ -5,6 +5,22 @@
 import ttnn
 import math
 
+try:
+    pass
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
+
+def get_nested(params, path_list):
+    d = params
+    for key in path_list:
+        if key.isdigit():
+            key = int(key)
+        d = d[key]
+    return d
+
 
 class Conv:
     def __init__(
@@ -16,32 +32,36 @@ class Conv:
         act_block_h=None,
         activation="",
         split_conv=False,
-        seperable_conv_norm_act=False,
         fused_op=True,
         debug=False,
         groups=1,
         effective_se=False,
         parameters=None,
         pw=False,
+        use_1d_systolic_array=False,
+        deallocate_activation=False,
     ) -> None:
         self.fused_op = fused_op
-        path = path
+        self.use_1d_systolic_array = use_1d_systolic_array
+        self.deallocate_activation = deallocate_activation
+        path_parts = path.split(".")
+
         if fused_op:
             if pw:
-                self.weights = parameters[f"{path}.conv_pw.weight"]
-                self.bias = parameters[f"{path}.conv_pw.bias"]
+                self.weights = get_nested(parameters, path_parts + ["conv_pw", "weight"])
+                self.bias = get_nested(parameters, path_parts + ["conv_pw", "bias"])
             else:
-                self.weights = parameters[f"{path}.conv.weight"]
-                self.bias = parameters[f"{path}.conv.bias"]
+                self.weights = get_nested(parameters, path_parts + ["conv", "weight"])
+                self.bias = get_nested(parameters, path_parts + ["conv", "bias"])
             self.groups = groups
         else:
             if effective_se:
-                self.weights = parameters[f"{path}.weight"]
-                self.bias = parameters[f"{path}.bias"]
+                self.weights = get_nested(parameters, path_parts + ["fc", "weight"])
+                self.bias = get_nested(parameters, path_parts + ["fc", "bias"])
                 self.groups = groups
             else:
-                self.weights = parameters[f"{path}.conv_dw.weight"]
-                self.bias = parameters[f"{path}.conv_dw.bias"]
+                self.weights = get_nested(parameters, path_parts + ["conv_dw", "weight"])
+                self.bias = None  # get_nested(parameters, path_parts + ["conv_dw", "bias"])
                 self.groups = self.weights.shape[0]
 
         self.conv_params = conv_params
@@ -72,21 +92,14 @@ class Conv:
             weights_dtype=ttnn.bfloat8_b,
             activation=activation,
             shard_layout=self.shard_layout,
-            reshard_if_not_optimal=True,
-            deallocate_activation=True,
-            reallocate_halo_output=True,
+            reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
+            deallocate_activation=self.deallocate_activation,
+            reallocate_halo_output=False,
             enable_act_double_buffer=True,
-            act_block_w_div=1,
             enable_weights_double_buffer=True,
         )
         if self.act_block_h is not None:
             self.conv_config.act_block_h_override = act_block_h
-
-        if self.fused_op:
-            self.bn_weight = parameters[f"{path}.bn.weight"]
-            self.bn_bias = parameters[f"{path}.bn.bias"]
-            self.bn_running_mean = parameters[f"{path}.bn.running_mean"]
-            self.bn_running_var = parameters[f"{path}.bn.running_var"]
 
     def __str__(self) -> str:
         return f"Conv: {self.weights.shape} {self.bias.shape} {self.kernel_size}"
@@ -94,7 +107,6 @@ class Conv:
     def __call__(self, input_tensor):
         if input_tensor.shape[1] != 1:
             N, C, H, W = input_tensor.shape
-            input_tensor = ttnn.permute(input_tensor, (0, 2, 3, 1))
             input_height = input_tensor.shape[1]
             input_width = input_tensor.shape[2]
         else:
@@ -133,23 +145,4 @@ class Conv:
             return_output_dim=True,
             return_weights_and_bias=True,
         )
-
-        output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
-
-        output_tensor = ttnn.reshape(
-            output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[-1])
-        )
-        output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2))
-        if self.fused_op:
-            output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
-            bn = ttnn.batch_norm(
-                output_tensor,
-                running_mean=self.bn_running_mean,
-                running_var=self.bn_running_var,
-                weight=self.bn_weight,
-                bias=self.bn_bias,
-                training=False,
-            )
-            output_tensor = ttnn.relu(bn, memory_config=ttnn.L1_MEMORY_CONFIG)
-
         return output_tensor, _out_height, _out_width

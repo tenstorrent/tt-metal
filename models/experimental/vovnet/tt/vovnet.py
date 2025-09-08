@@ -2,6 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
 
 import ttnn
 
@@ -30,27 +36,21 @@ class TtVoVNet:
                 base_address=f"stem.0",
                 device=self.device,
                 parameters=parameters,
+                deallocate_activation=True,
+                lay_idx=2,
             ),
             TtSeparableConvNormAct(
-                base_address=f"stem.1",
-                device=device,
-                parameters=parameters,
-                stride=1,
-                padding=1,
+                base_address=f"stem.1", device=device, parameters=parameters, stride=1, padding=1, lay_idx=3
             ),
             TtSeparableConvNormAct(
-                base_address=f"stem.2",
-                device=device,
-                parameters=parameters,
-                stride=2,
-                padding=1,
+                base_address=f"stem.2", device=device, parameters=parameters, stride=2, padding=1, lay_idx=4
             ),
         ]
 
         self.stages = []
 
         downsample = False
-        for i in range(4):
+        for idx, i in enumerate(range(4)):
             self.stages += [
                 TtOsaStage(
                     block_per_stage=1,
@@ -58,6 +58,7 @@ class TtVoVNet:
                     base_address=f"stages.{i}",
                     parameters=parameters,
                     device=self.device,
+                    lay_idx=f"4_{idx}",
                 )
             ]
             downsample = True
@@ -69,10 +70,15 @@ class TtVoVNet:
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if use_signpost:
+            signpost(header="vovnet")
+
         for i, module in enumerate(self.stem):
             x = module.forward(x)[0]
+
         for i, module in enumerate(self.stages):
             x = module.forward(x)
 
         x = self.head.forward(x)
+
         return x
