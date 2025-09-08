@@ -62,10 +62,6 @@ void kernel_main() {
     uint32_t start_tw = offset_c % Wt;
     uint32_t end_tw = (dst_shard_width != 0) ? (start_tw + dst_shard_width) : Wt;
 
-    // For TTS column broadcast, use predicate dimensions for offset calculations
-    // The true tensor may have different actual dimensions, but we use predicate dims for traversal
-    const uint32_t true_HtWt = Ht * Wt;  // Use predicate dimensions for traversal
-
     // this is the INPUT tile offset for predicate
     uint32_t tile_offset = start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride;
 #if !SRC_BCAST_PREDICATE
