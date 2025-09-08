@@ -62,7 +62,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN umask 000 && python3 -m venv $PYTHON_ENV_DIR && chmod -R 777 $PYTHON_ENV_DIR
+RUN umask 000 && python3 -m venv $PYTHON_ENV_DIR
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
