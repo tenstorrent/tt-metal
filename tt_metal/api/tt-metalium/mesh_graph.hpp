@@ -118,7 +118,7 @@ public:
 
     // Static functions for mesh graph descriptor management
     static std::filesystem::path get_mesh_graph_descriptor_path_for_cluster_type(
-        tt::tt_metal::ClusterType cluster_type, const std::string& root_dir);
+        tt::tt_metal::ClusterType cluster_type, const std::string& root_dir, const bool version_2 = false);
 
 private:
     void validate_mesh_id(MeshId mesh_id) const;
@@ -145,6 +145,9 @@ private:
 
     static const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
         cluster_type_to_mesh_graph_descriptor;
+
+    static const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
+        cluster_type_to_mesh_graph_descriptor_mgd2;
 };
 
 }  // namespace tt::tt_fabric

@@ -209,6 +209,9 @@ class RunTimeOptions {
     // Consolidated target device selection
     TargetDevice runtime_target_device_ = TargetDevice::Silicon;
 
+    // Using MGD 2.0 syntax for mesh graph descriptor in Fabric Control Plane
+    bool use_mesh_graph_descriptor_2_0 = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -485,6 +488,9 @@ public:
 
     // Target device accessor
     inline TargetDevice get_target_device() const { return runtime_target_device_; }
+
+    // Using MGD 2.0 syntax for mesh graph descriptor in Fabric Control Plane
+    bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.
