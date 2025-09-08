@@ -205,6 +205,8 @@ class TtHead:
         if self.parameters.resolution[0] == 320:
             output_tensor = ttnn.add(output_tensor, 0.0, dtype=ttnn.bfloat8_b)
             outfromNeck2 = ttnn.add(outfromNeck2, 0.0, dtype=ttnn.bfloat8_b)
+        if self.parameters.resolution[0] == 640:
+            output_tensor = ttnn.add(output_tensor, 0.0, dtype=ttnn.bfloat8_b)
         output_tensor = ttnn.concat([output_tensor, outfromNeck2], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output_tensor = self.conv12(output_tensor)

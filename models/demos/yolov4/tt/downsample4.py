@@ -176,9 +176,8 @@ class Down4:
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
         output_tensor_left = ttnn.sharded_to_interleaved(output_tensor_left, ttnn.L1_MEMORY_CONFIG)
-        # if self.parameters.resolution[0] == 640:
-        #     output_tensor = ttnn.add(output_tensor, 0.0, dtype=ttnn.bfloat8_b)
-        #     output_tensor_left = ttnn.add(output_tensor_left, 0.0, dtype=ttnn.bfloat8_b)
+        if self.parameters.resolution[0] == 640:
+            output_tensor = ttnn.add(output_tensor, 0.0, dtype=ttnn.bfloat8_b)
         output_tensor = ttnn.concat([output_tensor, output_tensor_left], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(output_tensor_left)
 
