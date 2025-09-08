@@ -142,6 +142,8 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
         (max_eth_channels + logical_fabric_mux_cores_.size() - 1) / logical_fabric_mux_cores_.size();
     num_used_riscs_per_tensix_ = num_configs_per_core_;
 
+    TT_FATAL(num_used_riscs_per_tensix_ == 1, "Currently only support one mux per tensix");
+
     // Second pass: create per-device channel mappings using real ethernet channel IDs
     for (const auto& device : all_active_devices) {
         auto dev_id = device->id();
