@@ -23,16 +23,6 @@ bool check_if_recv_socket(const tt::tt_metal::distributed::SocketConfig& socket_
     return (socket_config.receiver_rank == expected_receiver_rank);
 }
 
-// bool check_if_send_socket(const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
-//     const auto& socket_config = mesh_socket.get_config();
-//     return check_if_send_socket(socket_config);
-// }
-//
-// bool check_if_recv_socket(const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
-//     const auto& socket_config = mesh_socket.get_config();
-//     return check_if_recv_socket(socket_config);
-// }
-
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 }  // namespace
