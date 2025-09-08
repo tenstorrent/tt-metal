@@ -119,6 +119,9 @@ class CompositePytorchGraph(PytorchGraph):
             main_op_code = main_op_code.replace(f"{const},", f"params['{const}'],")
             main_op_code = main_op_code.replace(f"{const})", f"params['{const}'])")
             main_op_code = main_op_code.replace(f"({const})", f"(params['{const}'])")
+            main_op_code = main_op_code.replace(f'"{const}",', f"params['{const}'],")
+            main_op_code = main_op_code.replace(f'"{const}")', f"params['{const}'])")
+            main_op_code = main_op_code.replace(f'("{const}")', f"(params['{const}'])")
         code_lines[
             "main"
         ] += f"""
@@ -126,6 +129,12 @@ class CustomModel(torch.nn.Module):
     def __init__(self, params):
         self.params = params
         super().__init__()
+        
+    def state_dict(self):
+        return self.params.to_dict()
+        
+    def load_state_dict(self, state_dict, *args, **kwargs):
+        self.params.from_dict(state_dict)
 
     def forward(self,{','.join([inp.input_identifier for inp in input_ops])}):
         params = self.params

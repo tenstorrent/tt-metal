@@ -6,7 +6,11 @@ import json
 
 def _tensor_info(obj):
     if isinstance(obj, torch.Tensor) and not obj.__class__.__name__ == "Trackable_Tensor":
-        return {"shape": list(obj.shape), "dtype": str(obj.dtype), "min_max": [obj.min().item(), obj.max().item()]}
+        return {
+            "shape": list(obj.shape),
+            "dtype": str(obj.dtype),
+            "min_max": [(obj.min().item(), obj.max().item()) if obj.numel() > 0 else (0, 0)],
+        }
     elif isinstance(obj, (list, tuple)):
         return [_tensor_info(x) for x in obj]
     elif isinstance(obj, dict):
@@ -84,3 +88,12 @@ class LazyParams:
             t = torch.randint(low, high, shape, dtype=dtype)
             return t
         return self.data[const_name]
+
+    def to_dict(self):
+        if self.fake:
+            return {k: self[k] for k in self.meta}
+        return self.data
+
+    def from_dict(self, state_dict):
+        self.data = state_dict
+        self.fake = False

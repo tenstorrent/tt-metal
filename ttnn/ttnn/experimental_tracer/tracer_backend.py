@@ -25,6 +25,7 @@ from tracer_backend_utils import (
     InputOp,
 )
 from utils import LazyParams
+from collections import OrderedDict
 
 
 # TODO: move this into library proper
@@ -129,6 +130,7 @@ class FrozenTrackableTensor:
         self.module_name = tensor.module_name  # Store the module name if it exists
         self.shape = tensor.shape
         self.graph_output_index = None
+        self.const_name = tensor.const_name
         if "graph_output_index" in tensor.__dict__:
             self.graph_output_index = tensor.graph_output_index
 
@@ -138,7 +140,7 @@ class FrozenTrackableTensor:
     @property
     def is_graph_input(self):
         assert self.id != "-1", "Trackable_Tensor must have a valid id. Got -1."
-        return "-" in self.id
+        return "-" in self.id and self.const_name is None
 
 
 class Trackable_Tensor(torch.Tensor):
@@ -183,6 +185,7 @@ class Trackable_Tensor(torch.Tensor):
         r.trackable_shape = elem.shape
         r.trackable_dtype = elem.dtype
         r.id = "-1"
+        r.const_name = None
         return r
 
     def __repr__(self):
@@ -363,18 +366,18 @@ class OperationGraph:
             op_unique_name = ""
 
         def process_arg(arg, index):
-            if isinstance(arg, FrozenTrackableTensor):
+            if isinstance(arg, FrozenTrackableTensor) and arg.const_name is None:
                 if arg.id in self.tracer.graph_output_to_node or arg.is_graph_input:
                     name = (
                         self.tracer.graph_output_to_node[arg.id]["name"] if not arg.is_graph_input else arg.module_name
                     )
-                    return PlaceholderTensor(name=name)
+                    return PlaceholderTensor(name=name, value=arg, shape=arg.shape)
+            elif isinstance(arg, FrozenTrackableTensor):
+                result = ConstantTensor(name=arg.id, value=arg.tensor, id=arg.const_name, shape=arg.shape)
+                self.tracer.constants[result.name] = result
+                return result
             elif isinstance(arg, torch.Tensor):
-                if self.tracer.save_original_tensors:
-                    for constant in self.tracer.constants.values():
-                        if constant.value.equal(arg):
-                            return constant
-                result = ConstantTensor(name=f"{op_unique_name}_{index}", value=arg)
+                result = ConstantTensor(name=f"{op_unique_name}_{index}", value=arg, shape=arg.shape)
                 self.tracer.constants[result.name] = result
                 return result
             elif isinstance(arg, (list, tuple)):
@@ -407,7 +410,9 @@ class OperationGraph:
                 parent_id = node_data["args"][parent_index].id.split("_")[0]
                 assert parent_id in self.operations, f"Parent ID {parent_id} not found in operations."
                 new_args = [arg for arg in args]
-                new_args[parent_index] = PlaceholderTensor(name=self.operations[parent_id].unique_name)
+                new_args[parent_index] = PlaceholderTensor(
+                    name=self.operations[parent_id].unique_name, shape=new_args[parent_index].shape
+                )
                 operation = TupleOp(
                     id=node_id,
                     unique_name=name,
@@ -454,7 +459,7 @@ class OperationGraph:
                     meta={
                         "o_shapes": [arg.shape],
                     },
-                    res=PlaceholderTensor(name=arg.module_name),
+                    res=PlaceholderTensor(name=arg.module_name, shape=arg.shape),
                 )
                 self.graph.add_edge(arg.id, node_data["id"])
             elif isinstance(arg, (list, tuple)):
@@ -471,7 +476,7 @@ class OperationGraph:
                             meta={
                                 "o_shapes": [item.shape],
                             },
-                            res=PlaceholderTensor(name=item.module_name),
+                            res=PlaceholderTensor(name=item.module_name, shape=item.shape),
                         )
                         self.graph.add_edge(item.id, node_data["id"])
 
@@ -484,6 +489,8 @@ class OperationGraph:
             for input_node in inputs:
                 if output in self.operations and input_node.tensor.id in self.operations:
                     self.graph.add_edge(input_node.tensor.id, output)
+                elif output in self.operations and input_node.tensor.const_name is not None:
+                    continue
                 else:
                     print(f"Warning: Edge from {output} to {input_node} could not be added.")
 
@@ -527,6 +534,35 @@ class WrappedOperationGraph(OperationGraph):
         if self.verbose and unsupported_wrapped_ops:
             print(f"Unsupported wrapped operations: {', '.join(unsupported_wrapped_ops)}")
 
+    def remove_detach_on_constants(self):
+        for node_id in nx.topological_sort(self.graph):
+            operation = self.operations[node_id]
+            if operation.function_call_name == "torch.ops.aten.detach":
+                if isinstance(operation.args[0], ConstantTensor):
+                    parent = operation.args[0]
+                    for successor in self.graph.successors(node_id):
+                        succ_op = self.operations[successor]
+                        new_args = []
+                        for succ_arg in succ_op.args:
+                            if isinstance(succ_arg, PlaceholderTensor) and succ_arg.name == operation.unique_name:
+                                new_args.append(parent)
+                            elif isinstance(succ_arg, list):
+                                new_list = []
+                                for item in succ_arg:
+                                    if isinstance(item, PlaceholderTensor) and item.name == operation.unique_name:
+                                        new_list.append(parent)
+                                    else:
+                                        new_list.append(item)
+                                new_args.append(new_list)
+                            else:
+                                new_args.append(succ_arg)
+                        succ_op.args = new_args
+                        self.operations[successor] = succ_op
+                        self.graph.nodes[successor]["operation"] = succ_op
+                    for edge in list(self.graph.out_edges(node_id)):
+                        self.graph.remove_edge(*edge)
+                    self.graph.remove_node(node_id)
+
     def generate(self):
         """
         Generate operations and build the graph.
@@ -534,6 +570,7 @@ class WrappedOperationGraph(OperationGraph):
         self.create_operations()
         self.convert_operations_to_wrapped()
         self.build_graph()
+        self.remove_detach_on_constants()
 
 
 def register_module_hooks(module, parent_name=""):
@@ -904,6 +941,31 @@ def set_is_graph_output(outputs, index=0):
         print(f"Warning: Output {outputs} are not Trackable_Tensor instances, cannot set is_graph_output.")
 
 
+def wrap_state_dict(state_dict, save_original_tensors):
+    """
+    Wrap the tensors in the state_dict with Trackable_Tensor.
+
+    Args:
+        state_dict: The state_dict of the model.
+
+    Returns:
+        The wrapped state_dict.
+    """
+
+    wrapped_state_dict = {}
+    for key, value in state_dict.items():
+        if isinstance(value, torch.Tensor):
+            wrapped_tensor = Trackable_Tensor(value)
+            wrapped_tensor.id = str(Trackable_Tensor.tracer_data.get_next_id())
+            wrapped_tensor.const_name = key
+            wrapped_state_dict[key] = wrapped_tensor
+        else:
+            wrapped_state_dict[key] = value
+    wrapped_state_dict = OrderedDict(wrapped_state_dict)
+    # wrapped_state_dict._metadata = {}
+    return wrapped_state_dict
+
+
 def trace_torch_model(
     model, input_shapes, input_dtypes=None, dump_visualization=False, wrap_operations=True, save_original_tensors=True
 ) -> OperationGraph:
@@ -930,7 +992,10 @@ def trace_torch_model(
             tracer.fake_original_tensor = model.params.fake
     except:
         pass
+    state_dict = model.state_dict()
     Trackable_Tensor.set_tracer_data(tracer)  # Set the tracer data instance for Trackable_Tensor
+    wrapped_state_dict = wrap_state_dict(state_dict, save_original_tensors)
+    model.load_state_dict(wrapped_state_dict, assign=True)
     input_tensors = []
     if input_dtypes is None:
         input_dtypes = [torch.float32] * len(input_shapes)

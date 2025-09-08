@@ -150,19 +150,12 @@ class Operation:
 
     @property
     def input_shapes(self) -> Optional[Dict[int, Any]]:
-        try:
-            dynamic_shapes = self.meta_data.meta["i_shapes"]
-            args_shapes = {}
-            offset = 0
-            for index, elem in enumerate(self.args):
-                if isinstance(elem, PlaceholderTensor) and offset < len(dynamic_shapes):
-                    args_shapes[index] = dynamic_shapes[offset]
-                    offset += 1
-                elif isinstance(elem, ConstantTensor):
-                    args_shapes[index] = elem.value.shape
-            return args_shapes
-        except:
-            return None
+        args_shapes = {}
+        for index, elem in enumerate(self.args):
+            if isinstance(elem, (PlaceholderTensor, ConstantTensor)):
+                args_shapes[index] = elem.shape
+        return args_shapes
+
 
     @property
     def output_shapes(self) -> Optional[List[Any]]:
@@ -819,6 +812,29 @@ class AtenScaledDotProductFlashAttention(WrappedOperation):
 
     pass
 
+@dataclass
+@register_operation("torch.ops.aten.detach")
+class AtenDetach(WrappedOperation):
+    """Represents the detach operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.t")
+class AtenT(WrappedOperation):
+    """Represents the t operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten._scaled_dot_product_flash_attention_for_cpu")
+class AtenScaledDotProductFlashAttentionForCPU(WrappedOperation):
+    """Represents the _scaled_dot_product_flash_attention_for_cpu operation."""
+
+    pass
+
 
 @dataclass
 class InputOp(Operation):
@@ -868,6 +884,7 @@ class Parameter:
     """Represents a parameter in the graph."""
 
     name: str
+    shape: List[int]
     value: Optional[Union[torch.Tensor, float, int, str]] = None
 
     def generate_code(self) -> str:
@@ -885,13 +902,14 @@ class ConstantTensor(Parameter):
     ConstantTensorFromModel: ClassVar[bool] = False
 
     def __post_init__(self):
-        self.id = f"const{ConstantTensor.counter}"
+        if self.id == "":
+            self.id = f"const{ConstantTensor.counter}"
         ConstantTensor.counter += 1
 
     def generate_code(self) -> str:
         """Generate the serialization code for this constant tensor."""
         if ConstantTensor.ConstantTensorFromModel:
-            return self.id
+            return f"\"{self.id}\""
         if self.value.numel() > 10:
             return f"torch.zeros({self.value.shape}, dtype={self.value.dtype})"
         return f"torch.tensor({self.value.tolist()})"
