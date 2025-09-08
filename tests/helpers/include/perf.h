@@ -4,13 +4,9 @@
 
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
-#include <type_traits>
 
 #include "ckernel.h"
-#include "ckernel_instr_params.h"
-#include "ckernel_ops.h"
 
 enum class PerfRunType
 {
