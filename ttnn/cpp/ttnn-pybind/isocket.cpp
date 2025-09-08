@@ -22,14 +22,16 @@ public:
     void recv(ttnn::Tensor& tensor) override { PYBIND11_OVERRIDE_PURE(void, ttnn::distributed::ISocket, recv, tensor); }
 
     tt::tt_metal::distributed::multihost::Rank get_rank() const override {
-        PYBIND11_OVERRIDE_PURE(tt::tt_metal::distributed::multihost::Rank, ttnn::distributed::ISocket, get_rank, );
+        PYBIND11_OVERRIDE_PURE(
+            tt::tt_metal::distributed::multihost::Rank, ttnn::distributed::ISocket, get_rank, /*no args*/);
     }
 
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context() const override {
         PYBIND11_OVERRIDE_PURE(
             std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>,
             ttnn::distributed::ISocket,
-            get_distributed_context, );
+            get_distributed_context,
+            /*no args*/);
     }
 };  // class PyISocket
 
