@@ -79,6 +79,9 @@ private:
     // Device frequency
     int device_core_frequency{};
 
+    // Thread pool used for processing data when dumping results
+    std::shared_ptr<ThreadPool> thread_pool{};
+
     // Last fast dispatch read performed flag
     bool is_last_fd_read_done{};
 
@@ -100,9 +103,6 @@ private:
 
     // Per-core sync info used to make tracy context
     std::unordered_map<CoreCoord, SyncInfo> core_sync_info;
-
-    // (Device ID, Core Coord) pairs that keep track of cores which need to have their Tracy contexts updated
-    // std::unordered_set<std::pair<chip_id_t, CoreCoord>, pair_hash<chip_id_t, CoreCoord>> device_cores;
 
     // Storage for all core's control buffers
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_control_buffers;
@@ -197,8 +197,6 @@ public:
 
     ~DeviceProfiler();
 
-    std::shared_ptr<ThreadPool> thread_pool{};
-
     // Device-core Syncdata
     std::map<CoreCoord, SyncInfo> device_core_sync_info;
 
@@ -263,18 +261,6 @@ public:
 
     bool isLastFDReadDone() const;
 };
-
-// Merges markers from each (physical core, risc type) group into a single sorted vector. The markers in each group
-// should already be sorted.
-//
-// IMPORTANT: This function creates a vector of references to the TTDeviceMarker objects stored in
-// device_markers_per_core_risc_map. These are direct references to the original objects, not copies of the data.
-// Thread safety warning: device_markers_per_core_risc_map MUST NOT be modified (no insertions, deletions, or rehashing)
-// while these references are in use, as this could invalidate the references and cause undefined behavior.
-std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDeviceMarkersVector(
-    const std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>>&
-        device_markers_per_core_risc_map,
-    ThreadPool* thread_pool);
 
 bool useFastDispatch(IDevice* device);
 
