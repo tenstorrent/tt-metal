@@ -372,7 +372,6 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     input_queue = Queue()
     output_queue = Queue()
     p = None
-
     timeout = get_timeout(module_name)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
@@ -523,7 +522,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                     break
                 else:
                     logger.info("Continuing with remaining tests in suite despite timeout.")
-                    p = Process(target=run, args=(test_module_name, input_queue, output_queue, config))
+                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
                     p.start()
                     # Continue to the next test vector without breaking
 
