@@ -103,8 +103,8 @@ jobs:
               # already JSON; expect an array of strings
               SEL_ARR="$(echo "${SEL}" | jq -c '.')"
             else
-              # CSV -> JSON array (trim whitespace around items)
-              SEL_ARR="$(echo "${SEL}" | tr ',' '\n' | sed -E 's/^ *| *$//g' | awk 'NF' | jq -R . | jq -s -c '.')"
+              echo "Not supported input format"
+              exit 1
             fi
           fi
           echo "SEL array: ${SEL_ARR}"
