@@ -890,7 +890,7 @@ class ModelArgs:
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=max(
-                    1,
+                    8,
                     8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(
@@ -1311,12 +1311,20 @@ class ModelArgs:
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
     def get_xqkv_prefill_mem_cfg(self, seq_len):
+        print(
+            "get_xqkv_prefill_mem_cfg",
+            self.n_kv_heads,
+            self.cluster_shape[1],
+            seq_len,
+            self.head_dim,
+            (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
+        )
         return ttnn.create_sharded_memory_config(
             (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
             ttnn.CoreGrid(y=8, x=8),
-            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardStrategy.BLOCK,
             ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
+            use_height_and_width_as_shard_shape=False,
         )
 
     def is_distributed_norm(self, mode):
@@ -1686,6 +1694,83 @@ class ModelArgs:
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
             with open(config_file, "r") as f:
                 config = json.load(f)
+        config = {
+            "vocab_size": 32000,
+            "max_position_embeddings": 1024,
+            "hidden_size": 1024,
+            "intermediate_size": 1024,
+            "num_hidden_layers": 16,
+            "num_attention_heads": 8,
+            "num_key_value_heads": 8,
+            "hidden_act": "silu",
+            "initializer_range": 0.02,
+            "rms_norm_eps": 1e-05,
+            "pretraining_tp": 1,
+            "use_cache": True,
+            "rope_theta": 10000.0,
+            "rope_scaling": None,
+            "attention_bias": False,
+            "attention_dropout": 0.0,
+            "mlp_bias": False,
+            "head_dim": 256,
+            "return_dict": True,
+            "output_hidden_states": False,
+            "torchscript": False,
+            "torch_dtype": "float16",
+            "use_bfloat16": False,
+            "tf_legacy_loss": False,
+            "pruned_heads": {},
+            "tie_word_embeddings": False,
+            "chunk_size_feed_forward": 0,
+            "is_encoder_decoder": False,
+            "is_decoder": False,
+            "cross_attention_hidden_size": None,
+            "add_cross_attention": False,
+            "tie_encoder_decoder": False,
+            "max_length": 20,
+            "min_length": 0,
+            "do_sample": False,
+            "early_stopping": False,
+            "num_beams": 1,
+            "num_beam_groups": 1,
+            "diversity_penalty": 0.0,
+            "temperature": 1.0,
+            "top_k": 50,
+            "top_p": 1.0,
+            "typical_p": 1.0,
+            "repetition_penalty": 1.0,
+            "length_penalty": 1.0,
+            "no_repeat_ngram_size": 0,
+            "encoder_no_repeat_ngram_size": 0,
+            "bad_words_ids": None,
+            "num_return_sequences": 1,
+            "output_scores": False,
+            "return_dict_in_generate": False,
+            "forced_bos_token_id": None,
+            "forced_eos_token_id": None,
+            "remove_invalid_values": False,
+            "exponential_decay_length_penalty": None,
+            "suppress_tokens": None,
+            "begin_suppress_tokens": None,
+            "architectures": ["LlamaForCausalLM"],
+            "finetuning_task": None,
+            "id2label": {0: "LABEL_0", 1: "LABEL_1"},
+            "label2id": {"LABEL_0": 0, "LABEL_1": 1},
+            "tokenizer_class": None,
+            "prefix": None,
+            "bos_token_id": 1,
+            "pad_token_id": None,
+            "eos_token_id": 2,
+            "sep_token_id": None,
+            "decoder_start_token_id": None,
+            "task_specific_params": None,
+            "problem_type": None,
+            "_name_or_path": "meta-llama/Llama-2-7b-hf",
+            "transformers_version": "4.53.0",
+            "model_type": "llama",
+            "output_attentions": False,
+        }
+        print(config)
         self._set_params_from_dict(config, is_hf=True)
 
     def __repr__(self):
@@ -1811,6 +1896,19 @@ class ModelArgs:
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
         for k in keys_dict:
+            print(k, state_dict[k].shape)
+            if (k == "tok_embeddings.weight") or (k == "output.weight"):
+                state_dict[k] = state_dict[k][:, :1024]
+            elif ("w1" in k) or ("w3" in k):
+                state_dict[k] = state_dict[k][:2048, :1024]
+            elif "w2" in k:
+                state_dict[k] = state_dict[k][:1024, :2048]
+            elif ("wq" in k) or ("wk" in k) or ("wv" in k) or ("wo" in k):
+                state_dict[k] = state_dict[k][:1024, :1024]
+            elif "norm" in k:
+                state_dict[k] = state_dict[k][:1024]
+            print("\t", state_dict[k].shape)
+
             if any([r in k for r in remv]):
                 state_dict.pop(k)
 

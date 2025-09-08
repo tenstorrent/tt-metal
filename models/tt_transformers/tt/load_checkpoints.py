@@ -581,6 +581,7 @@ def fuse_qkv_meta(state_dict):
 
         prefix = wq_key[: -len("wq.weight")]
         fused_qkv_weights = torch.vstack((wq, wk, wv))
+        print(fused_qkv_weights.shape, wq.shape)
         state_dict[f"{prefix}wqkv.weight"] = fused_qkv_weights
 
         del state_dict[wq_key], state_dict[wk_key], state_dict[wv_key]
