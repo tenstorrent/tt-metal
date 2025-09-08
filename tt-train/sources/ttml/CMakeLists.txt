@@ -254,6 +254,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp
+    # SGD Fused Optimizer
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/sgd_fused.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/sgd_fused.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
