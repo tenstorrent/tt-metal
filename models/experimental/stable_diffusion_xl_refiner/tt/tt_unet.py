@@ -160,7 +160,7 @@ class TtUNet2DConditionModel:
         hidden_states, [C, H, W] = self.conv_in.apply(hidden_states, B, C, H, W)
 
         # 3. down blocks
-        down_block_res_samples = (hidden_states,)
+        down_block_res_samples = [hidden_states]  # Use list instead of tuple
         for i, down_block in enumerate(self.down_blocks):
             print("down_block:", i, "input shape:", hidden_states.shape, "[B, C, H, W]:", [B, C, H, W])
             if i == 0 or i == 3:
@@ -169,7 +169,7 @@ class TtUNet2DConditionModel:
                 hidden_states, [C, H, W], res_samples = down_block.forward(
                     hidden_states, [B, C, H, W], temb, encoder_hidden_states
                 )
-            down_block_res_samples += res_samples
+            down_block_res_samples.extend(res_samples)  # Use extend instead of tuple concatenation
             print("res samples:", res_samples)
             print("down_block_res_samples length:", len(down_block_res_samples))
 
@@ -182,7 +182,11 @@ class TtUNet2DConditionModel:
         for i, up_block in enumerate(self.up_blocks):
             res_samples = down_block_res_samples[-len(up_block.resnets) :]
             print("res_samples:", res_samples)
-            print
+
+            # Check allocation status of each tensor before up block
+            for j, tensor in enumerate(res_samples):
+                print(f"res_samples[{j}] is allocated: {tensor.is_allocated()}")
+
             down_block_res_samples = down_block_res_samples[: -len(up_block.resnets)]
             print("down_block_res_samples length after trim:", len(down_block_res_samples))
             if i == 0 or i == 3:

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_transformer2dmodel import TtTransformer2DModel
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_resnetblock2d import TtResnetBlock2D
@@ -60,10 +61,16 @@ class TtCrossAttnDownBlock2D(LightweightModule):
         for resnet, attn in tt_blocks:
             hidden_states, [C, H, W] = resnet.forward(hidden_states, temb, [B, C, H, W])
             hidden_states = attn.forward(hidden_states, [B, C, H, W], encoder_hidden_states=encoder_hidden_states)
-            residuals = residuals + (hidden_states,)
+            # Create a copy of the tensor to avoid aliasing issues with hidden_states
+            residual = ttnn.clone(hidden_states)
+            # residual = ttnn.to_memory_config(residual_copy, ttnn.DRAM_MEMORY_CONFIG)
+            residuals = residuals + (residual,)
 
         if self.downsamplers is not None:
             hidden_states, [C, H, W] = self.downsamplers.forward(hidden_states, [B, C, H, W])
-            residuals = residuals + (hidden_states,)
+            # Create a copy of the tensor to avoid aliasing issues with hidden_states
+            residual = ttnn.clone(hidden_states)
+            # residual = ttnn.to_memory_config(residual_copy, ttnn.DRAM_MEMORY_CONFIG)
+            residuals = residuals + (residual,)
 
         return hidden_states, [C, H, W], residuals
