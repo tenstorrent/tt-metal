@@ -60,6 +60,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory_sharde
     const std::string& mode,
     const std::string& padding_mode,
     bool use_precomputed_grid,
-    bool extend_channels);
+    bool batch_output_channels);
 
 }  // namespace ttnn::operations::grid_sample

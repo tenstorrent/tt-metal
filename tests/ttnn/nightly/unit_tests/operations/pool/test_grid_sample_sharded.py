@@ -31,13 +31,13 @@ def align_to_boundary(value, alignment):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
-@pytest.mark.parametrize("use_precomputed_grid", [False])  # , True])
+@pytest.mark.parametrize("use_precomputed_grid", [True, False])
 @pytest.mark.parametrize(
     "input_shape, grid_shape",
     [
-        # ((2, 32, 16, 32), (2, 8, 8, 2)),  # channels=32 (multiple of 32)
+        ((1, 32, 16, 32), (1, 8, 8, 2)),  # channels=32 (multiple of 32)
         ((1, 64, 32, 64), (1, 16, 16, 2)),  # channels=64 (multiple of 32)
-        # ((4, 96, 8, 16), (4, 4, 4, 2)),  # channels=96 (multiple of 32)
+        ((1, 96, 8, 16), (1, 4, 4, 2)),  # channels=96 (multiple of 32)
     ],
 )
 def test_grid_sample_sharded(device, input_shape, grid_shape, use_precomputed_grid):
@@ -64,7 +64,11 @@ def test_grid_sample_sharded(device, input_shape, grid_shape, use_precomputed_gr
     # torch_grid = F.affine_grid(theta_batched, shape, align_corners=False)
     # torch_grid += torch.randn(grid_shape) * 0.05
 
-    torch_grid = torch.zeros(grid_shape, dtype=torch.float32)  # + 0.38
+    # Create a grid with incrementing values starting from 0.01
+    # grid_size = grid_h * grid_w
+    # increments = torch.arange(1, grid_size + 1, dtype=torch.float32) * 0.01
+    # torch_grid = increments.view(1, grid_h, grid_w, 1).expand(batch_size, -1, -1, 2)
+    torch_grid = torch.rand(grid_shape, dtype=torch.float32) * 2 - 1
 
     # Calculate expected PyTorch output
     torch_output_nchw = F.grid_sample(
@@ -117,7 +121,7 @@ def test_grid_sample_sharded(device, input_shape, grid_shape, use_precomputed_gr
         ttnn_grid_interleaved = ttnn.from_torch(
             torch_grid,
             device=device,
-            dtype=ttnn.float32,
+            dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -132,6 +136,10 @@ def test_grid_sample_sharded(device, input_shape, grid_shape, use_precomputed_gr
     # Verify output shape
     expected_shape = torch_output_nhwc.shape
     assert ttnn_output_torch.shape == expected_shape, f"Expected {expected_shape}, got {ttnn_output_torch.shape}"
+
+    # Calculate and print maximum absolute difference
+    abs_diff = torch.abs(torch_output_nhwc - ttnn_output_torch)
+    max_abs_diff = abs_diff.max().item()
 
     # Verify numerical correctness
     pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)

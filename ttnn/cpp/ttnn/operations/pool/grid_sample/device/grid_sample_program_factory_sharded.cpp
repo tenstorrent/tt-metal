@@ -25,7 +25,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory_sharde
     const std::string& mode,
     const std::string& padding_mode,
     bool use_precomputed_grid,
-    bool extend_channels) {
+    bool batch_output_channels) {
     tt::tt_metal::Program program{};
 
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -59,10 +59,10 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory_sharde
     // Calculate sticks per core for grid tensor
     const uint32_t grid_nsticks_per_core = grid_shard_spec.shape[0];
 
-    // Calculate output sticks per core based on extend_channels mode
+    // Calculate output sticks per core based on batch_output_channels mode
     const uint32_t output_nsticks_per_core =
-        extend_channels ? grid_nsticks_per_core :          // extend_channels=true: 1:1 ratio
-            grid_nsticks_per_core * grid_batching_factor;  // extend_channels=false: 1:K ratio
+        batch_output_channels ? grid_nsticks_per_core :    // batch_output_channels=true: 1:1 ratio
+            grid_nsticks_per_core * grid_batching_factor;  // batch_output_channels=false: 1:K ratio
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t buffering_factor = 2;  // Data is already in shards
@@ -93,9 +93,9 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory_sharde
 
     // CB2: Scalar buffer (holds 4 bilinear interpolation weights)
     const uint32_t scalar_cb_num_pages = buffering_factor;
-    const uint32_t scalar_cb_page_size = tt::tt_metal::detail::TileSize(grid_cb_data_format);
+    const uint32_t scalar_cb_page_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
     const auto [scalar_cb_index, scalar_cb_handle] = tt::tt_metal::create_cb(
-        next_cb_index++, program, all_cores, scalar_cb_page_size, scalar_cb_num_pages, grid_cb_data_format);
+        next_cb_index++, program, all_cores, scalar_cb_page_size, scalar_cb_num_pages, input_cb_data_format);
 
     // CB3: Output buffer - local sharded output (following pool pattern)
     // This CB points directly to the output tensor's L1 buffer

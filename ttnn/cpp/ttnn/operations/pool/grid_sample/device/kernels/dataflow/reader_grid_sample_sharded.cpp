@@ -54,7 +54,7 @@ void kernel_main() {
 
     // Input tensor accessor for remote NOC reads
     constexpr auto input_tensor_args = TensorAccessorArgs<10>();
-    const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr, 0 /* will be set per access */);
+    const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr, input_stick_nbytes);
 
     // Grid coordinates scaling factors (for standard grid mode)
     constexpr float input_height_f = float(input_height);
@@ -74,18 +74,13 @@ void kernel_main() {
     uint32_t grid_stick_idx = 0;
     uint32_t l1_grid_addr = l1_grid_base_addr;
 
-    // DPRINT << "Starting grid sample reader kernel"
-    //    << ", processing " << grid_nsticks_per_core << " grid sticks\n";
-
     while (grid_stick_idx < grid_nsticks_per_core) {
-        // DPRINT << "Processing grid stick " << grid_stick_idx << "\n";
         volatile tt_l1_ptr uint16_t* const grid_stick_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_grid_addr);
 
         // Process each batched grid point within this stick
         uint32_t batch_idx = 0;
         while (batch_idx < grid_batching_factor) {
-            // DPRINT << "Processing grid stick " << grid_stick_idx << ", batch " << batch_idx << "\n";
             uint16_t weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf;
             int32_t h0, h1, w0, w1;
             uint32_t curr_image_batch = 0;  // Will need to calculate based on global position
@@ -115,8 +110,6 @@ void kernel_main() {
 
             const float h_coord_rel = bfloat16_to_float(h_coord_raw);
             const float w_coord_rel = bfloat16_to_float(w_coord_raw);
-
-            DPRINT << "  Grid coords (rel): (" << h_coord_rel << ", " << w_coord_rel << ")\n";
 
             const float h_coord_image = h_coord_rel * height_scale + height_offset;
             const float w_coord_image = w_coord_rel * width_scale + width_offset;
@@ -163,39 +156,34 @@ void kernel_main() {
             // Reserve CB space for 4 corner input sticks for this grid point
 
             cb_reserve_back(input_cb_index, 1);
-            // DPRINT << "Reserved input CB space for grid stick " << grid_stick_idx << ", batch " << batch_idx << "\n";
 
             uint32_t l1_write_input_addr = get_write_ptr(input_cb_index);
 
             // Read 4 corner input sticks via NOC from remote input tensor shards
             if (h0_valid && w0_valid) {
                 const uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
-                const uint64_t remote_noc_addr =
-                    input_tensor_accessor.get_noc_addr(north_west_stick_index, input_stick_nbytes);
+                const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(north_west_stick_index);
                 noc_async_read(remote_noc_addr, l1_write_input_addr, input_stick_nbytes);
             }
             l1_write_input_addr += input_stick_nbytes;
 
             if (h0_valid && w1_valid) {
                 const uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
-                const uint64_t remote_noc_addr =
-                    input_tensor_accessor.get_noc_addr(north_east_stick_index, input_stick_nbytes);
+                const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(north_east_stick_index);
                 noc_async_read(remote_noc_addr, l1_write_input_addr, input_stick_nbytes);
             }
             l1_write_input_addr += input_stick_nbytes;
 
             if (h1_valid && w0_valid) {
                 const uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
-                const uint64_t remote_noc_addr =
-                    input_tensor_accessor.get_noc_addr(south_west_stick_index, input_stick_nbytes);
+                const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(south_west_stick_index);
                 noc_async_read(remote_noc_addr, l1_write_input_addr, input_stick_nbytes);
             }
             l1_write_input_addr += input_stick_nbytes;
 
             if (h1_valid && w1_valid) {
                 const uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
-                const uint64_t remote_noc_addr =
-                    input_tensor_accessor.get_noc_addr(south_east_stick_index, input_stick_nbytes);
+                const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(south_east_stick_index);
                 noc_async_read(remote_noc_addr, l1_write_input_addr, input_stick_nbytes);
             }
 
