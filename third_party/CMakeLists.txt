@@ -321,3 +321,16 @@ CPMAddPackage(
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"
 )
+
+############################################################################################################################
+# nanobind : https://github.com/wjakob/nanobind
+############################################################################################################################
+
+CPMAddPackage(
+    NAME nanobind
+    GITHUB_REPOSITORY wjakob/nanobind
+    GIT_TAG v2.9.2
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "NB_USE_SUBMODULE_DEPS ON"
+)

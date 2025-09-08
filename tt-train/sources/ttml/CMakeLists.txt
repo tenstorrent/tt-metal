@@ -351,7 +351,13 @@ add_library(ttml STATIC ${SOURCES})
 
 target_include_directories(ttml PUBLIC ${PROJECT_SOURCE_DIR})
 
-find_package(Python3 REQUIRED Development)
+find_package(
+    Python
+    COMPONENTS
+        Development.Module
+        Interpreter
+    REQUIRED
+)
 
 foreach(lib ${BoostPackages})
     target_include_directories(ttml SYSTEM PUBLIC ${Boost${lib}_SOURCE_DIR}/include)
@@ -443,3 +449,28 @@ if(NOT EXISTS "${TINYLLAMA_TOKENIZER_FILE}")
 else()
     message(STATUS "Tokenizer text file already exists at ${TINYLLAMA_TOKENIZER_FILE}, skipping download.")
 endif()
+
+set(TTML_SRC_NANOBIND
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/__init__.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/__init__.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/autograd.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/autograd.hpp
+)
+nanobind_add_module(_ttml ${TTML_SRC_NANOBIND})
+target_link_libraries(
+    _ttml
+    PRIVATE
+        fmt::fmt-header-only
+        Metalium::Metal
+        Metalium::TTNN
+        Metalium::TTNNCPP
+        Python3::Python
+        ttml
+)
+target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR})
+target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/ttnn)
+target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/ttnn/api)
+target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/tt_metal/api)
+target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/tt_metal/third_party/umd/device/api)
+target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/tt_stl)
+target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
