@@ -50,10 +50,18 @@ static constexpr std::size_t RESULT_BUFFER_SIZE = RESULT_BUFFER_PAGE_SIZE;
 static constexpr auto RESULT_BUFFER_TYPE = BufferType::L1;
 
 // Helper function that creates and zero-initializes a result buffer.
-std::shared_ptr<Buffer> create_result_buffer(IDevice* device) {
-    auto result_buffer = Buffer::create(device, RESULT_BUFFER_PAGE_SIZE, RESULT_BUFFER_SIZE, RESULT_BUFFER_TYPE);
+std::shared_ptr<distributed::MeshBuffer> create_result_buffer(std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    distributed::DeviceLocalBufferConfig local_config{
+        .page_size = RESULT_BUFFER_PAGE_SIZE,
+        .buffer_type = RESULT_BUFFER_TYPE,
+    };
+    distributed::ReplicatedBufferConfig buffer_config{
+        .size = RESULT_BUFFER_SIZE,
+    };
+    auto result_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
     std::vector<DataT> init_data(RESULT_BUFFER_SIZE / sizeof(DataT), 0);
-    detail::WriteToDeviceL1(device, WORKER_CORE, result_buffer->address(), init_data);
+    distributed::WriteShard(
+        mesh_device->mesh_command_queue(), result_buffer, init_data, distributed::MeshCoordinate(0, 0));
     return result_buffer;
 }
 
@@ -92,32 +100,45 @@ static const std::vector<DataT> EXPECTED_RESULT = {WRAP_WRITE_VALUE, WRAP_WRITE_
  * This tests blocking reserve back and wait front between Packer at Compute Kernel and BRSIC.
  * Here, cb_reserve_back is implemented in compute kernel API while cb_wait_front is implemented in dataflow API.
  */
-TEST_F(DeviceFixture, TensixTestCircularBufferWrappingBlockingToWriter) {
-    auto device = devices_.at(0);
+TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToWriter) {
+    auto mesh_device = devices_.at(0);
+    auto device = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
     CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_blocking_writer.cpp",
         WORKER_CORE,
         ComputeConfig{});
 
     auto reader_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_blocking_reader.cpp",
         WORKER_CORE,
         WriterDataMovementConfig{});
 
     CreateCircularBuffer(
-        program, WORKER_CORE, CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
+        program_,
+        WORKER_CORE,
+        CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
 
-    auto result_buffer = Buffer::create(device, RESULT_BUFFER_PAGE_SIZE, RESULT_BUFFER_SIZE, RESULT_BUFFER_TYPE);
-    SetRuntimeArgs(program, reader_kernel, WORKER_CORE, {result_buffer->address()});
+    distributed::DeviceLocalBufferConfig local_config{
+        .page_size = RESULT_BUFFER_PAGE_SIZE, .buffer_type = RESULT_BUFFER_TYPE};
+    distributed::ReplicatedBufferConfig buffer_config{.size = RESULT_BUFFER_SIZE};
+    // auto result_buffer = create_result_buffer(mesh_device);
+    auto result_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
+    SetRuntimeArgs(program_, reader_kernel, WORKER_CORE, {result_buffer->address()});
 
-    EnqueueProgram(device->command_queue(), program, true);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<DataT> host_buffer;
     auto expected_result_size = EXPECTED_RESULT.size() * sizeof(DataT);
-    detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), expected_result_size, host_buffer);
+    distributed::ReadShard(cq, host_buffer, result_buffer, distributed::MeshCoordinate(0, 0));
 
     EXPECT_EQ(host_buffer, EXPECTED_RESULT) << "Page corruption detected.";
 }
@@ -126,32 +147,48 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrappingBlockingToWriter) {
  * This tests blocking reserve back and wait_front between BRSIC and Unpacker at Compute Kernel.
  * Here, cb_reserve_back is implemented in dataflow API while cb_wait_front is implemented in Compute Kernel API.
  */
-TEST_F(DeviceFixture, TensixTestCircularBufferWrappingBlockingToCompute) {
-    auto device = devices_.at(0);
+TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToCompute) {
+    auto mesh_device = devices_.at(0);
+    auto device = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
     CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_blocking_writer.cpp",
         WORKER_CORE,
         ReaderDataMovementConfig{});
 
     auto reader_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_blocking_reader.cpp",
         WORKER_CORE,
         ComputeConfig{});
 
     CreateCircularBuffer(
-        program, WORKER_CORE, CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
+        program_,
+        WORKER_CORE,
+        CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
 
-    auto result_buffer = Buffer::create(device, RESULT_BUFFER_PAGE_SIZE, RESULT_BUFFER_SIZE, RESULT_BUFFER_TYPE);
-    SetRuntimeArgs(program, reader_kernel, WORKER_CORE, {result_buffer->address()});
+    distributed::DeviceLocalBufferConfig local_config{
+        .page_size = RESULT_BUFFER_PAGE_SIZE,
+        .buffer_type = RESULT_BUFFER_TYPE,
+    };
+    distributed::ReplicatedBufferConfig buffer_config{
+        .size = RESULT_BUFFER_SIZE,
+    };
+    auto result_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
+    SetRuntimeArgs(program_, reader_kernel, WORKER_CORE, {result_buffer->address()});
 
-    EnqueueProgram(device->command_queue(), program, true);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<DataT> host_buffer;
     auto expected_result_size = EXPECTED_RESULT.size() * sizeof(DataT);
-    detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), expected_result_size, host_buffer);
+    distributed::ReadShard(cq, host_buffer, result_buffer, distributed::MeshCoordinate(0, 0));
 
     EXPECT_EQ(host_buffer, EXPECTED_RESULT) << "Page corruption detected.";
 }
@@ -173,13 +210,21 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrappingBlockingToCompute) {
  * 2. Writer stops writing
  * 3. Reader asks for available pages, should be false.
  */
-TEST_F(DeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
+TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
     static constexpr DataT SUCCESS_TOKEN = 0xC0FFEE;
 
-    auto device = devices_.at(0);
+    auto mesh_device = devices_.at(0);
+    auto device = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+
     CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_non_blocking_writer.cpp",
         WORKER_CORE,
         ComputeConfig{});
@@ -188,21 +233,23 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
     reader_config.defines["CHECK_FRONT"] = "1";
 
     auto reader_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_non_blocking_reader.cpp",
         WORKER_CORE,
         reader_config);
 
     CreateCircularBuffer(
-        program, WORKER_CORE, CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
+        program_,
+        WORKER_CORE,
+        CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
 
-    auto result_buffer = create_result_buffer(device);
-    SetRuntimeArgs(program, reader_kernel, WORKER_CORE, {result_buffer->address(), SUCCESS_TOKEN});
+    auto result_buffer = create_result_buffer(mesh_device);
+    SetRuntimeArgs(program_, reader_kernel, WORKER_CORE, {result_buffer->address(), SUCCESS_TOKEN});
 
-    EnqueueProgram(device->command_queue(), program, true);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<DataT> host_buffer;
-    detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), sizeof(DataT), host_buffer);
+    distributed::ReadShard(cq, host_buffer, result_buffer, distributed::MeshCoordinate(0, 0));
     EXPECT_EQ(host_buffer.front(), SUCCESS_TOKEN) << "Reader should have detected that the CB is full.";
 }
 
@@ -217,37 +264,46 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
  * 2. Writer writes 2 steps of data, filling the CB.
  * 3. Writer asks if there's any reserable pages, should be false.
  */
-TEST_F(DeviceFixture, TensixTestCircularBufferWrappingNonBlockingBack) {
+TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingBack) {
     static constexpr DataT SUCCESS_TOKEN = 0xBABE;
 
-    auto device = devices_.at(0);
+    auto mesh_device = devices_.at(0);
+    auto device = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
 
     ReaderDataMovementConfig writer_config;
     writer_config.defines["CHECK_BACK"] = "1";
 
     auto writer_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_non_blocking_writer.cpp",
         WORKER_CORE,
         writer_config);
 
     CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_non_blocking_reader.cpp",
         WORKER_CORE,
         ComputeConfig{});
 
     CreateCircularBuffer(
-        program, WORKER_CORE, CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
+        program_,
+        WORKER_CORE,
+        CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
 
-    auto result_buffer = create_result_buffer(device);
-    SetRuntimeArgs(program, writer_kernel, WORKER_CORE, {result_buffer->address(), SUCCESS_TOKEN});
+    auto result_buffer = create_result_buffer(mesh_device);
+    SetRuntimeArgs(program_, writer_kernel, WORKER_CORE, {result_buffer->address(), SUCCESS_TOKEN});
 
-    EnqueueProgram(device->command_queue(), program, true);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     std::vector<DataT> host_buffer;
-    detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), sizeof(DataT), host_buffer);
+    distributed::ReadShard(cq, host_buffer, result_buffer, distributed::MeshCoordinate(0, 0));
     EXPECT_EQ(host_buffer.front(), SUCCESS_TOKEN) << "Writer should have detected that the CB is full.";
 }
 
