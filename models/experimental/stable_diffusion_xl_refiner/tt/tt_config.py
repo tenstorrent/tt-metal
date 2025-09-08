@@ -72,6 +72,7 @@ resnet_configs = {
     "down_blocks.3.resnets.1": make_resnet_config(),
     # Mid blocks x2
     "mid_block.resnets.0": make_resnet_config(),
+    "mid_block.resnets.1": make_resnet_config(),
     # Up blocks
     "up_blocks.0.resnets.0": make_resnet_config(use_conv_shortcut=True),
     "up_blocks.0.resnets.1": make_resnet_config(use_conv_shortcut=True),
@@ -272,4 +273,113 @@ downblock_configs = {
 
 def get_downblock_config(module_path: str) -> DownBlockConfig:
     config = downblock_configs.get(module_path)
+    return config
+
+
+########### TransformerBlock configurations ##########
+
+
+@dataclass
+class TransformerBlockConfig:
+    num_attn_heads: int = 8
+
+
+def make_transformerblock_config(
+    num_attn_heads: int = 8,
+) -> TransformerBlockConfig:
+    return TransformerBlockConfig(
+        num_attn_heads=num_attn_heads,
+    )
+
+
+# TransformerBlock configurations for SDXL Refiner
+transformerblock_configs = {
+    # First CrossAttnDownBlock2D - 2x Transformer2DModel - 768 channels
+    # Each Transformer2DModel has 4x TransformerBlocks, each TransformerBlock has 2x Attention layers
+    "down_blocks.1.attentions.0.transformer_blocks.0": make_transformerblock_config(num_attn_heads=12),
+    "down_blocks.1.attentions.0.transformer_blocks.1": make_transformerblock_config(num_attn_heads=12),
+    "down_blocks.1.attentions.0.transformer_blocks.2": make_transformerblock_config(num_attn_heads=12),
+    "down_blocks.1.attentions.0.transformer_blocks.3": make_transformerblock_config(num_attn_heads=12),
+    "down_blocks.1.attentions.1.transformer_blocks.0": make_transformerblock_config(num_attn_heads=12),
+    "down_blocks.1.attentions.1.transformer_blocks.1": make_transformerblock_config(num_attn_heads=12),
+    "down_blocks.1.attentions.1.transformer_blocks.2": make_transformerblock_config(num_attn_heads=12),
+    "down_blocks.1.attentions.1.transformer_blocks.3": make_transformerblock_config(num_attn_heads=12),
+    # Second CrossAttnDownBlock2D - 2x Transformer2DModel - 1536 channels
+    # Each Transformer2DModel has 4x TransformerBlocks
+    "down_blocks.2.attentions.0.transformer_blocks.0": make_transformerblock_config(num_attn_heads=24),
+    "down_blocks.2.attentions.0.transformer_blocks.1": make_transformerblock_config(num_attn_heads=24),
+    "down_blocks.2.attentions.0.transformer_blocks.2": make_transformerblock_config(num_attn_heads=24),
+    "down_blocks.2.attentions.0.transformer_blocks.3": make_transformerblock_config(num_attn_heads=24),
+    "down_blocks.2.attentions.1.transformer_blocks.0": make_transformerblock_config(num_attn_heads=24),
+    "down_blocks.2.attentions.1.transformer_blocks.1": make_transformerblock_config(num_attn_heads=24),
+    "down_blocks.2.attentions.1.transformer_blocks.2": make_transformerblock_config(num_attn_heads=24),
+    "down_blocks.2.attentions.1.transformer_blocks.3": make_transformerblock_config(num_attn_heads=24),
+    # First CrossAttnUpBlock2D - 3x Transformer2DModel - 1536 channels
+    # Each Transformer2DModel has 4x TransformerBlocks
+    "up_blocks.1.attentions.0.transformer_blocks.0": make_transformerblock_config(num_attn_heads=24),
+    "up_blocks.1.attentions.0.transformer_blocks.1": make_transformerblock_config(num_attn_heads=24),
+    "up_blocks.1.attentions.0.transformer_blocks.2": make_transformerblock_config(num_attn_heads=24),
+    "up_blocks.1.attentions.0.transformer_blocks.3": make_transformerblock_config(num_attn_heads=24),
+    "up_blocks.1.attentions.1.transformer_blocks.0": make_transformerblock_config(num_attn_heads=24),
+    "up_blocks.1.attentions.1.transformer_blocks.1": make_transformerblock_config(num_attn_heads=24),
+    "up_blocks.1.attentions.1.transformer_blocks.2": make_transformerblock_config(num_attn_heads=24),
+    "up_blocks.1.attentions.1.transformer_blocks.3": make_transformerblock_config(num_attn_heads=24),
+    "up_blocks.1.attentions.2.transformer_blocks.0": make_transformerblock_config(num_attn_heads=24),
+    "up_blocks.1.attentions.2.transformer_blocks.1": make_transformerblock_config(num_attn_heads=24),
+    "up_blocks.1.attentions.2.transformer_blocks.2": make_transformerblock_config(num_attn_heads=24),
+    "up_blocks.1.attentions.2.transformer_blocks.3": make_transformerblock_config(num_attn_heads=24),
+    # Second CrossAttnUpBlock2D - 3x Transformer2DModel - 768 channels
+    # Each Transformer2DModel has 4x TransformerBlocks
+    "up_blocks.2.attentions.0.transformer_blocks.0": make_transformerblock_config(num_attn_heads=12),
+    "up_blocks.2.attentions.0.transformer_blocks.1": make_transformerblock_config(num_attn_heads=12),
+    "up_blocks.2.attentions.0.transformer_blocks.2": make_transformerblock_config(num_attn_heads=12),
+    "up_blocks.2.attentions.0.transformer_blocks.3": make_transformerblock_config(num_attn_heads=12),
+    "up_blocks.2.attentions.1.transformer_blocks.0": make_transformerblock_config(num_attn_heads=12),
+    "up_blocks.2.attentions.1.transformer_blocks.1": make_transformerblock_config(num_attn_heads=12),
+    "up_blocks.2.attentions.1.transformer_blocks.2": make_transformerblock_config(num_attn_heads=12),
+    "up_blocks.2.attentions.1.transformer_blocks.3": make_transformerblock_config(num_attn_heads=12),
+    "up_blocks.2.attentions.2.transformer_blocks.0": make_transformerblock_config(num_attn_heads=12),
+    "up_blocks.2.attentions.2.transformer_blocks.1": make_transformerblock_config(num_attn_heads=12),
+    "up_blocks.2.attentions.2.transformer_blocks.2": make_transformerblock_config(num_attn_heads=12),
+    "up_blocks.2.attentions.2.transformer_blocks.3": make_transformerblock_config(num_attn_heads=12),
+    # MidBlock2DCrossAttention - 1x Transformer2DModel - 1536 channels, 16x16 resolution
+    # The Transformer2DModel has 4x TransformerBlocks
+    "mid_block.attentions.0.transformer_blocks.0": make_transformerblock_config(num_attn_heads=24),
+    "mid_block.attentions.0.transformer_blocks.1": make_transformerblock_config(num_attn_heads=24),
+    "mid_block.attentions.0.transformer_blocks.2": make_transformerblock_config(num_attn_heads=24),
+    "mid_block.attentions.0.transformer_blocks.3": make_transformerblock_config(num_attn_heads=24),
+}
+
+
+def get_transformerblock_config(module_path: str) -> TransformerBlockConfig:
+    config = transformerblock_configs.get(module_path)
+    return config
+
+
+########## TransformerModel configurations ##########
+
+
+@dataclass
+class Transformer2DModelConfig:
+    num_transformer_blocks: int = 4
+    norm: NormConfig = None
+
+
+def make_transformer2dmodel_config(
+    norm_sharded: bool = True,
+    norm_out_blocks: int = 1,
+    norm_grid: Optional[Tuple[int, int]] = (8, 8),
+    eps: float = 1e-6,
+) -> Transformer2DModelConfig:
+    return Transformer2DModelConfig(
+        norm=make_norm_config(norm_sharded, norm_out_blocks, norm_grid, eps=eps),
+    )
+
+
+# Transformer2DModel configurations for SDXL Refiner
+
+
+def get_transformer2dmodel_config(module_path: str) -> Transformer2DModelConfig:
+    config = make_transformer2dmodel_config()
+    # config = transformer2dmodel_configs.get(module_path)
     return config

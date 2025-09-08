@@ -51,13 +51,14 @@ class TtDownBlock2D:
 
     def forward(self, hidden_states, input_shape, temb):
         B, C, H, W = input_shape
+        residuals = ()
 
         for resnet in self.resnets:
             hidden_states, [C, H, W] = resnet.forward(hidden_states, temb, [B, C, H, W])
+            residuals = residuals + (hidden_states,)
 
         if self.downsample is not None:
             hidden_states, [C, H, W] = self.downsample.forward(hidden_states, [B, C, H, W])
+            residuals = residuals + (hidden_states,)
 
-        # TODO: Add residuals
-
-        return hidden_states, [C, H, W]
+        return hidden_states, [C, H, W], residuals

@@ -24,9 +24,12 @@ class TtFeedForward(LightweightModule):
         weights = state_dict[f"{module_path}.net.2.weight"].unsqueeze(0).unsqueeze(0)
         bias = state_dict[f"{module_path}.net.2.bias"]
 
+        print(module_path)
         self.tt_weights, self.tt_bias = prepare_linear_params(device, weights, bias, ttnn.bfloat16)
 
     def forward(self, hidden_states):
+        print("Entering TtFeedForward forward")
+        print(f"Hidden states shape: {hidden_states.shape}")
         hidden_states = self.tt_geglu.forward(hidden_states)
 
         hidden_states = ttnn.linear(
