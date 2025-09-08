@@ -226,18 +226,16 @@ class Attention(LightweightModule):
             wv = torch.transpose(wv_selected, -2, -1)
 
             qkv = torch.cat([wq, wk, wv], dim=-1)
-            print("QKV", qkv.shape)
             qkv_list.append(qkv)
 
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
-        print("QKV_cat", qkv_cat.shape)
 
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
             dtype=self.wqkv_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,  # if self.TG else wqkv_mem_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else wqkv_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
             ),
