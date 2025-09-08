@@ -60,7 +60,6 @@ WhereBroadcastType get_broadcast_type(
     WhereVariant variant);
 
 // 2-tensor broadcast compatibility (used by both TTS and TST)
-WhereBroadcastType get_broadcast_type(
-    const ttnn::Shape& predicate_shape, const ttnn::Shape& tensor_shape, WhereVariant variant);
+WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& tensor_shape);
 
 }  // namespace ttnn::operations::ternary

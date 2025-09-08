@@ -134,8 +134,8 @@ Tensor WhereOperation::invoke(
             }
 
             // Check if shapes are broadcast-compatible for TTS using broadcast detection
-            auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
-                predicate.logical_shape(), t_true.logical_shape(), WhereVariant::TTS);
+            auto broadcast_type =
+                ttnn::operations::ternary::get_broadcast_type(predicate.logical_shape(), t_true.logical_shape());
 
             if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
                 log_info(tt::LogOp, "Where LLK - TTS");
@@ -158,8 +158,8 @@ Tensor WhereOperation::invoke(
             if (typecast_predicate) {
                 condition = ttnn::typecast(queue_id, predicate, t_false.dtype());
             }
-            auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
-                predicate.logical_shape(), t_false.logical_shape(), WhereVariant::TST);
+            auto broadcast_type =
+                ttnn::operations::ternary::get_broadcast_type(predicate.logical_shape(), t_false.logical_shape());
 
             if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
                 log_info(tt::LogOp, "Where LLK - TST");

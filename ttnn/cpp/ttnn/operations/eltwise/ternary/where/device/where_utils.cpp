@@ -207,8 +207,7 @@ std::map<std::string, std::string> make_dataflow_defines(
 // 2-tensor broadcast compatibility (used by both TTS and TST variants)
 // For TTS: checks predicate vs true tensor (false is scalar)
 // For TST: checks predicate vs false tensor (true is scalar)
-WhereBroadcastType get_broadcast_type(
-    const ttnn::Shape& predicate_shape, const ttnn::Shape& tensor_shape, WhereVariant variant) {
+WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& tensor_shape) {
     // Check for exact match
     if (predicate_shape == tensor_shape) {
         return WhereBroadcastType::NONE;
@@ -219,8 +218,7 @@ WhereBroadcastType get_broadcast_type(
 
     log_debug(
         tt::LogOp,
-        "{} broadcast detection - predicate shape: {}, tensor shape: {}",
-        variant == WhereVariant::TTS ? "TTS" : "TST",
+        "2-tensor broadcast detection - predicate shape: {}, tensor shape: {}",
         predicate_shape,
         tensor_shape);
     log_debug(tt::LogOp, "same_width: {}, same_height: {}", same_width, same_height);
@@ -252,7 +250,7 @@ WhereBroadcastType get_broadcast_type(
         // If one tensor has more dimensions, those dimensions can be any value (implicit broadcast)
         // This is the standard broadcasting rule where missing dimensions are treated as 1
         if (can_broadcast) {
-            log_debug(tt::LogOp, "Detected OUTER_BCAST for {}", variant == WhereVariant::TTS ? "TTS" : "TST");
+            log_debug(tt::LogOp, "Detected OUTER_BCAST for 2-tensor case");
             return WhereBroadcastType::OUTER_BCAST;
         } else {
             log_debug(tt::LogOp, "OUTER_BCAST compatibility check failed");
@@ -279,7 +277,7 @@ WhereBroadcastType get_broadcast_type(
         // Column broadcast case: at least one tensor is broadcasting in width and heights are same
         if ((pred_col_broadcasted || tensor_col_broadcasted) && same_height) {
             // TTS and TST support column broadcast
-            log_debug(tt::LogOp, "{} detected column broadcast", variant == WhereVariant::TTS ? "TTS" : "TST");
+            log_debug(tt::LogOp, "2-tensor case detected column broadcast");
             return WhereBroadcastType::COL_BCAST;
         }
     }
@@ -293,9 +291,8 @@ WhereBroadcastType get_broadcast_type(
 
         log_debug(
             tt::LogOp,
-            "{} row broadcast check: pred_h={}, tensor_h={}, same_width={}, pred_row_broadcasted={}, "
+            "2-tensor row broadcast check: pred_h={}, tensor_h={}, same_width={}, pred_row_broadcasted={}, "
             "tensor_row_broadcasted={}",
-            variant == WhereVariant::TTS ? "TTS" : "TST",
             pred_h,
             tensor_h,
             same_width,
@@ -305,10 +302,7 @@ WhereBroadcastType get_broadcast_type(
         // Row broadcast case: at least one tensor is broadcasting in height and widths are same
         if ((pred_row_broadcasted || tensor_row_broadcasted) && same_width) {
             // TTS and TST do not support row broadcast - fallback to legacy
-            log_debug(
-                tt::LogOp,
-                "{} row broadcast not supported, falling back to legacy",
-                variant == WhereVariant::TTS ? "TTS" : "TST");
+            log_debug(tt::LogOp, "2-tensor row broadcast not supported, falling back to legacy");
             return WhereBroadcastType::INVALID_BCAST;
         }
     }
