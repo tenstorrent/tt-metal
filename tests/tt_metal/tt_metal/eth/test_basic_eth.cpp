@@ -397,34 +397,35 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
     const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     const auto erisc_count =
-        tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(HalProgrammableCoreType::ACTIVE_ETH);
+        tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
-            auto risc = (GetArch() == tt::ARCH::BLACKHOLE) ? tt_metal::DataMovementProcessor::RISCV_1 : tt_metal::DataMovementProcessor::RISCV_0;
-            const auto ethernet_config = tt_metal::EthernetConfig{
-                .noc = tt_metal::NOC::NOC_0, .processor = risc};
-            ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-                static_cast<DispatchFixture*>(this),
-                device,
-                WORD_SIZE,
-                src_eth_l1_byte_address,
-                eth_core,
-                ethernet_config));
-            ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-                static_cast<DispatchFixture*>(this),
-                device,
-                WORD_SIZE * 1024,
-                src_eth_l1_byte_address,
-                eth_core,
-                ethernet_config));
-            ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-                static_cast<DispatchFixture*>(this),
-                device,
-                WORD_SIZE * 2048,
-                src_eth_l1_byte_address,
-                eth_core,
-                ethernet_config));
+            for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
+                const auto ethernet_config = tt_metal::EthernetConfig{
+                    .noc = tt_metal::NOC::NOC_0, .processor = static_cast<DataMovementProcessor>(erisc_idx)};
+                ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
+                    static_cast<DispatchFixture*>(this),
+                    device,
+                    WORD_SIZE,
+                    src_eth_l1_byte_address,
+                    eth_core,
+                    ethernet_config));
+                ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
+                    static_cast<DispatchFixture*>(this),
+                    device,
+                    WORD_SIZE * 1024,
+                    src_eth_l1_byte_address,
+                    eth_core,
+                    ethernet_config));
+                ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
+                    static_cast<DispatchFixture*>(this),
+                    device,
+                    WORD_SIZE * 2048,
+                    src_eth_l1_byte_address,
+                    eth_core,
+                    ethernet_config));
+            }
         }
     }
 }
@@ -437,7 +438,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) 
     const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     const auto erisc_count =
-        tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(HalProgrammableCoreType::ACTIVE_ETH);
+        tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {

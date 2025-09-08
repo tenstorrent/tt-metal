@@ -79,23 +79,26 @@ inline void run_subordinate_eriscs(uint32_t enables) {
     }
 }
 
+inline void apply_tweaks() {
+    // #18384: This register was left dirty by eth training.
+    // It is not used in dataflow api, so it can be set to 0
+    // one time here instead of setting it each time in dataflow_api.
+    NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
+}
+
 inline void service_base_fw() {
-    // reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
-    if (is_port_up()) {
-        // Write to MEM_AERISC_LIVE_LINK_STATUS_BASE for debug
-        ncrisc_noc_full_sync();
-        reinterpret_cast<void (*)(uint32_t)>(
-            (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
-        ncrisc_noc_counters_init();
-    }
+    // Base fw only uses noc0
+    ncrisc_noc_full_sync<0>();
+    reinterpret_cast<void (*)(uint32_t)>(
+        (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
+    noc_init<0>(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+    apply_tweaks();
 }
 
 inline void wait_subordinate_eriscs() {
     WAYPOINT("SEW");
     do {
         invalidate_l1_cache();
-        service_base_fw();
-        __asm__ volatile("fence");
     } while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
     WAYPOINT("SED");
 }
@@ -131,13 +134,8 @@ void __attribute__((noinline)) Application(void) {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
-
+    apply_tweaks();
     ncrisc_noc_full_sync();
-
-    // #18384: This register was left dirty by eth training.
-    // It is not used in dataflow api, so it can be set to 0
-    // one time here instead of setting it everytime in dataflow_api.
-    NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
 
     deassert_all_reset();
     wait_subordinate_eriscs();
@@ -186,11 +184,7 @@ void __attribute__((noinline)) Application(void) {
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
-            // #18384: This register was left dirty by eth training.
-            // It is not used in dataflow api, so it can be set to 0
-            // one time here instead of setting it everytime in dataflow_api.
-            NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
-
+            apply_tweaks();
             uint32_t enables = launch_msg_address->kernel_config.enables;
             constexpr int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
             run_subordinate_eriscs(enables);

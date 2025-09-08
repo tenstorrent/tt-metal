@@ -1313,7 +1313,7 @@ TEST_F(UnitMeshCQFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
 TEST_F(UnitMeshCQFixture, ActiveEthEnqueueDummyProgram) {
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_devices()[0]->get_active_ethernet_cores(true)) {
-            const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+            const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
                 HalProgrammableCoreType::ACTIVE_ETH);
             for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
                 log_info(
@@ -1331,8 +1331,8 @@ TEST_F(UnitMeshCQFixture, ActiveEthEnqueueDummyProgram) {
 // Test to see we can launch a kernel at the same time on both active ethernet cores
 // If they can't handshake it means only 1 was able to launch
 TEST_F(UnitMeshCQFixture, ActiveEthTwoRiscsHandshake) {
-    const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-        HalProgrammableCoreType::ACTIVE_ETH);
+    const auto erisc_count =
+        tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
     if (erisc_count < 2) {
         GTEST_SKIP() << "Skipping test as this test requires 2 ethernet cores";
     }
@@ -1387,7 +1387,7 @@ TEST_F(UnitMeshCQFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovem
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
             log_info(tt::LogTest, "Issuing test for eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
-            const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+            const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
                 HalProgrammableCoreType::ACTIVE_ETH);
             for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
                 log_info(
@@ -1843,8 +1843,8 @@ TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesEth) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
                          << " does not have any active ethernet cores";
         }
-        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-            HalProgrammableCoreType::ACTIVE_ETH);
+        const auto erisc_count =
+            tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
         for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
             log_info(tt::LogTest, "Test logical coordinates active ethernet DM{}", erisc_idx);
             local_test_functions::test_my_coordinates(

@@ -347,7 +347,7 @@ void send_msg_to_eth_mailbox(
                     virtual_core.str(),
                     mailbox_val);
 
-                TT_THROW("Device {} Firmware update is required. Minimum tt-firmware verison is 18.8.0", device_id);
+                TT_THROW("Device {} Firmware update is required. Minimum tt-firmware verison is 18.10.0", device_id);
             }
             std::this_thread::sleep_for(k_sleep_time);
         }
@@ -392,7 +392,7 @@ void send_msg_to_eth_mailbox(
                     virtual_core.str(),
                     mailbox_val);
 
-                TT_THROW("Device {} Firmware update is required. Minimum tt-firmware verison is 18.8.0", device_id);
+                TT_THROW("Device {} Firmware update is required. Minimum tt-firmware verison is 18.10.0", device_id);
             }
             std::this_thread::sleep_for(k_sleep_time);
         } while (msg_status != done_message);
@@ -427,7 +427,7 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
                     hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
                 TT_THROW(
                     "Device {}: Timed out while waiting for active ethernet core {} to become active again. "
-                    "Try resetting the board. Is the firmware updated? Minimum tt-firmware version is 18.8.0",
+                    "Try resetting the board. Is the firmware updated? Minimum tt-firmware version is 18.10.0",
                     device_id,
                     virtual_core.str());
             }
