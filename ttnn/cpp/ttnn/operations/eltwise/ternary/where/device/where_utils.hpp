@@ -54,10 +54,7 @@ std::map<std::string, std::string> make_dataflow_defines(
 
 // TTT variant (tensor-tensor-tensor)
 WhereBroadcastType get_broadcast_type(
-    const ttnn::Shape& predicate_shape,
-    const ttnn::Shape& value_true_shape,
-    const ttnn::Shape& value_false_shape,
-    WhereVariant variant);
+    const ttnn::Shape& predicate_shape, const ttnn::Shape& value_true_shape, const ttnn::Shape& value_false_shape);
 
 // 2-tensor broadcast compatibility (used by both TTS and TST)
 WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& tensor_shape);

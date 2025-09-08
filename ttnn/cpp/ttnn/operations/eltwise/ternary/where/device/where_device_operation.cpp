@@ -432,8 +432,8 @@ WhereDeviceOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     // Detect broadcast type for TTT variant
-    WhereBroadcastType broadcast_type = get_broadcast_type(
-        predicate.logical_shape(), value_true.logical_shape(), value_false.logical_shape(), WhereVariant::TTT);
+    WhereBroadcastType broadcast_type =
+        get_broadcast_type(predicate.logical_shape(), value_true.logical_shape(), value_false.logical_shape());
 
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TTT,

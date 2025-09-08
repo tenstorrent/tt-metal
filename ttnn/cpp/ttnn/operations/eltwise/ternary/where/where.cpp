@@ -110,7 +110,7 @@ Tensor WhereOperation::invoke(
             // Check if shapes are broadcast-compatible for TTT using broadcast detection
             // This needs to be done in the device operation but we need this check here to decide fallback to legacy
             auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
-                predicate.logical_shape(), t_true.logical_shape(), t_false.logical_shape(), WhereVariant::TTT);
+                predicate.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
 
             if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
                 log_info(tt::LogOp, "Where LLK - TTT");

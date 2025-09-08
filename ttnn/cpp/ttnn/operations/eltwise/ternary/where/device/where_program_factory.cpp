@@ -998,8 +998,7 @@ void WhereDeviceOperation::WhereProgramFactory::override_runtime_arguments(
         broadcast_type = get_broadcast_type(
             predicate_tensor.logical_shape(),
             value_true_tensor.value().logical_shape(),
-            value_false_tensor.value().logical_shape(),
-            WhereVariant::TTT);
+            value_false_tensor.value().logical_shape());
     }
     if (operation_attributes.where_variant == WhereVariant::TTS) {
         broadcast_type =
