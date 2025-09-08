@@ -20,7 +20,6 @@ struct IsInOperation {
         const Tensor& test_elements,
         const bool& assume_unique = false,
         const bool& invert = false,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& opt_out = std::nullopt);
 };
 

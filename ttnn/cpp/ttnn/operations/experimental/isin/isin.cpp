@@ -118,7 +118,6 @@ Tensor IsInOperation::invoke(
     const Tensor& test_elements,
     const bool& assume_unique,
     const bool& invert,
-    const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& opt_out) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
@@ -132,7 +131,6 @@ Tensor IsInOperation::invoke(
         is_in_preprocessing_result.single_fetch_elements_number,
         assume_unique,
         invert,
-        memory_config,
         opt_out,
         queue_id);
 

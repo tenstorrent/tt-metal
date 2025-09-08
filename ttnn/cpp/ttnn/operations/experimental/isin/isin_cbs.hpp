@@ -15,7 +15,6 @@ using namespace tt;
 enum class IsInCB : std::underlying_type_t<CBIndex> {
     ELEMENTS = CBIndex::c_0,
     TEST_ELEMENTS = CBIndex::c_1,
-    // INDEX_HINT = CBIndex::c_2,
     OUTPUT = CBIndex::c_2
 };
 
