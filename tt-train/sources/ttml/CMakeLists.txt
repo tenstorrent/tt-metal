@@ -149,6 +149,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_fused.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_fused.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/lambda_scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/lambda_scheduler.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/linear_scheduler.cpp
