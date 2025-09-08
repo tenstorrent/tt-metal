@@ -40,8 +40,13 @@ struct ActivationReuseConfig {
     bool readers_process_full_image_widths = false;
     uint32_t tilized_cb_row_offset = 0;
     uint32_t tilized_cb_second_reader_offset = 0;
-    uint32_t reader_remaining_tiles_to_push = 0;
-    uint32_t writer_remaining_tiles_to_push = 0;
+    // New fields for handling multiple cores with non-meaningful work
+    uint32_t num_cores_with_non_meaningful_work = 0;
+    std::set<CoreCoord> cores_with_non_meaningful_work;
+    bool has_partial_core = false;
+    CoreCoord partial_work_core{0, 0};
+    uint32_t partial_core_reader_tiles_to_push = 0;
+    uint32_t partial_core_writer_remaining_tiles_to_push_to_push = 0;
 };
 
 ActivationReuseConfig calculate_activation_reuse_params(
@@ -59,7 +64,8 @@ ActivationReuseConfig calculate_activation_reuse_params(
     uint32_t total_output_height_ntiles,
     uint32_t padded_total_output_height_ntiles,
     const std::vector<CBInfo>& cb_info,
-    bool enable_split_reader) {
+    bool enable_split_reader,
+    const CoreRangeSet& input_cores) {
     ActivationReuseConfig config;
 
     // Calculate compile time args needed for activation reuse feature
@@ -103,24 +109,46 @@ ActivationReuseConfig calculate_activation_reuse_params(
     // Last cores sometime have less work to do, but we still need to push the same number of tiles
     // to avoid blocking compute kernels; Here we compute how many cores will be pushing the remaining tiles
     uint32_t total_remaining_tiles_to_push = padded_total_output_height_ntiles - total_output_height_ntiles;
-    TT_FATAL(
-        total_remaining_tiles_to_push <= single_core_height_ntiles,
-        "Only last core can have less work to do than the rest of the grid");
 
-    if (enable_split_reader) {
-        uint32_t full_remaining_act_blocks_to_push = total_remaining_tiles_to_push / act_block_h_ntiles;
-        config.reader_remaining_tiles_to_push = full_remaining_act_blocks_to_push * act_block_h_nsubblocks_split;
-        config.writer_remaining_tiles_to_push = full_remaining_act_blocks_to_push * act_block_h_nsubblocks_split_last;
+    config.num_cores_with_non_meaningful_work = tt::div_up(total_remaining_tiles_to_push, single_core_height_ntiles);
 
-        uint32_t leftover_tiles_to_push = total_remaining_tiles_to_push % act_block_h_ntiles;
-        if (leftover_tiles_to_push > act_block_h_nsubblocks_split_last) {
-            config.writer_remaining_tiles_to_push += act_block_h_nsubblocks_split_last;
-            config.reader_remaining_tiles_to_push += leftover_tiles_to_push - act_block_h_nsubblocks_split_last;
-        } else {
-            config.writer_remaining_tiles_to_push += leftover_tiles_to_push;
+    std::vector<CoreCoord> all_input_cores;
+    for (const CoreRange& range : input_cores.ranges()) {
+        for (const CoreCoord& core : range) {
+            all_input_cores.push_back(core);
         }
-    } else {
-        config.reader_remaining_tiles_to_push = total_remaining_tiles_to_push;
+    }
+
+    // Calculate tiles for the partial core (the one core that may have less than full work)
+    uint32_t partial_core_remaining_tiles = total_remaining_tiles_to_push % single_core_height_ntiles;
+    config.has_partial_core = partial_core_remaining_tiles > 0;
+    config.partial_core_reader_tiles_to_push = partial_core_remaining_tiles;
+
+    if (partial_core_remaining_tiles > 0) {
+        if (enable_split_reader) {
+            uint32_t partial_core_act_blocks_to_push = partial_core_remaining_tiles / act_block_h_ntiles;
+            config.partial_core_reader_tiles_to_push = partial_core_act_blocks_to_push * act_block_h_nsubblocks_split;
+            config.partial_core_writer_remaining_tiles_to_push_to_push =
+                partial_core_act_blocks_to_push * act_block_h_nsubblocks_split_last;
+
+            uint32_t partial_core_leftover_tiles = partial_core_remaining_tiles % act_block_h_ntiles;
+            if (partial_core_leftover_tiles > act_block_h_nsubblocks_split_last) {
+                config.partial_core_writer_remaining_tiles_to_push_to_push += act_block_h_nsubblocks_split_last;
+                config.partial_core_reader_tiles_to_push +=
+                    partial_core_leftover_tiles - act_block_h_nsubblocks_split_last;
+            } else {
+                config.partial_core_writer_remaining_tiles_to_push_to_push += partial_core_leftover_tiles;
+            }
+        }
+        uint32_t partial_core_idx = all_input_cores.size() - config.num_cores_with_non_meaningful_work;
+        config.partial_work_core = all_input_cores[partial_core_idx];
+    }
+
+    // Put all cores with non-meaningful work to the set
+    uint32_t start_idx =
+        all_input_cores.size() - config.num_cores_with_non_meaningful_work - (config.has_partial_core ? 1 : 0);
+    for (uint32_t i = start_idx; i < all_input_cores.size(); i++) {
+        config.cores_with_non_meaningful_work.insert(all_input_cores[i]);
     }
 
     return config;
@@ -671,7 +699,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             total_output_height_ntiles,
             act_matrix_height_ntiles,
             cb_info,
-            enable_split_reader);
+            enable_split_reader,
+            input_cores);
     }
 
 
@@ -713,7 +742,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             activation_reuse_config.image_width_tiles,
             output_image_width,
             activation_reuse_config.reuse_window_offset,
-            static_cast<uint32_t>(activation_reuse_config.reader_remaining_tiles_to_push != 0)};
+            static_cast<uint32_t>(activation_reuse_config.num_cores_with_non_meaningful_work > 0)};
 
         reader_compile_time_args.insert(
             reader_compile_time_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
@@ -816,7 +845,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                     activation_reuse_config.image_width_tiles,
                     output_image_width,
                     activation_reuse_config.reuse_window_offset,
-                    static_cast<uint32_t>(activation_reuse_config.writer_remaining_tiles_to_push != 0)};
+                    static_cast<uint32_t>(activation_reuse_config.num_cores_with_non_meaningful_work > 0)};
                 split_reader_args.insert(
                     split_reader_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
             }
@@ -991,10 +1020,15 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         uint32_t core_i = 0;
         for (const CoreRange& core_range : input_cores.ranges()) {
             for (const CoreCoord& core : core_range) {
-                std::vector<uint32_t> reader_rt_args{
-                    core.x == last_input_core.x && core.y == last_input_core.y
-                        ? activation_reuse_config.reader_remaining_tiles_to_push
-                        : 0};
+                uint32_t reader_remaining_tiles_to_push = 0;
+                if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
+                    reader_remaining_tiles_to_push = activation_reuse_config.partial_core_reader_tiles_to_push;
+                } else if (
+                    activation_reuse_config.cores_with_non_meaningful_work.find(core) !=
+                    activation_reuse_config.cores_with_non_meaningful_work.end()) {
+                    reader_remaining_tiles_to_push = act_block_h_nsubblocks_split;
+                }
+                std::vector<uint32_t> reader_rt_args{reader_remaining_tiles_to_push};
                 SetRuntimeArgs(program, reader_id, core, reader_rt_args);
                 core_i++;
             }
@@ -1081,10 +1115,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                  weights_mcast_sender_semaphore_id,
                  weights_mcast_receiver_semaphore_id});
             if (enable_split_reader && enable_activation_reuse) {
-                sender_rt_args.push_back(
-                    core.x == last_input_core.x && core.y == last_input_core.y
-                        ? activation_reuse_config.writer_remaining_tiles_to_push
-                        : 0);
+                uint32_t writer_remaining_tiles_to_push = 0;
+                if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
+                    writer_remaining_tiles_to_push =
+                        activation_reuse_config.partial_core_writer_remaining_tiles_to_push_to_push;
+                } else if (
+                    activation_reuse_config.cores_with_non_meaningful_work.find(core) !=
+                    activation_reuse_config.cores_with_non_meaningful_work.end()) {
+                    writer_remaining_tiles_to_push = act_block_h_nsubblocks_split_last;
+                }
+                sender_rt_args.push_back(writer_remaining_tiles_to_push);
             }
             SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
         }
@@ -1120,10 +1160,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                     weights_mcast_sender_semaphore_id,
                     weights_mcast_receiver_semaphore_id};
                 if (enable_split_reader && enable_activation_reuse) {
-                    receiver_args.push_back(
-                        core.x == last_input_core.x && core.y == last_input_core.y
-                            ? activation_reuse_config.writer_remaining_tiles_to_push
-                            : 0);
+                    uint32_t writer_remaining_tiles_to_push = 0;
+                    if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
+                        writer_remaining_tiles_to_push =
+                            activation_reuse_config.partial_core_writer_remaining_tiles_to_push_to_push;
+                    } else if (
+                        activation_reuse_config.cores_with_non_meaningful_work.find(core) !=
+                        activation_reuse_config.cores_with_non_meaningful_work.end()) {
+                        writer_remaining_tiles_to_push = act_block_h_nsubblocks_split_last;
+                    }
+                    receiver_args.push_back(writer_remaining_tiles_to_push);
                 }
             }
             SetRuntimeArgs(program, writer_mcast_receiver_id, core, receiver_args);
