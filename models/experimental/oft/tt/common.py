@@ -1,4 +1,5 @@
 import ttnn
+import torch
 import math
 from loguru import logger
 
@@ -36,9 +37,22 @@ class Conv:
         # logger.debug(f"Conv parameters: {self.weights}")
         self.conv_pt = conv_pt
         # logger.debug(f"Conv: {self.conv_pt}")
-        self.has_bias = has_bias
-        if self.has_bias:
-            self.bias = parameters.bias
+
+        # handle comparison mode that requires bias
+        if ttnn.CONFIG.enable_comparison_mode:
+            self.has_bias = True
+            if has_bias:
+                self.bias = parameters.bias
+            else:
+                # Create bias tensor with proper shape for TTNN conv2d
+                bias_tensor = torch.zeros(conv_pt.out_channels)
+                self.bias = bias_tensor.view(1, 1, 1, -1)
+                # Convert bias to ttnn tensor
+                self.bias = ttnn.from_torch(self.bias, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        else:
+            self.has_bias = has_bias
+            if self.has_bias:
+                self.bias = parameters.bias
 
         self.kernel_size = (self.weights.shape[2], self.weights.shape[3])
         self.stride = conv_pt.stride  # stride
