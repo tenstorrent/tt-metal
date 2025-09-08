@@ -33,12 +33,14 @@ void bind_grid_sample(py::module& module) {
                                  - Shape (N, H_grid, W_grid, 2*K) where K is the grid batching factor
                                  - Contains K sets of normalized coordinates in range [-1, 1] packed into the last dimension
                                  - Each coordinate pair (x, y): x=-1 (leftmost), x=+1 (rightmost), y=-1 (topmost), y=+1 (bottommost)
+                                 - Data type: BFLOAT16 or FLOAT32 (FLOAT32 provides higher precision for coordinate calculations)
                                  - When K=1: standard single coordinate per location (maps 1:1 to PyTorch F.grid_sample behavior)
                                  - When K>1: K coordinate sets are packed per spatial location, typically created by reshaping
                                    a larger grid from (N, H_grid, W_grid*K, 2) to (N, H_grid, W_grid, 2*K), where the desired grid shape would be W_grid*K
                                * Precomputed mode (use_precomputed_grid=True):
                                  - Shape (N, H_grid, W_grid, 6*K) containing K sets of precomputed data packed into the last dimension
                                  - Each set has 6 elements: pixel coordinates and bilinear interpolation weights
+                                 - Data type: BFLOAT16 only (precomputed grids must be BFLOAT16)
                                  - When K=1: standard precomputed grid
                                  - When K>1: K precomputed sets are packed per spatial location, typically created by reshaping
                                    a larger precomputed grid from (N, H_grid, W_grid*K, 6) to (N, H_grid, W_grid, 6*K), where the desired grid shape would be W_grid*K
@@ -94,11 +96,16 @@ void bind_grid_sample(py::module& module) {
             >>> output_c_extend = ttnn.grid_sample(input_tensor, batched_grid_tensor, batch_output_channels=True)
             >>> print(output_c_extend.shape)  # [1, 4, 4, 128] - channels batched from 32 to 128 (K*C)
 
-            >>> # Example 3: Using precomputed grid for better performance
-            >>> grid_float32 = ttnn.from_torch(grid, dtype=ttnn.float32)
+            >>> # Example 3: Using FLOAT32 grid for higher precision
+            >>> grid_float32 = ttnn.from_torch(grid.to(torch.float32), dtype=ttnn.float32, device=device)
+            >>> output_float32 = ttnn.grid_sample(input_tensor, grid_float32)  # Higher precision coordinates
+            >>> print(output_float32.shape)  # [1, 4, 4, 32]
+
+            >>> # Example 4: Using precomputed grid for better performance
+            >>> grid_float32_host = ttnn.from_torch(grid, dtype=ttnn.float32)
             >>> input_shape = [1, 4, 4, 32]  # [N, H, W, C] format
             >>> prepared_grid = ttnn.prepare_grid_sample_grid(
-            ...     grid_float32, input_shape, padding_mode="zeros", output_dtype=ttnn.bfloat16
+            ...     grid_float32_host, input_shape, padding_mode="zeros", output_dtype=ttnn.bfloat16
             ... )
             >>> prepared_grid = ttnn.to_device(prepared_grid, device)
             >>> output_precomputed = ttnn.grid_sample(input_tensor, prepared_grid, use_precomputed_grid=True)
