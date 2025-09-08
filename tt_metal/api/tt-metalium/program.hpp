@@ -14,7 +14,7 @@ namespace tt::tt_metal {
 // Fwd declares
 struct ProgramDescriptor;
 class CircularBuffer;
-class Kernel;
+class KernelMeta;
 
 namespace detail {
 class ProgramImpl;
@@ -51,7 +51,7 @@ public:
 
     // Only Used in op_profiler, we might want to expose this via a tooling interface instead of through here.
     // Return type should be any_range
-    std::vector<std::shared_ptr<Kernel>> kernels() const;
+    std::vector<KernelMeta> kernels() const;
 
     // debug/test/internal usage.
     detail::ProgramImpl& impl() { return *internal_; }
