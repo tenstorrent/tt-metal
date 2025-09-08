@@ -54,21 +54,17 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
     LayerNormDistributedType norm_type,
     DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
     const uint32_t NC = a.physical_volume() / HW;
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
-    const auto& a_dtype = a.dtype();
 
     const uint32_t Wt = W / TILE_WIDTH;
     const uint32_t Ht = H / TILE_HEIGHT;
-    const uint32_t tile_cols_per_device = is_rmsnorm ? 1 : 2;
 
     uint32_t num_tile_rows = NC * Ht;
-    uint32_t num_tile_cols = Wt;
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -92,13 +88,8 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
     uint32_t bfloat16_tile_size = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
 
-    tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
-    uint32_t inb_single_tile_size = 0;
-
     auto a_addr = a.buffer()->address();
     auto dst_addr = output.buffer()->address();
-
-    uint32_t num_tiles = a.physical_volume() / TILE_HW;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -130,7 +121,6 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
     auto grid_size = device->compute_with_storage_grid_size();
 
     uint32_t max_cores_y = grid_size.y;
-    uint32_t max_cores_x = grid_size.x;
     uint32_t cores_x = std::min(max_cores_y, num_tile_rows);
     while (num_tile_rows % cores_x != 0 && cores_x > 1) {
         cores_x--;
@@ -169,7 +159,6 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)writer_block_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
-    bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
     std::map<std::string, std::string> compute_defines;
 
     compute_defines["RMSNORM"] = "1";
@@ -323,7 +312,6 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     const uint32_t NC = a.physical_volume() / HW;
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
-    const auto& a_dtype = a.dtype();
 
     const uint32_t Wt = W / TILE_WIDTH;
     const uint32_t Ht = H / TILE_HEIGHT;
@@ -341,8 +329,6 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     if (use_2d_kernel) {
         return layernorm_pre_allgather_multi_core_2d(a, output, norm_type, compute_kernel_config);
     }
-
-    const uint32_t tile_cols_per_device = is_rmsnorm ? 1 : 2;
 
     uint32_t num_tile_rows = NC * Ht;
 
@@ -373,13 +359,8 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
     log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
 
-    tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
-    uint32_t inb_single_tile_size = 0;
-
     auto a_addr = a.buffer()->address();
     auto dst_addr = output.buffer()->address();
-
-    uint32_t num_tiles = a.physical_volume() / TILE_HW;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -451,7 +432,6 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)writer_block_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
-    bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
     std::map<std::string, std::string> compute_defines;
 
     if (is_rmsnorm) {
@@ -513,7 +493,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     // Log all circular buffers with program.circular_buffers(), which returns
     // std::vector<std::shared_ptr<CircularBuffer>>
     for (const auto& cb : program.circular_buffers()) {
-        for (const auto index : cb->buffer_indices()) {
+        for ([[maybe_unused]] const auto index : cb->buffer_indices()) {
             log_debug(tt::LogOp, "cb_id {}", index);
             log_debug(tt::LogOp, "page_size: {}", cb->page_size(index));
             log_debug(tt::LogOp, "num_pages: {}", cb->num_pages(index));

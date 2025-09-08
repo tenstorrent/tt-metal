@@ -8,6 +8,7 @@
 #include <iostream>
 #include <mutex>
 #include <string>
+#include <chrono>
 
 #include "impl/context/metal_context.hpp"
 
@@ -55,7 +56,6 @@ const std::string& get_reports_dir() {
     }
     return outpath;
 }
-
 }  // namespace utils
 
 }  // namespace tt

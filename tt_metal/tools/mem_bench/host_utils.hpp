@@ -10,7 +10,7 @@
 #include <span>
 #include <vector>
 
-#include "dispatch/memcpy.hpp"
+#include "tt_metal/impl/dispatch/memcpy.hpp"
 #include "vector_aligned.hpp"
 
 namespace tt::tt_metal::tools::mem_bench {

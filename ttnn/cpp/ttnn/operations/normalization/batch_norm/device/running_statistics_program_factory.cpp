@@ -155,10 +155,7 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
     uint32_t d_single_tile_size = tt_metal::detail::TileSize(d_data_format);
     uint32_t e_single_tile_size = tt_metal::detail::TileSize(e_data_format);
 
-    uint32_t num_output_tiles = output.physical_volume() / output.tensor_spec().tile().get_tile_hw();
-
     // we parallelize the computation across the output tiles
-    constexpr bool row_major = true;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
