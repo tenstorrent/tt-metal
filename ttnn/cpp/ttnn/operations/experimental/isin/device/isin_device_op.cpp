@@ -4,8 +4,9 @@
 
 #include "isin_device_op.hpp"
 
-#include <enchantum/enchantum.hpp>
 #include "ttnn/operations/experimental/isin/isin_common.hpp"
+
+#include <enchantum/enchantum.hpp>
 
 namespace ttnn::operations::experimental::isin {
 
@@ -48,9 +49,7 @@ IsInDeviceOperation::spec_return_value_t IsInDeviceOperation::compute_output_spe
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return {
         Shape{tensor_args.elements_tensor.logical_volume()},
-        {OUTPUT_TENSOR_DATA_TYPE,
-         {OUTPUT_TENSOR_LAYOUT},
-         args.memory_config.has_value() ? *(args.memory_config) : tensor_args.elements_tensor.memory_config()},
+        {OUTPUT_TENSOR_DATA_TYPE, {OUTPUT_TENSOR_LAYOUT}, tensor_args.elements_tensor.memory_config()},
     };
 }
 
@@ -71,12 +70,9 @@ IsInDeviceOperation::invocation_result_t IsInDeviceOperation::invoke(
     const uint32_t& single_fetch_subchunk_size,
     const bool& assume_unique,
     const bool& invert,
-    const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_out,
     const QueueId& queue_id) {
-    return {
-        {assume_unique, invert, single_fetch_subchunk_size, memory_config},
-        {elements_tensor, test_elements_tensor, optional_out}};
+    return {{assume_unique, invert, single_fetch_subchunk_size}, {elements_tensor, test_elements_tensor, optional_out}};
 }
 
 }  // namespace ttnn::operations::experimental::isin

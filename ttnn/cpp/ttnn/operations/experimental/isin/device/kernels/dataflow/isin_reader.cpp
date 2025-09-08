@@ -22,7 +22,8 @@ FORCE_INLINE void isin_subchunks(
     const uint32_t& test_elements_l1_read_addr,
     const uint32_t& output_l1_write_addr,
     const uint32_t& elements_subchunk_size,
-    const uint32_t& test_elements_subchunk_size) {
+    const uint32_t& test_elements_subchunk_size,
+    const bool& invert) {
     volatile tt_l1_ptr elements_number_type* elements_subchunk_ptr =
         reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(elements_l1_read_addr);
     volatile tt_l1_ptr elements_number_type* test_elements_subchunk_ptr =
@@ -33,7 +34,7 @@ FORCE_INLINE void isin_subchunks(
         for (uint32_t test_elements_index = 0; test_elements_index < test_elements_subchunk_size;
              ++test_elements_index) {
             if (elements_subchunk_ptr[elements_index] == test_elements_subchunk_ptr[test_elements_index]) {
-                output_subchunk_ptr[elements_index] = 0xFFFFFFFF;
+                output_subchunk_ptr[elements_index] = invert ? 0x00000000 : 0xFFFFFFFF;
                 break;
             }
         }
@@ -47,16 +48,24 @@ FORCE_INLINE void isin_subchunks(
     `test_elements` tensor, so the output chunk get later updated only with the reverted values and
     then retuened to DRAM
 */
-FORCE_INLINE void prefill_output(const uint32_t& output_l1_write_addr, const uint32_t& output_subchunk_size) {
+FORCE_INLINE void prefill_output(
+    const uint32_t& output_l1_write_addr, const uint32_t& output_subchunk_size, const bool& invert) {
     volatile tt_l1_ptr output_number_type* output_chunk_begin_ptr =
         reinterpret_cast<volatile tt_l1_ptr output_number_type*>(output_l1_write_addr);
     for (uint32_t i = 0; i < output_subchunk_size; ++i) {
-        output_chunk_begin_ptr[i] = 0x0;
+        output_chunk_begin_ptr[i] = invert ? 0xFFFFFFFF : 0x00000000;
     }
 }
 
 }  // namespace
 
+/*
+    this kernel works with row-major data that has been flattened to a 1D tensor to save on redundant padding
+    the input tensors to the kernel (`elements` and `test_elements`) (and also output) are flattened to become one stick
+   only this means that the whole physical volume of input (and output) may not easily fit in L1 because DRAM calls are
+   costly, it is assumed (in the least optimized case) that it is feasible to subchunk data to have as long subchunks of
+   the only stick the input tensors consist of as possible
+*/
 void kernel_main() {
     constexpr auto ctas = get_ctas();
 
@@ -65,15 +74,22 @@ void kernel_main() {
     const uint32_t subchunks_per_core = get_arg_val<uint32_t>(2);
     const uint32_t subchunks_offset = get_arg_val<uint32_t>(3);
 
-    const auto elements_addr_gtor =
-        TensorAccessor{ctas.elements_accessor_args, elements_buffer_address, ctas.elements_size * 4};
-    const auto test_elements_addr_gtor =
-        TensorAccessor{ctas.test_elements_accessor_args, test_elements_buffer_address, ctas.test_elements_size * 4};
+    constexpr uint32_t elements_element_size = sizeof(std_type_t<get_dataformat(ctas.elements_cb)>);
+    constexpr uint32_t test_elements_element_size = sizeof(std_type_t<get_dataformat(ctas.test_elements_cb)>);
+    const auto elements_addr_gtor = TensorAccessor{
+        ctas.elements_accessor_args, elements_buffer_address, ctas.elements_size * elements_element_size};
+    const auto test_elements_addr_gtor = TensorAccessor{
+        ctas.test_elements_accessor_args,
+        test_elements_buffer_address,
+        ctas.test_elements_size * test_elements_element_size};
 
     /*
-        for every subchunk (part of a stick) of the elements tensor - to wchi an analogous output chunk
+        for every subchunk (part of a stick) of the elements tensor - to which an analogous output chunk
         is related to - is fully processed by the core
         there is the fact that tensors are flattened before fed to kernels, so they consist only of one stick
+        each core is provided a subset of subchunks of the element tensor to be processed only by that given core -
+        - this means that each core needs to go through the whole test_elements tensor (all subchunks) to
+        correctly work out the output values (yes/no) for each of according input elements - subject to optimizationś
     */
     for (uint32_t elements_subchunk_id = subchunks_offset,
                   elements_offset = subchunks_offset * ctas.single_fetch_subchunk_size;
@@ -88,7 +104,7 @@ void kernel_main() {
         cb_reserve_back(ctas.output_cb, ONE_PAGE);
         const uint32_t elements_l1_read_addr = get_read_ptr(ctas.elements_cb);
         const uint32_t output_l1_write_addr = get_write_ptr(ctas.output_cb);
-        prefill_output(output_l1_write_addr, elements_subchunk_size);
+        prefill_output(output_l1_write_addr, elements_subchunk_size, ctas.invert);
 
         // for every subchunk of the test_elements stick
         for (uint32_t test_elements_subchunk_id = 0, test_elements_offset = 0;
@@ -102,12 +118,15 @@ void kernel_main() {
             cb_wait_front(ctas.test_elements_cb, ONE_PAGE);
             const uint32_t test_elements_l1_read_addr = get_read_ptr(ctas.test_elements_cb);
 
+            // exhaustively perform isin on a given elements' subchunks (one elements' subchunk vs all test_elements'
+            // subchunks)
             isin_subchunks(
                 elements_l1_read_addr,
                 test_elements_l1_read_addr,
                 output_l1_write_addr,
                 elements_subchunk_size,
-                test_elements_subchunk_size);
+                test_elements_subchunk_size,
+                ctas.invert);
 
             cb_pop_front(ctas.test_elements_cb, ONE_PAGE);
         }

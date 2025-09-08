@@ -106,7 +106,7 @@ FORCE_INLINE void load_to_cb(
     cb_push_back(cb, ONE_PAGE);
 }
 
-// srite from L1 to DRAM
+// write from L1 to DRAM
 template <typename addr_gen_type>
 FORCE_INLINE void write_to_dram(
     const uint32_t& cb, const addr_gen_type& addr_gtor, const uint32_t& offset, const uint32_t& subchunk_size) {
