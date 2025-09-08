@@ -24,7 +24,7 @@ constexpr auto k_FabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
 constexpr auto k_ReliabilityMode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
 
 std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc) {
-    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string(), true);
+    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());
     control_plane->initialize_fabric_context(k_FabricConfig);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(k_FabricConfig, k_ReliabilityMode);
 
@@ -201,7 +201,7 @@ TEST(MeshGraphValidation, TestTGMeshGraphInitMGD2) {
     const std::filesystem::path tg_mesh_graph_desc_2_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto";
-    auto mesh_graph_desc = std::make_unique<MeshGraph>(tg_mesh_graph_desc_2_path.string(), true);
+    auto mesh_graph_desc = std::make_unique<MeshGraph>(tg_mesh_graph_desc_2_path.string());
     EXPECT_EQ(
         mesh_graph_desc->get_coord_range(MeshId{0}, MeshHostRankId(0)),
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
@@ -230,7 +230,7 @@ TEST(MeshGraphValidation, TestTGMeshGraphInitConsistencyCheckMGD2) {
     const std::filesystem::path tg_mesh_graph_desc_2_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto";
-    auto mesh_graph2 = std::make_unique<MeshGraph>(tg_mesh_graph_desc_2_path.string(), true);
+    auto mesh_graph2 = std::make_unique<MeshGraph>(tg_mesh_graph_desc_2_path.string());
 
     // Compare connectivity deeply
     expect_intra_mesh_connectivity_equal(

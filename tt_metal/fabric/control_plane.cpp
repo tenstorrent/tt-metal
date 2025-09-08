@@ -449,7 +449,7 @@ void ControlPlane::init_control_plane(
     std::optional<std::reference_wrapper<const std::map<FabricNodeId, chip_id_t>>>
         logical_mesh_chip_id_to_physical_chip_id_mapping) {
 
-    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file, version_2_);
+    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
     this->initialize_distributed_contexts();
@@ -466,14 +466,13 @@ void ControlPlane::init_control_plane(
     this->generate_local_intermesh_link_table();
 }
 
-ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file, const bool version_2) : version_2_(version_2) {
+ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     init_control_plane(mesh_graph_desc_file, std::nullopt);
 }
 
 ControlPlane::ControlPlane(
     const std::string& mesh_graph_desc_file,
-    const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping,
-    const bool version_2) : version_2_(version_2) {
+    const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     init_control_plane(mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
 }
 

@@ -81,7 +81,7 @@ using InterMeshConnectivity = std::vector<std::vector<std::unordered_map<MeshId,
 using IntraMeshConnectivity = std::vector<std::vector<std::unordered_map<chip_id_t, RouterEdge>>>;
 class MeshGraph {
 public:
-    explicit MeshGraph(const std::string& mesh_graph_desc_file_path, const bool version_2 = false);
+    explicit MeshGraph(const std::string& mesh_graph_desc_file_path);
     MeshGraph() = delete;
     ~MeshGraph() = default;
 
