@@ -21,7 +21,6 @@ public:
     ~ProfilerStateManager() = default;
 
     void cleanup_device_profilers() {
-        ZoneScoped;
         std::vector<std::thread> threads(this->device_profiler_map.size());
 
         uint32_t i = 0;
