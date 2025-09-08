@@ -399,7 +399,7 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     }
 
     if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED && enable_activation_reuse) {
-        const uint32_t output_image_width_ntiles = div_up(output_width, tt::constants::TILE_HEIGHT);
+        const uint32_t output_image_width_ntiles = tt::div_up(output_width, tt::constants::TILE_HEIGHT);
         TT_FATAL(
             act_block_h_ntiles > output_image_width_ntiles,
             "Activation reuse needs act block h ({}) to be bigger than output image width in tiles ({}) for the "
