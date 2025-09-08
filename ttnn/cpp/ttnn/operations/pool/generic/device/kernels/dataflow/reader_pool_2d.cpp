@@ -284,7 +284,7 @@ void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(34);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(35);
     constexpr bool return_indices = (bool)get_compile_time_arg_val(36);
-    constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0 && in_c % TILE_WIDTH <= FACE_WIDTH;
+    constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
 
     // TODO this should go in the initialization condition below
     if constexpr (last_tile_is_partial) {
