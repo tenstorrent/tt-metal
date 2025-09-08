@@ -7,6 +7,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <optional>
+#include <tuple>
+#include <umd/device/types/arch.hpp>
+#include <unordered_map>
 #include <vector>
 #include "tt-metalium/assert.hpp"
 #include "tt-metalium/constants.hpp"
@@ -206,7 +209,10 @@ std::vector<CBInfo> get_cb_info(
                 per_core_out_matrix_width_ntiles * block_config.act_block_w_ntiles,
                 weights_tile_size,
                 dilation[1],
-                num_blocks_act_h)) {
+                num_blocks_act_h,
+                block_config.act_block_w_ntiles,
+                fp32_dest_acc_en,
+                output_datatype)) {
             uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles;
             uint32_t act_block_h_nsubblocks_split_last = act_block_h_nsubblocks / 2;
             uint32_t act_block_h_nsubblocks_split = act_block_h_nsubblocks - act_block_h_nsubblocks_split_last;
@@ -499,6 +505,47 @@ bool is_split_reader_supported(
     return memory_layout == TensorMemoryLayout::HEIGHT_SHARDED && !is_1d_depthwise_conv && act_block_h_ntiles > 1;
 }
 
+static uint32_t get_tilize_cycles(tt::ARCH arch, DataType input_dtype, DataType output_dtype, bool fp32_dest_acc) {
+    switch (arch) {
+        case tt::ARCH::BLACKHOLE:
+            switch (input_dtype) {
+                case DataType::FLOAT32:
+                    switch (output_dtype) {
+                        case DataType::FLOAT32: return 132;
+                        case DataType::BFLOAT16: return fp32_dest_acc ? 80 : 132;
+                        case DataType::BFLOAT8_B: return fp32_dest_acc ? 77 : 132;
+                        default: TT_THROW("Unsupported output data type when calculating tilize cycles");
+                    };
+                case DataType::BFLOAT16:
+                    switch (output_dtype) {
+                        case DataType::FLOAT32: return fp32_dest_acc ? 128 : 105;
+                        case DataType::BFLOAT16: return 72;
+                        case DataType::BFLOAT8_B: return 60;
+                        default: TT_THROW("Unsupported output data type when calculating tilize cycles");
+                    };
+                default: TT_THROW("Unsupported input data type when calculating tilize cycles");
+            }
+        case tt::ARCH::WORMHOLE_B0:
+            switch (input_dtype) {
+                case DataType::FLOAT32:
+                    switch (output_dtype) {
+                        case DataType::FLOAT32: return fp32_dest_acc ? 128 : 107;
+                        case DataType::BFLOAT16: return 74;
+                        case DataType::BFLOAT8_B: return fp32_dest_acc ? 70 : 74;
+                        default: TT_THROW("Unsupported output data type when calculating tilize cycles");
+                    };
+                case DataType::BFLOAT16:
+                    switch (output_dtype) {
+                        case DataType::FLOAT32: return fp32_dest_acc ? 117 : 92;
+                        case DataType::BFLOAT16: return fp32_dest_acc ? 68 : 61;
+                        case DataType::BFLOAT8_B: return fp32_dest_acc ? 43 : 40;
+                        default: TT_THROW("Unsupported output data type when calculating tilize cycles");
+                    };
+                default: TT_THROW("Unsupported input data type when calculating tilize cycles");
+            }
+        default: TT_THROW("Unsupported architecture when calculating tilize cycles");
+    }
+}
 /*
     Split reader viability is calculated by comparing activation and weight transfer costs.
     - Activation cost is calculated by using benchmarked NOC transfer rate for L1 local transfer.
@@ -524,7 +571,11 @@ bool is_split_reader_viable(
     uint32_t weights_block_ntiles,
     uint32_t weights_tile_size,
     uint32_t dilation_w,
-    uint32_t num_blocks_act_h) {
+    uint32_t num_blocks_act_h,
+    uint32_t act_block_w_ntiles,
+    bool fp32_dest_acc,
+    DataType output_datatype) {
+    const float empirical_clock = arch == tt::ARCH::BLACKHOLE ? 1.35f : 1.0f;
     // Calculate activation transfer cost
     const uint32_t input_bytes_per_element = (input_datatype == DataType::FLOAT32) ? 4 : 2;
     // For dilated convs the kernel_width number of channels isn't sequential in the L1, so we transfer 1 channel at a
@@ -534,7 +585,8 @@ bool is_split_reader_viable(
         input_bytes_per_element * input_channels_padded * coallesced_read_channels;
     const float noc_local_l1_transfer_rate_gbps =
         get_local_l1_noc_transfer_rate(noc_local_l1_transfer_unit_bytes, arch);
-    const float activation_cost = static_cast<float>(
+    const float activation_cost = empirical_clock *
+                                  static_cast<float>(
                                       input_bytes_per_element * act_block_h_ntiles * tt::constants::TILE_HEIGHT *
                                       input_channels_padded * kernel_width) /
                                   noc_local_l1_transfer_rate_gbps;
@@ -543,28 +595,21 @@ bool is_split_reader_viable(
         get_mcast_many_l1_linked_noc_transfer_rate(weights_block_ntiles * weights_tile_size, arch);
     const float noc_all_dram_transfer_rate_gbps = get_all_dram_noc_transfer_rate(weights_tile_size, arch);
     const float weight_cost =
-        static_cast<float>(weights_tile_size * weights_block_ntiles) *
+        empirical_clock * static_cast<float>(weights_tile_size * weights_block_ntiles) *
         (1.0f / noc_all_dram_transfer_rate_gbps + 1.0f / noc_mcast_many_l1_linked_transfer_rate_gbps);
 
-    const float comparisson_factor = num_blocks_act_h > 1 ? 2.0f : 1.0f;
+    const float tilize_cost = get_tilize_cycles(arch, input_datatype, output_datatype, fp32_dest_acc) *
+                              act_block_w_ntiles * act_block_h_ntiles;
 
-    // Split reader is viable when activation cost significantly exceeds weight cost
-    const bool is_viable = activation_cost > comparisson_factor * weight_cost;
-
+    const bool is_viable =
+        activation_cost / 2 + std::max(weight_cost, tilize_cost) < std::max(activation_cost + tilize_cost, weight_cost);
     log_debug(
         tt::LogOp,
-        "Split reader viability: activation_cost={:.3f}, weight_cost={:.3f}, comparisson_factor={}, "
-        "weight_tile_size={}, weight_block_ntiles={},local_l1_transfer_unit_bytes={},coallesced_read_channels={}, "
-        "viable={}, num_blocks_act_h={}",
+        "Split reader viability: activation_cost={:.3f}, weight_cost={:.3f}, tilize_cost={:.3f}, is_viable={}",
         activation_cost,
         weight_cost,
-        comparisson_factor,
-        weights_tile_size,
-        weights_block_ntiles,
-        noc_local_l1_transfer_unit_bytes,
-        coallesced_read_channels,
-        is_viable,
-        num_blocks_act_h);
+        tilize_cost,
+        is_viable);
 
     return is_viable;
 }
