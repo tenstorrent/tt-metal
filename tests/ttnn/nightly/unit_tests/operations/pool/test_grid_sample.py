@@ -85,7 +85,7 @@ def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape, use_prec
 
 @pytest.mark.parametrize("use_precomputed_grid", [True, False])
 @pytest.mark.parametrize("batch_output_channels", [True, False])
-@pytest.mark.parametrize("grid_dtype", ["bfloat16", "float32"])
+@pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize(
     "input_shape, grid_shape, grid_batching_factor",
     [
@@ -101,7 +101,7 @@ def test_grid_sample_batch_output_channels_flag(
     """Test grid sample with batch_output_channels flag - both true and false behaviors"""
 
     # Skip float32 grid with precomputed grid - not currently supported
-    if grid_dtype == "float32" and use_precomputed_grid:
+    if grid_dtype == ttnn.float32 and use_precomputed_grid:
         pytest.skip("Precomputed grid with FLOAT32 grid dtype is not currently supported")
 
     torch.manual_seed(42)
@@ -149,10 +149,7 @@ def test_grid_sample_batch_output_channels_flag(
         # Reshape for grid batching: (N, H, W*K, 2) -> (N, H, W, 2*K)
         new_grid_w = grid_w // grid_batching_factor
         new_last_dim = 2 * grid_batching_factor
-        if grid_dtype == "float32":
-            ttnn_grid_host = ttnn.from_torch(grid_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32)
-        else:  # bfloat16
-            ttnn_grid_host = ttnn.from_torch(grid_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+        ttnn_grid_host = ttnn.from_torch(grid_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=grid_dtype)
         ttnn_grid_reshaped = ttnn.reshape(ttnn_grid_host, (batch_size, grid_h, new_grid_w, new_last_dim))
         ttnn_grid_device = ttnn.to_device(ttnn_grid_reshaped, device)
 
@@ -184,6 +181,4 @@ def test_grid_sample_batch_output_channels_flag(
 
     # Verify numerical correctness
     pcc_passed, pcc_message = assert_with_pcc(torch_expected_nhwc, ttnn_output_torch, pcc=0.99)
-    logger.info(
-        f"batch_output_channels={batch_output_channels} test (batching_factor={grid_batching_factor}, precomputed={use_precomputed_grid}, grid_dtype={grid_dtype}): {pcc_message}"
-    )
+    logger.info(pcc_message)
