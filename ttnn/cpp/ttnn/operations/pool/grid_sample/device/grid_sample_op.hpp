@@ -49,4 +49,13 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     bool use_precomputed_grid,
     bool batch_output_channels);
 
+tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory_sharded(
+    const Tensor& input_tensor,
+    const Tensor& grid_tensor,
+    const Tensor& output_tensor,
+    const std::string& mode,
+    const std::string& padding_mode,
+    bool use_precomputed_grid,
+    bool extend_channels);
+
 }  // namespace ttnn::operations::grid_sample
