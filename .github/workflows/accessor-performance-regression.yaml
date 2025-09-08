@@ -92,27 +92,7 @@ jobs:
           echo "🚀 Generating baseline performance data..."
           mkdir -p ./baseline-results
           python3 tests/ttnn/benchmark/python/accessor_benchmarks.py --export-results-to ./baseline-results
-
-          echo "🔍 Checking baseline results directory:"
-          ls -la ./baseline-results/
-          echo "🔍 Current working directory: $(pwd)"
-          echo "🔍 Directory contents:"
-          ls -la ./
-
-          # Verify that baseline results were actually generated
-          if [ ! -d "./baseline-results" ] || [ -z "$(ls -A ./baseline-results)" ]; then
-            echo "❌ ERROR: baseline-results directory is empty or doesn't exist!"
-            echo "🔍 Benchmark script may have failed to generate results"
-            exit 1
-          fi
-
           echo "✅ Baseline results generated successfully"
-
-      - name: 🔍 Verify Files on Host
-        run: |
-          echo "🔍 Checking if baseline-results exists on host at: ${{ github.workspace }}/docker-job-baseline/baseline-results"
-          ls -la "${{ github.workspace }}/docker-job-baseline/" || echo "docker-job-baseline directory not found"
-          ls -la "${{ github.workspace }}/docker-job-baseline/baseline-results/" || echo "baseline-results directory not found on host"
 
       - name: 📤 Upload Baseline Results
         id: upload-baseline
@@ -179,22 +159,6 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           path: docker-job
-
-      - name: 🔍 Debug Artifact Information
-        run: |
-          echo "🔍 Expected artifact name: ${{ needs.generate-baseline-performance.outputs.baseline-artifact-name }}"
-          echo "🔍 Baseline artifact name: baseline-performance-data"
-          echo "🔍 Current working directory: $(pwd)"
-          echo "🔍 Available files:"
-          ls -la ./
-
-      - name: 🔍 List Available Artifacts
-        continue-on-error: true
-        run: |
-          echo "🔍 Attempting to list available artifacts using GitHub CLI..."
-          gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts --jq '.artifacts[] | {name: .name, id: .id, created_at: .created_at}' || echo "Failed to list artifacts"
-        env:
-          GH_TOKEN: ${{ github.token }}
 
       - name: ⬇️ Download Baseline Performance Data
         uses: actions/download-artifact@v4
