@@ -68,7 +68,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     timeout-minutes: 60
     outputs:
-      baseline-artifact-name: ${{ steps.upload-baseline.outputs.artifact-id }}
+      baseline-artifact-name: baseline-performance-data
 
     steps:
       - name: ⬇️ Checkout baseline branch
@@ -161,7 +161,7 @@ jobs:
       - name: 🔍 Debug Artifact Information
         run: |
           echo "🔍 Expected artifact name: ${{ needs.generate-baseline-performance.outputs.baseline-artifact-name }}"
-          echo "🔍 Artifact name: ${{ needs.generate-baseline-performance.steps.upload-baseline.outputs.artifact-id }}"
+          echo "🔍 Baseline artifact name: baseline-performance-data"
 
       - name: ⬇️ Download Baseline Performance Data
         uses: actions/download-artifact@v4
