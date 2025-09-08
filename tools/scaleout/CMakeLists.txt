@@ -1,5 +1,8 @@
 project(scaleout_tools)
 
+# Make .clang-tidy available in the fabric binary directory for generated files
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/.clang-tidy ${CMAKE_CURRENT_BINARY_DIR}/.clang-tidy COPYONLY)
+
 include(protobuf)
 set(PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/schemas/factory_system_descriptor.proto
@@ -50,9 +53,9 @@ target_link_libraries(
         TT::STL
         umd::device
     PRIVATE
-        $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>
         enchantum::enchantum
-        protobuf::libprotobuf
+        $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>
+        $<BUILD_INTERFACE:protobuf::libprotobuf>
 )
 
 target_compile_features(scaleout_tools PUBLIC cxx_std_20)
