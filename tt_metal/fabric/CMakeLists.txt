@@ -104,7 +104,7 @@ target_link_libraries(
         Metalium::Metal::Impl
         TT::Metalium::HostDevCommon
         FlatBuffers::FlatBuffers
-        protobuf::libprotobuf
+        $<BUILD_INTERFACE:protobuf::libprotobuf>
 )
 
 target_precompile_headers(fabric REUSE_FROM TT::CommonPCH)

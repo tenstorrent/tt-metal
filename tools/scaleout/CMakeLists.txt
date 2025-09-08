@@ -47,9 +47,9 @@ target_link_libraries(
         TT::STL
         umd::device
     PRIVATE
-        $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>
         enchantum::enchantum
-        protobuf::libprotobuf
+        $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>
+        $<BUILD_INTERFACE:protobuf::libprotobuf>
 )
 
 target_compile_features(scaleout_tools PUBLIC cxx_std_20)
