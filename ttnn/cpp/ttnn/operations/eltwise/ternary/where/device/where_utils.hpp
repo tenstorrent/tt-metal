@@ -20,6 +20,7 @@ enum class KernelName {
     ReaderNoBcastTSS,
     ReaderColBcastTTT,
     ReaderColBcastTTS,
+    ReaderColBcastTST,
     ReaderOuterBcastTTT,
     ReaderOuterBcastTTS,
     ReaderOuterBcastTST,
@@ -32,6 +33,7 @@ enum class KernelName {
     ComputeNoBcastTSS,
     ComputeColBcastTTT,
     ComputeColBcastTTS,
+    ComputeColBcastTST,
 };
 
 struct WhereKernelConfig {
@@ -57,12 +59,8 @@ WhereBroadcastType get_broadcast_type(
     const ttnn::Shape& value_false_shape,
     WhereVariant variant);
 
-// TTS variant (tensor-tensor-scalar)
+// 2-tensor broadcast compatibility (used by both TTS and TST)
 WhereBroadcastType get_broadcast_type(
-    const ttnn::Shape& predicate_shape, const ttnn::Shape& value_true_shape, WhereVariant variant);
-
-// TST variant (tensor-scalar-tensor) - different parameter order to avoid ambiguity
-WhereBroadcastType get_broadcast_type(
-    const ttnn::Shape& predicate_shape, WhereVariant variant, const ttnn::Shape& value_false_shape);
+    const ttnn::Shape& predicate_shape, const ttnn::Shape& tensor_shape, WhereVariant variant);
 
 }  // namespace ttnn::operations::ternary

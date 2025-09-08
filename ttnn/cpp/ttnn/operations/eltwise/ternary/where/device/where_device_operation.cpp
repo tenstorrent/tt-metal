@@ -493,7 +493,7 @@ WhereDeviceOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     WhereBroadcastType broadcast_type =
-        get_broadcast_type(predicate.logical_shape(), WhereVariant::TST, value_false.logical_shape());
+        get_broadcast_type(predicate.logical_shape(), value_false.logical_shape(), WhereVariant::TST);
 
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TST,
