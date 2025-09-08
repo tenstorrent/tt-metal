@@ -212,20 +212,6 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
     if (tt::DevicePool::instance().is_device_active(device_id)) {
         device = tt::DevicePool::instance().get_active_device(device_id);
     }
-    json kernelSizes;
-    // TODO(HalProcessorClassType): all the combinations can be queried from HAL instead of hardcoded here, but
-    // currently HAL does not correctly report the number of processors under DM.
-    // It should report (DM, 0) and (DM, 1), but instead it currently reports (DM, 0) and (DM+1, 0).
-    // So hardcode for now, this is on par with previously hardcoded brisc, ncrisc, etc.
-    kernelSizes["TENSIX_DM_0_max_kernel_size"] = 0;
-    kernelSizes["TENSIX_DM_1_max_kernel_size"] = 0;
-    kernelSizes["TENSIX_COMPUTE_0_max_kernel_size"] = 0;
-    kernelSizes["TENSIX_COMPUTE_1_max_kernel_size"] = 0;
-    kernelSizes["TENSIX_COMPUTE_2_max_kernel_size"] = 0;
-    kernelSizes["ACTIVE_ETH_DM_0_max_kernel_size"] = 0;
-    kernelSizes["ACTIVE_ETH_DM_1_max_kernel_size"] = 0;
-    kernelSizes["IDLE_ETH_DM_0_max_kernel_size"] = 0;
-    kernelSizes["IDLE_ETH_DM_1_max_kernel_size"] = 0;
 
     for (const auto& kernel : program.kernels()) {
         json kernelObj;
@@ -242,20 +228,35 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
         }
     }
 
+    json kernelSizes;
+    // TODO(HalProcessorClassType): all the combinations can be queried from HAL instead of hardcoded here, but
+    // currently HAL does not correctly report the number of processors under DM.
+    // It should report (DM, 0) and (DM, 1), but instead it currently reports (DM, 0) and (DM+1, 0).
+    // So hardcode for now, this is on par with previously hardcoded brisc, ncrisc, etc.
+    kernelSizes["TENSIX_DM_0_max_kernel_size"] = 0;
+    kernelSizes["TENSIX_DM_1_max_kernel_size"] = 0;
+    kernelSizes["TENSIX_COMPUTE_0_max_kernel_size"] = 0;
+    kernelSizes["TENSIX_COMPUTE_1_max_kernel_size"] = 0;
+    kernelSizes["TENSIX_COMPUTE_2_max_kernel_size"] = 0;
+    kernelSizes["ACTIVE_ETH_DM_0_max_kernel_size"] = 0;
+    kernelSizes["ACTIVE_ETH_DM_1_max_kernel_size"] = 0;
+    kernelSizes["IDLE_ETH_DM_0_max_kernel_size"] = 0;
+    kernelSizes["IDLE_ETH_DM_1_max_kernel_size"] = 0;
+
     if (device != nullptr) {
         for (const auto& kernel : program.kernels()) {
             auto core_type = kernel.programmable_core_type;
             auto core_type_name = enchantum::to_string(core_type);
             auto processor_class_name = enchantum::to_string(kernel.processor_class);
 
-            for (int i = 0; i < kernel->expected_num_binaries(); i++) {
+            for (auto const& binary_meta : kernel.binary_meta) {
                 auto key = fmt::format(
                     "{}_{}_{}_max_kernel_size",
                     core_type_name,
                     processor_class_name,
-                    kernel->get_kernel_processor_type(i));
-                if (kernelSizes.value(key, 0) < kernel->get_binary_packed_size(device, i)) {
-                    kernelSizes[key] = kernel->get_binary_packed_size(device, i);
+                    binary_meta.processor_type);
+                if (kernelSizes.value(key, 0) < binary_meta.packed_size) {
+                    kernelSizes[key] = binary_meta.packed_size;
                 }
             }
         }
