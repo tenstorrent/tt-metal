@@ -37,7 +37,7 @@ struct InputBufferParams {
 };
 
 std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_input_mesh_buffer_from_inputs(
-    const InputBufferParams& inputs, tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    const InputBufferParams& inputs, tt::tt_metal::distributed::MeshDevice* mesh_device, bool is_interleaved = false) {
     // These values would be passed from tensor correctly based on PageConfig
     const auto host_size_in_bytes = inputs.physical_tensor_shape.volume() * inputs.bytes_per_element;
     const auto page_size = inputs.page_shape.height() * inputs.page_shape.width() * inputs.bytes_per_element;
@@ -46,12 +46,17 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_input_m
     const tt::tt_metal::distributed::ReplicatedBufferConfig mesh_buffer_config{.size = host_size_in_bytes};
 
     // Create input mesh buffer
-    auto input_buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(
-        inputs.physical_tensor_shape,
-        inputs.input_shard_spec.physical_shard_shape,
-        inputs.page_shape,
-        inputs.input_shard_spec.grid,
-        inputs.input_shard_spec.shard_orientation);
+    std::optional<tt::tt_metal::BufferDistributionSpec> input_buffer_distribution_spec;
+    if (is_interleaved) {
+        input_buffer_distribution_spec = std::nullopt;
+    } else {
+        input_buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(
+            inputs.physical_tensor_shape,
+            inputs.input_shard_spec.physical_shard_shape,
+            inputs.page_shape,
+            inputs.input_shard_spec.grid,
+            inputs.input_shard_spec.shard_orientation);
+    }
     const tt::tt_metal::distributed::DeviceLocalBufferConfig input_device_local_config{
         .page_size = page_size,
         .buffer_type = inputs.input_shard_spec.buffer_type,
@@ -116,8 +121,7 @@ void benchmark_args_combinations_single_core(
     bool is_interleaved = false) {
     // Create input and output replicated mesh buffers across generic mesh device; tests will only use first device
     const auto input_mesh_buffer =
-        is_interleaved ? create_replicated_interleaved_mesh_buffer_from_inputs(params, mesh_device_.get())
-                       : create_replicated_input_mesh_buffer_from_inputs(params, mesh_device_.get());
+        create_replicated_input_mesh_buffer_from_inputs(params, mesh_device_.get(), is_interleaved);
 
     // Extract local single-device buffer concepts for testing
     const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
