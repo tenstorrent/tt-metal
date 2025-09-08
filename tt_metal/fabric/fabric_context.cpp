@@ -97,12 +97,11 @@ std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> FabricContext::get_ed
     tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
     eth_chan_directions direction) {
     auto edm_buffer_config = tt::tt_fabric::FabricRouterBufferConfig{
-        .enable_dateline_sender_extra_buffer_slots = true,
-        .enable_dateline_receiver_extra_buffer_slots = true,
-        .enable_dateline_upstream_sender_extra_buffer_slots = true,
-        .enable_dateline_upstream_receiver_extra_buffer_slots = true,
-        .enable_dateline_upstream_adjacent_sender_extra_buffer_slots =
-            edm_axis != tt::tt_fabric::FabricEriscDatamoverAxis::Short,
+        .enable_dateline_sender_extra_buffer_slots = false,
+        .enable_dateline_receiver_extra_buffer_slots = false,
+        .enable_dateline_upstream_sender_extra_buffer_slots = false,
+        .enable_dateline_upstream_receiver_extra_buffer_slots = false,
+        .enable_dateline_upstream_adjacent_sender_extra_buffer_slots = false,
     };
     auto edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
         .edm_type = edm_type,

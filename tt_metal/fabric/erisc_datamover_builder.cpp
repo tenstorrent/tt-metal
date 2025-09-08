@@ -370,7 +370,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     };
 
     static const std::vector<std::vector<std::pair<size_t, size_t>>> ring_buffer_slot_options = {
-        {{8, 8}, {4, 8}}, {{8, 8}, {4, 8}}};
+        {{1, 1}, {1, 1}}, {{1, 1}, {1, 1}}};
 
     static const std::vector<std::vector<std::pair<size_t, size_t>>> torus_buffer_slot_options = {
         {{4, 8}, {4, 8}}, {{4, 8}, {4, 8}}};

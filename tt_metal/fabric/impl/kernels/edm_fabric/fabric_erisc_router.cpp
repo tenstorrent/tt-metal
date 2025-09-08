@@ -379,7 +379,6 @@ FORCE_INLINE void send_next_data(
     auto dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
 
     ASSERT(dest_addr == receiver_buffer_channel.get_buffer_address(remote_receiver_buffer_index));
-    ASSERT(prev_dest_addr != dest_addr);
 
     prev_dest_addr = dest_addr;
 
@@ -2860,6 +2859,24 @@ void kernel_main() {
         channel_buffer_size,
         sizeof(PACKET_HEADER_TYPE),
         receiver_channel_base_id);
+
+    // DPRINT << "my x/y " << (uint)my_x[0] << " " << (uint)my_y[0] <<ENDL();
+    // DPRINT << "downstream_edm_vc0_buffer_base_address "  << (uint)downstream_edm_vc0_buffer_base_address <<ENDL();
+    // DPRINT << "downstream_edm_vc1_buffer_base_address "  << (uint)downstream_edm_vc1_buffer_base_address <<ENDL();
+
+    // auto& local_receiver_channel0 = local_receiver_channels.template get<0>();
+    // auto& local_receiver_channel1 = local_receiver_channels.template get<1>();
+    // DPRINT << "local_receiver_channel0" <<ENDL();
+    // local_receiver_channel0.print_buffer_addresses();
+    // DPRINT << "local_receiver_channel1" <<ENDL();
+    // local_receiver_channel1.print_buffer_addresses();
+
+    // auto& remote_receiver_channel0 = remote_receiver_channels.template get<0>();
+    // auto& remote_receiver_channel1 = remote_receiver_channels.template get<1>();
+    // DPRINT << "remote_receiver_channel0" <<ENDL();
+    // remote_receiver_channel0.print_buffer_addresses();
+    // DPRINT << "remote_receiver_channel1" <<ENDL();
+    // remote_receiver_channel1.print_buffer_addresses();
 
     // initialize the local sender channel worker interfaces
     local_sender_channels.init(

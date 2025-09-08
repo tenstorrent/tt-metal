@@ -48,6 +48,8 @@ public:
         max_eth_payload_size_in_bytes = buffer_size_in_bytes;
         channel_id = channel_id_val;
 
+        static_assert(NUM_BUFFERS == 1, "NUM_BUFFERS must be 1");
+
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
             this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
 // need to avoid unrolling to keep code size within limits
@@ -98,6 +100,12 @@ public:
 
     FORCE_INLINE void set_cached_next_buffer_slot_addr(size_t next_buffer_slot_addr) {
         this->cached_next_buffer_slot_addr = next_buffer_slot_addr;
+    }
+
+    void print_buffer_addresses() const {
+        for (int i = 0; i < NUM_BUFFERS; ++i) {
+            DPRINT << (uint)buffer_addresses[i] << ENDL();
+        }
     }
 
 private:
