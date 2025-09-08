@@ -13,16 +13,17 @@ def _ntuple(x, n):
 
 
 def get_conv3d_config(in_channels, out_channels, kernel_size, stride, padding, padding_mode, grid_size):
-    # shape_to_blocking = {
-    #     # (60, 106, 768): (128, 96, 1, 2, 16),
-    #     # (120, 212, 512): (128, 128, 1, 8, 4),
-    #     # (240, 424, 256): (128, 128, 4, 4, 2),
-    #     # (480, 848, 128): (128, 128, 1, 2, 16),
-    #     768: (128, 96, 1, 2, 16),
-    #     512: (128, 128, 1, 8, 4),
-    #     256: (128, 128, 4, 4, 2),
-    #     128: (128, 128, 1, 2, 16),
-    # }
+    config_to_blocking = {
+        # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
+        (96, 32, (3, 3, 3)): ...,
+        (192, 96, (1, 3, 3)): (192, 96, 1, 4, 4),
+        (96, 96, (3, 3, 3)): (96, 96, 1, 32, 2),
+        (384, 192, (1, 3, 3)): (192, 96, 1, 16, 1),
+        (192, 192, (3, 3, 3)): ...,
+        (16, 384, (3, 3, 3)): ...,
+        (192, 384, (3, 3, 3)): ...,
+        (384, 384, (3, 3, 3)): ...,
+    }
     # blocking = shape_to_blocking.get(in_channels, None)
     blocking = None
     if blocking is None:
