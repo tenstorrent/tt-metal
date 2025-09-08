@@ -35,13 +35,35 @@ public:
     }
 };  // class PyISocket
 
+namespace {
+
+auto constexpr send_doc_string = R"doc(
+    Send a Tensor.
+
+    Keyword Args:
+        tensor (Tensor): The tensor to send.
+)doc";
+
+auto constexpr recv_doc_string = R"doc(
+    Receive a Tensor.
+
+    Keyword Args:
+        tensor (Tensor): The tensor to hold the received data.
+)doc";
+
+auto constexpr get_rank_doc_string = "Get Socket Rank.";
+auto constexpr get_distributed_context_doc_string = "Get Distributed Context.";
+auto constexpr tensor_arg_string = "tensor";
+
+}  // namespace
+
 void py_isocket_module_types(py::module& module) {
     py::class_<ttnn::distributed::ISocket, PyISocket /*, py::smart_holder*/>(module, "ISocket")
         .def(py::init<>())
-        .def("send", &ISocket::send)
-        .def("recv", &ISocket::recv)
-        .def("get_rank", &ISocket::get_rank)
-        .def("get_distributed_context", &ISocket::get_distributed_context);
+        .def("send", &ISocket::send, py::arg(tensor_arg_string), send_doc_string)
+        .def("recv", &ISocket::recv, py::arg(tensor_arg_string), recv_doc_string)
+        .def("get_rank", &ISocket::get_rank, get_rank_doc_string)
+        .def("get_distributed_context", &ISocket::get_distributed_context, get_distributed_context_doc_string);
 
     py::class_<ttnn::distributed::BidirectionalFabricSocket, ttnn::distributed::ISocket /*, py::smart_holder*/>(
         module, "BidirectionalFabricSocket")
@@ -49,10 +71,13 @@ void py_isocket_module_types(py::module& module) {
              const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&,
              const tt::tt_metal::distributed::SocketConfig&,
              const tt::tt_metal::distributed::SocketConfig&>())
-        .def("send", &BidirectionalFabricSocket::send)
-        .def("recv", &BidirectionalFabricSocket::recv)
-        .def("get_rank", &BidirectionalFabricSocket::get_rank)
-        .def("get_distributed_context", &BidirectionalFabricSocket::get_distributed_context)
+        .def("send", &BidirectionalFabricSocket::send, py::arg(tensor_arg_string), send_doc_string)
+        .def("recv", &BidirectionalFabricSocket::recv, py::arg(tensor_arg_string), recv_doc_string)
+        .def("get_rank", &BidirectionalFabricSocket::get_rank, get_rank_doc_string)
+        .def(
+            "get_distributed_context",
+            &BidirectionalFabricSocket::get_distributed_context,
+            get_distributed_context_doc_string)
         .def_static("create", &BidirectionalFabricSocket::create);
 
     py::class_<ttnn::distributed::FabricSocket, ttnn::distributed::ISocket /*, py::smart_holder*/>(
@@ -60,20 +85,20 @@ void py_isocket_module_types(py::module& module) {
         .def(py::init<
              const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&,
              const tt::tt_metal::distributed::SocketConfig&>())
-        .def("send", &FabricSocket::send)
-        .def("recv", &FabricSocket::recv)
-        .def("get_rank", &FabricSocket::get_rank)
-        .def("get_distributed_context", &FabricSocket::get_distributed_context)
+        .def("send", &FabricSocket::send, py::arg(tensor_arg_string), send_doc_string)
+        .def("recv", &FabricSocket::recv, py::arg(tensor_arg_string), recv_doc_string)
+        .def("get_rank", &FabricSocket::get_rank, get_rank_doc_string)
+        .def("get_distributed_context", &FabricSocket::get_distributed_context, get_distributed_context_doc_string)
         .def_static("create", &FabricSocket::create);
 
     py::class_<ttnn::distributed::MPISocket, ttnn::distributed::ISocket /*, py::smart_holder*/>(module, "MPISocket")
         .def(py::init<
              const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&,
              const tt::tt_metal::distributed::SocketConfig&>())
-        .def("send", &MPISocket::send)
-        .def("recv", &MPISocket::recv)
-        .def("get_rank", &MPISocket::get_rank)
-        .def("get_distributed_context", &MPISocket::get_distributed_context)
+        .def("send", &MPISocket::send, py::arg(tensor_arg_string), send_doc_string)
+        .def("recv", &MPISocket::recv, py::arg(tensor_arg_string), recv_doc_string)
+        .def("get_rank", &MPISocket::get_rank, get_rank_doc_string)
+        .def("get_distributed_context", &MPISocket::get_distributed_context, get_distributed_context_doc_string)
         .def_static("create", &MPISocket::create);
 }
 
