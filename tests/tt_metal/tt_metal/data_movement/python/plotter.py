@@ -130,7 +130,7 @@ class Plotter:
             elif "Direct Write Performance Comparison" in test_name:
                 self.plot_bandwidth_direct_write_performance(axes[0], plot_data[test_id])
             elif "Direct Write Address Pattern" in test_name:
-                self.plot_bandwidth_direct_write_address_patern(axes[0], plot_data[test_id])
+                self.plot_bandwidth_direct_write_address_pattern(axes[0], plot_data[test_id])
             else:  # Packet Sizes
                 self.plot_durations(axes[0], plot_data[test_id])
                 self.plot_data_size_vs_bandwidth(axes[1], plot_data[test_id])
@@ -360,7 +360,7 @@ class Plotter:
         )
 
     # Direct Write: Address pattern
-    def plot_bandwidth_direct_write_address_patern(self, ax, data):
+    def plot_bandwidth_direct_write_address_pattern(self, ax, data):
         x_key = "num_transactions"
         y_key = "bandwidth"
         series_keys = ["stateful", "same_dest", "same_value"]
