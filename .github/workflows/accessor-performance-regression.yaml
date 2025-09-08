@@ -178,6 +178,7 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          path: docker-job
 
       - name: 🔍 Debug Artifact Information
         run: |
