@@ -545,8 +545,8 @@ def get_padded_prefill_len(seq_len: int) -> int:
     If seq_len is more than 128, pad to whichever is smaller: a power of 2 or a multiple of 2048
     TODO: Generalize for max_mm_seq_len different from 2048
     """
-    if seq_len <= 128:
-        return 128
+    if seq_len <= 4096:
+        return 4096
     pow_2_pad = nearest_pow_2(seq_len)
     mult_2048_pad = 2048 * math.ceil(seq_len / 2048)
     min_extended_pad = min(pow_2_pad, mult_2048_pad)

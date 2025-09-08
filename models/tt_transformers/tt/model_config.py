@@ -1688,7 +1688,7 @@ class ModelArgs:
                 config = json.load(f)
         config = {
             "vocab_size": 32000,
-            "max_position_embeddings": 1024,
+            "max_position_embeddings": 4096,
             "hidden_size": 1024,
             "intermediate_size": 1024,
             "num_hidden_layers": 16,
