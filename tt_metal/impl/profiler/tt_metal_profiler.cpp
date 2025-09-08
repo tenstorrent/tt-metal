@@ -842,18 +842,7 @@ void ProcessDeviceProfilerResults(
         }
 
         if (dumpDeviceProfilerDataMidRun(state)) {
-            // hide this in a helper function behind profiler.cpp
-            profiler.initializeMissingTracyContexts();
-
-            std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
-                getSortedDeviceMarkersVector(profiler.device_markers_per_core_risc_map, profiler.thread_pool.get());
-
-            profiler.thread_pool->enqueue([&profiler]() { profiler.writeDeviceResultsToFiles(); });
-            profiler.pushTracyDeviceResults(device_markers_vec);
-
-            profiler.thread_pool->wait();
-
-            profiler.device_markers_per_core_risc_map.clear();
+            profiler.dumpDeviceResults(/*is_mid_run_dump=*/true);
         }
     }
 #endif
