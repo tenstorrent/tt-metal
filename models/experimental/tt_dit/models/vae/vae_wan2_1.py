@@ -14,9 +14,13 @@ class WanAttentionBlock:
         self,
         dim,
         mesh_device,
+        parallel_config,
+        ccl_manager,
     ):
         self.dim = dim
         self.mesh_device = mesh_device
+        self.parallel_config = parallel_config
+        self.ccl_manager = ccl_manager
 
         self.norm = RMSNorm(
             embedding_dim=dim,
@@ -92,11 +96,46 @@ class WanAttentionBlock:
         )
 
     def __call__(self, x_BTHWC):
+        """
+        x_BTHWC: (B, T, H, W, C) fractured on H and W
+
+        returns: (B, T, H, W, C) fractured on H and W
+        """
         assert len(x_BTHWC.shape) == 5
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
         residual_BTHWC = x_BTHWC
-        B, T, H, W, C = x_BTHWC.shape
 
+        # Gather height and width for replicated attention
+        if self.parallel_config.height_parallel.factor > 1:
+            x_BTHWC = ttnn.experimental.all_gather_async(
+                x_BTHWC,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    x_BTHWC.shape, 2, self.parallel_config.height_parallel.mesh_axis
+                ),
+                dim=2,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.height_parallel.mesh_axis
+                ),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.height_parallel.mesh_axis,
+            )
+        if self.parallel_config.width_parallel.factor > 1:
+            x_BTHWC = ttnn.experimental.all_gather_async(
+                x_BTHWC,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    x_BTHWC.shape, 3, self.parallel_config.width_parallel.mesh_axis
+                ),
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.width_parallel.mesh_axis
+                ),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.width_parallel.mesh_axis,
+            )
+
+        B, T, H, W, C = x_BTHWC.shape
         x_TNC = ttnn.reshape(x_BTHWC, (B * T, H * W, C))
         x_TNC = ttnn.to_layout(x_TNC, ttnn.TILE_LAYOUT)
         x_TNC = self.norm(x_TNC, compute_kernel_config=self.hifi4_compute_kernel_config)
@@ -116,6 +155,17 @@ class WanAttentionBlock:
         out_TND = self.proj(out_TNC, compute_kernel_config=self.mm_compute_kernel_config, core_grid=self.core_grid)
         out_TND = ttnn.to_layout(out_TND, ttnn.ROW_MAJOR_LAYOUT)
         out_BTHWC = ttnn.reshape(out_TND, (B, T, H, W, C))
+
+        # Scatter height and width
+        if self.parallel_config.height_parallel.factor > 1:
+            out_BTHWC = ttnn.mesh_partition(
+                out_BTHWC, dim=2, cluster_axis=self.parallel_config.height_parallel.mesh_axis
+            )
+        if self.parallel_config.width_parallel.factor > 1:
+            out_BTHWC = ttnn.mesh_partition(
+                out_BTHWC, dim=3, cluster_axis=self.parallel_config.width_parallel.mesh_axis
+            )
+
         return out_BTHWC + residual_BTHWC
 
 
@@ -128,6 +178,8 @@ class WanCausalConv3d:
         mesh_device,
         stride=1,
         padding=0,
+        ccl_manager=None,
+        parallel_config=None,
     ):
         self.in_channels = in_channels
         self.unpadded_out_channels = out_channels
@@ -139,19 +191,31 @@ class WanCausalConv3d:
         self.kernel_size = _ntuple(kernel_size, 3)
         self.stride = _ntuple(stride, 3)
         self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
 
         padding = _ntuple(padding, 3)
+        external_padding = list(padding)
+        internal_padding = list(padding)
         # t padding is handled explicitly and depends on the cache.
-        # conv3d can handle HW padding internally.
-        self.t_front_padding = 2 * padding[0]
-        self.padding = (0, padding[1], padding[2])
+        external_padding[0] = 2 * padding[0]
+        internal_padding[0] = 0
+        # HW padding may be handled by the halo CCL if the model is parallelized
+        if self.parallel_config.height_parallel.factor > 1:
+            external_padding[1] = padding[1]
+            internal_padding[1] = 0
+        if self.parallel_config.width_parallel.factor > 1:
+            external_padding[2] = padding[2]
+            internal_padding[2] = 0
+        self.external_padding = tuple(external_padding)
+        self.internal_padding = tuple(internal_padding)
 
         self.conv_config = get_conv3d_config(
             self.in_channels,
             self.out_channels,
             self.kernel_size,
             self.stride,
-            self.padding,
+            self.internal_padding,
             padding_mode="zeros",
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
@@ -183,8 +247,14 @@ class WanCausalConv3d:
         )
 
     def __call__(self, x_BTHWC, cache_x_BTHWC=None):
+        """
+        x_BTHWC: (B, T, H, W, C) fractured on H and W
+        cache_x_BTHWC: (B, T1, H, W, C) fractured on H and W
+
+        returns: (B, T, H, W, C) fractured on H and W
+        """
         # NOTE: T padding is handled explicitly and depends on the cache
-        t_front_padding = self.t_front_padding
+        t_front_padding = self.external_padding[0]
         if cache_x_BTHWC is not None and t_front_padding > 0:
             # concat on T
             x_BTHWC = ttnn.concat([cache_x_BTHWC, x_BTHWC], dim=1)
@@ -195,6 +265,55 @@ class WanCausalConv3d:
             x_BTNC = ttnn.reshape(x_BTHWC, (B, T, H * W, C))
             x_BTNC = ttnn.pad(x_BTNC, [(0, 0), (t_front_padding, 0), (0, 0), (0, 0)], value=0.0)
             x_BTHWC = ttnn.reshape(x_BTNC, (B, T + t_front_padding, H, W, C))
+
+        # Height halo
+        if self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1:
+            ttnn.synchronize_device(x_BTHWC.device())
+            x_BTHWC = ttnn.experimental.neighbor_pad_async(
+                x_BTHWC,
+                dim=2,
+                padding_left=self.external_padding[1],
+                padding_right=self.external_padding[1],
+                padding_mode="zeros",
+                cluster_axis=self.parallel_config.height_parallel.mesh_axis,
+                # neighbor_pad only needs one final semaphore, so index into ag semahpore list
+                final_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.height_parallel.mesh_axis
+                )[0],
+                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(
+                    self.parallel_config.height_parallel.mesh_axis
+                ),
+                mesh_device=self.mesh_device,
+                num_links=self.ccl_manager.num_links,
+                # memory_config=mem_config_output,
+                topology=self.ccl_manager.topology,
+            )
+            ttnn.synchronize_device(x_BTHWC.device())
+
+        # Width halo
+        if self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1:
+            # TODO: Fix validation in neighbor_pad_async to allow halo on dim3
+            x_THWC = ttnn.squeeze(x_BTHWC, dim=0)
+            ttnn.synchronize_device(x_THWC.device())
+            x_THWC = ttnn.experimental.neighbor_pad_async(
+                x_THWC,
+                dim=2,
+                padding_left=self.external_padding[2],
+                padding_right=self.external_padding[2],
+                padding_mode="zeros",
+                cluster_axis=self.parallel_config.width_parallel.mesh_axis,
+                # neighbor_pad only needs one final semaphore, so index into ag semahpore list
+                final_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.width_parallel.mesh_axis
+                )[0],
+                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.parallel_config.width_parallel.mesh_axis),
+                mesh_device=self.mesh_device,
+                num_links=self.ccl_manager.num_links,
+                # memory_config=mem_config_output,
+                topology=self.ccl_manager.topology,
+            )
+            ttnn.synchronize_device(x_THWC.device())
+            x_BTHWC = ttnn.unsqueeze(x_THWC, dim=0)
 
         return ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
@@ -211,6 +330,8 @@ class WanResidualBlock:
         in_dim,
         out_dim,
         mesh_device,
+        ccl_manager=None,
+        parallel_config=None,
     ):
         self.in_dim = in_dim
         self.out_dim = out_dim
@@ -229,6 +350,8 @@ class WanResidualBlock:
             kernel_size=3,
             padding=1,
             mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
         )
         self.norm2 = RMSNorm(
             embedding_dim=out_dim,
@@ -243,6 +366,8 @@ class WanResidualBlock:
             kernel_size=3,
             padding=1,
             mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
         )
 
         if in_dim != out_dim:
@@ -365,6 +490,8 @@ class WanMidBlock:
         self,
         dim,
         mesh_device,
+        ccl_manager=None,
+        parallel_config=None,
         num_layers=1,
     ):
         self.dim = dim
@@ -377,6 +504,8 @@ class WanMidBlock:
                 in_dim=dim,
                 out_dim=dim,
                 mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
             )
         )
 
@@ -385,6 +514,8 @@ class WanMidBlock:
                 WanAttentionBlock(
                     dim=dim,
                     mesh_device=mesh_device,
+                    ccl_manager=ccl_manager,
+                    parallel_config=parallel_config,
                 )
             )
             resnets.append(
@@ -392,6 +523,8 @@ class WanMidBlock:
                     in_dim=dim,
                     out_dim=dim,
                     mesh_device=mesh_device,
+                    ccl_manager=ccl_manager,
+                    parallel_config=parallel_config,
                 )
             )
 
@@ -427,6 +560,8 @@ class WanConv2d:
         out_channels,
         kernel_size,
         mesh_device,
+        ccl_manager=None,
+        parallel_config=None,
         stride=1,
         padding=0,
     ):
@@ -440,15 +575,31 @@ class WanConv2d:
         self.kernel_size = _ntuple(kernel_size, 3)
         self.stride = _ntuple(stride, 3)
         self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
 
-        self.padding = _ntuple(padding, 3)
+        padding = _ntuple(padding, 3)
+        external_padding = list(padding)
+        internal_padding = list(padding)
+        # t padding is handled explicitly and depends on the cache.
+        external_padding[0] = 2 * padding[0]
+        internal_padding[0] = 0
+        # HW padding may be handled by the halo CCL if the model is parallelized
+        if self.parallel_config.height_parallel.factor > 1:
+            external_padding[1] = padding[1]
+            internal_padding[1] = 0
+        if self.parallel_config.width_parallel.factor > 1:
+            external_padding[2] = padding[2]
+            internal_padding[2] = 0
+        self.external_padding = tuple(external_padding)
+        self.internal_padding = tuple(internal_padding)
 
         self.conv_config = get_conv3d_config(
             self.in_channels,
             self.out_channels,
             self.kernel_size,
             self.stride,
-            self.padding,
+            self.internal_padding,
             padding_mode="zeros",
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
@@ -478,6 +629,54 @@ class WanConv2d:
         print(f"Loaded conv_weight: {self.conv_weight.shape}, conv_bias: {self.conv_bias.shape}")
 
     def __call__(self, x_BTHWC):
+        # Height halo
+        if self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1:
+            ttnn.synchronize_device(x_BTHWC.device())
+            x_BTHWC = ttnn.experimental.neighbor_pad_async(
+                x_BTHWC,
+                dim=2,
+                padding_left=self.external_padding[1],
+                padding_right=self.external_padding[1],
+                padding_mode="zeros",
+                cluster_axis=self.parallel_config.height_parallel.mesh_axis,
+                # neighbor_pad only needs one final semaphore, so index into ag semahpore list
+                final_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.height_parallel.mesh_axis
+                )[0],
+                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(
+                    self.parallel_config.height_parallel.mesh_axis
+                ),
+                mesh_device=self.mesh_device,
+                num_links=self.ccl_manager.num_links,
+                # memory_config=mem_config_output,
+                topology=self.ccl_manager.topology,
+            )
+            ttnn.synchronize_device(x_BTHWC.device())
+        # Width halo
+        if self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1:
+            # TODO: Fix validation in neighbor_pad_async to allow halo on dim3
+            x_THWC = ttnn.squeeze(x_BTHWC, dim=0)
+            ttnn.synchronize_device(x_THWC.device())
+            x_THWC = ttnn.experimental.neighbor_pad_async(
+                x_THWC,
+                dim=2,
+                padding_left=self.external_padding[2],
+                padding_right=self.external_padding[2],
+                padding_mode="zeros",
+                cluster_axis=self.parallel_config.width_parallel.mesh_axis,
+                # neighbor_pad only needs one final semaphore, so index into ag semahpore list
+                final_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.width_parallel.mesh_axis
+                )[0],
+                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.parallel_config.width_parallel.mesh_axis),
+                mesh_device=self.mesh_device,
+                num_links=self.ccl_manager.num_links,
+                # memory_config=mem_config_output,
+                topology=self.ccl_manager.topology,
+            )
+            ttnn.synchronize_device(x_THWC.device())
+            x_BTHWC = ttnn.unsqueeze(x_THWC, dim=0)
+
         return ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
             weight_tensor=self.conv_weight,
@@ -493,6 +692,8 @@ class WanResample:
         dim,
         mode,
         mesh_device,
+        ccl_manager=None,
+        parallel_config=None,
         upsample_out_dim=None,
     ):
         self.dim = dim
@@ -508,6 +709,8 @@ class WanResample:
             kernel_size=(1, 3, 3),
             padding=(0, 1, 1),
             mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
         )
 
         if mode == "upsample3d":
@@ -517,6 +720,8 @@ class WanResample:
                 kernel_size=(3, 1, 1),
                 padding=(1, 0, 0),
                 mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
             )
 
     def load_state_dict(self, state_dict):
@@ -586,6 +791,8 @@ class WanUpBlock:
         out_dim,
         num_res_blocks,
         mesh_device,
+        ccl_manager=None,
+        parallel_config=None,
         upsample_mode=None,
     ):
         self.in_dim = in_dim
@@ -593,6 +800,8 @@ class WanUpBlock:
         self.num_res_blocks = num_res_blocks
         self.upsample_mode = upsample_mode
         self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
 
         assert upsample_mode in ["upsample2d", "upsample3d"] or upsample_mode is None
 
@@ -604,6 +813,8 @@ class WanUpBlock:
                     in_dim=current_dim,
                     out_dim=out_dim,
                     mesh_device=mesh_device,
+                    ccl_manager=ccl_manager,
+                    parallel_config=parallel_config,
                 )
             )
             current_dim = out_dim
@@ -615,6 +826,8 @@ class WanUpBlock:
                 dim=out_dim,
                 mode=upsample_mode,
                 mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
             )
 
     def load_state_dict(self, state_dict):
@@ -647,6 +860,8 @@ class WanDecoder3d:
         out_channels: int = 3,
         is_residual: bool = False,
         mesh_device=None,
+        ccl_manager=None,
+        parallel_config=None,
     ):
         assert not is_residual, "is_residual is not supported"
         self.dim = dim
@@ -656,15 +871,27 @@ class WanDecoder3d:
         self.attn_scales = attn_scales
         self.temperal_upsample = temperal_upsample
         self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
 
         # dimensions
         dims = [dim * u for u in [dim_mult[-1]] + dim_mult[::-1]]
 
         # init block
-        self.conv_in = WanCausalConv3d(z_dim, dims[0], kernel_size=3, padding=1, mesh_device=mesh_device)
+        self.conv_in = WanCausalConv3d(
+            z_dim,
+            dims[0],
+            kernel_size=3,
+            padding=1,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+        )
 
         # middle blocks
-        self.mid_block = WanMidBlock(dims[0], num_layers=1, mesh_device=mesh_device)
+        self.mid_block = WanMidBlock(
+            dims[0], num_layers=1, mesh_device=mesh_device, ccl_manager=ccl_manager, parallel_config=parallel_config
+        )
 
         # upsample blocks
         self.up_blocks = []
@@ -690,6 +917,8 @@ class WanDecoder3d:
                 num_res_blocks=num_res_blocks,
                 upsample_mode=upsample_mode,
                 mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
             )
             self.up_blocks.append(up_block)
 
@@ -697,7 +926,15 @@ class WanDecoder3d:
         self.norm_out = RMSNorm(
             embedding_dim=out_dim, norm_eps=1e-6, norm_elementwise_affine=True, bias=False, mesh_device=mesh_device
         )
-        self.conv_out = WanCausalConv3d(out_dim, out_channels, kernel_size=3, padding=1, mesh_device=mesh_device)
+        self.conv_out = WanCausalConv3d(
+            out_dim,
+            out_channels,
+            kernel_size=3,
+            padding=1,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+        )
 
     def load_state_dict(self, state_dict):
         self.conv_in.load_state_dict(substate(state_dict, "conv_in"))
@@ -811,6 +1048,8 @@ class WanDecoder:
         in_channels=3,
         out_channels=3,
         mesh_device=None,
+        ccl_manager=None,
+        parallel_config=None,
     ):
         assert not is_residual, "is_residual is not supported"
         self.z_dim = z_dim
@@ -819,6 +1058,8 @@ class WanDecoder:
         decoder_base_dim = decoder_base_dim or base_dim
 
         self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        self.parallel_config = parallel_config
 
         # Linear for post_quant_conv
         self.post_quant_conv = Linear(
@@ -837,6 +1078,8 @@ class WanDecoder:
             out_channels=out_channels,
             is_residual=is_residual,
             mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
         )
 
         self.cached_conv_count = count_convs(self.decoder)

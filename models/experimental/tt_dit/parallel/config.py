@@ -26,6 +26,11 @@ class VAEParallelConfig(NamedTuple):
     tensor_parallel: ParallelFactor
 
 
+class VaeHWParallelConfig(NamedTuple):
+    height_parallel: ParallelFactor
+    width_parallel: ParallelFactor
+
+
 class OldParallelConfig(NamedTuple):
     mesh_shape: tuple[int, int]
     factor: int
