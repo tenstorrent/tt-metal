@@ -8,7 +8,7 @@ EPSILON = 1e-6
 
 
 class OFT(nn.Module):
-    def __init__(self, channels, cell_size, grid_height, scale, dtype=torch.float32):
+    def __init__(self, channels, cell_size, grid_height, scale, dtype):
         super().__init__()
 
         y_corners = torch.arange(0, grid_height, cell_size, dtype=dtype) - grid_height / 2.0
@@ -36,7 +36,7 @@ class OFT(nn.Module):
         corners = grid.unsqueeze(1) + self.y_corners.view(-1, 1, 1, 3)
 
         # Project grid corners to image plane and normalize to [-1, 1]
-        img_corners = utils.perspective(calib.view(-1, 1, 1, 1, 3, 4), corners)
+        img_corners = utils.perspective(calib.view(-1, 1, 1, 1, 3, 4), corners, self.dtype)
 
         # Normalize to [-1, 1]
         img_height, img_width = features.size()[2:]

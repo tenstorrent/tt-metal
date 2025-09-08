@@ -23,7 +23,7 @@ def calculate_initialization_parameters(
     corners = grid.unsqueeze(1) + y_corners.view(-1, 1, 1, 3)
 
     # Project grid corners to image plane and normalize to [-1, 1]
-    img_corners = perspective(calib.view(-1, 1, 1, 1, 3, 4), corners)
+    img_corners = perspective(calib.view(-1, 1, 1, 1, 3, 4), corners, dtype=torch.float32)
     feature_height, feature_width = feature_shape_hw
     # Normalize to [-1, 1]
     img_size = corners.new([feature_width, feature_height]) / scale

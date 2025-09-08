@@ -37,17 +37,15 @@ def load_calib(filename, dtype=torch.float32):
     raise Exception("Could not find entry for P2 in calib file {}".format(filename))
 
 
-def perspective(matrix, vector):
+def perspective(matrix, vector, dtype):
     """
     Applies perspective projection to a vector using projection matrix
     """
-    # # Make sure both inputs are the same dtype
-    # if matrix.dtype != vector.dtype:
-    #     # Convert to the higher precision dtype
-    #     if matrix.dtype.is_floating_point and vector.dtype.is_floating_point:
-    #         dtype = torch.promote_types(matrix.dtype, vector.dtype)
-    #         matrix = matrix.to(dtype)
-    #         vector = vector.to(dtype)
+    # Make sure both inputs are the same dtype
+    if matrix.dtype != dtype:
+        matrix = matrix.to(dtype)
+    if vector.dtype != dtype:
+        vector = vector.to(dtype)
 
     vector = vector.unsqueeze(-1)
     homogenous = torch.matmul(matrix[..., :-1], vector) + matrix[..., [-1]]
