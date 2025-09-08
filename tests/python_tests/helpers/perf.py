@@ -332,7 +332,7 @@ def dump_scatter(testname: str, report: PerfReport):
             go.Scatter(
                 x=list(range(len(report.sweep_values))),
                 y=y_vals,
-                mode="markers",
+                mode="markers+lines",
                 name=stat_name,
                 text=hover,
                 hoverinfo="text+y",
