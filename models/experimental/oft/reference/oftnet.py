@@ -124,4 +124,8 @@ class OftNet(nn.Module):
             calib,
             grid,
             topdown,
+            scores,
+            pos_offsets,
+            dim_offsets,
+            ang_offsets
         )

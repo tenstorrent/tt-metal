@@ -462,6 +462,11 @@ class TTOftNet:
         # Apply topdown network
         td = self.forward_topdown_network(device, ortho)
 
+        # Predict encoded outputs
+        tt_scores, tt_pos_offsets, tt_dim_offsets, tt_ang_offsets = self.forward_predict_encoded_outputs(device, td)
+
+        signpost(header="OftNet finished")
+
         return (
             feats8,
             feats16,
@@ -491,6 +496,10 @@ class TTOftNet:
             calib_torch,
             grid_torch,
             td,
+            ttnn.to_torch(tt_scores), # just a hack to avoid hardcoded permute
+            ttnn.to_torch(tt_pos_offsets), # just a hack to avoid hardcoded permute
+            ttnn.to_torch(tt_dim_offsets), # just a hack to avoid hardcoded permute
+            ttnn.to_torch(tt_ang_offsets)   # just a hack to avoid hardcoded permute
         ), (
             "feats8",
             "feats16",
@@ -520,10 +529,11 @@ class TTOftNet:
             "calib",
             "grid",
             "td",
+            "scores",
+            "pos_offsets",
+            "dim_offsets",
+            "ang_offsets",
         )
 
-        # Predict encoded outputs
-        parts = self.forward_predict_encoded_outputs(device, td)
 
-        signpost(header="OftNet finished")
         return parts
