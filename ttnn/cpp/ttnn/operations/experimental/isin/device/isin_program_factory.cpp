@@ -32,7 +32,7 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
     const bool& assume_unique = args.assume_unique;
     const bool& invert = args.invert;
     const uint32_t& single_fetch_subchunk_size = args.single_fetch_subchunk_size;
-    const auto memory_config = args.memory_config.has_value() ? (*args.memory_config) : elements_tensor.memory_config();
+    const auto memory_config = elements_tensor.memory_config();
 
     const auto& elements_buffer = elements_tensor.buffer();
     const auto& test_elements_buffer = test_elements_tensor.buffer();
@@ -85,7 +85,6 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
          num_subchunks_per_core_group_1,  // Number of subchunks each core in the primary group processes
          num_subchunks_per_core_group_2   // Number of subchunks each core in the secondary group processes
     ] = split_work_to_cores(core_grid, subchunks_num);
-    //
     create_cb(program, elements_dtype, IsInCB::ELEMENTS, all_cores, elements_subchunk_size_bytes);
     create_cb(program, test_elements_dtype, IsInCB::TEST_ELEMENTS, all_cores, test_elements_subchunk_size_bytes);
     create_cb(program, OUTPUT_TENSOR_DATA_TYPE, IsInCB::OUTPUT, all_cores, output_subchunk_size_bytes);
