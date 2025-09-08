@@ -62,7 +62,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN python3 -m venv $PYTHON_ENV_DIR
+RUN python3 -m venv $PYTHON_ENV_DIR && chmod -R 777 $PYTHON_ENV_DIR
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -94,11 +94,11 @@ COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
 COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/.
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
 
-# TODO: Why do we need the chmod?
 RUN python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu && \
     python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
-    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
-    chmod -R 777 $VIRTUAL_ENV
+    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
+
+RUN ./scripts/install_debugger.sh
 
 #############################################################
 
