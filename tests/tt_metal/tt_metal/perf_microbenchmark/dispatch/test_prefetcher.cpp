@@ -1618,9 +1618,6 @@ void gen_relay_linear_h_test(
             // Add the CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH with the dispatch command as payload
             add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
 
-            // Now generate the CQ_PREFETCH_CMD_RELAY_LINEAR_H command to fetch data from NOC
-            auto prior_end = prefetch_cmds.size();
-
             // Create the relay linear H command
             CQPrefetchCmd cmd{};
             cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR_H;

@@ -113,9 +113,9 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
     // CB2: Scalar buffer (holds 4 bilinear interpolation weights)
     const uint32_t scalar_cb_num_pages = buffering_factor;
-    const uint32_t scalar_cb_page_size = tile_size(grid_cb_data_format);  // 4 scalars, aligned
+    const uint32_t scalar_cb_page_size = tile_size(input_cb_data_format);  // 4 scalars, aligned
     const auto [scalar_cb_index, scalar_cb_handle] = tt::tt_metal::create_cb(
-        next_cb_index++, program, all_cores, scalar_cb_page_size, scalar_cb_num_pages, grid_cb_data_format);
+        next_cb_index++, program, all_cores, scalar_cb_page_size, scalar_cb_num_pages, input_cb_data_format);
 
     // CB3: Output buffer
     const uint32_t out_ntiles_c = (uint32_t)std::ceil((float)output_shape[-1] / tt::constants::FACE_WIDTH);
@@ -136,6 +136,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
         (std::uint32_t)input_width,
         (std::uint32_t)(output_height * output_width),  // output_hw_size at index 13
         (std::uint32_t)grid_batching_factor,            // number of grids per spatial position
+        (std::uint32_t)grid_tensor.dtype(),             // grid data type
     };
 
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
