@@ -12,9 +12,11 @@
   - [3.2 File Layout](#32-file-layout)
 - [4. Multi-Host Support](#4-multi-host-support)
 - [5. Best Practices](#5-best-practices)
-- [6. Examples](#6-examples)
-  - [6.1 Basic Save and Load](#61-basic-save-and-load)
-  - [6.2 Using `ttnn.as_tensor` with Caching](#62-using-ttnnas_tensor-with-caching)
+- [6. Understanding Cache Hits and Misses](#6-understanding-cache-hits-and-misses)
+  - [6.1 Common Reasons for Cache Misses](#61-common-reasons-for-cache-misses)
+- [7. Examples](#7-examples)
+  - [7.1 Basic Save and Load](#71-basic-save-and-load)
+  - [7.2 Using `ttnn.as_tensor` with Caching](#72-using-ttnnas_tensor-with-caching)
 
 ## 1. Introduction
 
@@ -187,9 +189,42 @@ This organization helps users understand:
 - The data type and purpose of each tensor from its filename
 - Layer-specific organization for multi-layer models
 
-## 6. Examples
+## 6. Understanding Cache Hits and Misses
 
-### 6.1 Basic Save and Load
+When using `ttnn.as_tensor` with caching or `ttnn.load_tensor`, understanding cache behavior is crucial for debugging and performance optimization.
+
+### 6.1 Common Reasons for Cache Misses
+
+Cache misses occur when the cached tensor file cannot be used, forcing regeneration or recomputation. The most common causes are:
+
+1. **Cache Not Generated**: The cache file doesn't exist yet (first run or after cleanup)
+   ```python
+   # First call - cache miss, generates activations_dtype_bfloat16_layout_TILE.tensorbin
+   tensor = ttnn.as_tensor(data, cache_file_name="activations", dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+   ```
+
+2. **Shape Mismatch**: The requested tensor shape differs from the cached tensor
+   ```python
+   # Cache miss if previous tensor was different shape
+   tensor1 = ttnn.as_tensor(torch.randn(1024, 1024), cache_file_name="weights", ...)  # Creates cache
+   tensor2 = ttnn.as_tensor(torch.randn(2048, 2048), cache_file_name="weights", ...)  # Cache miss!
+   ```
+
+3. **Data Type or Layout Mismatch**: Different dtype or layout parameters create different cache files
+   ```python
+   # These create different cache files due to naming convention
+   tensor_bf16 = ttnn.as_tensor(data, cache_file_name="weights", dtype=ttnn.bfloat16)  # weights_dtype_bfloat16_layout_ROW_MAJOR.tensorbin
+   tensor_fp32 = ttnn.as_tensor(data, cache_file_name="weights", dtype=ttnn.float32)   # weights_dtype_float32_layout_ROW_MAJOR.tensorbin
+   ```
+
+4. **File Corruption**: The cache file exists but is corrupted or incomplete
+   - Partial writes from interrupted processes
+   - Disk errors or filesystem issues
+   - Manual modification of tensor files
+
+## 7. Examples
+
+### 7.1 Basic Save and Load
 
 ```python
 import ttnn
@@ -203,7 +238,7 @@ ttnn.dump_tensor("model_weights.tensorbin", tensor)
 loaded_tensor = ttnn.load_tensor("model_weights.tensorbin")
 ```
 
-### 6.2 Using `ttnn.as_tensor` with Caching
+### 7.2 Using `ttnn.as_tensor` with Caching
 
 ```python
 import ttnn
