@@ -163,8 +163,9 @@ def test_forward_pass(
     ############################
     logger.info("Setting up TTNN configs")
 
-    tensor_cache_path = deepseek_cache_path / "ttnn_tensors_cache"
-    weight_config_path = tensor_cache_path / f"model_{hf_config.num_hidden_layers}_layers_weight_config.json"
+    cache_dir = deepseek_cache_path / f"model_{hf_config.num_hidden_layers}_layers" / weights_type
+    tensor_cache_path = cache_dir / "ttnn_tensors_cache"
+    weight_config_path = cache_dir / "weight_config.json"
     # save this weight config to json file if it doesn't exist
     if not weight_config_path.exists():
         weight_config = Model1D.convert_weights(
