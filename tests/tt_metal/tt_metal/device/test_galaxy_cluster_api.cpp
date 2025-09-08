@@ -190,30 +190,4 @@ TEST_F(TGFixture, ValidateChipBoardTypes) {
     ASSERT_TRUE(num_n150_chips == 4) << "Detected " << num_n150_chips << " N150 chips" << std::endl;
 }
 
-TEST_F(TGGFixture, ValidateNumMMIOChips) {
-    const size_t num_mmio_chips = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
-    ASSERT_TRUE(num_mmio_chips == 8) << "Detected " << num_mmio_chips << " MMIO chips" << std::endl;
-}
-
-TEST_F(TGGFixture, ValidateNumGalaxyChips) {
-    const size_t num_galaxy_chips = tt::tt_metal::MetalContext::instance().get_cluster().number_of_user_devices();
-    ASSERT_TRUE(num_galaxy_chips == 64) << "Detected " << num_galaxy_chips << " Galaxy chips" << std::endl;
-}
-
-// Validate that there are 8 N150 chips and 64 Galaxy chips
-TEST_F(TGGFixture, ValidateChipBoardTypes) {
-    uint32_t num_n150_chips = 0;
-    uint32_t num_galaxy_chips = 0;
-    for (IDevice* device : this->devices_) {
-        const chip_id_t device_id = device->id();
-        if (is_galaxy_device(device_id)) {
-            num_galaxy_chips++;
-        } else if (is_n150_device(device_id)) {
-            num_n150_chips++;
-        }
-    }
-    ASSERT_TRUE(num_galaxy_chips == 64) << "Detected " << num_galaxy_chips << " Galaxy chips" << std::endl;
-    ASSERT_TRUE(num_n150_chips == 8) << "Detected " << num_n150_chips << " N150 chips" << std::endl;
-}
-
 }  // namespace tt::tt_metal
