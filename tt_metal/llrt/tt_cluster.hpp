@@ -8,6 +8,8 @@
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/cluster.hpp>
+#include "llrt/rtoptions.hpp"
+#include "llrt/tt_target_device.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -54,15 +56,6 @@ static constexpr std::uint32_t SW_VERSION = 0x00020000;
 using tt_target_dram = std::tuple<int, int, int>;
 
 namespace tt {
-
-/**
- * @brief Specifies the target devices on which the graph can be run.
- */
-enum class TargetDevice : std::uint8_t {
-    Silicon = 0,
-    Simulator = 1,
-    Invalid = 0xFF,
-};
 
 enum class EthRouterMode : uint32_t {
     IDLE = 0,
@@ -130,13 +123,9 @@ public:
         return this->driver_->get_soc_descriptor(chip).harvesting_masks.tensix_harvesting_mask;
     }
 
-    uint16_t get_bus_id(chip_id_t chip) const {
-        return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
-    }
+    uint16_t get_bus_id(chip_id_t chip) const;
 
-    std::optional<int> get_physical_slot(chip_id_t chip) const {
-        return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().physical_slot;
-    }
+    std::optional<int> get_physical_slot(chip_id_t chip) const;
 
     //! device driver and misc apis
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
@@ -332,6 +321,8 @@ public:
 
     tt::tt_metal::ClusterType get_cluster_type() const;
 
+    tt::TargetDevice get_target_device_type() const { return this->target_type_; }
+
     bool is_base_routing_fw_enabled() const;
 
     // Get all fabric ethernet cores
@@ -403,9 +394,7 @@ private:
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
     tt_ClusterDescriptor* cluster_desc_ = nullptr;
-    // In case of mock cluster descriptor, the tt_cluster holds the ownership of the created object;
-    // This is obviously a design issue. This should go away once the design is fixed.
-    std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc_ptr_;
+
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;
 

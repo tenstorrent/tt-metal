@@ -18,6 +18,7 @@
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/profiler/profiler_state_manager.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/llrt/get_platform_architecture.hpp"
 #include "tt_metal/llrt/llrt.hpp"
@@ -54,6 +55,15 @@ void MetalContext::initialize(
     const BankMapping& l1_bank_remap,
     size_t worker_l1_size,
     bool minimal) {
+    ZoneScoped;
+
+    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
+        TT_THROW(
+            "Mock cluster cannot be initialized because there is no device. "
+            "Mock clusters are only supported for testing control plane initialization without a device."
+            "Please unset the TT_METAL_MOCK_CLUSTER_DESC_PATH environment variable.");
+    }
+
     // Workaround for galaxy and BH, need to always re-init
     if (rtoptions_.get_force_context_reinit() or cluster_->is_galaxy_cluster() or cluster_->arch() == ARCH::BLACKHOLE) {
         force_reinit_ = true;
@@ -113,6 +123,10 @@ void MetalContext::initialize(
     }
     watcher_server_ =
         std::make_unique<WatcherServer>();  // Watcher server always created, since we use it to register kernels
+
+    if (rtoptions_.get_profiler_enabled()) {
+        profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
+    }
 
     // Minimal setup, don't initialize FW/Dispatch/etc.
     if (minimal) {
@@ -186,6 +200,8 @@ void MetalContext::initialize(
 }
 
 void MetalContext::teardown() {
+    ZoneScoped;
+
     if (!initialized_) {
         return;
     }
@@ -209,6 +225,8 @@ void MetalContext::teardown() {
         cluster_->l1_barrier(device_id);
     }
 
+    profiler_state_manager_.reset();
+
     for (auto& mem_map : dispatch_mem_map_) {
         if (mem_map) {
             mem_map.reset();
@@ -227,12 +245,17 @@ MetalContext& MetalContext::instance() {
 MetalContext::MetalContext() {
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
+    std::unique_ptr<tt_ClusterDescriptor> cluster_desc;
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
         custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
     }
 
+    if (rtoptions_.get_mock_enabled()) {
+        cluster_desc = tt::umd::tt_ClusterDescriptor::create_from_yaml(rtoptions_.get_mock_cluster_desc_path());
+    }
+
     bool is_base_routing_fw_enabled =
-        Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
+        Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_, cluster_desc.get()));
     hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
     cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
     distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
@@ -394,6 +417,7 @@ void MetalContext::set_default_fabric_topology() {
     // Set the mesh graph descriptor file to the default value and clear the custom FabricNodeId to physical chip
     // mapping.
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_.clear();
+
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
         custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
     } else {
@@ -578,60 +602,6 @@ void MetalContext::initialize_control_plane() {
 void MetalContext::reset_cores(chip_id_t device_id) {
     ZoneScoped;
 
-    auto get_active_erisc_launch_flag_addr = [&]() {
-        auto core_type_idx = hal_->get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-        std::uint32_t launch_erisc_addr = hal_->get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
-        return launch_erisc_addr;
-    };
-
-    auto erisc_app_still_running = [&](CoreCoord virtual_core) {
-        // Check if the kernel/erisc_app is still running on a ethernet core with context switching enabled
-        // The LAUNCH_ERISC_APP_FLAG is reset to 0 after reset/reboot, and set to 1 when Metal runtime launches erisc
-        // app FW Only applicable to WORMHOLE ethernet cores today, but could in theory extend to other cores, remove
-        // assert if so
-        if (cluster_->arch() != ARCH::WORMHOLE_B0) {
-            return false;
-        }
-        TT_ASSERT(
-            cluster_->is_ethernet_core(virtual_core, device_id),
-            "Invalid core {} for context switch check",
-            virtual_core.str());
-        std::uint32_t launch_erisc_addr = get_active_erisc_launch_flag_addr();
-        auto data = cluster_->read_core(device_id, virtual_core, launch_erisc_addr, sizeof(std::uint32_t));
-        return (data[0] != 0);
-    };
-
-    // Send exit_erisc_kernel to the launch message
-    auto erisc_send_exit_signal = [&](CoreCoord virtual_core, bool is_idle_eth) {
-        go_msg_t go_msg{};
-        std::memset(&go_msg, 0, sizeof(go_msg_t));
-        log_info(
-            tt::LogMetal,
-            "While initializing device {}, {} ethernet dispatch core {} detected as still "
-            "running, issuing exit signal.",
-            device_id,
-            is_idle_eth ? "idle" : "active",
-            virtual_core.str());
-
-        DeviceAddr launch_addr = hal_->get_dev_addr(
-            is_idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH,
-            HalL1MemAddrType::LAUNCH);
-
-        std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
-        data = cluster_->read_core(device_id, virtual_core, launch_addr, sizeof(launch_msg_t));
-
-        launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
-        launch_msg->kernel_config.exit_erisc_kernel = 1;
-        llrt::write_launch_msg_to_core(device_id, virtual_core, launch_msg, &go_msg, launch_addr, false);
-
-        if (!is_idle_eth) {
-            // Active
-            std::vector<uint32_t> clear_flag_data = {0};
-            cluster_->write_core_immediate(
-                device_id, virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
-        }
-    };
-
     // Assert worker cores + dispatch cores, in case they were in a bad state from before.
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> device_to_early_exit_cores;
 
@@ -640,8 +610,8 @@ void MetalContext::reset_cores(chip_id_t device_id) {
         for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
             CoreCoord virtual_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-            if (erisc_app_still_running(virtual_core)) {
-                erisc_send_exit_signal(virtual_core, false /* is_idle_eth */);
+            if (erisc_app_still_running(device_id, virtual_core)) {
+                erisc_send_exit_signal(device_id, virtual_core, false /* is_idle_eth */);
                 device_to_early_exit_cores[device_id].insert(virtual_core);
             }
         }
@@ -1226,5 +1196,49 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     }
     log_debug(LogDevice, "Firmware init complete");
 }
+
+uint32_t MetalContext::get_active_erisc_launch_flag_addr() {
+    auto core_type_idx = hal_->get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+    std::uint32_t launch_erisc_addr = hal_->get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
+    return launch_erisc_addr;
+};
+
+bool MetalContext::erisc_app_still_running(chip_id_t device_id, CoreCoord virtual_core) {
+    // Check if the kernel/erisc_app is still running on a ethernet core with context switching enabled
+    // The LAUNCH_ERISC_APP_FLAG is reset to 0 after reset/reboot, and set to 1 when Metal runtime launches erisc
+    // app FW Only applicable to WORMHOLE ethernet cores today, but could in theory extend to other cores, remove
+    // assert if so
+    if (cluster_->arch() != ARCH::WORMHOLE_B0) {
+        return false;
+    }
+    TT_ASSERT(
+        cluster_->is_ethernet_core(virtual_core, device_id),
+        "Invalid core {} for context switch check",
+        virtual_core.str());
+    std::uint32_t launch_erisc_addr = get_active_erisc_launch_flag_addr();
+    auto data = cluster_->read_core(device_id, virtual_core, launch_erisc_addr, sizeof(std::uint32_t));
+    return (data[0] != 0);
+};
+
+// Send exit_erisc_kernel to the launch message
+void MetalContext::erisc_send_exit_signal(chip_id_t device_id, CoreCoord virtual_core, bool is_idle_eth) {
+    go_msg_t go_msg{};
+    DeviceAddr launch_addr = hal_->get_dev_addr(
+        is_idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH,
+        HalL1MemAddrType::LAUNCH);
+
+    std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
+    data = cluster_->read_core(device_id, virtual_core, launch_addr, sizeof(launch_msg_t));
+
+    launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
+    launch_msg->kernel_config.exit_erisc_kernel = 1;
+    llrt::write_launch_msg_to_core(device_id, virtual_core, launch_msg, &go_msg, launch_addr, false);
+
+    if (!is_idle_eth) {
+        // Active
+        std::vector<uint32_t> clear_flag_data = {0};
+        cluster_->write_core_immediate(device_id, virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
+    }
+};
 
 }  // namespace tt::tt_metal

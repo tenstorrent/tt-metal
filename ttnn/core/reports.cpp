@@ -50,6 +50,7 @@ std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed:
     std::vector<BufferInfo> buffer_infos;
     for (auto device : devices) {
         const auto allocated_buffers = device->allocator()->get_allocated_buffers();
+        // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
         for (const auto& buffer : allocated_buffers) {
             auto device_id = device->id();
             auto address = buffer->address();
@@ -105,6 +106,7 @@ std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::dis
     std::vector<BufferPageInfo> buffer_page_infos;
     for (auto device : devices) {
         const auto allocated_buffers = device->allocator()->get_allocated_buffers();
+        // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
         for (const auto& buffer : allocated_buffers) {
             if (not buffer->is_l1()) {
                 continue;

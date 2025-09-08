@@ -38,6 +38,9 @@
 #include "umd/device/tt_core_coordinates.h"
 #include "distributed/mesh_trace.hpp"
 
+// Access to internal API: ProgramImpl::get_id
+#include "impl/program/program_impl.hpp"
+
 namespace tt::tt_metal {
 
 using std::vector;
@@ -45,7 +48,6 @@ using namespace tt;
 
 Program create_simple_unary_program(Buffer& input, Buffer& output) {
     Program program = CreateProgram();
-    IDevice* device = input.device();
     CoreCoord worker = {0, 0};
     auto reader_kernel = CreateKernel(
         program,
@@ -73,23 +75,12 @@ Program create_simple_unary_program(Buffer& input, Buffer& output) {
 
     CoreRange core_range({0, 0});
     CreateCircularBuffer(program, core_range, input_cb_config);
-    std::shared_ptr<RuntimeArgs> writer_runtime_args = std::make_shared<RuntimeArgs>();
-    std::shared_ptr<RuntimeArgs> reader_runtime_args = std::make_shared<RuntimeArgs>();
 
-    *writer_runtime_args = {
-        &output,
-        (uint32_t)0,
-        output.num_pages()
-    };
+    auto writer_runtime_args = {output.address(), uint32_t(0), output.num_pages()};
+    auto reader_runtime_args = {input.address(), uint32_t(0), input.num_pages()};
 
-    *reader_runtime_args = {
-        &input,
-        (uint32_t)0,
-        input.num_pages()
-    };
-
-    SetRuntimeArgs(device, detail::GetKernel(program, writer_kernel), worker, writer_runtime_args);
-    SetRuntimeArgs(device, detail::GetKernel(program, reader_kernel), worker, reader_runtime_args);
+    SetRuntimeArgs(program, writer_kernel, worker, writer_runtime_args);
+    SetRuntimeArgs(program, reader_kernel, worker, reader_runtime_args);
 
     CircularBufferConfig output_cb_config = CircularBufferConfig(2048, {{tt::CBIndex::c_16, tt::DataFormat::Float16_b}})
                                                 .set_page_size(tt::CBIndex::c_16, 2048);
@@ -339,7 +330,8 @@ TEST_F(UnitMeshCQTraceFixture, TensixInstantiateTraceSanity) {
 
     // Frontdoor read the trace buffer
     data_fd.resize(device_buffer->size() / sizeof(uint32_t));
-    EnqueueReadBuffer(mesh_device->get_devices()[0]->command_queue(), *device_buffer, data_fd.data(), kBlocking);
+    distributed::ReadShard(
+        mesh_command_queue, data_fd, trace_inst->mesh_buffer, distributed::MeshCoordinate{0, 0}, kBlocking);
     EXPECT_EQ(data_fd, data_bd);
 
     log_trace(LogTest, "Trace buffer content: {}", data_fd);
@@ -720,7 +712,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace
     distributed::ReleaseTrace(this->device_.get(), trace_id);
 }
 
-TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTrace) {
+TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestProgramsTrace) {
     auto& mesh_command_queue = this->device_->mesh_command_queue();
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
@@ -810,7 +802,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
     distributed::ReleaseTrace(this->device_.get(), trace_id);
 }
 
-TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestAlternatingLargeAndSmallProgramsTrace) {
+TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestAlternatingLargeAndSmallProgramsTrace) {
     auto& mesh_command_queue = this->device_->mesh_command_queue();
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
@@ -837,7 +829,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestAlternatingLargeAndSmallProg
     distributed::ReleaseTrace(this->device_.get(), trace_id);
 }
 
-TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramFollowedBySmallProgramsTrace) {
+TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestLargeProgramFollowedBySmallProgramsTrace) {
     auto& mesh_command_queue = this->device_->mesh_command_queue();
 
     for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
@@ -913,13 +905,13 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
             distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), trace_id);
             trace_ids.push_back(trace_id);
-            program_ids_to_trace_ids.emplace(workload.get_programs()[device_range_].get_id(), trace_id);
+            program_ids_to_trace_ids.emplace(workload.get_programs()[device_range_].impl().get_id(), trace_id);
         }
     }
     distributed::Finish(mesh_command_queue);
 
     for (auto& workload : this->workloads) {
-        const uint64_t program_id = workload.get_programs()[device_range_].get_id();
+        const uint64_t program_id = workload.get_programs()[device_range_].impl().get_id();
         const bool use_trace = program_ids_to_trace_ids.contains(program_id);
         if (use_trace) {
             const distributed::MeshTraceId trace_id = program_ids_to_trace_ids[program_id];
@@ -968,13 +960,13 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
             distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), trace_id);
             trace_ids.push_back(trace_id);
-            program_ids_to_trace_ids.emplace(workload.get_programs()[device_range_].get_id(), trace_id);
+            program_ids_to_trace_ids.emplace(workload.get_programs()[device_range_].impl().get_id(), trace_id);
         }
     }
     distributed::Finish(mesh_command_queue);
 
     for (auto& workload : this->workloads) {
-        const uint64_t program_id = workload.get_programs()[device_range_].get_id();
+        const uint64_t program_id = workload.get_programs()[device_range_].impl().get_id();
         const bool use_trace = program_ids_to_trace_ids.contains(program_id);
         if (use_trace) {
             const distributed::MeshTraceId trace_id = program_ids_to_trace_ids[program_id];
@@ -1035,13 +1027,13 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
             distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), trace_id);
             trace_ids.push_back(trace_id);
-            program_ids_to_trace_ids.emplace(workload.get_programs()[device_range_].get_id(), trace_id);
+            program_ids_to_trace_ids.emplace(workload.get_programs()[device_range_].impl().get_id(), trace_id);
         }
     }
     distributed::Finish(mesh_command_queue);
 
     for (auto& workload : this->workloads) {
-        const uint64_t program_id = workload.get_programs()[device_range_].get_id();
+        const uint64_t program_id = workload.get_programs()[device_range_].impl().get_id();
         const bool use_trace = program_ids_to_trace_ids.contains(program_id);
         if (use_trace) {
             const distributed::MeshTraceId trace_id = program_ids_to_trace_ids[program_id];

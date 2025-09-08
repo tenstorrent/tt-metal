@@ -149,10 +149,11 @@ void kernel_main() {
     uint32_t out_block_h_last = out_block_h_normal;
     uint32_t out_block_hw_last = out_block_hw_normal;
     const uint32_t num_reads_of_input = 3;
-    if constexpr(block_h % num_out_blocks != 0) {
+    if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
-        num_out_blocks_padded++;
-        out_block_h_last = block_h % num_out_blocks;
+	uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
+        num_out_blocks_padded += (residual / out_block_h_normal + 1);
+        out_block_h_last = residual % out_block_h_normal;
         out_block_hw_last = out_block_h_last * block_w;
     }
 

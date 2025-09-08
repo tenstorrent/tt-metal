@@ -7,6 +7,35 @@ import torch
 import ttnn
 
 
+def fold_batch_norm2d_into_conv2d_split(device, state_dict, path, eps=1e-03, bfloat8=False, mesh_mapper=None):
+    bn_weight = state_dict[path + f".bn.weight"].unsqueeze(1).unsqueeze(1).unsqueeze(1)
+    bn_bias = state_dict[path + f".bn.bias"].unsqueeze(1).unsqueeze(1).unsqueeze(1)
+    bn_running_mean = state_dict[path + f".bn.running_mean"].unsqueeze(1).unsqueeze(1).unsqueeze(1)
+    bn_running_var = state_dict[path + f".bn.running_var"].unsqueeze(1).unsqueeze(1).unsqueeze(1)
+
+    weight = state_dict[path + f".conv.weight"]
+    weight = (weight / torch.sqrt(bn_running_var + eps)) * bn_weight
+    bias = -(bn_weight) * (bn_running_mean / torch.sqrt(bn_running_var + eps)) + bn_bias
+    bias = bias.reshape(1, 1, 1, -1)
+
+    chunk_size = bias.shape[-1] // 2
+
+    if bfloat8:
+        return (
+            ttnn.from_torch(weight[:chunk_size, :, :, :], dtype=ttnn.float32, mesh_mapper=mesh_mapper),
+            ttnn.from_torch(bias[:, :, :, :chunk_size], dtype=ttnn.float32, mesh_mapper=mesh_mapper),
+            ttnn.from_torch(weight[chunk_size:, :, :, :], dtype=ttnn.float32, mesh_mapper=mesh_mapper),
+            ttnn.from_torch(bias[:, :, :, chunk_size:], dtype=ttnn.float32, mesh_mapper=mesh_mapper),
+        )
+
+    return (
+        ttnn.from_torch(weight[:chunk_size, :, :, :], dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper),
+        ttnn.from_torch(bias[:, :, :, :chunk_size], dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper),
+        ttnn.from_torch(weight[chunk_size:, :, :, :], dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper),
+        ttnn.from_torch(bias[:, :, :, chunk_size:], dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper),
+    )
+
+
 def fold_batch_norm2d_into_conv2d(device, state_dict, path, eps=1e-03, bfloat8=False, mesh_mapper=None):
     bn_weight = state_dict[path + f".bn.weight"].unsqueeze(1).unsqueeze(1).unsqueeze(1)
     bn_bias = state_dict[path + f".bn.bias"].unsqueeze(1).unsqueeze(1).unsqueeze(1)
@@ -207,12 +236,30 @@ def custom_preprocessor(device, state_dict, inp_h=640, inp_w=640, mesh_mapper=No
         ("model.22.cv3.2.1", True),
     ]
 
+    c2f_paths = [
+        "model.2.cv1",
+        "model.4.cv1",
+        "model.6.cv1",
+        "model.8.cv1",
+        "model.12.cv1",
+        "model.15.cv1",
+        "model.18.cv1",
+        "model.21.cv1",
+    ]
+
     parameters = {}
 
     for path, bfloat8 in pairs:
         parameters[path] = fold_batch_norm2d_into_conv2d(
             device, state_dict, path=path, bfloat8=True, mesh_mapper=mesh_mapper
         )
+
+        if path in c2f_paths:
+            parameters_modified = fold_batch_norm2d_into_conv2d_split(
+                device, state_dict, path=path, bfloat8=True, mesh_mapper=mesh_mapper
+            )
+            parameters[path + "_a"] = parameters_modified[:2]
+            parameters[path + "_b"] = parameters_modified[2:]
 
     parameters["model.22.cv2.0"] = preprocess_parameters(
         state_dict, "model.22.cv2.0", bfloat8=True, mesh_mapper=mesh_mapper

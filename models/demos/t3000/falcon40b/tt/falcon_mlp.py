@@ -47,7 +47,6 @@ class TtFalconMLP:
             memory_config=self.model_config["DENSE_H_TO_4H_MM_WEIGHTS_MEMCFG"],
             mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
             cache_file_name=tt_cache_path / dense_h_to_4h_str,
-            enable_multihost_format=True,
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
         )
 
@@ -59,7 +58,6 @@ class TtFalconMLP:
             memory_config=self.model_config["DENSE_4H_TO_H_MM_WEIGHTS_MEMCFG"],
             mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=2),
             cache_file_name=tt_cache_path / f"{dense_4h_to_h_str}_height_fractured",
-            enable_multihost_format=True,
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
         )
 

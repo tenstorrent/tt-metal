@@ -81,9 +81,9 @@ jobs:
           { name: "Galaxy unit tests", arch: wormhole_b0, model: unit, timeout: 45, owner_id: XXXXX},  # Add owner
           { name: "Galaxy Fabric tests", arch: wormhole_b0, model: fabric, timeout: 40, owner_id: UJ45FEC7M},  # Allan Liu
           { name: "Galaxy Llama3-70b unit tests", arch: wormhole_b0, model: llama3-70b, timeout: 30, owner_id: U053W15B6JF, mlperf: true}, # Djordje Ivanovic
-          { name: "Galaxy DRAM Prefetcher unit tests", arch: wormhole_b0, model: prefetcher, timeout: 30, owner_id: U071CKL4AFK}, # Ammar Vora, Yu Gao
+          { name: "Galaxy DRAM Prefetcher unit tests", arch: wormhole_b0, model: prefetcher, timeout: 30, owner_id: U044T8U8DEF}, # Johanna Rock, Yu Gao
           { name: "Galaxy distributed ops tests", arch: wormhole_b0, model: distributed-ops, timeout: 15, owner_id: U044T8U8DEF},  # Johanna Rock
-          { name: "Galaxy distributed runtime tests", arch: wormhole_b0, model: distributed-runtime, timeout: 45, owner_id: U03NG0A5ND7},  # Aditya Saigal
+          #{ name: "Galaxy distributed runtime tests", arch: wormhole_b0, model: distributed-runtime, timeout: 45, owner_id: U03NG0A5ND7}, # Aditya Saigal #See issue #26105
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:

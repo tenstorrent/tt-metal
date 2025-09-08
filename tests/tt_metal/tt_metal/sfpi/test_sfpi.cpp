@@ -59,6 +59,7 @@ bool runTest(
     // If we need more sofphisticate tuning, we should add tags to the
     // body of the file itself.
     auto pos = path.find_last_of('.');
+    // NOLINTNEXTLINE(bugprone-inc-dec-in-conditions)
     while (--pos && path[pos] >= '0' && path[pos] <= '9') {
         continue;
     }

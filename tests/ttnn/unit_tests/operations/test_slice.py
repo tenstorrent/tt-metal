@@ -1241,8 +1241,6 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
     torch.manual_seed(2001)
     torch_dtype = torch.float32 if input_dtype == ttnn.float32 else torch.bfloat16
     torch_input = torch.randint(-10, 10, dims).to(dtype=torch_dtype)
-    # torch_input = torch.tensor(range(dims[1])).reshape([1, dims[1], 1, 1]).broadcast_to(dims).to(dtype=torch.bfloat16)
-    # torch_input = torch.tensor(range(dims[2])).reshape([1, 1, dims[2], 1]).broadcast_to(dims).to(dtype=torch.bfloat16)
 
     core_range = ttnn.num_cores_to_corerangeset(cores, core_grid, orientation == ttnn.ShardOrientation.ROW_MAJOR)
     num_slices = dims[slice_dim] // slice_size
@@ -1324,6 +1322,64 @@ def test_slice_block_sharded_for_conv2d(device, dims, slice_dim, slice_size, cor
         this_torch_output = padded_torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2]]
         output_shape = this_torch_output.shape
         output_shape = [1, 1, output_shape[0] * output_shape[1] * output_shape[2], round_up(output_shape[3], 32)]
+        memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
+            output_shape, parallel_config, 1
+        )
+        this_ttnn_output = ttnn.padded_slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
+        output = this_ttnn_output.cpu().to_torch_with_padded_shape()
+        output = torch.reshape(output, this_torch_output.shape)
+        assert torch.allclose(this_torch_output, output, atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.parametrize(
+    "dims, slice_size, cores",
+    [
+        [[1, 32, 32, 1024], 16, 32],
+        [[1, 29, 29, 999], 16, 32],
+        [[1, 29, 29, 510], 16, 16],
+        [[1, 6, 58, 2048], 3, 64],
+    ],
+)
+@pytest.mark.parametrize("slice_dim", [1, 2])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
+def test_slice_width_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, input_dtype):
+    if input_dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("bfloat8_b is not supported in row major layout")
+
+    orientation = ttnn.ShardOrientation.ROW_MAJOR
+    core_grid = device.compute_with_storage_grid_size()
+    if core_grid.x * core_grid.y < cores:
+        pytest.skip(
+            "Skipping test_slice_height_sharded_for_conv2d as device does not have enough Tensix cores. Needs %d, but device has %d"
+            % (cores, core_grid.x * core_grid.y)
+        )
+
+    strides = [1, 1, 1, 1]
+    torch.manual_seed(2001)
+    torch_dtype = torch.float32 if input_dtype == ttnn.float32 else torch.bfloat16
+    torch_input = torch.randint(-10, 10, dims).to(dtype=torch_dtype)
+
+    core_range = ttnn.num_cores_to_corerangeset(cores, core_grid, orientation == ttnn.ShardOrientation.ROW_MAJOR)
+    num_slices = dims[slice_dim] // slice_size
+    ttnn_input = ttnn.from_torch(
+        torch_input, device=device, layout=layout, dtype=input_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    parallel_config = ttnn.SlidingWindowParallelConfig(
+        grid=core_range, shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED, shard_orientation=orientation
+    )
+    padded_channels = round_up(dims[-1], 32)
+    padded_torch_input = torch.nn.functional.pad(torch_input, (0, padded_channels - dims[-1]))
+    torch.set_printoptions(sci_mode=False, precision=2)
+    for i in range(num_slices):
+        begins = [0, 0, 0, 0]
+        ends = [dims[0], dims[1], dims[2], dims[3]]
+        begins[slice_dim] = i * slice_size
+        ends[slice_dim] = (i + 1) * slice_size
+        this_torch_output = padded_torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2]]
+        output_shape = this_torch_output.shape
+        output_shape = [1, 1, output_shape[0] * output_shape[1] * output_shape[2], round_up(output_shape[3], 32)]
+
         memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
             output_shape, parallel_config, 1
         )
