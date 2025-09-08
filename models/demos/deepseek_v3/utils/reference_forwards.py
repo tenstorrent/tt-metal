@@ -7,6 +7,7 @@ from transformers import DynamicCache
 from models.demos.deepseek_v3.reference.modeling_deepseek import (
     DeepseekV3Attention,
     DeepseekV3DecoderLayer,
+    DeepseekV3ForCausalLM,
     DeepseekV3Model,
 )
 
@@ -213,10 +214,11 @@ def reference_forward_decoder(
 
 
 def reference_forward_model(
-    reference_model: DeepseekV3Model,
+    reference_model: DeepseekV3Model | DeepseekV3ForCausalLM,
     torch_input_ids: torch.Tensor,
     position_ids: torch.LongTensor,
     mode: str,
+    dtype: torch.dtype = torch.float16,
 ) -> torch.Tensor:
     """Run the reference model forward pass.
 
@@ -240,7 +242,7 @@ def reference_forward_model(
 
 
     Args:
-        reference_model (DeepseekV3Model): The reference model to run.
+        reference_model (DeepseekV3Model | DeepseekV3CausalLM): The reference model to run.
         torch_input_ids (torch.Tensor): The input tensor to the model.
         position_ids (torch.LongTensor): The position ids for the input.
         mode (str): The mode of operation, either "decode" or "prefill".
@@ -248,7 +250,7 @@ def reference_forward_model(
         torch.Tensor: The output tensor from the model.
     """
 
-    reference_model = reference_model.to(torch.float32)
+    reference_model = reference_model.to(dtype)
 
     bsz, seq_len = torch_input_ids.shape
 
@@ -272,7 +274,13 @@ def reference_forward_model(
         position_ids=position_ids_expanded,
         use_cache=True,
     )
-    out = out.last_hidden_state
+
+    if isinstance(reference_model, DeepseekV3Model):
+        out = out.last_hidden_state
+    elif isinstance(reference_model, DeepseekV3ForCausalLM):
+        out = out.logits
+    else:
+        raise ValueError("Unsupported model type")
 
     if mode == "decode":
         # Get last token
