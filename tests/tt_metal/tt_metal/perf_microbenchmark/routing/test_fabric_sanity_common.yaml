@@ -357,6 +357,9 @@ Tests:
     fabric_setup:
       topology: Mesh
 
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
     defaults:
       ftype: unicast
       ntype: unicast_write
