@@ -13,6 +13,7 @@ target_sources(
         global_avg_pool/global_avg_pool.cpp
         grid_sample/device/grid_sample_op.cpp
         grid_sample/device/grid_sample_program_factory.cpp
+        grid_sample/device/grid_sample_program_factory_sharded.cpp
         grid_sample/grid_sample.cpp
         grid_sample/grid_sample_prepare_grid.cpp
         pool_utils.cpp

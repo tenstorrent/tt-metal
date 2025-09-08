@@ -74,17 +74,22 @@ void kernel_main() {
     uint32_t grid_stick_idx = 0;
     uint32_t l1_grid_addr = l1_grid_base_addr;
 
+    // DPRINT << "Starting grid sample reader kernel"
+    //    << ", processing " << grid_nsticks_per_core << " grid sticks\n";
+
     while (grid_stick_idx < grid_nsticks_per_core) {
+        // DPRINT << "Processing grid stick " << grid_stick_idx << "\n";
         volatile tt_l1_ptr uint16_t* const grid_stick_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_grid_addr);
 
         // Process each batched grid point within this stick
         uint32_t batch_idx = 0;
         while (batch_idx < grid_batching_factor) {
+            // DPRINT << "Processing grid stick " << grid_stick_idx << ", batch " << batch_idx << "\n";
             uint16_t weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf;
             int32_t h0, h1, w0, w1;
-            uint32_t curr_batch = 0;  // Will need to calculate based on global position
-            uint32_t batch_offset = curr_batch * input_height * input_width;
+            uint32_t curr_image_batch = 0;  // Will need to calculate based on global position
+            uint32_t batch_offset = curr_image_batch * input_height * input_width;
 
 #ifdef USE_PRECOMPUTED_GRID
             // Each precomputed grid entry has 6 values: h0, w0, weight_nw, weight_ne, weight_sw, weight_se
@@ -110,6 +115,8 @@ void kernel_main() {
 
             const float h_coord_rel = bfloat16_to_float(h_coord_raw);
             const float w_coord_rel = bfloat16_to_float(w_coord_raw);
+
+            DPRINT << "  Grid coords (rel): (" << h_coord_rel << ", " << w_coord_rel << ")\n";
 
             const float h_coord_image = h_coord_rel * height_scale + height_offset;
             const float w_coord_image = w_coord_rel * width_scale + width_offset;
@@ -154,7 +161,10 @@ void kernel_main() {
 #endif
 
             // Reserve CB space for 4 corner input sticks for this grid point
+
             cb_reserve_back(input_cb_index, 1);
+            // DPRINT << "Reserved input CB space for grid stick " << grid_stick_idx << ", batch " << batch_idx << "\n";
+
             uint32_t l1_write_input_addr = get_write_ptr(input_cb_index);
 
             // Read 4 corner input sticks via NOC from remote input tensor shards
@@ -202,7 +212,6 @@ void kernel_main() {
             if (batch_idx == grid_batching_factor) {
                 l1_grid_addr += grid_stick_nbytes;
                 ++grid_stick_idx;
-                batch_idx = 0;
             }
         }
     }

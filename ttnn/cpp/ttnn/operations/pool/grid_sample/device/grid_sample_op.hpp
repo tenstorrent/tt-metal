@@ -29,6 +29,10 @@ struct GridSample {
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "mode", "padding_mode", "use_precomputed_grid", "batch_output_channels", "output_mem_config");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            this->mode_,
+            this->padding_mode_,
             this->use_precomputed_grid_,
             this->batch_output_channels_,
             this->output_mem_config_);
