@@ -32,44 +32,40 @@ void kernel_main() {
     uint32_t padded_block_tiles_w_skip = get_arg_val<uint32_t>(13);
 
     // COMPILE TIME ARGS
-    // interleaved accessor args
-    constexpr auto in1_args = TensorAccessorArgs<0>();
-    constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
-
     // READER
     // in1 tensor args
-    constexpr uint32_t in1_tensor_stride_w = get_compile_time_arg_val(2);
-    constexpr uint32_t in1_tensor_stride_h = get_compile_time_arg_val(3);
-    constexpr uint32_t in1_tensor_next_block_stride = get_compile_time_arg_val(4);
+    constexpr uint32_t in1_tensor_stride_w = get_compile_time_arg_val(0);
+    constexpr uint32_t in1_tensor_stride_h = get_compile_time_arg_val(1);
+    constexpr uint32_t in1_tensor_next_block_stride = get_compile_time_arg_val(2);
     // in1 block args
-    constexpr uint32_t in1_block_w = get_compile_time_arg_val(5);
-    constexpr uint32_t in1_block_h = get_compile_time_arg_val(6);
-    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(7);
+    constexpr uint32_t in1_block_w = get_compile_time_arg_val(3);
+    constexpr uint32_t in1_block_h = get_compile_time_arg_val(4);
+    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(5);
     // in0/in1 common args
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(8);
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(6);
     // in1 mcast args
-    constexpr uint32_t in1_mcast_dest_noc_start_y = get_compile_time_arg_val(9);
-    constexpr uint32_t in1_mcast_dest_noc_end_y = get_compile_time_arg_val(10);
-    uint32_t in1_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(11));
-    uint32_t in1_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(12));
-    constexpr uint32_t in1_mcast_num_dests = get_compile_time_arg_val(13);
+    constexpr uint32_t in1_mcast_dest_noc_start_y = get_compile_time_arg_val(7);
+    constexpr uint32_t in1_mcast_dest_noc_end_y = get_compile_time_arg_val(8);
+    uint32_t in1_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
+    uint32_t in1_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
+    constexpr uint32_t in1_mcast_num_dests = get_compile_time_arg_val(11);
     // batch args
-    constexpr uint32_t KtNt = get_compile_time_arg_val(14);
-    constexpr uint32_t batch = get_compile_time_arg_val(15);
-    constexpr uint32_t bcast_B = get_compile_time_arg_val(16);
+    constexpr uint32_t KtNt = get_compile_time_arg_val(12);
+    constexpr uint32_t batch = get_compile_time_arg_val(13);
+    constexpr uint32_t bcast_B = get_compile_time_arg_val(14);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(17);
-    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(18);
-    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(19);
-    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(20);
+    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(15);
+    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(16);
+    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(17);
+    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(18);
     // out subblock args
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(21);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
-    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(23);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(19);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(20);
+    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(21);
     // batch args
-    constexpr uint32_t MtNt = get_compile_time_arg_val(24);  // if 0
+    constexpr uint32_t MtNt = get_compile_time_arg_val(22);  // if 0
     // Don't need batch; same as batch from READER args
 
 #ifdef FUSE_BIAS
@@ -79,13 +75,13 @@ void kernel_main() {
     uint32_t in3_mcast_dest_noc_start_x = get_arg_val<uint32_t>(16);
     uint32_t in3_mcast_dest_noc_end_x = get_arg_val<uint32_t>(17);
     // in3 mcast args
-    constexpr bool in3_is_dram = get_compile_time_arg_val(25) == 1;
-    constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(26);
-    constexpr uint32_t in3_mcast_dest_noc_start_y = get_compile_time_arg_val(27);
-    constexpr uint32_t in3_mcast_dest_noc_end_y = get_compile_time_arg_val(28);
-    uint32_t in3_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(29));
-    uint32_t in3_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(30));
-    constexpr uint32_t in3_mcast_num_dests = get_compile_time_arg_val(31);
+    constexpr bool in3_is_dram = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(24);
+    constexpr uint32_t in3_mcast_dest_noc_start_y = get_compile_time_arg_val(25);
+    constexpr uint32_t in3_mcast_dest_noc_end_y = get_compile_time_arg_val(26);
+    uint32_t in3_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(27));
+    uint32_t in3_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(28));
+    constexpr uint32_t in3_mcast_num_dests = get_compile_time_arg_val(29);
 
     constexpr uint32_t cb_id_in3 = 3;
     const uint32_t bias_single_tile_size_bytes = get_tile_size(cb_id_in3);
@@ -119,9 +115,19 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in1_mcast_sender_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_sender_semaphore_addr);
 #endif
+
+    // interleaved accessor args
+#ifdef FUSE_BIAS
+    constexpr auto in1_args = TensorAccessorArgs<30>();
+    constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
+    constexpr auto in3_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+#else
+    constexpr auto in1_args = TensorAccessorArgs<23>();
+    constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
+#endif
+
     const auto s1 = TensorAccessor(in1_args, in1_tensor_addr, in1_single_tile_size_bytes);
 #ifdef FUSE_BIAS
-    constexpr auto in3_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     const auto s3 = TensorAccessor(in3_args, in3_tensor_addr, bias_single_tile_size_bytes);
 #endif
     // WRITER
