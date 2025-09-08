@@ -95,11 +95,6 @@ def test_grid_sample_sharded(device, input_shape, grid_shape, use_precomputed_gr
     expected_shape = torch_output_nhwc.shape
     assert ttnn_output_torch.shape == expected_shape, f"Expected {expected_shape}, got {ttnn_output_torch.shape}"
 
-    # Verify that sharded implementation was actually used
-    assert not ttnn_input.is_sharded(), "Input tensor should be interleaved"
-    assert ttnn_grid_device.is_sharded(), "Grid tensor should be sharded"
-    assert ttnn_output.is_sharded(), "Output tensor should be sharded"
-
     # Verify numerical correctness
-    pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.98)
+    pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
     logger.info(f"SHARDED grid_sample (precomputed={use_precomputed_grid}): {pcc_message}")

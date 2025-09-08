@@ -44,18 +44,16 @@ void kernel_main() {
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t grid_cb_index = get_compile_time_arg_val(1);
     constexpr uint32_t scalar_cb_index = get_compile_time_arg_val(2);
-    constexpr uint32_t output_cb_index = get_compile_time_arg_val(3);
+    constexpr uint32_t input_stick_nbytes = get_compile_time_arg_val(3);
     constexpr uint32_t grid_stick_nbytes = get_compile_time_arg_val(4);
     constexpr uint32_t input_height = get_compile_time_arg_val(5);
     constexpr uint32_t input_width = get_compile_time_arg_val(6);
     constexpr uint32_t grid_nsticks_per_core = get_compile_time_arg_val(7);
-    constexpr uint32_t output_nsticks_per_core = get_compile_time_arg_val(8);
-    constexpr uint32_t grid_batching_factor = get_compile_time_arg_val(9);
-    constexpr uint32_t extend_channels = get_compile_time_arg_val(10);
-    constexpr uint32_t use_precomputed_grid = get_compile_time_arg_val(11);
+    constexpr uint32_t grid_batching_factor = get_compile_time_arg_val(8);
+    constexpr uint32_t use_precomputed_grid = get_compile_time_arg_val(9);
 
     // Input tensor accessor for remote NOC reads
-    constexpr auto input_tensor_args = TensorAccessorArgs<12>();
+    constexpr auto input_tensor_args = TensorAccessorArgs<10>();
     const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr, 0 /* will be set per access */);
 
     // Grid coordinates scaling factors (for standard grid mode)
@@ -69,22 +67,20 @@ void kernel_main() {
     // Zero out input CB to handle invalid coordinates properly
     zero_out_tiles<input_cb_index>();
 
-    // Get local grid data pointer (already in L1)
-    const uint32_t l1_grid_addr = get_read_ptr(grid_cb_index);
-    volatile tt_l1_ptr uint16_t* const grid_base_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_grid_addr);
-
-    // Calculate input stick size for NOC reads
-    const uint32_t input_stick_nbytes = input_width * sizeof(uint16_t);  // Assuming bfloat16
+    // Get local grid data base address (already in L1)
+    const uint32_t l1_grid_base_addr = get_read_ptr(grid_cb_index);
 
     // Process each grid stick assigned to this core
-    for (uint32_t grid_stick_idx = 0; grid_stick_idx < grid_nsticks_per_core; ++grid_stick_idx) {
-        // Calculate grid data offset for this stick
-        const uint32_t grid_data_offset_bytes = grid_stick_idx * grid_stick_nbytes;
-        const uint32_t grid_data_offset_elements = grid_data_offset_bytes / sizeof(uint16_t);
-        volatile tt_l1_ptr uint16_t* const grid_stick_ptr = grid_base_ptr + grid_data_offset_elements;
+    uint32_t grid_stick_idx = 0;
+    uint32_t l1_grid_addr = l1_grid_base_addr;
+
+    while (grid_stick_idx < grid_nsticks_per_core) {
+        volatile tt_l1_ptr uint16_t* const grid_stick_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_grid_addr);
 
         // Process each batched grid point within this stick
-        for (uint32_t batch_idx = 0; batch_idx < grid_batching_factor; ++batch_idx) {
+        uint32_t batch_idx = 0;
+        while (batch_idx < grid_batching_factor) {
             uint16_t weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf;
             int32_t h0, h1, w0, w1;
             uint32_t curr_batch = 0;  // Will need to calculate based on global position
@@ -201,20 +197,12 @@ void kernel_main() {
             const uint32_t l1_write_scalar_addr = get_write_ptr(scalar_cb_index);
             fill_four_val(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
             cb_push_back(scalar_cb_index, 1);
-        }
 
-        // Handle output for this grid stick
-        if (extend_channels) {
-            // extend_channels=true: 1 grid stick -> 1 output stick (channels extended)
-            cb_reserve_back(output_cb_index, 1);
-            // Compute kernel will handle the interpolation and write to output CB
-            cb_push_back(output_cb_index, 1);
-        } else {
-            // extend_channels=false: 1 grid stick -> grid_batching_factor output sticks
-            for (uint32_t out_idx = 0; out_idx < grid_batching_factor; ++out_idx) {
-                cb_reserve_back(output_cb_index, 1);
-                // Compute kernel will handle the interpolation and write to output CB
-                cb_push_back(output_cb_index, 1);
+            ++batch_idx;
+            if (batch_idx == grid_batching_factor) {
+                l1_grid_addr += grid_stick_nbytes;
+                ++grid_stick_idx;
+                batch_idx = 0;
             }
         }
     }

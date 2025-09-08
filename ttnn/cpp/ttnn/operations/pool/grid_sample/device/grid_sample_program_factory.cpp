@@ -108,7 +108,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const uint32_t input_cb_page_size = in_ntiles_c * tt::constants::TILE_HW * input_tensor.element_size();
 
     // CB1: Input data buffer (holds 4 input sticks for bilinear interpolation)
-    uint32_t input_cb_num_pages = buffering_factor;  // 4 corner sticks for bilinear
+    uint32_t input_cb_num_pages = buffering_factor;
     const auto [input_cb_index, input_cb_handle] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, input_cb_page_size, input_cb_num_pages, input_cb_data_format);
 

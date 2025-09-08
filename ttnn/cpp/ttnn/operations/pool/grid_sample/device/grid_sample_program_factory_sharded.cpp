@@ -64,14 +64,13 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory_sharde
             grid_nsticks_per_core * grid_batching_factor;  // extend_channels=false: 1:K ratio
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
-    const uint32_t buffering_factor = 1;  // Data is already in shards
+    const uint32_t buffering_factor = 2;  // Data is already in shards
 
     // CB0: Grid data buffer - local sharded grid data
     // This CB points directly to the grid tensor's L1 buffer
     const uint32_t grid_stick_nbytes = grid_shape[-1] * grid_tensor.element_size();
-    const uint32_t aligned_grid_stick_nbytes = tt::round_up(grid_stick_nbytes, grid_tensor.buffer()->alignment());
-    const uint32_t grid_cb_pagesize = aligned_grid_stick_nbytes;
-    const uint32_t grid_cb_npages = grid_nsticks_per_core * buffering_factor;
+    const uint32_t grid_cb_pagesize = grid_stick_nbytes;
+    const uint32_t grid_cb_npages = grid_nsticks_per_core;
 
     const auto [grid_cb_index, grid_cb_handle] = tt::tt_metal::create_cb(
         next_cb_index++,
@@ -86,7 +85,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory_sharde
     // This is NOT tied to a buffer since we'll do remote reads
     const uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[-1] / tt::constants::TILE_WIDTH);
     const uint32_t input_cb_page_size = in_ntiles_c * tt::constants::TILE_HW * input_tensor.element_size();
-    const uint32_t input_cb_num_pages = 4 * buffering_factor;  // 4 corner points for bilinear
+    const uint32_t input_cb_num_pages = buffering_factor;
 
     const auto [input_cb_index, input_cb_handle] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, input_cb_page_size, input_cb_num_pages, input_cb_data_format);
@@ -102,7 +101,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory_sharde
     const uint32_t output_stick_nbytes = output_shape[-1] * output_tensor.element_size();
     const uint32_t aligned_output_stick_nbytes = tt::round_up(output_stick_nbytes, output_tensor.buffer()->alignment());
     const uint32_t output_cb_pagesize = aligned_output_stick_nbytes;
-    const uint32_t output_cb_npages = output_nsticks_per_core * buffering_factor;
+    const uint32_t output_cb_npages = output_nsticks_per_core;
 
     const auto [output_cb_index, output_cb_handle] = tt::tt_metal::create_cb(
         next_cb_index++,
@@ -113,19 +112,19 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory_sharde
         output_cb_data_format,
         output_tensor.buffer());
 
+    const uint32_t input_stick_nbytes = input_shape[-1] * input_tensor.element_size();
+
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)input_cb_index,                // 0: input CB index
         (std::uint32_t)grid_cb_index,                 // 1: grid CB index
         (std::uint32_t)scalar_cb_index,               // 2: scalar CB index
-        (std::uint32_t)output_cb_index,               // 3: output CB index
-        (std::uint32_t)aligned_grid_stick_nbytes,     // 4: grid stick size
+        (std::uint32_t)input_stick_nbytes,            // 3: input stick size in bytes
+        (std::uint32_t)grid_stick_nbytes,             // 4: grid stick size
         (std::uint32_t)input_height,                  // 5: input height
         (std::uint32_t)input_width,                   // 6: input width
         (std::uint32_t)grid_nsticks_per_core,         // 7: grid sticks per core
-        (std::uint32_t)output_nsticks_per_core,       // 8: output sticks per core
-        (std::uint32_t)grid_batching_factor,          // 9: number of grids per spatial position
-        (std::uint32_t)extend_channels ? 1 : 0,       // 10: extend_channels flag
-        (std::uint32_t)use_precomputed_grid ? 1 : 0,  // 11: precomputed grid flag
+        (std::uint32_t)grid_batching_factor,          // 8: number of grids per spatial position
+        (std::uint32_t)use_precomputed_grid ? 1 : 0,  // 9: precomputed grid flag
     };
 
     // Add input tensor accessor args for remote NOC reads
