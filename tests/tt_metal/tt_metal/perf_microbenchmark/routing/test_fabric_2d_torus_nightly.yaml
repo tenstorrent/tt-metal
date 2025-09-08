@@ -18,11 +18,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -40,11 +40,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -66,11 +66,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -88,11 +88,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -114,11 +114,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -136,11 +136,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -158,11 +158,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -180,11 +180,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -202,11 +202,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -224,11 +224,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -250,11 +250,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -272,11 +272,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -294,11 +294,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -316,11 +316,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -338,11 +338,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -360,11 +360,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -386,11 +386,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -409,11 +409,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -432,11 +432,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -455,11 +455,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -478,11 +478,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -501,11 +501,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -524,11 +524,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -547,11 +547,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -570,11 +570,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -593,11 +593,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -620,11 +620,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -643,11 +643,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -666,11 +666,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -689,11 +689,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -712,11 +712,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -735,11 +735,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -758,11 +758,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -781,11 +781,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -804,11 +804,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -827,11 +827,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -854,11 +854,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -877,11 +877,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -900,11 +900,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -923,11 +923,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -946,11 +946,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -969,11 +969,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -992,11 +992,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1015,11 +1015,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1038,11 +1038,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1061,11 +1061,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1088,11 +1088,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1111,11 +1111,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1134,11 +1134,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1157,11 +1157,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1180,11 +1180,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1203,11 +1203,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1226,11 +1226,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1249,11 +1249,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1272,11 +1272,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1295,11 +1295,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1322,11 +1322,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1345,11 +1345,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1368,11 +1368,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1391,11 +1391,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1414,11 +1414,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1437,11 +1437,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1460,11 +1460,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1483,11 +1483,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1506,11 +1506,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1533,11 +1533,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1556,11 +1556,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1579,11 +1579,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1606,11 +1606,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1634,11 +1634,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1658,11 +1658,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1682,11 +1682,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1706,11 +1706,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1730,11 +1730,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1754,11 +1754,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1778,11 +1778,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1802,11 +1802,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1826,11 +1826,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1850,11 +1850,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1878,11 +1878,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1902,11 +1902,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1926,11 +1926,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1950,11 +1950,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1974,11 +1974,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -1998,11 +1998,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2022,11 +2022,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2046,11 +2046,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2070,11 +2070,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2094,11 +2094,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2118,11 +2118,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2146,11 +2146,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2170,11 +2170,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2194,11 +2194,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2218,11 +2218,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2242,11 +2242,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2266,11 +2266,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2290,11 +2290,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2314,11 +2314,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2338,11 +2338,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2362,11 +2362,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2386,11 +2386,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2414,11 +2414,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2438,11 +2438,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2462,11 +2462,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2486,11 +2486,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2510,11 +2510,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2534,11 +2534,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2558,11 +2558,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2582,11 +2582,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2606,11 +2606,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2630,11 +2630,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2654,11 +2654,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2682,11 +2682,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2707,11 +2707,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2732,11 +2732,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2757,11 +2757,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2782,11 +2782,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2807,11 +2807,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2832,11 +2832,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2857,11 +2857,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2882,11 +2882,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2907,11 +2907,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2932,11 +2932,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2957,11 +2957,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -2982,11 +2982,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3014,11 +3014,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3036,11 +3036,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3062,11 +3062,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3084,11 +3084,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3110,11 +3110,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3132,11 +3132,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3154,11 +3154,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3176,11 +3176,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3198,11 +3198,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3220,11 +3220,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3246,11 +3246,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3268,11 +3268,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3290,11 +3290,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3312,11 +3312,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3334,11 +3334,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3356,11 +3356,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3382,11 +3382,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3405,11 +3405,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3428,11 +3428,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3451,11 +3451,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3474,11 +3474,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3497,11 +3497,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3520,11 +3520,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3543,11 +3543,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3566,11 +3566,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3589,11 +3589,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3616,11 +3616,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3639,11 +3639,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3662,11 +3662,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3685,11 +3685,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3708,11 +3708,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3731,11 +3731,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3754,11 +3754,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3777,11 +3777,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3800,11 +3800,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3823,11 +3823,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3850,11 +3850,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3873,11 +3873,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3896,11 +3896,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3919,11 +3919,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3942,11 +3942,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3965,11 +3965,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -3988,11 +3988,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4011,11 +4011,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4034,11 +4034,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4057,11 +4057,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4084,11 +4084,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4107,11 +4107,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4130,11 +4130,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4153,11 +4153,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4176,11 +4176,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4199,11 +4199,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4222,11 +4222,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4245,11 +4245,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4268,11 +4268,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4291,11 +4291,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4318,11 +4318,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4341,11 +4341,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4364,11 +4364,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4387,11 +4387,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4410,11 +4410,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4433,11 +4433,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4456,11 +4456,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4479,11 +4479,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4502,11 +4502,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4529,11 +4529,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4552,11 +4552,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4575,11 +4575,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4602,11 +4602,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4630,11 +4630,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4654,11 +4654,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4678,11 +4678,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4702,11 +4702,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4726,11 +4726,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4750,11 +4750,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4774,11 +4774,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4798,11 +4798,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4822,11 +4822,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4846,11 +4846,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4874,11 +4874,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4898,11 +4898,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4922,11 +4922,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4946,11 +4946,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4970,11 +4970,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -4994,11 +4994,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5018,11 +5018,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5042,11 +5042,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5066,11 +5066,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5090,11 +5090,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5114,11 +5114,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5142,11 +5142,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5166,11 +5166,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5190,11 +5190,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5214,11 +5214,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5238,11 +5238,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5262,11 +5262,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5286,11 +5286,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5310,11 +5310,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5334,11 +5334,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5358,11 +5358,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5382,11 +5382,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5410,11 +5410,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5434,11 +5434,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5458,11 +5458,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5482,11 +5482,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5506,11 +5506,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5530,11 +5530,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5554,11 +5554,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5578,11 +5578,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5602,11 +5602,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5626,11 +5626,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5650,11 +5650,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5678,11 +5678,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5703,11 +5703,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5728,11 +5728,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5753,11 +5753,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5778,11 +5778,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5803,11 +5803,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5828,11 +5828,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5853,11 +5853,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5878,11 +5878,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5903,11 +5903,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5928,11 +5928,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5953,11 +5953,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -5978,11 +5978,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6006,11 +6006,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6028,11 +6028,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6050,11 +6050,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6072,11 +6072,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6094,11 +6094,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6117,11 +6117,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6140,11 +6140,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6167,11 +6167,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6189,11 +6189,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6211,11 +6211,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6233,11 +6233,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6255,11 +6255,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6277,11 +6277,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6299,11 +6299,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6321,11 +6321,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6343,11 +6343,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6365,11 +6365,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6387,11 +6387,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6409,11 +6409,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6431,11 +6431,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6454,11 +6454,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6477,11 +6477,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6500,11 +6500,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6523,11 +6523,11 @@ Tests:
       routing_type: LowLatency
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6548,11 +6548,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6570,11 +6570,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6592,11 +6592,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6614,11 +6614,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6636,11 +6636,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6659,11 +6659,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6682,11 +6682,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6708,11 +6708,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6730,11 +6730,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6752,11 +6752,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6774,11 +6774,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6796,11 +6796,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6818,11 +6818,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6840,11 +6840,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6862,11 +6862,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6884,11 +6884,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6906,11 +6906,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6928,11 +6928,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6950,11 +6950,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6972,11 +6972,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -6995,11 +6995,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -7018,11 +7018,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -7041,11 +7041,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
@@ -7064,11 +7064,11 @@ Tests:
       routing_type: Dynamic
 
     parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       ftype: [mcast, unicast]
 
     defaults:
       size: 512
+      ntype: unicast_write
       num_packets: 5000
       destination:
         hops:
