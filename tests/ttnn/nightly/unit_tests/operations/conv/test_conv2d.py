@@ -123,6 +123,7 @@ def run_conv(
     enable_weights_double_buffer=False,
     bs_full_inner_dim=False,
     sharded_cfg=None,
+    throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
 ):
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
@@ -137,6 +138,9 @@ def run_conv(
         logger.info(f"Using {num_devices} devices for this test")
     else:
         total_batch_size = batch_size
+
+    if type(throttle_level) == int:
+        throttle_level = ttnn.ThrottleLevel(throttle_level)
 
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
@@ -173,7 +177,6 @@ def run_conv(
     torch_input_tensor_nchw = randomize_torch_tensor(
         torch_tensor_map, conv_input_shape, generate_positive_numbers=sqrt_act_function
     )
-    torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
     torch_weight_tensor = randomize_torch_tensor(
         torch_tensor_map, conv_weight_shape, generate_positive_numbers=sqrt_act_function
@@ -183,6 +186,12 @@ def run_conv(
         if has_bias
         else None
     )
+    # Scale down input and weights if input channels is large to reduce float accumulation errors
+    if input_channels > 1000:
+        torch_input_tensor_nchw = torch_input_tensor_nchw / 10
+        torch_weight_tensor = torch_weight_tensor / 10
+
+    torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
     torch_padded_input = torch.nn.functional.pad(
         torch_input_tensor_nchw,
@@ -242,12 +251,14 @@ def run_conv(
         enable_kernel_stride_folding=enable_kernel_stride_folding,
         full_inner_dim=bs_full_inner_dim,
     )
+
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_approx_mode=math_approx_mode,
         math_fidelity=math_fidelity,
         fp32_dest_acc_en=fp32_accum,
         packer_l1_acc=packer_l1_acc,
+        throttle_level=throttle_level,
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
@@ -707,34 +718,35 @@ SliceWidth = ttnn.Conv2dSliceWidth
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "input_channels, output_channels, input_height, input_width, slice_type, weights_dtype, output_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity",
+    "input_channels, output_channels, input_height, input_width, slice_type, weights_dtype, output_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity, throttle",
     # fmt: off
     (
-        (10,    64,  4096,   512,  SliceHeight,   ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  32 * 8, ttnn.MathFidelity.LoFi  ),
-        (64,    64,  2048,   256,  SliceHeight,   ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  32 * 16, ttnn.MathFidelity.LoFi  ),
-        (64,    64,  1024,   128,  SliceHeight,   ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (64,    64,   512,    64,  SliceHeight,   ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        ( 4,    32,  1024,  1024,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (5, 5), (1, 1), (0, 0), (1, 1),  32,      ttnn.MathFidelity.LoFi  ),
-        (32,    48,  1020,  1020,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (2, 2),  32 * 2,  ttnn.MathFidelity.LoFi  ),
-        (48,    56,  1016,  1016,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (4, 4),  32 * 3,  ttnn.MathFidelity.LoFi  ),
-        (56,    64,  1008,   256,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8),  0,       ttnn.MathFidelity.LoFi  ),
-        (64,   128,   992,   992,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (2, 2), (1, 1), (0, 0), (1, 1), 32 * 4,  ttnn.MathFidelity.LoFi  ),
-        (128,  128,  1024,  1024,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (128,  3,   1024,  1024,    SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
-        (16,   512,  128,    128,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
-        (256,  128,  1024,  1024,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 4,  ttnn.MathFidelity.LoFi  ),
-        (256,  256,  1024,  1024,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 8,  ttnn.MathFidelity.LoFi  ),
-        (256,  256,  512,   512,    SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (512,  512,  256,   256,    SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (512,  256,  512,   512,    SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (512,  512,  512,   512,    SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (56,    64,  1008,  1008,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8),  0,       ttnn.MathFidelity.LoFi  ),
+        (10,    64,  4096,   512,  SliceHeight,   ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  32 * 8,  ttnn.MathFidelity.LoFi,   0),
+        (64,    64,  2048,   256,  SliceHeight,   ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  32 * 16, ttnn.MathFidelity.LoFi,   0),
+        (64,    64,  1024,   128,  SliceHeight,   ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi,   0),
+        (64,    64,   512,    64,  SliceHeight,   ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi,   0),
+        ( 4,    32,  1024,  1024,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (5, 5), (1, 1), (0, 0), (1, 1),  32,      ttnn.MathFidelity.LoFi,   0),
+        (32,    48,  1020,  1020,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (2, 2),  32 * 2,  ttnn.MathFidelity.LoFi,   0),
+        (48,    56,  1016,  1016,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (4, 4),  32 * 3,  ttnn.MathFidelity.LoFi,   0),
+        (56,    64,  1008,   256,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8),  0,       ttnn.MathFidelity.LoFi,   0),
+        (64,   128,   992,   992,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (2, 2), (1, 1), (0, 0), (1, 1), 32 * 4,   ttnn.MathFidelity.LoFi,   3),
+        (128,  128,  1024,  1024,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi,   3),
+        (128,  3,   1024,  1024,    SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi,   0),
+        (16,   512,  128,    128,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi,   0),
+        (256,  128,  1024,  1024,  SliceHeight,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 4,  ttnn.MathFidelity.LoFi,   3),
+        (256,  256,  1024,  1024,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 8,  ttnn.MathFidelity.LoFi,   3),
+        (256,  256,  512,   512,    SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi,   0),
+        (512,  512,  256,   256,    SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi,   0),
+        (512,  256,  512,   512,    SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi,   0),
+        (512,  512,  512,   512,    SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi,   0),
+        (56,    64,  1008,  1008,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8),  0,       ttnn.MathFidelity.LoFi,   3),
+        (2944, 2944,   48,    48,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (1, 1),  32,      ttnn.MathFidelity.HiFi4,  0),
      )
     # fmt: on
 )
 @pytest.mark.parametrize(
     "fp32_accum, packer_l1_acc",
-    [[False, False]],
+    [[True, True]],
 )
 def test_conv_dram(
     device,
@@ -756,6 +768,7 @@ def test_conv_dram(
     input_dtype,
     input_layout,
     packer_l1_acc,
+    throttle,
 ):
     if device.core_grid.y == 7:
         pytest.skip("Tests have been configured for N150.")
@@ -792,6 +805,7 @@ def test_conv_dram(
         run_twice=False,
         fast_compare=True,
         slice_config=ttnn.Conv2dSliceConfig(slice_type=slice_type),
+        throttle_level=throttle,
     )
 
 
@@ -3149,28 +3163,28 @@ def test_conv2d_model_fruit(
         # kernel 3x3
         (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, False, 1, 1, True, True),
         (1, 1280, 1280, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, True, ttnn.MathFidelity.HiFi2, False, True, False, 1, 1, True, True),
-        (1, 1280, 640, 64, 64,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
+        (1, 1280, 640, 64, 64,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
         (1, 1920, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, False, 1, 1, True, True),
-        (1, 1920, 640, 64, 64,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 64,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
+        (1, 1920, 640, 64, 64,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
         (1, 2560, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, False, 1, 1, True, True),
-        (1, 320, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 512, 1, True, ttnn.MathFidelity.HiFi2, False, True, False, 1, 1, True, True),
-        (1, 320, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, True, ttnn.MathFidelity.HiFi2, False, True, False, 1, 1, True, True),
+        (1, 320, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0, 1, True, ttnn.MathFidelity.HiFi2, False, True, False, 1, 1, True, True),
+        (1, 320, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 1024, 1, True, ttnn.MathFidelity.HiFi2, False, True, False, 1, 1, True, True),
         (1, 640, 1280, 32, 32,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, False, True, False, 1, 1, True, True),
-        (1, 640, 640, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
+        (1, 640, 640, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
         (1, 640, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0,   1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
-        (1, 640, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 64,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
-        (1, 960, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
-        (1, 960, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 2, 1, True, True),
+        (1, 640, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
+        (1, 960, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
+        (1, 960, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
 
         # stride 2x2
-        (1, 320, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), BS, 512, 1, False, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
+        (1, 320, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), BS, 0, 1, False, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
         (1, 640, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), BS, 0,   1, False, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
 
         # output_channels 4
-        (1, 320, 4, 128, 128,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 128,  1, True, ttnn.MathFidelity.HiFi2, False, False, True, 1, 1, False, False),
+        (1, 320, 4, 128, 128,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 128,  1, True, ttnn.MathFidelity.HiFi2, False, False, True, 1, 1, True, False),
 
-        # input_channels 4
-        (1, 4, 320, 128, 128,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 256,  1, True, ttnn.MathFidelity.HiFi2, False, False, True, 1, 1, True, False),
+        # # input_channels 4
+        (1, 4, 320, 128, 128,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0,  1, True, ttnn.MathFidelity.HiFi2, False, False, True, 1, 1, True, False),
 
         # kernel 1x1
         (1, 1280, 640, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1, False, False),
@@ -3185,7 +3199,7 @@ def test_conv2d_model_fruit(
     ),
 )
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
 def test_conv2d_sdxl(
     device,
     torch_tensor_map,
@@ -3444,30 +3458,26 @@ def test_conv2d_sdxl_refiner(
 
 
 @pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, deallocate_activation, slice_type, num_slices, act_block_h_override",
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, deallocate_activation, slice_type, num_slices, act_block_h_override, throttle",
     (
         # 1024x1024 resolution
 
         # VAE
         # kernel 3x3
-        (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dSliceWidth, 8, 32),
-        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dSliceWidth, 16, 32),
-        (1, 256, 256, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth, 16, 512),
-        (1, 256, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth, 4, 512),
-        (1, 512, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, None, 1, 512),
-        (1, 512, 512, 256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth, 2, 256),
-        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth, 8, 512),
-        (1, 512, 512, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth, 8, 256),
-
-        # output_channels 3
-        (1, 128, 3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dSliceWidth, 8, 256),
-
-        # input_channels 4
-        (1, 4, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, None, 1, 0),
+        (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dSliceWidth,  8,   32, 3),
+        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dSliceWidth, 16,   32, 0),
+        (1, 256, 256, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth, 16,  512, 0),
+        (1, 256, 256,  512,  512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth,  4,  512, 0),
+        (1, 512, 512,  128,  128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False,                  None,  1,  512, 0),
+        (1, 512, 512,  256,  256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth,  2,  256, 0),
+        (1, 512, 256,  512,  512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth,  8,  512, 0),
+        (1, 512, 512,  512,  512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth,  8,  256, 0),
+        # output_channels 3,
+        (1, 128,   3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dSliceWidth, 8,   256, 0),
+        # input_channels 4,
+        (1,   4, 512,  128,  128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False,                  None, 1,     0, 0),
     ),
 )
-
-@skip_for_blackhole()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
 def test_conv2d_vae_sdxl(
     device,
@@ -3488,7 +3498,8 @@ def test_conv2d_vae_sdxl(
     deallocate_activation,
     slice_type,
     num_slices,
-    act_block_h_override
+    act_block_h_override,
+    throttle
 ):
     # Skip all on N300
     if device.core_grid.y != 8 and is_wormhole_b0():
@@ -3541,6 +3552,7 @@ def test_conv2d_vae_sdxl(
         input_layout=ttnn.TILE_LAYOUT,
         enable_act_double_buffer=False, # TODO: this is set to true in SDXL, need to adapt tests
         enable_split_reader=True if shard_layout == HS else False,
+        throttle_level=throttle
     )
 
 
@@ -3989,7 +4001,7 @@ def test_conv2d_act_dealloc(
     num_slices,
 ):
     if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED and input_layout == ttnn.ROW_MAJOR_LAYOUT and stride == (1,1):
-        pytest.skip("Block sharded conv2d does not support input with row major layout")
+        pytest.skip("Skipping due to Tilize op HEIGHT SHARDED assertion (called inside ttnn.conv2d)")
     if enable_fenable_kernel_stride_folding and stride != kernel:
         pytest.skip("Kernel stride folding is only supported when stride == kernel size")
     if enable_fenable_kernel_stride_folding and shard_layout is not None:
