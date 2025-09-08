@@ -1712,7 +1712,7 @@ class ModelArgs:
             "attention_bias": False,
             "attention_dropout": 0.0,
             "mlp_bias": False,
-            "head_dim": 256,
+            "head_dim": 128,
             "return_dict": True,
             "output_hidden_states": False,
             "torchscript": False,
