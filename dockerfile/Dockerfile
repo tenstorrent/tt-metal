@@ -98,7 +98,9 @@ RUN umask 000 && python3 -m pip config set global.extra-index-url https://downlo
     python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
 
-RUN ./scripts/install_debugger.sh
+COPY /scripts/install_debugger.sh /opt/tt_metal_infra/scripts/install_debugger.sh
+COPY /scripts/ttexalens_ref.txt /opt/tt_metal_infra/scripts/ttexalens_ref.txt
+RUN /bin/bash /opt/tt_metal_infra/scripts/install_debugger.sh
 
 #############################################################
 
