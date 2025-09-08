@@ -567,10 +567,10 @@ void py_module(py::module& module) {
         .def("shape", &DistributedHostBuffer::shape, py::return_value_policy::reference_internal);
 
     auto py_tensor_topology = static_cast<py::class_<TensorTopology>>(module.attr("TensorTopology"));
-    py_tensor_topology.def("mesh_shape", &TensorTopology::mesh_shape, py::return_value_policy::reference_internal)
+    py_tensor_topology
+        .def("distribution_shape", &TensorTopology::distribution_shape, py::return_value_policy::reference_internal)
         .def("placements", &TensorTopology::placements, py::return_value_policy::reference_internal)
-        .def("mesh_coords", &TensorTopology::mesh_coords, py::return_value_policy::reference_internal)
-        .def("mesh_shape", &TensorTopology::mesh_shape, py::return_value_policy::reference_internal);
+        .def("mesh_coords", &TensorTopology::mesh_coords, py::return_value_policy::reference_internal);
 
     module.def(
         "get_device_tensors",
