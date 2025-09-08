@@ -23,6 +23,7 @@ on:
       enable-watcher:
         description: 'Enable watcher'
         default: false
+        required: false
         type: boolean
 
 jobs:
