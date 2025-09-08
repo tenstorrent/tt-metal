@@ -989,6 +989,8 @@ struct SenderKernelConfig {
     void open_connections() {
         for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
             fabric_connections()[i].open();
+            DPRINT << "fabric_connections to " << (uint)fabric_connections()[i].edm_noc_x << " "
+                   << (uint)fabric_connections()[i].edm_noc_y << "\n";
         }
     }
 

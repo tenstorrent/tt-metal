@@ -306,6 +306,7 @@ static uint8_t test_remote_receiver_buffer_index = 0;
 static uint32_t senedr_send_counter = 0;
 static uint32_t senedr_send_counter_ch0 = 0;
 static uint32_t senedr_send_counter_ch1 = 0;
+static uint32_t senedr_send_counter_ch2 = 0;
 template <
     uint8_t sender_channel_index,
     uint8_t to_receiver_pkts_sent_id,
@@ -326,7 +327,22 @@ FORCE_INLINE void send_next_data(
         senedr_send_counter_ch0++;
     } else if (sender_channel_index == 1) {
         senedr_send_counter_ch1++;
+    } else if (sender_channel_index == 2) {
+        senedr_send_counter_ch2++;
     }
+
+    // if (fabric_node_id == 2 && my_x[0] == 31 && my_y[0] == 25) {
+    //     WATCHER_RING_BUFFER_PUSH((uint)0xCCCCCCCC);
+    //     WATCHER_RING_BUFFER_PUSH((uint)senedr_send_counter_ch2);
+    //     WATCHER_RING_BUFFER_PUSH((uint)my_direction);
+    //     WATCHER_RING_BUFFER_PUSH((uint)0xDDDDDDDD);
+    // }
+    // if (my_x[0] == 31 && my_y[0] == 25) {
+    //     WATCHER_RING_BUFFER_PUSH((uint)0xCCCCCCCC);
+    //     WATCHER_RING_BUFFER_PUSH((uint)senedr_send_counter);
+    //     WATCHER_RING_BUFFER_PUSH((uint)my_direction);
+    //     WATCHER_RING_BUFFER_PUSH((uint)0xDDDDDDDD);
+    // }
 
     if (sender_channel_index != 2) {
         static_assert(RECEIVER_NUM_BUFFERS != 0);
@@ -376,9 +392,9 @@ FORCE_INLINE void send_next_data(
     } else {
         ASSERT(false);
     }
-    for (int i = 0; i < 1000; ++i) {
-        asm volatile("nop");
-    }
+    // for (int i = 0; i < 1000; ++i) {
+    //     asm volatile("nop");
+    // }
 
     volatile auto ch_id = pkt_header->src_ch_id;
 
@@ -422,14 +438,13 @@ FORCE_INLINE void send_next_data(
         volatile uint32_t* to_receiver_sent_addr_ptr = reinterpret_cast<volatile uint32_t*>(to_receiver_sent_addr);
         to_receiver_sent_addr_ptr[0] += 1;  // Increment the address pointer
         volatile auto dummy = *to_receiver_sent_addr_ptr;
-
         if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
             while (internal_::eth_txq_is_busy(sender_txq_id)) {
             };
         }
-        for (int i = 0; i < 100; ++i) {
-            asm volatile("nop");
-        }
+        // for (int i = 0; i < 100; ++i) {
+        //     asm volatile("nop");
+        // }
         asm volatile("fence" ::: "memory");
         internal_::eth_send_packet_bytes_unsafe(sender_txq_id, to_receiver_sent_addr, to_receiver_receive_addr, 16);
     } else if (to_receiver_pkts_sent_id == 1) {
@@ -441,9 +456,9 @@ FORCE_INLINE void send_next_data(
             while (internal_::eth_txq_is_busy(sender_txq_id)) {
             };
         }
-        for (int i = 0; i < 100; ++i) {
-            asm volatile("nop");
-        }
+        // for (int i = 0; i < 100; ++i) {
+        //     asm volatile("nop");
+        // }
         asm volatile("fence" ::: "memory");
         internal_::eth_send_packet_bytes_unsafe(
             sender_txq_id, to_receiver_sent_addr_ch1, to_receiver_receive_addr_ch1, 16);
@@ -1512,6 +1527,10 @@ FORCE_INLINE void establish_edm_connection(
 ////////////////////////////////////
 ////////////////////////////////////
 static uint32_t senedr_ack_counter = 0;
+
+static uint32_t to_sender_0_counter = 0;
+static uint32_t to_sender_1_counter = 0;
+static uint32_t to_sender_2_counter = 0;
 template <
     bool enable_packet_header_recording,
     uint8_t sender_channel_index,
@@ -1566,18 +1585,38 @@ void run_sender_channel_step_impl(
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
     }
 
-    // Process COMPLETIONs from receiver
-    int32_t completions_since_last_check =
-        sender_channel_from_receiver_credits.get_num_unprocessed_completions_from_receiver();
+    uint32_t completions_since_last_check = 0;
+    uint32_t current_sender_receive_count = 0;
+    invalidate_l1_cache();
+    if (sender_channel_index == 0) {
+        volatile uint32_t* ptr = reinterpret_cast<volatile uint32_t*>(sender_0_receive_addr);
+        current_sender_receive_count = *ptr;
+        completions_since_last_check = ((int32_t)(current_sender_receive_count - to_sender_0_counter));
+    } else if (sender_channel_index == 1) {
+        volatile uint32_t* ptr = reinterpret_cast<volatile uint32_t*>(sender_1_receive_addr);
+        current_sender_receive_count = *ptr;
+        completions_since_last_check = ((int32_t)(current_sender_receive_count - to_sender_1_counter));
+    } else if (sender_channel_index == 2) {
+        volatile uint32_t* ptr = reinterpret_cast<volatile uint32_t*>(sender_2_receive_addr);
+        current_sender_receive_count = *ptr;
+        completions_since_last_check = ((int32_t)(current_sender_receive_count - to_sender_2_counter));
+    } else {
+        ASSERT(false);
+    }
+
     if (completions_since_last_check) {
         senedr_ack_counter += completions_since_last_check;
-        // WATCHER_RING_BUFFER_PUSH((uint)0xCCCCCCCC);
-        // WATCHER_RING_BUFFER_PUSH((uint)senedr_ack_counter);
-        // WATCHER_RING_BUFFER_PUSH((uint)my_direction);
-        // WATCHER_RING_BUFFER_PUSH((uint)0xDDDDDDDD);
+
+        if (sender_channel_index == 0) {
+            to_sender_0_counter += completions_since_last_check;
+        } else if (sender_channel_index == 1) {
+            to_sender_1_counter += completions_since_last_check;
+        } else if (sender_channel_index == 2) {
+            to_sender_2_counter += completions_since_last_check;
+        }
 
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
-        sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
+        // sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
         if constexpr (!enable_first_level_ack) {
             if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
                 local_sender_channel_worker_interface
@@ -1709,6 +1748,7 @@ static uint32_t receiver_ack_count_ch1 = 0;
 
 static uint32_t receiver_received_counter = 0;
 static uint32_t receiver_received_counter_ch1 = 0;
+
 template <
     uint8_t receiver_channel,
     uint8_t to_receiver_pkts_sent_id,
@@ -1777,7 +1817,7 @@ void run_receiver_channel_step_impl(
             ch_id = 2;
         } else {
             // if (receiver_channel == 0)
-            // ASSERT(false);
+            ASSERT(false);
         }
 
         bool can_send_to_all_local_chip_receivers = false;
@@ -1852,24 +1892,45 @@ void run_receiver_channel_step_impl(
 
             wr_sent_counter.increment();
 
+            if (to_receiver_pkts_sent_id == 0) {
+                ASSERT(wr_sent_counter.counter == receiver_received_counter);
+            } else if (to_receiver_pkts_sent_id == 1) {
+                ASSERT(wr_sent_counter.counter == receiver_received_counter_ch1);
+            }
+
             receiver_ack_count++;
             if (ch_id == 0) {
                 receiver_ack_count_ch0++;
             } else if (ch_id == 1) {
                 receiver_ack_count_ch1++;
             }
-            WATCHER_RING_BUFFER_PUSH((uint)0xAAAAAAAA);
-            WATCHER_RING_BUFFER_PUSH((uint)receiver_ack_count_ch1);
-            WATCHER_RING_BUFFER_PUSH((uint)ch_id);
-            WATCHER_RING_BUFFER_PUSH((uint)0xBBBBBBBB);
-
-            // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
-            // increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
 
             while (internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ));
 
-            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                receiver_channel_response_credit_sender, ch_id);
+            invalidate_l1_cache();
+            if (ch_id == 0) {
+                volatile uint32_t* to_sender_complete_addrs_ptr =
+                    reinterpret_cast<volatile uint32_t*>(to_sender_0_complete_addr);
+                to_sender_complete_addrs_ptr[0] += 1;  // Increment the address pointer
+                volatile auto dummy = *to_sender_complete_addrs_ptr;
+                internal_::eth_send_packet_bytes_unsafe(
+                    receiver_txq_id, to_sender_0_complete_addr, sender_0_receive_addr, ETH_WORD_SIZE_BYTES);
+            } else if (ch_id == 1) {
+                volatile uint32_t* to_sender_complete_addrs_ptr =
+                    reinterpret_cast<volatile uint32_t*>(to_sender_1_complete_addr);
+                to_sender_complete_addrs_ptr[0] += 1;  // Increment the address pointer
+                volatile auto dummy = *to_sender_complete_addrs_ptr;
+                internal_::eth_send_packet_bytes_unsafe(
+                    receiver_txq_id, to_sender_1_complete_addr, sender_1_receive_addr, ETH_WORD_SIZE_BYTES);
+            } else if (ch_id == 2) {
+                volatile uint32_t* to_sender_complete_addrs_ptr =
+                    reinterpret_cast<volatile uint32_t*>(to_sender_2_complete_addr);
+                to_sender_complete_addrs_ptr[0] += 1;  // Increment the address pointer
+                volatile auto dummy = *to_sender_complete_addrs_ptr;
+                internal_::eth_send_packet_bytes_unsafe(
+                    receiver_txq_id, to_sender_2_complete_addr, sender_2_receive_addr, ETH_WORD_SIZE_BYTES);
+            }
+
             receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
         }
     }
@@ -2372,6 +2433,13 @@ void kernel_main() {
     // Initialize stream register state for credit management across the Ethernet link.
     // We make sure to do this before we handshake to guarantee that the registers are
     // initialized before the other side has any possibility of modifying them.
+
+    *reinterpret_cast<volatile uint32_t*>(to_sender_complete_addrs[0]) = 0;
+    *reinterpret_cast<volatile uint32_t*>(to_sender_complete_addrs[1]) = 0;
+    *reinterpret_cast<volatile uint32_t*>(to_sender_complete_addrs[2]) = 0;
+    *reinterpret_cast<volatile uint32_t*>(to_sender_complete_addrs[3]) = 0;
+    *reinterpret_cast<volatile uint32_t*>(to_sender_complete_addrs[4]) = 0;
+    *reinterpret_cast<volatile uint32_t*>(to_sender_complete_addrs[5]) = 0;
 
     *reinterpret_cast<volatile uint32_t*>(to_receiver_sent_addrs[0]) = 0;
     *reinterpret_cast<volatile uint32_t*>(to_receiver_sent_addrs[1]) = 0;

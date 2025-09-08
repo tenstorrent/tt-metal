@@ -69,8 +69,9 @@ static_assert(
     "Stream IDs end marker not found. This implies some arguments were misaligned between host and device. Double "
     "check the CT args.");
 
+constexpr size_t fabric_node_id = get_compile_time_arg_val(STREAM_IDS_END_MARKER_IDX + 1);
 // Main configuration arguments (after stream IDs and marker)
-constexpr size_t SENDER_CHANNEL_NOC_CONFIG_START_IDX = STREAM_IDS_END_MARKER_IDX + 1;
+constexpr size_t SENDER_CHANNEL_NOC_CONFIG_START_IDX = STREAM_IDS_END_MARKER_IDX + 2;
 constexpr size_t NUM_SENDER_CHANNELS = get_compile_time_arg_val(SENDER_CHANNEL_NOC_CONFIG_START_IDX);
 constexpr size_t NUM_RECEIVER_CHANNELS_CT_ARG_IDX = SENDER_CHANNEL_NOC_CONFIG_START_IDX + 1;
 constexpr size_t NUM_RECEIVER_CHANNELS = get_compile_time_arg_val(NUM_RECEIVER_CHANNELS_CT_ARG_IDX);
@@ -90,12 +91,12 @@ static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
 static_assert(
-    wait_for_host_signal_IDX == 28, "wait_for_host_signal_IDX must be 28 (24 stream IDs + 1 marker + 3 config args)");
+    wait_for_host_signal_IDX == 29, "wait_for_host_signal_IDX must be 28 (24 stream IDs + 1 marker + 3 config args)");
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
 static_assert(
-    MAIN_CT_ARGS_START_IDX == 29, "MAIN_CT_ARGS_START_IDX must be 29 (24 stream IDs + 1 marker + 4 config args)");
+    MAIN_CT_ARGS_START_IDX == 30, "MAIN_CT_ARGS_START_IDX must be 29 (24 stream IDs + 1 marker + 4 config args)");
 
 constexpr uint32_t SWITCH_INTERVAL =
 #ifndef DEBUG_PRINT_ENABLED
@@ -334,6 +335,17 @@ constexpr size_t to_receiver_sent_addr = to_receiver_sent_addrs[0];
 constexpr size_t to_receiver_receive_addr = to_receiver_sent_addrs[1];
 constexpr size_t to_receiver_sent_addr_ch1 = to_receiver_sent_addrs[2];
 constexpr size_t to_receiver_receive_addr_ch1 = to_receiver_sent_addrs[3];
+
+constexpr size_t TO_INDEX = TO_SENDER_CREDIT_COUNTERS_START_IDX + 8;
+constexpr std::array<size_t, 6> to_sender_complete_addrs = fill_array_with_next_n_args<size_t, TO_INDEX, 6>();
+constexpr size_t to_sender_0_complete_addr = to_sender_complete_addrs[0];
+constexpr size_t to_sender_1_complete_addr = to_sender_complete_addrs[1];
+constexpr size_t to_sender_2_complete_addr = to_sender_complete_addrs[2];
+constexpr size_t sender_0_receive_addr = to_sender_complete_addrs[3];
+constexpr size_t sender_1_receive_addr = to_sender_complete_addrs[4];
+constexpr size_t sender_2_receive_addr = to_sender_complete_addrs[5];
+
+static_assert(to_receiver_sent_addr != to_sender_0_complete_addr, "should not use same addr");
 
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> to_sender_remote_ack_counter_addrs =
     conditional_get_next_n_args<multi_txq_enabled, size_t, TO_SENDER_CREDIT_COUNTERS_START_IDX, NUM_SENDER_CHANNELS>();

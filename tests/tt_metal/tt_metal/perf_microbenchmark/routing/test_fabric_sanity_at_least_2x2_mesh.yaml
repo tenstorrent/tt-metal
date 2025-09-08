@@ -108,6 +108,13 @@ Tests:
     patterns:
       - type: half_ring
 
+    # senders:
+    #   - device: [0, 3]
+    #     patterns:
+    #       -
+    #         destination:
+    #           device: [0, 7]
+
   # - name: "HalfRingMulticast"
   #   fabric_setup:
   #     topology: Ring

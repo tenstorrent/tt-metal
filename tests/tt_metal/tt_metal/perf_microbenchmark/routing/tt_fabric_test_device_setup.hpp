@@ -483,6 +483,7 @@ inline std::vector<uint32_t> TestDevice::generate_fabric_connection_args(
     CoreCoord core, const std::vector<std::pair<RoutingDirection, uint32_t>>& fabric_connections) {
     std::vector<uint32_t> fabric_connection_args;
     for (const auto& [direction, link_idx] : fabric_connections) {
+        TT_FATAL(link_idx == 0, "link_idx is not 0 ! {}", link_idx);
         const auto& args = get_fabric_connection_args(core, direction, link_idx);
         fabric_connection_args.insert(fabric_connection_args.end(), args.begin(), args.end());
     }
