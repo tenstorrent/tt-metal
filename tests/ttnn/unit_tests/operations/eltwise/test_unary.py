@@ -659,10 +659,12 @@ def test_unary_zero_comp_ttnn(input_shapes, low, high, ttnn_function, device):
     ),
 )
 @pytest.mark.parametrize(
-    "low, high",
+    "low, high, torch_dtype, ttnn_dtype",
     [
-        (0, 2),  # Small range
-        (0, 65535),  # Full uint16 range
+        (0, 2, torch.int32, ttnn.uint16),  # Small range
+        (0, 65535, torch.int32, ttnn.uint16),  # Full uint16 range
+        (0, 2, torch.uint32, ttnn.uint32),  # Small range
+        (0, 4294967295, torch.uint32, ttnn.uint32),  # Full uint32 range
     ],
 )
 @pytest.mark.parametrize(
@@ -672,21 +674,21 @@ def test_unary_zero_comp_ttnn(input_shapes, low, high, ttnn_function, device):
         ttnn.nez,
     ],
 )
-def test_unary_zero_comp_uint16_ttnn(input_shapes, low, high, ttnn_function, device):
-    in_data = torch.randint(low, high, input_shapes, dtype=torch.int32)
+def test_unary_zero_comp_uint_ttnn(input_shapes, low, high, torch_dtype, ttnn_dtype, ttnn_function, device):
+    in_data = torch.randint(low, high, input_shapes, dtype=torch_dtype)
     zeroize_prob = 0.50
     if zeroize_prob > 0:
         zero_mask = torch.rand(in_data.shape) < zeroize_prob
+        in_data = in_data.to(torch.int64) if ttnn_dtype == ttnn.uint32 else in_data
         in_data = in_data.masked_fill(zero_mask, 0)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
-
+        in_data = in_data.to(torch.uint32) if ttnn_dtype == ttnn.uint32 else in_data
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     cq_id = 0
     output_tensor = ttnn_function(input_tensor, queue_id=cq_id)
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data)
 
     output_tensor = ttnn.to_torch(output_tensor)
-
     assert torch.equal(golden_tensor, output_tensor)
 
 
