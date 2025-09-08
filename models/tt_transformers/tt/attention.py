@@ -684,10 +684,6 @@ class Attention(LightweightModule):
                 raise ValueError(f"seq_len {seq_len} must be divisible by {self.MAX_QKV_MM_SEQ_LEN}")
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
-        print("PREFILL", x_11SH.shape, self.wqkv.shape, seq_len, self.MAX_QKV_MM_SEQ_LEN)
-        # PREFILL Shape([1, 1, 256, 4096]) Shape([1, 1, 4096, 12288])
-        x_11SH = x_11SH[:, :, :, :1024]
-        # self.wqkv= self.wqkv[:,:,:1024,:4096]
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
