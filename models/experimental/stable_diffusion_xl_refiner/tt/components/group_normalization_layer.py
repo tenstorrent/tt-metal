@@ -20,9 +20,11 @@ class NormConfig:
             self.core_grid = ttnn.CoreGrid(y=8, x=8)
 
 
-def make_norm_config(sharded: bool, num_out_blocks: int, core_grid: Tuple[int, int]) -> NormConfig:
+def make_norm_config(
+    sharded: bool = True, num_out_blocks: int = 1, core_grid: Tuple[int, int] = (8, 8), eps: float = 1e-5
+) -> NormConfig:
     config = NormConfig(
-        sharded=sharded, num_out_blocks=num_out_blocks, core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1])
+        sharded=sharded, num_out_blocks=num_out_blocks, core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1]), eps=eps
     )
     return config
 
@@ -36,6 +38,9 @@ class GroupNormalizationLayer:
         self.norm_groups = norm_config.num_groups
         self.norm_eps = norm_config.eps
         self.num_out_blocks = norm_config.num_out_blocks
+        print(
+            f"GroupNormalizationLayer: sharded={self.sharded}, num_groups={self.norm_groups}, eps={self.norm_eps}, num_out_blocks={self.num_out_blocks}"
+        )
 
         if self.sharded:
             self.core_grid = ttnn.CoreGrid(y=8, x=8)
@@ -51,6 +56,10 @@ class GroupNormalizationLayer:
         )
 
     def apply(self, hidden_states, B, C, H, W):
+        # Handle case where hidden_states might be a tuple (tensor, shape)
+        if isinstance(hidden_states, (tuple, list)):
+            hidden_states = hidden_states[0]
+
         if self.sharded:
             return self._apply_sharded_norm(hidden_states, B, C, H, W)
         else:
