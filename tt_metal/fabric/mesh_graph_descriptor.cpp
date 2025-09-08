@@ -476,17 +476,6 @@ void MeshGraphDescriptor::validate_graph_topology_and_connections(const proto::M
 
     // Combine all checks into a single loop over graph_descriptors
     for (const auto& graph : proto.graph_descriptors()) {
-        // Check that there is a graph topology or connections for each graph descriptor
-        if (!graph.has_graph_topology() && graph.connections_size() == 0) {
-            error_messages.push_back(
-                fmt::format(
-                    "Graph descriptor must have either graph_topology or connections defined (Graph: {})",
-                    graph.name()
-                )
-            );
-            continue;
-        }
-
         // Check that both graph_topology and connections are not defined at the same time
         if (graph.has_graph_topology() && graph.connections_size() > 0) {
             error_messages.push_back(
