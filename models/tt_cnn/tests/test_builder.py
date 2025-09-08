@@ -2,7 +2,15 @@ import pytest
 import torch
 
 import ttnn
-from models.tt_cnn.tt.builder import Conv2dConfiguration, DeviceDescriptor, TtConv2d
+from models.tt_cnn.tt.builder import (
+    AutoShardedStrategyConfiguration,
+    BlockShardedStrategyConfiguration,
+    Conv2dConfiguration,
+    DeviceDescriptor,
+    HeightShardedStrategyConfiguration,
+    TtConv2d,
+    WidthShardedStrategyConfiguration,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -43,11 +51,30 @@ def create_input_tensor(configuration: Conv2dConfiguration):
     ],
     indirect=True,
 )
-def test_basic_conv2d(device):
+@pytest.mark.parametrize(
+    "input_height, input_width, in_channels, out_channels, batch_size, kernel_size, padding, sharding_strategy",
+    (
+        (32, 32, 16, 16, 4, 3, 1, AutoShardedStrategyConfiguration()),
+        (64, 64, 32, 16, 2, 5, 0, HeightShardedStrategyConfiguration()),
+        (16, 16, 64, 64, 1, 3, 1, WidthShardedStrategyConfiguration()),
+        (128, 64, 16, 32, 1, 3, 1, BlockShardedStrategyConfiguration()),
+    ),
+)
+def test_basic_conv2d(
+    input_height, input_width, in_channels, out_channels, batch_size, kernel_size, padding, sharding_strategy, device
+):
     device_descriptor = DeviceDescriptor(device, (4, 4))
 
-    configuration = Conv2dConfiguration(224, 224, 32, 32, 1, (3, 3), padding=(1, 1), activation="")
-    print(configuration)
+    configuration = Conv2dConfiguration(
+        input_height,
+        input_width,
+        in_channels,
+        out_channels,
+        batch_size=batch_size,
+        kernel_size=(kernel_size, kernel_size),
+        padding=(padding, padding),
+        sharding_strategy=sharding_strategy,
+    )
 
     weight, bias = create_torch_weight_and_bias(configuration)
     torch_input_tensor, ttnn_input_tensor = create_input_tensor(configuration)
@@ -58,16 +85,15 @@ def test_basic_conv2d(device):
     torch_output_tensor = torch.nn.functional.conv2d(
         torch_input_tensor,
         weight,
-        bias.reshape(32),
+        bias.reshape(-1),
         padding=configuration.padding,
     )
 
+    output_height, output_width = torch_output_tensor.shape[-2:]  # [B, C, H, W]
     assert_with_pcc(
         torch_output_tensor,
         ttnn.to_torch(ttnn_output_tensor)
-        .reshape(
-            configuration.batch_size, configuration.input_height, configuration.input_width, configuration.out_channels
-        )
+        .reshape(configuration.batch_size, output_height, output_width, configuration.out_channels)
         .permute(0, 3, 1, 2),
         0.999,
     )

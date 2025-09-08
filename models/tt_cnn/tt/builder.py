@@ -23,7 +23,7 @@ class AutoShardedStrategyConfiguration(ShardedStrategyConfiguration):
 class HeightShardedStrategyConfiguration(ShardedStrategyConfiguration):
     reshard_if_not_optimal: bool = False
     override_core_grid: Optional[int] = None
-    act_block_h_override: Optional[int] = None
+    act_block_h_override: int = 0
 
     def get_tensor_memory_layout(self):
         return ttnn.TensorMemoryLayout.HEIGHT_SHARDED
@@ -33,7 +33,7 @@ class HeightShardedStrategyConfiguration(ShardedStrategyConfiguration):
 class WidthShardedStrategyConfiguration(ShardedStrategyConfiguration):
     reshard_if_not_optimal: bool = False
     override_core_grid: Optional[int] = None
-    act_block_w_override: Optional[int] = None
+    act_block_w_div: int = 1
 
     def get_tensor_memory_layout(self):
         return ttnn.TensorMemoryLayout.WIDTH_SHARDED
@@ -63,12 +63,12 @@ class Conv2dConfiguration:
     in_channels: int
     out_channels: int
     batch_size: int
-    kernel_size: Union[int, Tuple[int, int]]
-    stride: Union[int, Tuple[int, int]] = (1, 1)
-    padding: Union[int, Tuple[int, int]] = (0, 0)
+    kernel_size: Tuple[int, int]
+    stride: Tuple[int, int] = (1, 1)
+    padding: Tuple[int, int] = (0, 0)
     groups: int = 1
-    dilation: Union[int, Tuple[int, int]] = (1, 1)
-    activation: str = "relu"
+    dilation: Tuple[int, int] = (1, 1)
+    activation: str = ""
 
     activation_dtype = ttnn.bfloat16
     weights_dtype = ttnn.bfloat16
@@ -145,13 +145,13 @@ def sharding_strategy_to_conv2d_config(sharding_strategy: ShardingStrategy, devi
     if isinstance(sharding_strategy, HeightShardedStrategyConfiguration):
         output["act_block_h_override"] = sharding_strategy.act_block_h_override
     elif isinstance(sharding_strategy, WidthShardedStrategyConfiguration):
-        output["act_block_w_override"] = sharding_strategy.act_block_w_override
+        output["act_block_w_div"] = sharding_strategy.act_block_w_div
     elif isinstance(sharding_strategy, BlockShardedStrategyConfiguration):
         ...
     else:
         raise ValueError(f"Invalid sharding ShardedStrategyConfiguration was encountered: {sharding_strategy}")
 
-    return outptu
+    return output
 
 
 def to_conv2d_config(configuration: Conv2dConfiguration, device_descriptor: DeviceDescriptor):
