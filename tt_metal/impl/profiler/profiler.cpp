@@ -1371,7 +1371,7 @@ void DeviceProfiler::readDeviceMarkerData(
         return;
     }
 
-    device_tracy_contexts.try_emplace({device_id, physical_core});
+    device_tracy_contexts.try_emplace({device_id, physical_core}, nullptr);
 
     updateFirstTimestamp(timestamp);
 }
