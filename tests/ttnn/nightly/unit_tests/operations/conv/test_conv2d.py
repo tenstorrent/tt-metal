@@ -4001,7 +4001,7 @@ def test_conv2d_act_dealloc(
     num_slices,
 ):
     if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED and input_layout == ttnn.ROW_MAJOR_LAYOUT and stride == (1,1):
-        pytest.skip("Block sharded conv2d does not support input with row major layout")
+        pytest.skip("Skipping due to Tilize op HEIGHT SHARDED assertion (called inside ttnn.conv2d)")
     if enable_fenable_kernel_stride_folding and stride != kernel:
         pytest.skip("Kernel stride folding is only supported when stride == kernel size")
     if enable_fenable_kernel_stride_folding and shard_layout is not None:
