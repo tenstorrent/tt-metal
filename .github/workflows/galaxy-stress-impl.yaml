@@ -16,14 +16,9 @@ on:
         required: false
         type: string
         default: "in-service"
-      topology-6u:
-        required: false
-        type: boolean
-        default: true
 
 jobs:
-  stress-6u:
-    if: ${{ inputs.topology-6u }}
+  stress-galaxy:
     runs-on:
       - ${{ inputs.extra-tag }}
       - topology-6u
