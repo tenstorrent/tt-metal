@@ -229,7 +229,7 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-  t3000-fast-tests:
+  t3000-apc-fast-tests:
     if: ${{ github.event.pull_request.head.repo.fork == false }}
     needs: build-artifact
     secrets: inherit
