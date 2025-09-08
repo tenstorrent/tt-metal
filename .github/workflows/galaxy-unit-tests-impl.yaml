@@ -73,7 +73,7 @@ jobs:
   #    - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
   #      if: always()
 
-  Galaxy-unit-tests:
+  galaxy-unit-tests:
     strategy:
       fail-fast: false
       matrix:

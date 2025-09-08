@@ -14,7 +14,7 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
-  Galaxy-Unit-tests:
+  galaxy-unit-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/galaxy-unit-tests-impl.yaml
