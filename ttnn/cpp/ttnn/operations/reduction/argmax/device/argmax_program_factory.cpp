@@ -133,8 +133,6 @@ operation::ProgramWithCallbacks argmax_single_core(
 
     const auto src_buffer = input.buffer();
     const auto dst_buffer = output.buffer();
-    const bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     const auto inner_dim_units = output_last_dim;
     const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
@@ -290,7 +288,6 @@ operation::ProgramWithCallbacks argmax_multi_core(
     const auto src_buffer = input.buffer();
     const auto dst_buffer = output.buffer();
     const auto src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const auto dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // NOC transactions need to be aligned.
     // So, for bfloat16 dtype, we need at least 16/32 units per core (depending on alignment) to avoid unaligned

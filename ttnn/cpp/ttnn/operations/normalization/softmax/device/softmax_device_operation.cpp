@@ -107,7 +107,6 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Determine if we should use sharded multi-core program factory
     const auto input_tensor_shape = tensor_args.input_tensor.padded_shape();
-    const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const auto rank = input_tensor_shape.size();
 
     if (operation_attributes.softmax_type == SoftmaxOperationType::SoftmaxInPlace ||
