@@ -443,7 +443,8 @@ def run_all_to_all_dispatch_test(
         selected_experts_k = tt_metadata_tensor.shape[3]
 
         metadata_all_close = torch.allclose(tt_metadata_tensor, output_metadata_goldens_list[tensor_index])
-        if not metadata_all_close:
+        metadata_all_equal = torch.equal(tt_metadata_tensor, output_metadata_goldens_list[tensor_index])
+        if not metadata_all_close or not metadata_all_equal:
             metadata_passed = False
             first_failed_metadata_index = tensor_index
             failed_metadata_indices = torch.where(tt_metadata_tensor != output_metadata_goldens_list[tensor_index])
@@ -468,12 +469,15 @@ def run_all_to_all_dispatch_test(
                             is_all_close = torch.allclose(
                                 tt_torch_tensor[d, b, s, :], output_tensor_goldens_list[tensor_index][d, b, s, :]
                             )
+                            is_all_equal = torch.equal(
+                                tt_torch_tensor[d, b, s, :], output_tensor_goldens_list[tensor_index][d, b, s, :]
+                            )
                             if not is_all_close:
                                 logger.info(
                                     f"Output tensor {tensor_index} mismatch at batch {b}, sequence {s}, expert {expert_id}, device {d}"
                                 )
 
-                            if not eq or not is_all_close:
+                            if not eq or not is_all_close or not is_all_equal:
                                 passed = False
                                 first_failed_tensor_index = tensor_index
                                 first_failed_batch_index = b

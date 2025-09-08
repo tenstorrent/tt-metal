@@ -591,6 +591,10 @@ def check_results(test_tensor, ref_tensor, data_map):
             for s in range(ref_tensor.shape[2]):
                 if data_map[k, b, s].item() == 1:
                     assert_with_pcc(test_tensor[k, b, s, :], ref_tensor[k, b, s, :])
+                    assert (
+                        torch.equal(test_tensor[k, b, s, :], ref_tensor[k, b, s, :]),
+                        f"Equal check failed for k={k}, b={b}, s={s}",
+                    )
 
 
 @pytest.mark.parametrize(
