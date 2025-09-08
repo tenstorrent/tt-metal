@@ -345,3 +345,64 @@ TEST(FreeListOptTest, FirstFitAllocateAtAddressInteractions) {
     ASSERT_TRUE(b.has_value());
     ASSERT_EQ(b.value(), 1_KiB);
 }
+
+TEST(FreeListOptTest, AllocatedAddresses) {
+    auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB);
+
+    // Check that allocated addresses is empty
+    auto empty_allocated_addresses = allocator.allocated_addresses();
+    ASSERT_TRUE(empty_allocated_addresses.empty());
+
+    // Allocate some blocks and validate allocated addresses
+    auto a = allocator.allocate(512_KiB, /*bottom_up=*/false);
+    ASSERT_TRUE(a.has_value());
+    ASSERT_EQ(a.value(), 1_GiB - 512_KiB);
+
+    auto b = allocator.allocate(2_KiB);
+    ASSERT_TRUE(b.has_value());
+    ASSERT_EQ(b.value(), 0);
+
+    // Unaligned size should be aligned to the next multiple of 1_KiB
+    auto c = allocator.allocate(500);
+    ASSERT_TRUE(c.has_value());
+    ASSERT_EQ(c.value(), 2_KiB);
+
+    auto allocated_addresses = allocator.allocated_addresses();
+    ASSERT_EQ(allocated_addresses.size(), 3);
+
+    // Allocated addresses are not sorted by start address; in this case, it should be in order of: a, b, c
+    ASSERT_EQ(allocated_addresses[0], (std::pair<tt::tt_metal::DeviceAddr, size_t>{1_GiB - 512_KiB, 512_KiB}));
+    ASSERT_EQ(allocated_addresses[1], (std::pair<tt::tt_metal::DeviceAddr, size_t>{0, 2_KiB}));
+    ASSERT_EQ(allocated_addresses[2], (std::pair<tt::tt_metal::DeviceAddr, size_t>{2_KiB, 1_KiB}));
+
+    /*********************************************************
+     * Check allocated_addresses is correct after other APIs *
+     *********************************************************/
+    // Deallocate first block
+    allocator.deallocate(a.value());
+    auto after_free = allocator.allocated_addresses();
+    ASSERT_EQ(after_free.size(), 2);
+    ASSERT_EQ(after_free[0], (std::pair<tt::tt_metal::DeviceAddr, size_t>{0_KiB, 2_KiB}));
+    ASSERT_EQ(after_free[1], (std::pair<tt::tt_metal::DeviceAddr, size_t>{2_KiB, 1_KiB}));
+
+    // Clear -> empty again
+    allocator.clear();
+    auto after_clear = allocator.allocated_addresses();
+    ASSERT_TRUE(after_clear.empty());
+
+    // Allocate from top to leave space at bottom, then shrink and reset
+    auto top = allocator.allocate(1_KiB, /*bottom_up=*/false);
+    auto after_top = allocator.allocated_addresses();
+    ASSERT_EQ(after_top.size(), 1);
+    ASSERT_EQ(after_top[0], (std::pair<tt::tt_metal::DeviceAddr, size_t>{1_GiB - 1_KiB, 1_KiB}));
+
+    // Shrink from bottom (should not affect allocated block near top)
+    allocator.shrink_size(1_KiB);
+    auto after_shrink = allocator.allocated_addresses();
+    ASSERT_EQ(after_shrink, after_top);
+
+    // Reset size back
+    allocator.reset_size();
+    auto after_reset = allocator.allocated_addresses();
+    ASSERT_EQ(after_reset, after_top);
+}

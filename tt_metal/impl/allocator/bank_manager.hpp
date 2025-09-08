@@ -13,6 +13,10 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <algorithm>
+#include <functional>
+#include <tt_stl/small_vector.hpp>
+#include <tt_stl/strong_type.hpp>
 
 #include "algorithms/allocator_algorithm.hpp"
 #include "core_coord.hpp"
@@ -30,13 +34,30 @@ class BankManager {
 public:
     BankManager() = default;
 
+    struct AllocatorDependencies {
+        using AllocatorID = ttsl::StrongType<uint32_t, struct AllocatorIDTag>;
+        using AdjacencyList = ttsl::SmallVector<ttsl::SmallVector<AllocatorID>>;
+        AdjacencyList dependencies{};
+
+        AllocatorDependencies();
+        explicit AllocatorDependencies(
+            const std::unordered_map<AllocatorID, ttsl::SmallVector<AllocatorID>>& dependencies_map);
+
+        uint32_t num_allocators() const;
+        ttsl::SmallVector<AllocatorID> allocator_ids() const;
+
+        bool operator==(const AllocatorDependencies& other) const noexcept;
+        bool operator!=(const AllocatorDependencies& other) const noexcept { return !(*this == other); }
+    };
+
     BankManager(
         const BufferType& buffer_type,
         const std::vector<int64_t>& bank_descriptors,
         DeviceAddr size_bytes,
         uint32_t alignment_bytes,
         DeviceAddr alloc_offset = 0,
-        bool disable_interleaved = false);
+        bool disable_interleaved = false,
+        const AllocatorDependencies& dependencies = AllocatorDependencies());
     BankManager(
         const BufferType& buffer_type,
         const std::unordered_map<uint32_t, int64_t>& bank_id_to_descriptor,
@@ -44,7 +65,8 @@ public:
         DeviceAddr interleaved_address_limit,
         uint32_t alignment_bytes,
         DeviceAddr alloc_offset = 0,
-        bool disable_interleaved = false);
+        bool disable_interleaved = false,
+        const AllocatorDependencies& dependencies = AllocatorDependencies());
     BankManager&& operator=(BankManager&& that) noexcept;
     ~BankManager();
     uint32_t num_banks() const;
@@ -58,39 +80,87 @@ public:
         DeviceAddr page_size,
         bool bottom_up,
         const CoreRangeSet& compute_grid,
-        std::optional<uint32_t> num_shards);
+        std::optional<uint32_t> num_shards,
+        AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
 
-    void deallocate_buffer(DeviceAddr address);
+    void deallocate_buffer(
+        DeviceAddr address, AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
     void deallocate_all();
 
     void clear();
 
-    std::optional<DeviceAddr> lowest_occupied_address(uint32_t bank_id) const;
+    std::optional<DeviceAddr> lowest_occupied_address(
+        uint32_t bank_id,
+        AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
 
-    Statistics get_statistics() const;
+    Statistics get_statistics(
+        AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
 
-    void dump_blocks(std::ofstream& out) const;
+    void dump_blocks(
+        std::ofstream& out,
+        AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
 
-    MemoryBlockTable get_memory_block_table() const;
+    MemoryBlockTable get_memory_block_table(
+        AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
 
-    void shrink_size(DeviceAddr shrink_size, bool bottom_up = true);
-    void reset_size();
+    void shrink_size(
+        DeviceAddr shrink_size,
+        bool bottom_up = true,
+        AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
+    void reset_size(AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
 
 private:
-    void deallocate_buffer_(DeviceAddr address);
-
-    // Types of buffers allocated in the banks
+    /*********************************
+     * Allocator-independent members *
+     *********************************/
+    // Type of buffers allocated in the banks (same across allocators)
     BufferType buffer_type_{0};
-    std::unordered_set<DeviceAddr> allocated_buffers_;
     // This is to store offsets for any banks that share a core or node (dram in wh/storage core), so we can view all
-    // banks using only bank_id Set to 0 for cores/nodes with only 1 bank
+    // banks using only bank_id. Set to 0 for cores/nodes with only 1 bank.
     std::unordered_map<uint32_t, int64_t> bank_id_to_bank_offset_;
-    std::unique_ptr<allocator::Algorithm> allocator_;
+
     DeviceAddr interleaved_address_limit_{};
     uint32_t alignment_bytes_{};
-    void validate_bank_id(uint32_t bank_id) const;
 
-    void init_allocator(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset);
+    /*******************************
+     * Allocator-dependent members *
+     *******************************/
+    // Dependencies between allocators (also encodes number of allocators)
+    AllocatorDependencies allocator_dependencies_{};
+
+    // Track allocations per allocator
+    ttsl::SmallVector<std::unordered_set<DeviceAddr>> allocated_buffers_{};
+    ttsl::SmallVector<std::unique_ptr<allocator::Algorithm>> allocators_{};
+
+    // Per-allocator cache of: merged allocated ranges of all other dependent allocators
+    ttsl::SmallVector<std::optional<std::vector<std::pair<DeviceAddr, DeviceAddr>>>> allocated_ranges_cache_{};
+
+    /*********************************
+     * Allocator-independent methods *
+     *********************************/
+    void validate_bank_id(uint32_t bank_id) const;
+    void init_allocators(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset);
+
+    // Assert on non-const methods that have not been tested with overlapping allocators
+    void assert_single_allocator() const;
+
+    /*******************************
+     * Allocator-dependent methods *
+     *******************************/
+    allocator::Algorithm* get_allocator_from_id(AllocatorDependencies::AllocatorID allocator_id);
+    const allocator::Algorithm* get_allocator_from_id(AllocatorDependencies::AllocatorID allocator_id) const;
+
+    // Invalidate caches stored on allocators that depend on the given allocator
+    void invalidate_allocated_ranges_cache_for_dependent_allocators(AllocatorDependencies::AllocatorID allocator_id);
+
+    // Compute and cache the merged allocated ranges of all dependent allocators for the given allocator
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& compute_merged_allocated_ranges(
+        AllocatorDependencies::AllocatorID allocator_id);
+
+    // Compute available address ranges for the given allocator and request, after subtracting merged neighbor
+    // allocations
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> compute_available_addresses(
+        AllocatorDependencies::AllocatorID allocator_id, DeviceAddr size_per_bank, DeviceAddr address_limit);
 };
 
 }  // namespace tt_metal
