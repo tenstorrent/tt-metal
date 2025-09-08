@@ -329,6 +329,7 @@ void kernel_main() {
                     break;
                 }
             }
+            noc_async_writes_flushed();
 
             cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
 
@@ -475,6 +476,7 @@ void kernel_main() {
                         break;
                     }
                 }
+                noc_async_writes_flushed();
 
                 cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
 
