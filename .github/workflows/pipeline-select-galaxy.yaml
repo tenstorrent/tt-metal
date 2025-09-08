@@ -175,7 +175,7 @@ jobs:
     if: ${{ needs.determine-tests.outputs.run-frequent == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/tg-frequent-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-frequent-tests-impl.yaml
     with:
       extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
