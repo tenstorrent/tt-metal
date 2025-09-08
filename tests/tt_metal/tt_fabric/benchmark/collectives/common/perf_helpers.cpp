@@ -71,14 +71,14 @@ PerfStats aggregate_stats(const std::vector<PerfPoint>& pts) {
     return s;
 }
 
-void warmup_once(Fixture* fixture, PerfParams base, int iters) {
+void warmup_once(HelpersFixture* fixture, PerfParams base, int iters) {
     base.tensor_bytes = std::max<uint32_t>(base.page_size, 4 * base.page_size);
     for (int i = 0; i < iters; ++i) {
         (void)RunUnicastConnWithParams(fixture, base);
     }
 }
 
-PerfStats run_repeated(Fixture* fixture, const PerfParams& p, int warmup_iters, int iters) {
+PerfStats run_repeated(HelpersFixture* fixture, const PerfParams& p, int warmup_iters, int iters) {
     for (int w = 0; w < warmup_iters; ++w) {
         (void)RunUnicastConnWithParams(fixture, p);
     }

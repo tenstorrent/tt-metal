@@ -20,9 +20,9 @@ using tt::DevicePool;
 
 namespace tt::tt_fabric::bench {
 
-using FabricFixture = ::tt::tt_fabric::fabric_router_tests::Fabric2DFixture;
+using Fixture = ::tt::tt_fabric::fabric_router_tests::Fabric2DFixture;
 
-PerfPoint RunUnicastConnWithParams(Fixture* fixture, const PerfParams& p) {
+PerfPoint RunUnicastConnWithParams(HelpersFixture* fixture, const PerfParams& p) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};
@@ -205,7 +205,7 @@ PerfPoint RunUnicastConnWithParams(Fixture* fixture, const PerfParams& p) {
     };
 }
 
-TEST_F(FabricFixture, UnicastConn_CodeControlled) {
+TEST_F(Fixture, UnicastConn_CodeControlled) {
     PerfParams p;
     p.mesh_id = 0;
     p.src_chip = 0;
@@ -217,7 +217,7 @@ TEST_F(FabricFixture, UnicastConn_CodeControlled) {
     RunUnicastConnWithParams(this, p);
 }
 
-TEST_F(FabricFixture, UnicastConn_SweepTensorSize) {
+TEST_F(Fixture, UnicastConn_SweepTensorSize) {
     PerfParams base;
     base.mesh_id = 0;
     base.src_chip = 0;
@@ -285,7 +285,7 @@ TEST_F(FabricFixture, UnicastConn_SweepTensorSize) {
     std::cout << "[perf] wrote " << results.size() << " points -> " << csv_name << "\n";
 }
 
-TEST_F(FabricFixture, UnicastConn_HeatmapDstCore) {
+TEST_F(Fixture, UnicastConn_HeatmapDstCore) {
     PerfParams base;
     base.mesh_id = 0;
     base.src_chip = 0;

@@ -13,7 +13,7 @@
 
 namespace tt::tt_fabric::bench {
 
-using Fixture = ::tt::tt_fabric::fabric_router_tests::BaseFabricFixture;
+using HelpersFixture = ::tt::tt_fabric::fabric_router_tests::BaseFabricFixture;
 // ---- Shared data types ----
 struct PerfPoint {
     uint64_t bytes{};
@@ -40,7 +40,7 @@ struct PerfStats {
     double mean_gbps{};
 };
 
-PerfPoint RunUnicastConnWithParams(Fixture* fixture, const PerfParams& p);
+PerfPoint RunUnicastConnWithParams(HelpersFixture* fixture, const PerfParams& p);
 
 // Helpers implemented in perf_helpers.cpp
 double mean_of(const std::vector<double>& v);
@@ -49,9 +49,9 @@ double percentile(std::vector<double> v, double p_in_0_100);
 
 PerfStats aggregate_stats(const std::vector<PerfPoint>& pts);
 
-void warmup_once(Fixture* fixture, PerfParams base, int iters = 1);
+void warmup_once(HelpersFixture* fixture, PerfParams base, int iters = 1);
 
-PerfStats run_repeated(Fixture* fixture, const PerfParams& p, int warmup_iters, int iters);
+PerfStats run_repeated(HelpersFixture* fixture, const PerfParams& p, int warmup_iters, int iters);
 
 // Utility used by multiple tests
 tt::tt_metal::IDevice* find_device_by_id(chip_id_t phys_id);
