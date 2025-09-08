@@ -141,7 +141,10 @@ class ContextParallelConv3d:
 
         # Calculate padding
         height_pad = (self.kernel_size[1] - 1) // 2
-        width_pad = (self.kernel_size[2] - 1) // 2
+        if self.parallel_config.hw_parallel.factor > 1:
+            width_pad = 0
+        else:
+            width_pad = (self.kernel_size[2] - 1) // 2
         self.padding = (0, height_pad, width_pad)
 
         self.weight = None
@@ -229,7 +232,13 @@ class ContextParallelConv3d:
             # Pad on first device
             halo_tensor = ttnn.squeeze(x_NTHWC, 0)
             halo_tensor = vae_neighbor_pad(
-                self.ccl_manager, halo_tensor, cluster_axis=1, dim=0, padding_left=2, padding_right=0
+                self.ccl_manager,
+                halo_tensor,
+                cluster_axis=1,
+                dim=0,
+                padding_left=2,
+                padding_right=0,
+                padding_mode="replicate",
             )
             x_pad_NTHWC = ttnn.unsqueeze(halo_tensor, 0)
 

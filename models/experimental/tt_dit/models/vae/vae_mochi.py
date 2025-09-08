@@ -262,17 +262,20 @@ class ResBlock:
 
     def __call__(self, x_NTHWC):
         shapes = self.get_tensor_shapes(x_NTHWC)
+        N, T, H, W, C = shapes
         x_tiled_NTHWC = self.reshape_tilize(x_NTHWC, shapes)
         residual_tiled_NTHWC = x_tiled_NTHWC
         ttnn.deallocate(x_NTHWC)
-
         if self.parallel_config.hw_parallel.factor > 1:
+            x_tiled_NTHWC = ttnn.reshape(x_tiled_NTHWC, (T, H, W, C))
             x_tiled_NTHWC = vae_all_gather(
                 self.ccl_manager,
                 x_tiled_NTHWC,
                 cluster_axis=self.parallel_config.hw_parallel.mesh_axis,
                 dim=2,
+                reshape=False,
             )
+            x_tiled_NTHWC = ttnn.reshape(x_tiled_NTHWC, (T, 1, H * W * 2, C))
         gathered_shapes = (
             shapes[0],
             shapes[1],
@@ -286,6 +289,7 @@ class ResBlock:
         num_out_blocks = self.num_out_blocks_map[C][HW]
         x_norm_tiled_NTHWC = self.norm1(x_tiled_NTHWC, num_out_blocks)
         x_norm_tiled_NTHWC = ttnn.silu(x_norm_tiled_NTHWC, output_tensor=x_norm_tiled_NTHWC)  # in-place
+
         x_NTHWC = self.untilize_reshape(x_norm_tiled_NTHWC, gathered_shapes)
         ttnn.deallocate(x_norm_tiled_NTHWC)
 
@@ -304,32 +308,31 @@ class ResBlock:
                 dim=2,
                 padding_left=1,
                 padding_right=1,
+                padding_mode="zeros",
             )
             x_NTHWC = ttnn.unsqueeze(x_NTHWC, 0)
 
         x_conv1_NTHWC = self.conv1(x_NTHWC)
         ttnn.deallocate(x_NTHWC)
-
-        if self.parallel_config.hw_parallel.factor > 1:
-            x_conv1_NTHWC = x_conv1_NTHWC[:, :, :, 1 : shapes[3] + 1, :]
-
         x_conv1_tiled_NTHWC = self.reshape_tilize(x_conv1_NTHWC, shapes)
         ttnn.deallocate(x_conv1_NTHWC)
 
         if self.parallel_config.hw_parallel.factor > 1:
+            x_conv1_tiled_NTHWC = ttnn.reshape(x_conv1_tiled_NTHWC, (T, H, W, C))
             x_conv1_tiled_NTHWC = vae_all_gather(
                 self.ccl_manager,
                 x_conv1_tiled_NTHWC,
                 cluster_axis=self.parallel_config.hw_parallel.mesh_axis,
                 dim=2,
+                reshape=False,
             )
+            x_conv1_tiled_NTHWC = ttnn.reshape(x_conv1_tiled_NTHWC, (T, 1, H * W * 2, C))
 
         HW = x_conv1_tiled_NTHWC.shape[2]
         C = x_conv1_tiled_NTHWC.shape[3]
         num_out_blocks = self.num_out_blocks_map[C][HW]
         x_tiled_NTHWC = self.norm2(x_conv1_tiled_NTHWC, num_out_blocks)
         ttnn.deallocate(x_conv1_tiled_NTHWC)
-
         x_tiled_NTHWC = ttnn.silu(x_tiled_NTHWC, output_tensor=x_tiled_NTHWC)  # in-place
         x_NTHWC = self.untilize_reshape(x_tiled_NTHWC, gathered_shapes)
         ttnn.deallocate(x_tiled_NTHWC)
@@ -349,15 +352,12 @@ class ResBlock:
                 dim=2,
                 padding_left=1,
                 padding_right=1,
+                padding_mode="zeros",
             )
             x_NTHWC = ttnn.unsqueeze(x_NTHWC, 0)
 
         x_conv2_NTHWC = self.conv2(x_NTHWC)
         ttnn.deallocate(x_NTHWC)
-
-        if self.parallel_config.hw_parallel.factor > 1:
-            x_conv2_NTHWC = x_conv2_NTHWC[:, :, :, 1 : shapes[3] + 1, :]
-
         x_conv2_tiled_NTHWC = self.reshape_tilize(x_conv2_NTHWC, shapes)
         ttnn.deallocate(x_conv2_NTHWC)
 
