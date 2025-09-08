@@ -240,9 +240,8 @@ struct PhysicalMeshConfig {
     std::string mesh_descriptor_path;
     std::vector<std::vector<eth_coord_t>> eth_coord_mapping;
 
-    PhysicalMeshConfig() {
-        mesh_descriptor_path = "";  // Default path to the mesh descriptor.
-        eth_coord_mapping = {};
+    PhysicalMeshConfig() : mesh_descriptor_path(""), eth_coord_mapping({}) {
+        // Default path to the mesh descriptor.
     }
 };
 

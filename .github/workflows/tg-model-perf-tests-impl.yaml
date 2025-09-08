@@ -50,7 +50,7 @@ jobs:
             timeout: 100,
             tracy: true,
             save-perf-data: true,
-            owner_id: U071CKL4AFK # Ammar Vora
+            owner_id: U053W15B6JF # Djordje Ivanovic
           },
           {
             name: "Galaxy Llama 70B prefill perf tests",

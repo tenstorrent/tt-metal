@@ -24,14 +24,6 @@ void kernel_main() {
     constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(22);
     constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(23);
 
-    uint32_t i = 0;
-    uint32_t noop = get_arg_val<uint32_t>(i);
-    i += 1;
-
-    if (noop) {
-        return;
-    }
-
     if constexpr (needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act>();
     }

@@ -37,6 +37,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
@@ -81,10 +82,9 @@ void set_edm_runtime_args(
 
 class N300TestDevice {
 public:
-    N300TestDevice() : device_open(false) {
+    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()), device_open(false) {
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
-        num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
             tt::tt_metal::GetNumPCIeDevices() >= 1) {
             std::vector<chip_id_t> ids(num_devices_, 0);
@@ -158,10 +158,10 @@ void generate_receiver_worker_kernels(
 
     CreateCircularBuffer(program, worker_core, cb_src0_config);
     std::vector<uint32_t> receiver_worker_writer_compile_args{
-        dest_is_dram,  //
-        num_pages,     //
+        num_pages,  //
         page_size,
         num_pages_per_edm_buffer};
+    tt::tt_metal::TensorAccessorArgs().append_to(receiver_worker_writer_compile_args);
     std::vector<uint32_t> receiver_worker_writer_runtime_args{dram_output_buffer_base_addr};
     log_info(tt::LogTest, "\tReceiverWriter CT Args");
     for (auto const& arg : receiver_worker_writer_compile_args) {
@@ -230,10 +230,10 @@ void generate_sender_worker_kernels(
     bool src_is_dram,
     ttnn::ccl::EriscDataMoverTerminationMode edm_termination_mode) {
     std::vector<uint32_t> sender_worker_reader_compile_args{
-        src_is_dram,      //
         num_pages_total,  //
         page_size,
         num_pages_per_edm_buffer};
+    tt::tt_metal::TensorAccessorArgs().append_to(sender_worker_reader_compile_args);
     std::vector<uint32_t> sender_worker_reader_runtime_args{dram_output_buffer_base_addr};
 
     log_info(tt::LogTest, "\tSenderReader CT Args");
