@@ -91,6 +91,13 @@ def create_OFT_model_parameters(model: OftNet, input_tensors: tuple[torch.Tensor
     parameters.oft32.conv3d.bias = ttnn.to_device(parameters.oft32.conv3d.bias, device=device)
 
     input1, input2, input3 = input_tensors
+
+    # # Ensure all inputs have the same dtype as the model
+    # model_dtype = next(model.parameters()).dtype
+    # input1 = input1.to(model_dtype)
+    # input2 = input2.to(model_dtype)
+    # input3 = input3.to(model_dtype)
+
     # logger.debug(f"Input1 shape: {input1.shape}, Input2 shape: {input2.shape}, Input3 shape: {input3.shape}")
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(

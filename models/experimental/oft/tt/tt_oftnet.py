@@ -30,6 +30,8 @@ class TTOftNet:
         grid_res=0.5,
         grid_height=4,
         host_fallback_model=None,
+        FeedForward_fallback=False,
+        Lateral_fallback=False,
         OFT_fallback=False,
     ):
         self.frontend = TTResNetFeatures(device, parameters.frontend, conv_pt.frontend, block, layers)
@@ -103,6 +105,11 @@ class TTOftNet:
 
         self.host_fallback_model = host_fallback_model
         self.OFT_fallback = OFT_fallback
+        self.FeedForward_fallback = FeedForward_fallback
+        self.Lateral_fallback = Lateral_fallback
+        assert not (
+            (host_fallback_model == None) and (OFT_fallback or FeedForward_fallback or Lateral_fallback)
+        ), "If host_fallback_model is None, all fallbacks must be False"
 
     def forward_normalization(self, device, input_tensor):
         """Normalize input tensor by mean and std-dev"""
@@ -167,51 +174,74 @@ class TTOftNet:
                 calib=ttnn.to_torch(calib, dtype=torch.float32),
                 grid=ttnn.to_torch(grid, dtype=torch.float32),
             )
+            ref_torch_ortho = ref_torch_ortho8 + ref_torch_ortho16 + ref_torch_ortho32
 
         # Apply OFT and sum
         ortho8 = self.oft8.forward(device, lat8, calib, grid)  # ortho8
-        ttnn.deallocate(lat8)
+        # ttnn.deallocate(lat8)
+        lat8 = ttnn.to_memory_config(lat8, ttnn.DRAM_MEMORY_CONFIG)
         ortho16 = self.oft16.forward(device, lat16, calib, grid)
-        ttnn.deallocate(lat16)
+        # ttnn.deallocate(lat16)
+        lat16 = ttnn.to_memory_config(lat16, ttnn.DRAM_MEMORY_CONFIG)
         ortho32 = self.oft32.forward(device, lat32, calib, grid)
-        ttnn.deallocate(lat32)
+        # ttnn.deallocate(lat32)
+        lat32 = ttnn.to_memory_config(lat32, ttnn.DRAM_MEMORY_CONFIG)
+
+        ortho = ortho8 + ortho16 + ortho32
 
         if self.OFT_fallback:
             host_ortho8 = ttnn.to_torch(ortho8).permute((0, 3, 1, 2)).reshape(ref_torch_ortho8.shape)
             host_ortho16 = ttnn.to_torch(ortho16).permute((0, 3, 1, 2)).reshape(ref_torch_ortho16.shape)
             host_ortho32 = ttnn.to_torch(ortho32).permute((0, 3, 1, 2)).reshape(ref_torch_ortho32.shape)
+            host_ortho = ttnn.to_torch(ortho).permute((0, 3, 1, 2)).reshape(ref_torch_ortho.shape)
+
             from tests.ttnn.utils_for_testing import check_with_pcc
 
             orth8_pcc_passed, orth8_pcc = check_with_pcc(host_ortho8, ref_torch_ortho8, 0.99)
             orth16_pcc_passed, orth16_pcc = check_with_pcc(host_ortho16, ref_torch_ortho16, 0.99)
             orth32_pcc_passed, orth32_pcc = check_with_pcc(host_ortho32, ref_torch_ortho32, 0.99)
+            ortho_pcc_passed, ortho_pcc = check_with_pcc(host_ortho, ref_torch_ortho, 0.99)
+
             logger.warning(
-                f"{orth8_pcc_passed=}, {orth8_pcc=}, {orth16_pcc_passed=}, {orth16_pcc=}, {orth32_pcc_passed=}, {orth32_pcc=}"
+                f"{orth8_pcc_passed=}, {orth8_pcc=}, {orth16_pcc_passed=}, {orth16_pcc=}, {orth32_pcc_passed=}, {orth32_pcc=} {ortho_pcc_passed=}, {ortho_pcc=}"
             )
             logger.warning("OFT_fallback")
-            ref_ortho8 = ref_torch_ortho8.permute((0, 2, 3, 1))
-            ref_ortho8 = ref_ortho8.reshape(
-                ref_ortho8.shape[0], 1, ref_ortho8.shape[1] * ref_ortho8.shape[2], ref_ortho8.shape[3]
+
+            host_to_device_with_permute_and_reshape = lambda tensor: ttnn.from_torch(
+                tensor.permute((0, 2, 3, 1)).reshape(
+                    tensor.shape[0], 1, tensor.shape[2] * tensor.shape[3], tensor.shape[1]
+                ),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
             )
-            ref_ortho16 = ref_torch_ortho16.permute((0, 2, 3, 1))
-            ref_ortho16 = ref_ortho16.reshape(
-                ref_ortho16.shape[0], 1, ref_ortho16.shape[1] * ref_ortho16.shape[2], ref_ortho16.shape[3]
+
+            ref_ortho8 = host_to_device_with_permute_and_reshape(ref_torch_ortho8)
+            ref_ortho16 = host_to_device_with_permute_and_reshape(ref_torch_ortho16)
+            ref_ortho32 = host_to_device_with_permute_and_reshape(ref_torch_ortho32)
+            ref_torch_ortho = ref_torch_ortho.permute((0, 2, 3, 1))
+            host_to_device_with_permute_and_reshape = lambda tensor: ttnn.to_layout(
+                ttnn.from_torch(
+                    tensor.permute((0, 2, 3, 1)).reshape(
+                        tensor.shape[0], 1, tensor.shape[2] * tensor.shape[3], tensor.shape[1]
+                    ),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=device,
+                ),
+                ttnn.TILE_LAYOUT,
             )
-            ref_ortho32 = ref_torch_ortho32.permute((0, 2, 3, 1))
-            ref_ortho32 = ref_ortho32.reshape(
-                ref_ortho32.shape[0], 1, ref_ortho32.shape[1] * ref_ortho32.shape[2], ref_ortho32.shape[3]
-            )
-            ref_ortho8 = ttnn.from_torch(ref_ortho8, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-            ref_ortho16 = ttnn.from_torch(ref_ortho16, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-            ref_ortho32 = ttnn.from_torch(ref_ortho32, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-            ref_ortho8 = ttnn.to_layout(ref_ortho8, ttnn.TILE_LAYOUT)
-            ref_ortho16 = ttnn.to_layout(ref_ortho16, ttnn.TILE_LAYOUT)
-            ref_ortho32 = ttnn.to_layout(ref_ortho32, ttnn.TILE_LAYOUT)
+
+            ref_ortho8 = host_to_device_with_permute_and_reshape(ref_torch_ortho8)
+            ref_ortho16 = host_to_device_with_permute_and_reshape(ref_torch_ortho16)
+            ref_ortho32 = host_to_device_with_permute_and_reshape(ref_torch_ortho32)
+            ref_ortho = host_to_device_with_permute_and_reshape(ref_torch_ortho)
+
             ortho8 = ref_ortho8
             ortho16 = ref_ortho16
             ortho32 = ref_ortho32
+            ortho = ref_ortho
 
-        ortho = ortho8 + ortho16 + ortho32
         signpost(header="Oft module finished")
         logger.debug(f"Ortho shape: {ortho.shape}, dtype: {ortho.dtype}")
 
@@ -221,7 +251,7 @@ class TTOftNet:
             f"Ortho shape: {ortho.shape}, dtype: {ortho.dtype} layout: {ortho.layout} memory_config: {ortho.memory_config()}"
         )
 
-        return ortho
+        return ortho8, ortho16, ortho32, ortho
 
     def forward_topdown_network(self, device, ortho):
         """Apply topdown network"""
@@ -261,13 +291,158 @@ class TTOftNet:
         normalized_input = self.forward_normalization(device, input_tensor)
 
         # Run frontend network
-        feats8, feats16, feats32 = self.frontend.forward(device, normalized_input)
+        if self.FeedForward_fallback and self.host_fallback_model is not None:
+            import torch
+
+            logger.warning("Using host fallback FeedForward model")
+            normalized_input_torch = (
+                ttnn.to_torch(normalized_input, dtype=torch.float32).permute((0, 3, 1, 2)).contiguous()
+            )
+            feats8_torch, feats16_torch, feats32_torch = self.host_fallback_model.frontend(normalized_input_torch)
+            feats8 = ttnn.from_torch(
+                feats8_torch.permute((0, 2, 3, 1)), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+            feats16 = ttnn.from_torch(
+                feats16_torch.permute((0, 2, 3, 1)), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+            feats32 = ttnn.from_torch(
+                feats32_torch.permute((0, 2, 3, 1)), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+        else:
+            feats8, feats16, feats32 = self.frontend.forward(device, normalized_input)
 
         # Apply lateral layers
-        lat8, lat16, lat32 = self.forward_lateral_layers(device, feats8, feats16, feats32)
+        if self.Lateral_fallback and self.host_fallback_model is not None:
+            logger.warning("Using host fallback Lateral model")
+            import torch
+            import torch.nn.functional as F
+
+            feats8_torch = ttnn.to_torch(feats8, dtype=torch.float32).permute((0, 3, 1, 2)).contiguous()
+            feats16_torch = ttnn.to_torch(feats16, dtype=torch.float32).permute((0, 3, 1, 2)).contiguous()
+            feats32_torch = ttnn.to_torch(feats32, dtype=torch.float32).permute((0, 3, 1, 2)).contiguous()
+            lat8_torch = F.relu(self.host_fallback_model.bn8(self.host_fallback_model.lat8(feats8_torch)))
+            lat16_torch = F.relu(self.host_fallback_model.bn16(self.host_fallback_model.lat16(feats16_torch)))
+            lat32_torch = F.relu(self.host_fallback_model.bn32(self.host_fallback_model.lat32(feats32_torch)))
+            lat8 = ttnn.from_torch(
+                lat8_torch.permute((0, 2, 3, 1)), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+            lat16 = ttnn.from_torch(
+                lat16_torch.permute((0, 2, 3, 1)), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+            lat32 = ttnn.from_torch(
+                lat32_torch.permute((0, 2, 3, 1)), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+        else:
+            lat8, lat16, lat32 = self.forward_lateral_layers(device, feats8, feats16, feats32)
 
         # Apply OFT transformation
-        ortho = self.forward_oft(device, lat8, lat16, lat32, calib, grid)
+        import torch
+
+        lat8_torch = (
+            ttnn.to_torch(lat8, dtype=torch.float32)
+            .permute((0, 3, 1, 2))
+            .contiguous()
+            .reshape((1, 256, input_tensor.shape[1] // 8, input_tensor.shape[2] // 8))
+        )
+        lat16_torch = (
+            ttnn.to_torch(lat16, dtype=torch.float32)
+            .permute((0, 3, 1, 2))
+            .contiguous()
+            .reshape((1, 256, input_tensor.shape[1] // 16, input_tensor.shape[2] // 16))
+        )
+        lat32_torch = (
+            ttnn.to_torch(lat32, dtype=torch.float32)
+            .permute((0, 3, 1, 2))
+            .contiguous()
+            .reshape((1, 256, input_tensor.shape[1] // 32, input_tensor.shape[2] // 32))
+        )
+        calib_torch = ttnn.to_torch(calib, dtype=torch.float32)
+        grid_torch = ttnn.to_torch(grid, dtype=torch.float32)
+        (
+            ortho8,
+            integral_img8,
+            bbox_top_left8,
+            bbox_btm_right8,
+            bbox_top_right8,
+            bbox_btm_left8,
+        ) = self.host_fallback_model.oft8(lat8_torch, calib_torch, grid_torch)
+        (
+            ortho16,
+            integral_img16,
+            bbox_top_left16,
+            bbox_btm_right16,
+            bbox_top_right16,
+            bbox_btm_left16,
+        ) = self.host_fallback_model.oft16(lat16_torch, calib_torch, grid_torch)
+        (
+            ortho32,
+            integral_img32,
+            bbox_top_left32,
+            bbox_btm_right32,
+            bbox_top_right32,
+            bbox_btm_left32,
+        ) = self.host_fallback_model.oft32(lat32_torch, calib_torch, grid_torch)
+        ortho = ortho8 + ortho16 + ortho32
+        # ortho8, ortho16, ortho32, ortho = self.forward_oft(device, lat8, lat16, lat32, calib, grid)
+
+        # return (feats8, feats16, feats32, lat8, lat16, lat32, ortho8, ortho16, ortho32, ortho, calib_torch, grid_torch), ("feats8", "feats16", "feats32", "lat8", "lat16", "lat32", "ortho8", "ortho16", "ortho32", "ortho", "calib", "grid")
+        return (
+            feats8,
+            feats16,
+            feats32,
+            lat8,
+            lat16,
+            lat32,
+            integral_img8,
+            integral_img16,
+            integral_img32,
+            bbox_top_left8,
+            bbox_btm_right8,
+            bbox_top_right8,
+            bbox_btm_left8,
+            bbox_top_left16,
+            bbox_btm_right16,
+            bbox_top_right16,
+            bbox_btm_left16,
+            bbox_top_left32,
+            bbox_btm_right32,
+            bbox_top_right32,
+            bbox_btm_left32,
+            ortho8,
+            ortho16,
+            ortho32,
+            ortho,
+            calib_torch,
+            grid_torch,
+        ), (
+            "feats8",
+            "feats16",
+            "feats32",
+            "lat8",
+            "lat16",
+            "lat32",
+            "integral_img8",
+            "integral_img16",
+            "integral_img32",
+            "bbox_top_left8",
+            "bbox_btm_right8",
+            "bbox_top_right8",
+            "bbox_btm_left8",
+            "bbox_top_left16",
+            "bbox_btm_right16",
+            "bbox_top_right16",
+            "bbox_btm_left16",
+            "bbox_top_left32",
+            "bbox_btm_right32",
+            "bbox_top_right32",
+            "bbox_btm_left32",
+            "ortho8",
+            "ortho16",
+            "ortho32",
+            "ortho",
+            "calib",
+            "grid",
+        )
 
         # Apply topdown network
         td = self.forward_topdown_network(device, ortho)

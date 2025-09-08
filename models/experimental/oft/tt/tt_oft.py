@@ -152,7 +152,15 @@ class OFT:
         ortho_feats = ttnn.relu(ortho_feats, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if use_signpost:
             signpost(header="OFT block ended")
-        return ortho_feats
+        # return ortho_feats
+        return (
+            ortho_feats,
+            integral_image,
+            self.bbox_corners[0],
+            self.bbox_corners[1],
+            self.bbox_corners[2],
+            self.bbox_corners[3],
+        )
 
 
 def ttnn_integral_image_channel_last(features_nhwc):

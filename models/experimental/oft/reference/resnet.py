@@ -12,14 +12,14 @@ model_urls = {
 }
 
 
-def conv3x3(in_planes, out_planes, stride=1):
+def conv3x3(in_planes, out_planes, stride=1, dtype=torch.float32):
     """3x3 convolution with padding"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False)
+    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False, dtype=dtype)
 
 
-def conv1x1(in_planes, out_planes, stride=1):
+def conv1x1(in_planes, out_planes, stride=1, dtype=torch.float32):
     """1x1 convolution with padding"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
+    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False, dtype=dtype)
 
 
 def printdebug_tensor_shape(tensor, name):
@@ -32,19 +32,28 @@ def printdebug_tensor_shape(tensor, name):
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, inplanes, planes, stride=1):
+    def __init__(self, inplanes, planes, stride=1, dtype=torch.float32):
         super(BasicBlock, self).__init__()
 
-        self.conv1 = conv3x3(inplanes, planes, stride)
+        # Update conv functions to pass dtype
+        self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=3, stride=stride, padding=1, bias=False, dtype=dtype)
         self.bn1 = nn.GroupNorm(16, planes)
 
-        self.conv2 = conv3x3(planes, planes)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False, dtype=dtype)
         self.bn2 = nn.GroupNorm(16, planes)
 
         if stride != 1 or inplanes != planes:
-            self.downsample = nn.Sequential(conv1x1(inplanes, planes, stride), nn.GroupNorm(16, planes))
+            self.downsample = nn.Sequential(
+                nn.Conv2d(inplanes, planes, kernel_size=1, stride=stride, bias=False, dtype=dtype),
+                nn.GroupNorm(16, planes),
+            )
         else:
             self.downsample = None
+
+        self.dtype = dtype
+
+        # Convert all parameters to the specified dtype using PyTorch's to() method
+        self.to(dtype)
 
     def forward(self, x):
         identity = x
@@ -67,16 +76,17 @@ class BasicBlock(nn.Module):
 
 
 class ResNetFeatures(nn.Module):
-    def __init__(self, block, layers, num_classes=1000, zero_init_residual=False):
+    def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, dtype=torch.float32):
         super(ResNetFeatures, self).__init__()
         self.inplanes = 64
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        self.bn1 = nn.GroupNorm(16, 64)
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False, dtype=dtype)
+        self.bn1 = nn.GroupNorm(16, 64)  # GroupNorm doesn't have dtype parameter
+        self.dtype = dtype
 
-        self.layer1 = self._make_layer(block, 64, layers[0])
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
+        self.layer1 = self._make_layer(block, 64, layers[0], dtype=dtype)
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dtype=dtype)
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2, dtype=dtype)
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, dtype=dtype)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -90,16 +100,22 @@ class ResNetFeatures(nn.Module):
                 if isinstance(m, BasicBlock):
                     nn.init.constant_(m.bn2.weight, 0)
 
-    def _make_layer(self, block, planes, blocks, stride=1):
+        # Convert all parameters and buffers to the specified dtype using PyTorch's to() method
+        self.to(dtype)
+
+    def _make_layer(self, block, planes, blocks, stride=1, dtype=torch.float32):
         layers = []
-        layers.append(block(self.inplanes, planes, stride))
+        layers.append(block(self.inplanes, planes, stride, dtype=dtype))
         self.inplanes = planes * block.expansion
         for _ in range(1, blocks):
-            layers.append(block(self.inplanes, planes))
+            layers.append(block(self.inplanes, planes, dtype=dtype))
 
         return nn.Sequential(*layers)
 
     def forward(self, x):
+        if x.dtype != self.dtype:
+            x = x.to(self.dtype)
+
         conv1 = F.relu(self.bn1(self.conv1(x)), inplace=True)
         conv1 = F.max_pool2d(conv1, 3, stride=2, padding=1)
 
@@ -111,15 +127,15 @@ class ResNetFeatures(nn.Module):
         return feats8, feats16, feats32
 
 
-def resnet18(pretrained=False, **kwargs):
-    model = ResNetFeatures(BasicBlock, [2, 2, 2, 2], **kwargs)
+def resnet18(pretrained=False, dtype=torch.float32, **kwargs):
+    model = ResNetFeatures(BasicBlock, [2, 2, 2, 2], dtype=dtype, **kwargs)
     if pretrained:
         _load_pretrained(model, model_zoo.load_url(model_urls["resnet18"]))
     return model
 
 
-def resnet34(pretrained=False, **kwargs):
-    model = ResNetFeatures(BasicBlock, [3, 4, 6, 3], **kwargs)
+def resnet34(pretrained=False, dtype=torch.float32, **kwargs):
+    model = ResNetFeatures(BasicBlock, [3, 4, 6, 3], dtype=dtype, **kwargs)
     if pretrained:
         _load_pretrained(model, model_zoo.load_url(model_urls["resnet34"]))
     return model
@@ -127,7 +143,9 @@ def resnet34(pretrained=False, **kwargs):
 
 def _load_pretrained(model, pretrained):
     model_dict = model.state_dict()
-    pretrained = {k: v for k, v in pretrained.items() if k in model_dict}
+    # Convert pretrained weights to the model's dtype
+    dtype = next(model.parameters()).dtype
+    pretrained = {k: v.to(dtype) if v.is_floating_point() else v for k, v in pretrained.items() if k in model_dict}
     model_dict.update(pretrained)
     model.load_state_dict(model_dict)
 

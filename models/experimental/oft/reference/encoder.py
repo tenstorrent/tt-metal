@@ -7,9 +7,9 @@ from collections import namedtuple
 ObjectData = namedtuple("ObjectData", ["classname", "position", "dimensions", "angle", "score"])
 
 
-def gaussian_kernel(sigma=1.0, trunc=2.0):
+def gaussian_kernel(sigma=1.0, trunc=2.0, dtype=torch.float32):
     width = round(trunc * sigma)
-    x = torch.arange(-width, width + 1).float() / sigma
+    x = torch.arange(-width, width + 1, dtype=dtype) / sigma
     kernel1d = torch.exp(-0.5 * x**2)
     kernel2d = kernel1d.view(1, -1) * kernel1d.view(-1, 1)
 
@@ -19,6 +19,7 @@ def gaussian_kernel(sigma=1.0, trunc=2.0):
 class ObjectEncoder(object):
     def __init__(
         self,
+        dtype,
         classnames=["Car"],
         pos_std=[0.5, 0.36, 0.5],
         log_dim_mean=[[0.42, 0.48, 1.35]],
@@ -28,9 +29,9 @@ class ObjectEncoder(object):
     ):
         self.classnames = classnames
         self.nclass = len(classnames)
-        self.pos_std = torch.tensor(pos_std)
-        self.log_dim_mean = torch.tensor(log_dim_mean)
-        self.log_dim_std = torch.tensor(log_dim_std)
+        self.pos_std = torch.tensor(pos_std, dtype=dtype)
+        self.log_dim_mean = torch.tensor(log_dim_mean, dtype=dtype)
+        self.log_dim_std = torch.tensor(log_dim_std, dtype=dtype)
 
         self.sigma = sigma
         self.nms_thresh = nms_thresh
@@ -76,7 +77,7 @@ class ObjectEncoder(object):
 def non_maximum_suppression(heatmaps, sigma=1.0, thresh=0.05, max_peaks=50):
     # Smooth with a Gaussian kernel
     num_class = heatmaps.size(0)
-    kernel = gaussian_kernel(sigma)
+    kernel = gaussian_kernel(sigma, dtype=heatmaps.dtype)
     kernel = kernel.to(heatmaps)
     kernel = kernel.expand(num_class, num_class, -1, -1)
     smoothed = F.conv2d(heatmaps[None], kernel, padding=int((kernel.size(2) - 1) / 2))
