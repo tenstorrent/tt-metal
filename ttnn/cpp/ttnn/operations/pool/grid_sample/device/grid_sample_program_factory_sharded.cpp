@@ -60,9 +60,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory_sharde
     const uint32_t grid_nsticks_per_core = grid_shard_spec.shape[0];
 
     // Calculate output sticks per core based on batch_output_channels mode
-    const uint32_t output_nsticks_per_core =
-        batch_output_channels ? grid_nsticks_per_core :    // batch_output_channels=true: 1:1 ratio
-            grid_nsticks_per_core * grid_batching_factor;  // batch_output_channels=false: 1:K ratio
+    const uint32_t output_nsticks_per_core = output_tensor.shard_spec().value().shape[0];
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t buffering_factor = 2;  // Data is already in shards
@@ -159,25 +157,25 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory_sharde
     const uint32_t dummy_cb_id = 32;                    // Unused CB for split reader
 
     std::vector<uint32_t> compute_compile_time_args = {
-        in_ntiles_c,                                     // 0: Input tiles per channel
-        reduction_size,                                  // 1: Reduction size (4 for bilinear)
-        split_reader,                                    // 2: Split reader flag
-        grid_batching_factor * output_nsticks_per_core,  // 3: Total grid interpolations per core
-        channels_per_shard,                              // 4: Channels per shard
-        in_nblocks_c,                                    // 5: Channel blocks
-        max_rows_for_reduction,                          // 6: Max rows
-        input_cb_index,                                  // 7: Input CB
-        dummy_cb_id,                                     // 8: Input CB 1 (unused)
-        dummy_cb_id,                                     // 9: Index Input CB (unused)
-        dummy_cb_id,                                     // 10: Index Input CB 1 (unused)
-        scalar_cb_index,                                 // 11: Scalar CB
-        dummy_cb_id,                                     // 12: Scalar CB 1 (unused)
-        dummy_cb_id,                                     // 13: Tile Temp CB (unused)
-        dummy_cb_id,                                     // 14: Index Tile Temp CB (unused)
-        output_cb_index,                                 // 15: Output CB
-        dummy_cb_id,                                     // 16: Index Output CB (unused)
-        one_scalar_per_core,                             // 17: Scalar mode
-        false,                                           // 18: Return Indices (unused)
+        in_ntiles_c,                                   // 0: Input tiles per channel
+        reduction_size,                                // 1: Reduction size (4 for bilinear)
+        split_reader,                                  // 2: Split reader flag
+        grid_batching_factor * grid_nsticks_per_core,  // 3: Total grid interpolations per core
+        channels_per_shard,                            // 4: Channels per shard
+        in_nblocks_c,                                  // 5: Channel blocks
+        max_rows_for_reduction,                        // 6: Max rows
+        input_cb_index,                                // 7: Input CB
+        dummy_cb_id,                                   // 8: Input CB 1 (unused)
+        dummy_cb_id,                                   // 9: Index Input CB (unused)
+        dummy_cb_id,                                   // 10: Index Input CB 1 (unused)
+        scalar_cb_index,                               // 11: Scalar CB
+        dummy_cb_id,                                   // 12: Scalar CB 1 (unused)
+        dummy_cb_id,                                   // 13: Tile Temp CB (unused)
+        dummy_cb_id,                                   // 14: Index Tile Temp CB (unused)
+        output_cb_index,                               // 15: Output CB
+        dummy_cb_id,                                   // 16: Index Output CB (unused)
+        one_scalar_per_core,                           // 17: Scalar mode
+        false,                                         // 18: Return Indices (unused)
     };
 
     const tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
