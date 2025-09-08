@@ -239,6 +239,7 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds):
     # Create input tensor
     torch_input = torch.randn(N, C, T, H, W)
     tt_input = torch_input.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
+
     if T % mesh_device.shape[vae_parallel_config.time_parallel.mesh_axis]:
         tt_input = torch.nn.functional.pad(
             tt_input,
@@ -253,11 +254,13 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds):
                 get_padded_size(T, mesh_device.shape[vae_parallel_config.time_parallel.mesh_axis]) - T,
             ),
         )
-    if W % mesh_device.shape[vae_parallel_config.hw_parallel.mesh_axis]:
+    num_devices_HW = mesh_device.shape[vae_parallel_config.hw_parallel.mesh_axis]
+    if W % num_devices_HW:
         tt_input = torch.nn.functional.pad(
             tt_input,
-            pad=(0, 0, 0, 0, 0, get_padded_size(W, mesh_device.shape[vae_parallel_config.hw_parallel.mesh_axis]) - W),
+            pad=(0, 0, 0, get_padded_size(W, num_devices_HW) - W),
         )
+
     tt_input = ttnn.from_torch(
         tt_input,
         device=mesh_device,
@@ -275,7 +278,7 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds):
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[3, 1]),
     )
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
-    tt_output_torch = tt_output_torch[:, :, 0:T, :, 0:W]
+    tt_output_torch = tt_output_torch[0:N, 0:C, 0:T, 0:H, 0:W]
 
     # Get reference output
     logger.info("Run RefResBlock forward")
