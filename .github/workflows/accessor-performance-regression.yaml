@@ -108,12 +108,18 @@ jobs:
 
           echo "✅ Baseline results generated successfully"
 
+      - name: 🔍 Verify Files on Host
+        run: |
+          echo "🔍 Checking if baseline-results exists on host at: ${{ github.workspace }}/docker-job-baseline/baseline-results"
+          ls -la "${{ github.workspace }}/docker-job-baseline/" || echo "docker-job-baseline directory not found"
+          ls -la "${{ github.workspace }}/docker-job-baseline/baseline-results/" || echo "baseline-results directory not found on host"
+
       - name: 📤 Upload Baseline Results
         id: upload-baseline
         uses: actions/upload-artifact@v4
         with:
           name: baseline-performance-data
-          path: ./baseline-results
+          path: ${{ github.workspace }}/docker-job-baseline/baseline-results
           retention-days: 1
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
@@ -193,12 +199,14 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.generate-baseline-performance.outputs.baseline-artifact-name }}
-          path: ./baseline-performance-data
+          path: ${{ github.workspace }}/docker-job/baseline-performance-data
 
       - name: 📊 Run Accessor Performance Regression Tests
         timeout-minutes: 15
         run: |
           echo "🚀 Starting accessor performance regression tests..."
+          echo "🔍 Checking if baseline data is available inside container:"
+          ls -la ./baseline-performance-data/ || echo "baseline-performance-data directory not found"
           python -m pytest tests/ttnn/benchmark/python/perf_regression/test_accessor_perf_regression.py -v --tb=short --perf-baseline-path ./baseline-performance-data
 
       - name: 📊 Generate Performance Report
