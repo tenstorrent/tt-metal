@@ -1215,6 +1215,10 @@ def tt_distributed_rmsnorm(
         inp = ttnn.to_memory_config(inp, ttnn.DRAM_MEMORY_CONFIG)
         inp = ttnn.typecast(inp, ttnn.bfloat16, sub_core_grids=ttnn.CoreRangeSet({core_range}))
         inp = ttnn.to_memory_config(inp, inp_mem_config)
+    elif program_config is None and inp.dtype == ttnn.bfloat8_b:
+        # inp_bf8 = inp
+        inp = ttnn.typecast(inp, ttnn.bfloat16)
+        # ttnn.deallocate(inp_bf8)
 
     tt_stats = (
         ttnn.rms_norm_pre_all_gather(

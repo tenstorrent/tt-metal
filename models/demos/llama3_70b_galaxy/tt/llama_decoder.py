@@ -149,9 +149,10 @@ class TtTransformerBlock(LightweightModule):
             # Note this works because layer 0 has a bfloat16 input while other layers use bfloat8
             # since we want residual to be bfloat16
             attn_in_sharded, _ = self.attention_norm(x, None, mode)
-            attn_in_sharded = ttnn.to_memory_config(
-                attn_in_sharded, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
-            )
+            if not mode == "prefill":
+                attn_in_sharded = ttnn.to_memory_config(
+                    attn_in_sharded, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
+                )
             h = x
 
         else:
@@ -177,7 +178,7 @@ class TtTransformerBlock(LightweightModule):
         if mode == "prefill":
             h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)  # , dtype=ttnn.bfloat16)
             x.deallocate(True)
-            ff_in_sharded, _ = self.ff_norm(h, None, mode)
+            ff_in_sharded, _ = self.ff_norm(h, h, mode)
 
         if mode == "decode":
             # ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
@@ -196,6 +197,6 @@ class TtTransformerBlock(LightweightModule):
             #     ff_out.deallocate(True)
             if mode == "prefill":
                 h.deallocate(True)
-            return out, h
+            return out, None
         else:
             return ff_out, h

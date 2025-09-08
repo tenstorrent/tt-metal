@@ -169,7 +169,7 @@ def run_qwen_demo(
     model_args = TtQwenModelArgs(
         mesh_device,
         max_batch_size=32,
-        max_seq_len=256,
+        max_seq_len=2048,
         dummy_weights=False,
     )
     model_args.n_layers = layers
@@ -324,14 +324,16 @@ def run_qwen_demo(
     if not stress_test:
         ttnn.plus_one(
             current_pos_tensor,
-            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            sub_core_grids=model_args.sub_core_grids,
         )
         ttnn.plus_one(
             rot_mat_idxs,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
 
-    tt_out_tok = tt_sampling(tt_out[0])  # Compile again without seed to obtain random sampling
+    _ = tt_sampling(
+        tt_out[0], tt_out_tok=tt_out_tok
+    )  # Compile again without seed to obtain random sampling; at this position to simplify test_decoder_device_perf.py
 
     # Capture Trace
     logger.info(f"Capturing model trace...")
@@ -351,14 +353,13 @@ def run_qwen_demo(
         mode="decode",
         page_table=page_table_tt,
     )
-
     # Sampling
     _ = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)
 
     if not stress_test:
         ttnn.plus_one(
             current_pos_tensor,
-            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            sub_core_grids=model_args.sub_core_grids,
         )
         ttnn.plus_one(
             rot_mat_idxs,
@@ -395,7 +396,6 @@ def run_qwen_demo(
     profiler.end(f"capture_trace")
 
     ttnn.synchronize_device(mesh_device)
-
     # Start decoding
     iteration = 0
     users_decoding = True  # reset to handle next batch
@@ -430,13 +430,15 @@ def run_qwen_demo(
             block_host = True
             prefill = True
         else:
-            block_host = False if layers == 80 else True
+            block_host = False if layers == 64 else True
             prefill = False
 
         if iteration == 0:  # First iteration also accounts for compile time
             profiler.start(f"compile_decode", iteration=iteration)
 
+        logger.info(f"Executing trace for iteration {iteration}")
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=block_host)
+        logger.info(f"Trace executed for iteration {iteration}")
 
         if prefill:
             current_iteration = iteration
@@ -596,12 +598,11 @@ def run_qwen_demo(
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            128 * 1024,  # max_seq_len
+            2048,  # max_seq_len
             32,  # batch_size
-            # 2000,  # max_generated_tokens
-            5,
+            2000,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 256},  # page_params
             {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params
             False,  # stress_test
             0,  # start_pos

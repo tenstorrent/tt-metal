@@ -1484,8 +1484,9 @@ class TtQwenModelArgs(TtModelArgs):
             self.max_context_len = params.get("max_position_embeddings")
         else:
             self.max_context_len = (
-                128 * 1024
-            )  # For Llama3 Meta weights TODO: Remove this when we move to HF weights only
+                # 128 * 1024
+                190190  # For Llama3 Meta weights TODO: Remove this when we move to HF weights only
+            )
 
         # Handle different MLP dimension specifications
         if "intermediate_size" in params:
