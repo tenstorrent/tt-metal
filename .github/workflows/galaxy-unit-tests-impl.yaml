@@ -1,4 +1,4 @@
-name: "[internal] TG unit tests impl"
+name: "[internal] Galaxy unit tests impl"
 
 on:
   workflow_call:
@@ -19,7 +19,7 @@ on:
       topology:
         required: false
         type: string
-        default: "config-tg"
+        default: "topology-6u"
 
 jobs:
   # See issue 25270
@@ -73,7 +73,7 @@ jobs:
   #    - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
   #      if: always()
 
-  TG-tests:
+  galaxy-unit-tests:
     strategy:
       fail-fast: false
       matrix:
