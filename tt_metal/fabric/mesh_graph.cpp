@@ -63,7 +63,7 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
 bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test; }
 
 static FabricType topology_to_fabric_type(const proto::TorusTopology& topology) {
-    auto dim_types = topology.dim_types();
+    const auto& dim_types = topology.dim_types();
 
     // Assume 2D topology
     if (dim_types.size() == 2) {
