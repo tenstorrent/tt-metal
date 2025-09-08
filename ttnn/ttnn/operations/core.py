@@ -642,10 +642,6 @@ def as_tensor(
         cache_file_name: str,
         mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper],
     ):
-        # Generate the tensor on host, and dump it to the cache file.
-        if ttnn.using_distributed_env():
-            base_file_name = f"{base_file_name}_{os.getenv('TT_MESH_HOST_RANK')}"
-
         tensor = torch_to_ttnn(
             tensor=tensor,
             dtype=dtype,
@@ -673,12 +669,6 @@ def as_tensor(
 
     try:
         tensor = ttnn._ttnn.tensor.load_tensor_flatbuffer(cache_file_name, device=device)
-
-        if tuple(tensor.shape) != tuple(torch_tensor.shape):
-            logger.warning(
-                f"Cached file {cache_file_name} has shape {tensor.shape}, expected {torch_tensor.shape}, regenerating cache"
-            )
-            tensor = from_torch_and_dump(torch_tensor, dtype, layout, cache_file_name, mesh_mapper)
         logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
     except RuntimeError as e:
         logger.warning(f"Failed to load cache for {cache_file_name}: {e}")
