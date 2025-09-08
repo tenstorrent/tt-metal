@@ -47,8 +47,8 @@ def test_oftnet(
     torch.manual_seed(42)
 
     # Use bfloat16 dtype for consistency with model
-    model_dtype = torch.bfloat16
-    # model_dtype = torch.float32
+    # model_dtype = torch.bfloat16
+    model_dtype = torch.float32
 
     input_tensor = load_image(input_image_path, pad_hw=(384, 1280), dtype=model_dtype)[None]
     calib = load_calib(calib_path, dtype=model_dtype)[None]

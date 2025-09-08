@@ -177,13 +177,29 @@ class TTOftNet:
             ref_torch_ortho = ref_torch_ortho8 + ref_torch_ortho16 + ref_torch_ortho32
 
         # Apply OFT and sum
-        ortho8 = self.oft8.forward(device, lat8, calib, grid)  # ortho8
+        ortho8, integral_img8, bbox_top_left8, bbox_btm_right8, bbox_top_right8, bbox_btm_left8 = self.oft8.forward(
+            device, lat8, calib, grid
+        )  # ortho8
         # ttnn.deallocate(lat8)
         lat8 = ttnn.to_memory_config(lat8, ttnn.DRAM_MEMORY_CONFIG)
-        ortho16 = self.oft16.forward(device, lat16, calib, grid)
+        (
+            ortho16,
+            integral_img16,
+            bbox_top_left16,
+            bbox_btm_right16,
+            bbox_top_right16,
+            bbox_btm_left16,
+        ) = self.oft16.forward(device, lat16, calib, grid)
         # ttnn.deallocate(lat16)
         lat16 = ttnn.to_memory_config(lat16, ttnn.DRAM_MEMORY_CONFIG)
-        ortho32 = self.oft32.forward(device, lat32, calib, grid)
+        (
+            ortho32,
+            integral_img32,
+            bbox_top_left32,
+            bbox_btm_right32,
+            bbox_top_right32,
+            bbox_btm_left32,
+        ) = self.oft32.forward(device, lat32, calib, grid)
         # ttnn.deallocate(lat32)
         lat32 = ttnn.to_memory_config(lat32, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -251,7 +267,30 @@ class TTOftNet:
             f"Ortho shape: {ortho.shape}, dtype: {ortho.dtype} layout: {ortho.layout} memory_config: {ortho.memory_config()}"
         )
 
-        return ortho8, ortho16, ortho32, ortho
+        return (
+            lat8,
+            lat16,
+            lat32,
+            integral_img8,
+            integral_img16,
+            integral_img32,
+            bbox_top_left8,
+            bbox_btm_right8,
+            bbox_top_right8,
+            bbox_btm_left8,
+            bbox_top_left16,
+            bbox_btm_right16,
+            bbox_top_right16,
+            bbox_btm_left16,
+            bbox_top_left32,
+            bbox_btm_right32,
+            bbox_top_right32,
+            bbox_btm_left32,
+            ortho8,
+            ortho16,
+            ortho32,
+            ortho,
+        )
 
     def forward_topdown_network(self, device, ortho):
         """Apply topdown network"""
@@ -336,63 +375,88 @@ class TTOftNet:
             lat8, lat16, lat32 = self.forward_lateral_layers(device, feats8, feats16, feats32)
 
         # Apply OFT transformation
-        import torch
+        import torch  # HACK
 
-        lat8_torch = (
-            ttnn.to_torch(lat8, dtype=torch.float32)
-            .permute((0, 3, 1, 2))
-            .contiguous()
-            .reshape((1, 256, input_tensor.shape[1] // 8, input_tensor.shape[2] // 8))
-        )
-        lat16_torch = (
-            ttnn.to_torch(lat16, dtype=torch.float32)
-            .permute((0, 3, 1, 2))
-            .contiguous()
-            .reshape((1, 256, input_tensor.shape[1] // 16, input_tensor.shape[2] // 16))
-        )
-        lat32_torch = (
-            ttnn.to_torch(lat32, dtype=torch.float32)
-            .permute((0, 3, 1, 2))
-            .contiguous()
-            .reshape((1, 256, input_tensor.shape[1] // 32, input_tensor.shape[2] // 32))
-        )
         calib_torch = ttnn.to_torch(calib, dtype=torch.float32)
         grid_torch = ttnn.to_torch(grid, dtype=torch.float32)
-        (
-            ortho8,
-            integral_img8,
-            bbox_top_left8,
-            bbox_btm_right8,
-            bbox_top_right8,
-            bbox_btm_left8,
-        ) = self.host_fallback_model.oft8(lat8_torch, calib_torch, grid_torch)
-        (
-            ortho16,
-            integral_img16,
-            bbox_top_left16,
-            bbox_btm_right16,
-            bbox_top_right16,
-            bbox_btm_left16,
-        ) = self.host_fallback_model.oft16(lat16_torch, calib_torch, grid_torch)
-        (
-            ortho32,
-            integral_img32,
-            bbox_top_left32,
-            bbox_btm_right32,
-            bbox_top_right32,
-            bbox_btm_left32,
-        ) = self.host_fallback_model.oft32(lat32_torch, calib_torch, grid_torch)
-        ortho = ortho8 + ortho16 + ortho32
+        if self.OFT_fallback:
+            import torch
 
-        ortho = ttnn.from_torch(
-            ortho.permute((0, 2, 3, 1)).reshape((1, 1, ortho.shape[2] * ortho.shape[3], ortho.shape[1])),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-        )
-        ortho = ttnn.to_layout(ortho, ttnn.TILE_LAYOUT)
-        # ortho8, ortho16, ortho32, ortho = self.forward_oft(device, lat8, lat16, lat32, calib, grid)
-
+            lat8_torch = (
+                ttnn.to_torch(lat8, dtype=torch.float32)
+                .permute((0, 3, 1, 2))
+                .contiguous()
+                .reshape((1, 256, input_tensor.shape[1] // 8, input_tensor.shape[2] // 8))
+            )
+            lat16_torch = (
+                ttnn.to_torch(lat16, dtype=torch.float32)
+                .permute((0, 3, 1, 2))
+                .contiguous()
+                .reshape((1, 256, input_tensor.shape[1] // 16, input_tensor.shape[2] // 16))
+            )
+            lat32_torch = (
+                ttnn.to_torch(lat32, dtype=torch.float32)
+                .permute((0, 3, 1, 2))
+                .contiguous()
+                .reshape((1, 256, input_tensor.shape[1] // 32, input_tensor.shape[2] // 32))
+            )
+            (
+                ortho8,
+                integral_img8,
+                bbox_top_left8,
+                bbox_btm_right8,
+                bbox_top_right8,
+                bbox_btm_left8,
+            ) = self.host_fallback_model.oft8(lat8_torch, calib_torch, grid_torch)
+            (
+                ortho16,
+                integral_img16,
+                bbox_top_left16,
+                bbox_btm_right16,
+                bbox_top_right16,
+                bbox_btm_left16,
+            ) = self.host_fallback_model.oft16(lat16_torch, calib_torch, grid_torch)
+            (
+                ortho32,
+                integral_img32,
+                bbox_top_left32,
+                bbox_btm_right32,
+                bbox_top_right32,
+                bbox_btm_left32,
+            ) = self.host_fallback_model.oft32(lat32_torch, calib_torch, grid_torch)
+            ortho = ortho8 + ortho16 + ortho32
+            ortho = ttnn.from_torch(
+                ortho.permute((0, 2, 3, 1)).reshape((1, 1, ortho.shape[2] * ortho.shape[3], ortho.shape[1])),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+            )
+            ortho = ttnn.to_layout(ortho, ttnn.TILE_LAYOUT)
+        else:
+            (
+                lat8,
+                lat16,
+                lat32,
+                integral_img8,
+                integral_img16,
+                integral_img32,
+                bbox_top_left8,
+                bbox_btm_right8,
+                bbox_top_right8,
+                bbox_btm_left8,
+                bbox_top_left16,
+                bbox_btm_right16,
+                bbox_top_right16,
+                bbox_btm_left16,
+                bbox_top_left32,
+                bbox_btm_right32,
+                bbox_top_right32,
+                bbox_btm_left32,
+                ortho8,
+                ortho16,
+                ortho32,
+                ortho,
+            ) = self.forward_oft(device, lat8, lat16, lat32, calib, grid)
         # return (feats8, feats16, feats32, lat8, lat16, lat32, ortho8, ortho16, ortho32, ortho, calib_torch, grid_torch), ("feats8", "feats16", "feats32", "lat8", "lat16", "lat32", "ortho8", "ortho16", "ortho32", "ortho", "calib", "grid")
 
         # Apply topdown network

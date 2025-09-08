@@ -35,7 +35,7 @@ def test_oft_forward(device, input_shape, channels, cell_size, grid_height, scal
     grid = make_grid(grid_size=(80.0, 80.0), grid_offset=(-40.0, 1.74, 0.0), grid_res=0.5)
     grid = grid.unsqueeze(0)
 
-    ref_oft = ReferenceOFT(channels, cell_size, grid_height, scale=scale)
+    ref_oft = ReferenceOFT(channels, cell_size, grid_height, scale=scale, dtype=torch.float32)
     ref_out = ref_oft.forward(features, calib, grid)
     # Prepare TTNN input
     params = create_OFT_model_parameters_oft(ref_oft, (features, calib, grid), device)
