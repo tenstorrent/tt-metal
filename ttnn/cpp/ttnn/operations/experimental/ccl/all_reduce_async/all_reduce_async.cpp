@@ -118,6 +118,7 @@ Tensor strided_reduce(
 ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const uint32_t num_devices,
+    const std::vector<GlobalSemaphore>& barrier_semaphores,
     const std::vector<GlobalSemaphore>& rs_global_semaphores,
     const std::vector<GlobalSemaphore>& ag_global_semaphores,
     ttnn::operations::reduction::ReduceType math_op,
@@ -156,7 +157,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         std::nullopt,
         dim,
         rs_global_semaphores,
-        true,  // do sync
+        barrier_semaphores[0],
         num_preferred_links.value_or(1),
         out_memory_config,
         std::nullopt,
@@ -166,19 +167,20 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         scattered_tensor,
         dim,
         ag_global_semaphores,
-        true,  // do sync
         num_preferred_links.value_or(1),
         out_memory_config,
         topology,
         worker_subdevice_id_opt,
         false,
-        use_llama_sharded);
+        use_llama_sharded,
+        barrier_semaphores[1]);
 }
 
 ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
+    const std::vector<GlobalSemaphore>& barrier_semaphores,
     const std::vector<GlobalSemaphore>& rs_global_semaphores,
     const std::vector<GlobalSemaphore>& ag_global_semaphores,
     ttnn::operations::reduction::ReduceType math_op,
@@ -219,7 +221,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         std::nullopt,
         dim,
         rs_global_semaphores,
-        true,  // do sync
+        barrier_semaphores[0],
         num_preferred_links.value_or(1),
         out_memory_config,
         std::nullopt,
@@ -233,13 +235,13 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         mesh_device,
         topology,
         ag_global_semaphores,
-        true,  // do sync
         std::nullopt,
         out_memory_config,
         num_preferred_links.value_or(1),
         worker_subdevice_id_opt,
         false,
-        use_llama_sharded);
+        use_llama_sharded,
+        barrier_semaphores[1]);
 }
 
 ttnn::Tensor ExecuteAllReduceAsync::invoke(
