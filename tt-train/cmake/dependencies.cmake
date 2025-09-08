@@ -122,6 +122,9 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
 )
+if(tokenizers-cpp_ADDED)
+    target_compile_options(tokenizers_cpp PRIVATE -Wno-for-loop-analysis)
+endif()
 # gersemi: on
 
 ####################################################################################################################
