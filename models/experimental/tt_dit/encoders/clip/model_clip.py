@@ -382,7 +382,6 @@ class CLIPAttention:
             bias=True,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            init=False,
         )
         self.k_proj = ColParallelLinear(
             in_features=self.embed_dim,
@@ -390,7 +389,6 @@ class CLIPAttention:
             bias=True,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            init=False,
         )
         self.v_proj = ColParallelLinear(
             in_features=self.embed_dim,
@@ -398,7 +396,6 @@ class CLIPAttention:
             bias=True,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            init=False,
         )
         self.o_proj = ColParallelLinear(
             in_features=self.embed_dim,
@@ -406,7 +403,6 @@ class CLIPAttention:
             bias=True,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            init=False,
         )
 
     def load_state_dict(self, state_dict):
