@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 from loguru import logger
 
@@ -50,8 +52,16 @@ class YOLOv4PerformanceRunnerInfra:
 
         torch_input_shape = (batch_size, *resolution, 3)
         imgfile = "models/demos/yolov4/resources/giraffe.jpg"
-        input_img = load_image(imgfile, resolution)
-        self.torch_input_tensor = image_to_tensor(input_img)
+        if os.path.exists(imgfile):
+            input_img = load_image(imgfile, resolution)
+            torch_img = image_to_tensor(input_img)
+            self.torch_input_tensor = torch.concatenate([torch_img] * self.num_devices, 0)
+        else:
+            input_shape = (batch_size * self.num_devices, *resolution, 3)
+            torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
+            self.input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, mesh_mapper=self.inputs_mesh_mapper)
+            self.torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
+
         self.input_tensor = ttnn.from_torch(self.torch_input_tensor, ttnn.bfloat16, mesh_mapper=self.inputs_mesh_mapper)
         torch_input_tensor_params = torch.randn(torch_input_shape, dtype=torch.float32)
         self.torch_input_tensor_params = torch_input_tensor_params.permute(0, 3, 1, 2)
