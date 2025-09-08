@@ -118,7 +118,7 @@ def test_oftnet(
         grid_height=grid_height,
         host_fallback_model=ref_model if use_host_oft else None,
         OFT_fallback=use_host_oft,
-        FeedForward_fallback=True,
+        FeedForward_fallback=False,
         Lateral_fallback=False,
     )
 

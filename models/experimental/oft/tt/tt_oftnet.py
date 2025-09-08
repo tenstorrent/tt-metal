@@ -383,9 +383,21 @@ class TTOftNet:
             bbox_btm_left32,
         ) = self.host_fallback_model.oft32(lat32_torch, calib_torch, grid_torch)
         ortho = ortho8 + ortho16 + ortho32
+
+        ortho = ttnn.from_torch(
+            ortho.permute((0, 2, 3, 1)).reshape((1, 1, ortho.shape[2] * ortho.shape[3], ortho.shape[1])),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+        ortho = ttnn.to_layout(ortho, ttnn.TILE_LAYOUT)
         # ortho8, ortho16, ortho32, ortho = self.forward_oft(device, lat8, lat16, lat32, calib, grid)
 
         # return (feats8, feats16, feats32, lat8, lat16, lat32, ortho8, ortho16, ortho32, ortho, calib_torch, grid_torch), ("feats8", "feats16", "feats32", "lat8", "lat16", "lat32", "ortho8", "ortho16", "ortho32", "ortho", "calib", "grid")
+
+        # Apply topdown network
+        td = self.forward_topdown_network(device, ortho)
+
         return (
             feats8,
             feats16,
@@ -414,6 +426,7 @@ class TTOftNet:
             ortho,
             calib_torch,
             grid_torch,
+            td,
         ), (
             "feats8",
             "feats16",
@@ -442,10 +455,8 @@ class TTOftNet:
             "ortho",
             "calib",
             "grid",
+            "td",
         )
-
-        # Apply topdown network
-        td = self.forward_topdown_network(device, ortho)
 
         # Predict encoded outputs
         parts = self.forward_predict_encoded_outputs(device, td)
