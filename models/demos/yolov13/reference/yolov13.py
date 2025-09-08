@@ -7,872 +7,652 @@ import torch.nn as nn
 import torch.nn.functional as f
 
 
-def make_anchors(feats, strides, grid_cell_offset=0.5):
-    anchor_points, stride_tensor = [], []
-    assert feats is not None
-    dtype, device = feats[0].dtype, feats[0].device
-    for i, stride in enumerate(strides):
-        _, _, h, w = feats[i].shape
-        sx = torch.arange(end=w, device=device, dtype=dtype) + grid_cell_offset  # shift x
-        sy = torch.arange(end=h, device=device, dtype=dtype) + grid_cell_offset  # shift y
-        sy, sx = torch.meshgrid(sy, sx)
-        anchor_points.append(torch.stack((sx, sy), -1).view(-1, 2))
-        stride_tensor.append(torch.full((h * w, 1), stride, dtype=dtype, device=device))
-    return torch.cat(anchor_points), torch.cat(stride_tensor)
-
-
-class DFL(nn.Module):
-    def __init__(self):
-        super(DFL, self).__init__()
-        self.conv = nn.Conv2d(16, 1, kernel_size=1, stride=1, bias=False)
-
-    def forward(self, x):
-        return self.conv(x)
+def autopad(k, p=None, d=1):  # kernel, padding, dilation
+    """Pad to 'same' shape outputs."""
+    if d > 1:
+        k = d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]  # actual kernel-size
+    if p is None:
+        p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
+    return p
 
 
 class Conv(nn.Module):
-    def __init__(self, in_channel, out_channel, kernel=1, stride=1, padding=0, dilation=1, groups=1, enable_act=True):
+    default_act = nn.SiLU()  # default activation
+
+    def __init__(
+        self, in_channel, out_channel, kernel_size=1, stride=1, padding=None, groups=1, dilation=1, activation=True
+    ):
         super().__init__()
-        self.enable_act = enable_act
-        if enable_act:
-            self.conv = nn.Conv2d(
-                in_channel,
-                out_channel,
-                kernel,
-                stride=stride,
-                padding=padding,
-                dilation=dilation,
-                groups=groups,
-                bias=False,
-            )
-            self.bn = nn.BatchNorm2d(out_channel, eps=0.001, momentum=0.03)
-            self.act = nn.SiLU(inplace=True)
-        else:
-            self.conv = nn.Conv2d(
-                in_channel,
-                out_channel,
-                kernel,
-                stride=stride,
-                padding=padding,
-                dilation=dilation,
-                groups=groups,
-                bias=False,
-            )
-            self.bn = nn.BatchNorm2d(out_channel, eps=0.001, momentum=0.03)
+        self.conv = nn.Conv2d(
+            in_channel,
+            out_channel,
+            kernel_size,
+            stride,
+            autopad(kernel_size, padding, dilation),
+            groups=groups,
+            dilation=dilation,
+            bias=False,
+        )
+        self.bn = nn.BatchNorm2d(channel_out)
+        self.activation = (
+            self.default_act
+            if activation is True
+            else aactivationct
+            if isinstance(activation, nn.Module)
+            else nn.Identity()
+        )
 
     def forward(self, x):
-        if self.enable_act:
-            x = self.conv(x)
-            x = self.bn(x)
-            x = self.act(x)
-        else:
-            x = self.conv(x)
-            x = self.bn(x)
-        return x
+        """Apply convolution, batch normalization and activation to input tensor."""
+        return self.act(self.bn(self.conv(x)))
+
+    def forward_fuse(self, x):
+        """Apply convolution and activation without batch normalization."""
+        return self.act(self.conv(x))
+
+
+class DsConv(nn.Module):
+    def __init__(self, channel_in, channel_out, kernel_size=3, stride=1, padding=None, dilation=1, bias=False):
+        super().__init__()
+        if padding is None:
+            p = (dilation * (kernel_size - 1)) // 2
+        self.dw = nn.Conv2d(
+            channel_in,
+            channel_in,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=p,
+            dilation=dilation,
+            groups=channel_in,
+            bias=bias,
+        )
+
+        self.pw = nn.Conv2d(channel_in, channel_out, 1, 1, 0, bias=bias)
+        self.bn = nn.BatchNorm2d(channel_out)
+        self.act = nn.SiLU()
+
+    def forward(self, x):
+        x = self.dw(x)
+        x = self.pw(x)
+        return self.act(self.bn(x))
 
 
 class Bottleneck(nn.Module):
-    def __init__(
-        self, in_channel, out_channel, kernel=[1, 1], stride=[1, 1], padding=[0, 0], dilation=[1, 1], groups=[1, 1]
-    ):
+    def __init__(self, channel_in, channel_out, shortcut=True, groups=1, kernel=(3, 3), expasion_ration=0.5):
         super().__init__()
-        self.cv1 = Conv(
-            in_channel[0],
-            out_channel[0],
-            kernel[0],
-            stride=stride[0],
-            padding=padding[0],
-            dilation=dilation[0],
-            groups=groups[0],
-        )
-        self.cv2 = Conv(
-            in_channel[1],
-            out_channel[1],
-            kernel[1],
-            stride=stride[1],
-            padding=padding[1],
-            dilation=dilation[1],
-            groups=groups[1],
+        hidden_channel = int(c2 * expasion_ration)  # hidden channels
+        self.cv1 = Conv(channel_in, hidden_channel, k[0], 1)
+        self.cv2 = Conv(hidden_channel, channel_out, k[1], 1, groups=groups)
+        self.add = shortcut and c1 == c2
+
+    def forward(self, x):
+        return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
+
+
+# CSP Bottleneck with 3 convolutions
+class C3(nn.Module):
+    def __init__(self, channel_in, channel_out, n=1, shortcut=True, groups=1, expansion_ratio=0.5):
+        super().__init__()
+        hidden_channel = int(c2 * expansion_ratio)  # hidden channels
+        self.cv1 = Conv(channel_in, hidden_channel, 1, 1)
+        self.cv2 = Conv(channel_in, hidden_channel, 1, 1)
+        self.cv3 = Conv(2 * hidden_channel, channel_out, 1)  # optional act=FReLU(c2)
+        self.m = nn.Sequential(
+            *(
+                Bottleneck(hidden_channel, hidden_channel, shortcut, groups, kernels=((1, 1), (3, 3)), e=1.0)
+                for _ in range(n)
+            )
         )
 
     def forward(self, x):
-        input = x
-        x = self.cv1(x)
-        x = self.cv2(x)
-        return input + x
+        return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
 
 
-class SPPF(nn.Module):
+class DSBottleneck(nn.Module):
     def __init__(
         self,
-        in_channel,
-        out_channel,
-        kernel=[1, 1],
-        stride=[1, 1],
-        padding=[0, 0],
-        dilation=[1, 1],
-        groups=[1, 1],
-        m_kernel=5,
-        m_padding=2,
+        channel_in,
+        channel_out,
+        shortcut=True,
+        expasion_ration=0.5,
+        kernel_size_dsconv_1=3,
+        kernel_size_dsconv_2=5,
+        dilatation_dsconv_2=1,
     ):
         super().__init__()
-        self.cv1 = Conv(
-            in_channel[0],
-            out_channel[0],
-            kernel[0],
-            stride=stride[0],
-            padding=padding[0],
-            dilation=dilation[0],
-            groups=groups[0],
+        hidden_channel = int(channel_out * expasion_ration)
+        self.cv1 = DSConv(channel_in, hidden_channel, kernel_size_dsconv_1, stride=1, padding=None, dilatation=1)
+        self.cv2 = DSConv(
+            hidden_channel, channel_out, kernel_size_dsconv_2, stride=1, padding=None, dilatation=dilatation_dsconv_2
         )
-        self.cv2 = Conv(
-            in_channel[1],
-            out_channel[1],
-            kernel[1],
-            stride=stride[1],
-            padding=padding[1],
-            dilation=dilation[1],
-            groups=groups[1],
-        )
-        self.m = nn.MaxPool2d(kernel_size=m_kernel, stride=1, padding=m_padding)
+        self.add = shortcut and c1 == c2
 
     def forward(self, x):
-        x = self.cv1(x)
-        x1 = x
-        m1 = self.m(x)
-        m2 = self.m(m1)
-        m3 = self.m(m2)
-        y = torch.cat((x1, m1, m2, m3), 1)
-        x = self.cv2(y)
-        return x
+        y = self.cv2(self.cv1(x))
+        return x + y if self.add else y
 
 
-class C3k(nn.Module):
-    def __init__(self, in_channel, out_channel, kernel, stride, padding, dilation, groups):
-        super().__init__()
-        self.cv1 = Conv(
-            in_channel[0],
-            out_channel[0],
-            kernel[0],
-            stride=stride[0],
-            padding=padding[0],
-            dilation=dilation[0],
-            groups=groups[0],
-        )
-        self.cv2 = Conv(
-            in_channel[1],
-            out_channel[1],
-            kernel[1],
-            stride=stride[1],
-            padding=padding[1],
-            dilation=dilation[1],
-            groups=groups[1],
-        )
-        self.cv3 = Conv(
-            in_channel[2],
-            out_channel[2],
-            kernel[2],
-            stride=stride[2],
-            padding=padding[2],
-            dilation=dilation[2],
-            groups=groups[2],
-        )
+class DSC3k(C3):
+    def __init__(
+        self,
+        channel_in,
+        channel_out,
+        n=1,
+        shortcut=True,
+        groups=1,
+        expansion_ratio=0.5,
+        kernel_size_dsconv_1=3,
+        kernel_size_dsconv_2=5,
+        dilatation_dsconv_2=1,
+    ):
+        super().__init__(channel_in, channel_out, n, shortcut, groups, expansion_ratio)
+        hidden_channel = int(channel_out * expasion_ration)
+
         self.m = nn.Sequential(
+            *(
+                DSBottleneck(
+                    hidden_channel,
+                    hidden_channel,
+                    shortcut=shortcut,
+                    expasion_ration=1.0,
+                    kernel_size_dsconv_1=kernel_size_dsconv_1,
+                    kernel_size_dsconv_2=kernel_size_dsconv_2,
+                    dilatation_dsconv_2=dilatation_dsconv_2,
+                )
+                for _ in range(n)
+            )
+        )
+
+
+class C2f(nn.Module):
+    """Faster Implementation of CSP Bottleneck with 2 convolutions."""
+
+    def __init__(self, channel_in, channel_out, n=1, shortcut=False, groups=1, expasion_ratio=0.5):
+        super().__init__()
+        self.hidden_channel = int(channel_out * expasion_ratio)  # hidden channels
+        self.cv1 = Conv(channel_in, 2 * self.hidden_channel, 1, 1)
+        self.cv2 = Conv((2 + n) * self.hidden_channel, channel_out, 1)  # optional act=FReLU(c2)
+        self.m = nn.ModuleList(
             Bottleneck(
-                in_channel[3:5],
-                out_channel[3:5],
-                kernel[3:5],
-                stride=stride[3:5],
-                padding=padding[3:5],
-                dilation=dilation[3:5],
-                groups=groups[3:5],
-            ),
-            Bottleneck(
-                in_channel[5:7],
-                out_channel[5:7],
-                kernel[5:7],
-                stride=stride[5:7],
-                padding=padding[5:7],
-                dilation=dilation[5:7],
-                groups=groups[5:7],
-            ),
+                self.hidden_channel, self.hidden_channel, shortcut, groups, kernels=((3, 3), (3, 3)), expasion_ratio=1.0
+            )
+            for _ in range(n)
         )
 
     def forward(self, x):
-        x1 = self.cv1(x)
-        x2 = self.cv2(x)
-        x = self.m(x1)
-        x = torch.cat((x, x2), 1)
-        x = self.cv3(x)
-        return x
+        """Forward pass through C2f layer."""
+        y = list(self.cv1(x).chunk(2, 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+
+    def forward_split(self, x):
+        """Forward pass using split() instead of chunk()."""
+        y = self.cv1(x).split((self.c, self.c), 1)
+        y = [y[0], y[1]]
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
 
 
-class C3k2(nn.Module):
-    def __init__(self, in_channel, out_channel, kernel, stride, padding, dilation, groups, is_bk_enabled=False):
-        super().__init__()
-        self.is_bk_enabled = is_bk_enabled
-        if is_bk_enabled:
-            self.cv1 = Conv(
-                in_channel[0],
-                out_channel[0],
-                kernel[0],
-                stride=stride[0],
-                padding=padding[0],
-                dilation=dilation[0],
-                groups=groups[0],
-            )
-            self.cv2 = Conv(
-                in_channel[1],
-                out_channel[1],
-                kernel[1],
-                stride=stride[1],
-                padding=padding[1],
-                dilation=dilation[1],
-                groups=groups[1],
-            )
+class DSC3k2(C2f):
+    def __init__(
+        self,
+        channel_in,
+        channel_out,
+        n=1,
+        dsc3k=False,
+        expasion_ratio=0.5,
+        groups=1,
+        shortcut=True,
+        kernel_size_dsconv_1=3,
+        kernel_size_dsconv_2=7,
+        dilatation_dsconv_2=1,
+    ):
+        super().__init__(channel_in, channel_out, n, shortcut, groups, expasion_ratio)
+        if dsc3k:
             self.m = nn.ModuleList(
-                [
-                    Bottleneck(
-                        in_channel[2:4],
-                        out_channel[2:4],
-                        kernel[2:4],
-                        stride=stride[2:4],
-                        padding=padding[2:4],
-                        dilation=dilation[2:4],
-                        groups=groups[2:4],
-                    ),
-                ]
+                DSC3k(
+                    self.hidden_channel,
+                    self.hidden_channel,
+                    n=2,
+                    shortcut=shortcut,
+                    groups=groups,
+                    e=1.0,
+                    kernel_size_dsconv_1=kernel_size_dsconv_1,
+                    kernel_size_dsconv_2=kernel_size_dsconv_2,
+                    dilatation_dsconv_2=dilatation_dsconv_2,
+                )
+                for _ in range(n)
             )
-
         else:
-            self.cv1 = Conv(
-                in_channel[0],
-                out_channel[0],
-                kernel[0],
-                stride=stride[0],
-                padding=padding[0],
-                dilation=dilation[0],
-                groups=groups[0],
-            )
-            self.cv2 = Conv(
-                in_channel[1],
-                out_channel[1],
-                kernel[1],
-                stride=stride[1],
-                padding=padding[1],
-                dilation=dilation[1],
-                groups=groups[1],
-            )
             self.m = nn.ModuleList(
-                [
-                    C3k(
-                        in_channel[2:9],
-                        out_channel[2:9],
-                        kernel[2:9],
-                        stride[2:9],
-                        padding[2:9],
-                        dilation[2:9],
-                        groups[2:9],
-                    ),
-                ]
+                DSBottleneck(
+                    self.hidden_channel,
+                    self.hidden_channel,
+                    shortcut=shortcut,
+                    expasion_ratio=1.0,
+                    kernel_size_dsconv_1=kernel_size_dsconv_1,
+                    kernel_size_dsconv_2=kernel_size_dsconv_2,
+                    dilatation_dsconv_2=dilatation_dsconv_2,
+                )
+                for _ in range(n)
             )
 
-    def forward(self, x):
-        if self.is_bk_enabled:
-            x = self.cv1(x)
-            y = list(x.chunk(2, 1))
-            m_out = self.m[0](y[-1])
-            y.append(m_out)
-            x = torch.cat(y, 1)
-            x = self.cv2(x)
-        else:
-            x = self.cv1(x)
-            y = list(x.chunk(2, 1))
-            m_out = self.m[0](y[-1])
-            y.append(m_out)
-            x = torch.cat(y, 1)
-            x = self.cv2(x)
-        return x
 
-
-class Attention(nn.Module):
-    def __init__(self, in_channel, out_channel, kernel, stride, padding, dilation, groups):
+class AAttn(nn.Module):
+    def __init__(self, dim, num_heads, area=1):
         super().__init__()
-        self.num_heads = 2
-        self.key_dim = 32
-        self.head_dim = 64
-        self.scale = self.key_dim**-0.5
+        self.area = area
 
-        self.qkv = Conv(
-            in_channel[0],
-            out_channel[0],
-            kernel[0],
-            stride=stride[0],
-            padding=padding[0],
-            dilation=dilation[0],
-            groups=groups[0],
-            enable_act=False,
-        )
-        self.proj = Conv(
-            in_channel[1],
-            out_channel[1],
-            kernel[1],
-            stride=stride[1],
-            padding=padding[1],
-            dilation=dilation[1],
-            groups=groups[1],
-            enable_act=False,
-        )
-        self.pe = Conv(
-            in_channel[2],
-            out_channel[2],
-            kernel[2],
-            stride=stride[2],
-            padding=padding[2],
-            dilation=dilation[2],
-            groups=groups[2],
-            enable_act=False,
-        )
+        self.num_heads = num_heads
+        self.head_dim = head_dim = dim // num_heads
+        all_head_dim = head_dim * self.num_heads
+
+        self.qk = Conv(dim, all_head_dim * 2, 1, activation=False)
+        self.v = Conv(dim, all_head_dim, 1, activation=False)
+        self.proj = Conv(all_head_dim, dim, 1, activation=False)
+
+        self.pe = Conv(all_head_dim, dim, 5, 1, 2, groups=dim, activation=False)
 
     def forward(self, x):
         B, C, H, W = x.shape
         N = H * W
-        qkv = self.qkv(x)
-        q, k, v = qkv.view(B, self.num_heads, self.key_dim * 2 + self.head_dim, N).split(
-            [self.key_dim, self.key_dim, self.head_dim], dim=2
-        )
-        attn = (q.transpose(-2, -1) @ k) * self.scale
-        attn = attn.softmax(dim=-1)
-        x = (v @ attn.transpose(-2, -1)).view(B, C, H, W) + self.pe(v.reshape(B, C, H, W))
-        x = self.proj(x)
+
+        qk = self.qk(x).flatten(2).transpose(1, 2)
+        v = self.v(x)
+        pp = self.pe(v)
+        v = v.flatten(2).transpose(1, 2)
+
+        if self.area > 1:
+            qk = qk.reshape(B * self.area, N // self.area, C * 2)
+            v = v.reshape(B * self.area, N // self.area, C)
+            B, N, _ = qk.shape
+        q, k = qk.split([C, C], dim=2)
+
+        if x.is_cuda and USE_FLASH_ATTN:
+            q = q.view(B, N, self.num_heads, self.head_dim)
+            k = k.view(B, N, self.num_heads, self.head_dim)
+            v = v.view(B, N, self.num_heads, self.head_dim)
+
+            x = flash_attn_func(q.contiguous().half(), k.contiguous().half(), v.contiguous().half()).to(q.dtype)
+        else:
+            q = q.transpose(1, 2).view(B, self.num_heads, self.head_dim, N)
+            k = k.transpose(1, 2).view(B, self.num_heads, self.head_dim, N)
+            v = v.transpose(1, 2).view(B, self.num_heads, self.head_dim, N)
+
+            attn = (q.transpose(-2, -1) @ k) * (self.head_dim**-0.5)
+            max_attn = attn.max(dim=-1, keepdim=True).values
+            exp_attn = torch.exp(attn - max_attn)
+            attn = exp_attn / exp_attn.sum(dim=-1, keepdim=True)
+            x = v @ attn.transpose(-2, -1)
+
+            x = x.permute(0, 3, 1, 2)
+
+        if self.area > 1:
+            x = x.reshape(B // self.area, N * self.area, C)
+            B, N, _ = x.shape
+        x = x.reshape(B, H, W, C).permute(0, 3, 1, 2)
+
+        return self.proj(x + pp)
+
+
+class ABlock(nn.Module):
+    def __init__(self, dim, num_heads, mlp_ratio=1.2, area=1):
+        super().__init__()
+        self.attn = AAttn(dim, num_heads=num_heads, area=area)
+        mlp_hidden_dim = int(dim * mlp_ratio)
+        self.mlp = nn.Sequential(Conv(dim, mlp_hidden_dim, 1), Conv(mlp_hidden_dim, dim, 1, act=False))
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Conv2d):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        x = x + self.attn(x)
+        x = x + self.mlp(x)
         return x
 
 
-class PSABlock(nn.Module):
-    def __init__(self, in_channel, out_channel, kernel, stride, padding, dilation, groups):
+class A2C2f(nn.Module):
+    def __init__(
+        self,
+        channel_in,
+        channel_out,
+        n=1,
+        area_attention_2=True,
+        area=1,
+        residual=False,
+        mlp_ratio=2.0,
+        expansion_ratio=0.5,
+        groups=1,
+        shortcut=True,
+    ):
         super().__init__()
-        self.attn = Attention(
-            in_channel[0:3], out_channel[0:3], kernel[0:3], stride[0:3], padding[0:3], dilation[0:3], groups[0:3]
+        hidden_channel = int(channel_out * expansion_ratio)  # hidden channels
+        assert hidden_channel % 32 == 0, "Dimension of ABlock be a multiple of 32."
+
+        num_heads = hidden_channel // 32
+
+        self.cv1 = Conv(channel_in, hidden_channel, 1, 1)
+        self.cv2 = Conv((1 + n) * hidden_channel, channel_out, 1)
+
+        init_values = 0.01  # or smaller
+        self.gamma = (
+            nn.Parameter(init_values * torch.ones((channel_out)), requires_grad=True)
+            if area_attention_2 and residual
+            else None
         )
-        self.ffn = nn.Sequential(
-            Conv(
-                in_channel[3],
-                out_channel[3],
-                kernel[3],
-                stride=stride[3],
-                padding=padding[3],
-                dilation=dilation[3],
-                groups=groups[3],
-            ),
-            Conv(
-                in_channel[4],
-                out_channel[4],
-                kernel[4],
-                stride=stride[4],
-                padding=padding[4],
-                dilation=dilation[4],
-                groups=groups[4],
-                enable_act=False,
-            ),
+
+        self.m = nn.ModuleList(
+            nn.Sequential(*(ABlock(hidden_channel, num_heads, mlp_ratio, area) for _ in range(2)))
+            if area_attention_2
+            else C3k(hidden_channel, channel_out, 2, shortcut, groups)
+            for _ in range(n)
         )
 
     def forward(self, x):
-        x1 = x
-        x = self.attn(x)
-        x = x1 + x
-        x1 = x
-        x = self.ffn(x)
-        return x + x1
+        y = [self.cv1(x)]
+        y.extend(m(y[-1]) for m in self.m)
+        if self.gamma is not None:
+            return x + self.gamma.view(1, -1, 1, 1) * self.cv2(torch.cat(y, 1))
+        return self.cv2(torch.cat(y, 1))
 
 
-class C2PSA(nn.Module):
-    def __init__(self, in_channel, out_channel, kernel, stride, padding, dilation, groups):
+class Upsample(nn.Module):
+    def __init__(self, scale_factor=2.0, mode="nearest"):
         super().__init__()
-        self.out_channel = out_channel
-        self.cv1 = Conv(
-            in_channel[0],
-            out_channel[0],
-            kernel[0],
-            stride=stride[0],
-            padding=padding[0],
-            dilation=dilation[0],
-            groups=groups[0],
-        )
-        self.cv2 = Conv(
-            in_channel[1],
-            out_channel[1],
-            kernel[1],
-            stride=stride[1],
-            padding=padding[1],
-            dilation=dilation[1],
-            groups=groups[1],
-        )
-        self.m = nn.Sequential(
-            PSABlock(
-                in_channel[2:7],
-                out_channel[2:7],
-                kernel[2:7],
-                stride=stride[2:7],
-                padding=padding[2:7],
-                dilation=dilation[2:7],
-                groups=groups[2:7],
-            )
-        )
+        self.scale_factor = scale_factor
+        self.mode = mode
 
     def forward(self, x):
-        x = self.cv1(x)
-        a, b = x.split((int(self.out_channel[0] / 2), int(self.out_channel[0] / 2)), 1)
-        x = self.m(b)
-        x = self.cv2(torch.cat((a, x), 1))
+        x = f.upsample(x, scale_factor=self.scale_factor, mode=self.mode)
         return x
 
 
-class Detect(nn.Module):
-    def __init__(self, in_channel, out_channel, kernel, stride, padding, dilation, groups):
+class DownsampleConv(nn.Module):
+    def __init__(self, kernel_size=2, stride=2, padding=0, channel_adjust=True):
         super().__init__()
-        self.out_channel = out_channel
-        self.in_channel = in_channel
-        self.cv2 = nn.ModuleList(
-            [
-                nn.Sequential(
-                    Conv(
-                        in_channel[0],
-                        out_channel[0],
-                        kernel[0],
-                        stride=stride[0],
-                        padding=padding[0],
-                        dilation=dilation[0],
-                        groups=groups[0],
-                    ),
-                    Conv(
-                        in_channel[1],
-                        out_channel[1],
-                        kernel[1],
-                        stride=stride[1],
-                        padding=padding[1],
-                        dilation=dilation[1],
-                        groups=groups[1],
-                    ),
-                    nn.Conv2d(
-                        in_channel[2],
-                        out_channel[2],
-                        kernel[2],
-                        stride=stride[2],
-                        padding=padding[2],
-                        dilation=dilation[2],
-                        groups=groups[2],
-                    ),
-                ),
-                nn.Sequential(
-                    Conv(
-                        in_channel[3],
-                        out_channel[3],
-                        kernel[3],
-                        stride=stride[3],
-                        padding=padding[3],
-                        dilation=dilation[3],
-                        groups=groups[3],
-                    ),
-                    Conv(
-                        in_channel[4],
-                        out_channel[4],
-                        kernel[4],
-                        stride=stride[4],
-                        padding=padding[4],
-                        dilation=dilation[4],
-                        groups=groups[4],
-                    ),
-                    nn.Conv2d(
-                        in_channel[5],
-                        out_channel[5],
-                        kernel[5],
-                        stride=stride[5],
-                        padding=padding[5],
-                        dilation=dilation[5],
-                        groups=groups[5],
-                    ),
-                ),
-                nn.Sequential(
-                    Conv(
-                        in_channel[6],
-                        out_channel[6],
-                        kernel[6],
-                        stride=stride[6],
-                        padding=padding[6],
-                        dilation=dilation[6],
-                        groups=groups[6],
-                    ),
-                    Conv(
-                        in_channel[7],
-                        out_channel[7],
-                        kernel[7],
-                        stride=stride[7],
-                        padding=padding[7],
-                        dilation=dilation[7],
-                        groups=groups[7],
-                    ),
-                    nn.Conv2d(
-                        in_channel[8],
-                        out_channel[8],
-                        kernel[8],
-                        stride=stride[8],
-                        padding=padding[8],
-                        dilation=dilation[8],
-                        groups=groups[8],
-                    ),
-                ),
-            ]
-        )
-        self.cv3 = nn.ModuleList(
-            [
-                nn.Sequential(
-                    nn.Sequential(
-                        Conv(
-                            in_channel[9],
-                            out_channel[9],
-                            kernel[9],
-                            stride=stride[9],
-                            padding=padding[9],
-                            dilation=dilation[9],
-                            groups=groups[9],
-                        ),
-                        Conv(
-                            in_channel[10],
-                            out_channel[10],
-                            kernel[10],
-                            stride=stride[10],
-                            padding=padding[10],
-                            dilation=dilation[10],
-                            groups=groups[10],
-                        ),
-                    ),
-                    nn.Sequential(
-                        Conv(
-                            in_channel[11],
-                            out_channel[11],
-                            kernel[11],
-                            stride=stride[11],
-                            padding=padding[11],
-                            dilation=dilation[11],
-                            groups=groups[11],
-                        ),
-                        Conv(
-                            in_channel[12],
-                            out_channel[12],
-                            kernel[12],
-                            stride=stride[12],
-                            padding=padding[12],
-                            dilation=dilation[12],
-                            groups=groups[12],
-                        ),
-                    ),
-                    nn.Conv2d(
-                        in_channel[13],
-                        out_channel[13],
-                        kernel[13],
-                        stride=stride[13],
-                        padding=padding[13],
-                        dilation=dilation[13],
-                        groups=groups[13],
-                    ),
-                ),
-                nn.Sequential(
-                    nn.Sequential(
-                        Conv(
-                            in_channel[14],
-                            out_channel[14],
-                            kernel[14],
-                            stride=stride[14],
-                            padding=padding[14],
-                            dilation=dilation[14],
-                            groups=groups[14],
-                        ),
-                        Conv(
-                            in_channel[15],
-                            out_channel[15],
-                            kernel[15],
-                            stride=stride[15],
-                            padding=padding[15],
-                            dilation=dilation[15],
-                            groups=groups[15],
-                        ),
-                    ),
-                    nn.Sequential(
-                        Conv(
-                            in_channel[16],
-                            out_channel[16],
-                            kernel[16],
-                            stride=stride[16],
-                            padding=padding[16],
-                            dilation=dilation[16],
-                            groups=groups[16],
-                        ),
-                        Conv(
-                            in_channel[17],
-                            out_channel[17],
-                            kernel[17],
-                            stride=stride[17],
-                            padding=padding[17],
-                            dilation=dilation[17],
-                            groups=groups[17],
-                        ),
-                    ),
-                    nn.Conv2d(
-                        in_channel[18],
-                        out_channel[18],
-                        kernel[18],
-                        stride=stride[18],
-                        padding=padding[18],
-                        dilation=dilation[18],
-                        groups=groups[18],
-                    ),
-                ),
-                nn.Sequential(
-                    nn.Sequential(
-                        Conv(
-                            in_channel[19],
-                            out_channel[19],
-                            kernel[19],
-                            stride=stride[19],
-                            padding=padding[19],
-                            dilation=dilation[19],
-                            groups=groups[19],
-                        ),
-                        Conv(
-                            in_channel[20],
-                            out_channel[20],
-                            kernel[20],
-                            stride=stride[20],
-                            padding=padding[20],
-                            dilation=dilation[20],
-                            groups=groups[20],
-                        ),
-                    ),
-                    nn.Sequential(
-                        Conv(
-                            in_channel[21],
-                            out_channel[21],
-                            kernel[21],
-                            stride=stride[21],
-                            padding=padding[21],
-                            dilation=dilation[21],
-                            groups=groups[21],
-                        ),
-                        Conv(
-                            in_channel[22],
-                            out_channel[22],
-                            kernel[22],
-                            stride=stride[22],
-                            padding=padding[22],
-                            dilation=dilation[22],
-                            groups=groups[22],
-                        ),
-                    ),
-                    nn.Conv2d(
-                        in_channel[23],
-                        out_channel[23],
-                        kernel[23],
-                        stride=stride[23],
-                        padding=padding[23],
-                        dilation=dilation[23],
-                        groups=groups[23],
-                    ),
-                ),
-            ]
-        )
-        self.dfl = DFL()
+        self.downsample = nn.AvgPool2d(kernel_size, stride, padding)
+        if channel_adjust:
+            self.channel_adjust = Conv(in_channel, in_channel * 2, 1)
+        else:
+            self.channel_adjust = nn.Identity()
 
-    def forward(self, y1, y2, y3):
-        x1 = self.cv2[0](y1)
-        x2 = self.cv2[1](y2)
-        x3 = self.cv2[2](y3)
-        x4 = self.cv3[0](y1)
-        x5 = self.cv3[1](y2)
-        x6 = self.cv3[2](y3)
-
-        y1 = torch.cat((x1, x4), 1)
-        y2 = torch.cat((x2, x5), 1)
-        y3 = torch.cat((x3, x6), 1)
-        y_all = [y1, y2, y3]
-
-        y1 = torch.reshape(y1, (y1.shape[0], y1.shape[1], y1.shape[2] * y1.shape[3]))
-        y2 = torch.reshape(y2, (y2.shape[0], y2.shape[1], y2.shape[2] * y2.shape[3]))
-        y3 = torch.reshape(y3, (y3.shape[0], y3.shape[1], y3.shape[2] * y3.shape[3]))
-
-        y = torch.cat((y1, y2, y3), 2)
-
-        ya, yb = y.split((self.out_channel[0], self.out_channel[10]), 1)
-
-        ya = torch.reshape(ya, (ya.shape[0], int(ya.shape[1] / self.in_channel[24]), self.in_channel[24], ya.shape[2]))
-        ya = torch.permute(ya, (0, 2, 1, 3))
-        ya = f.softmax(ya, dim=1)
-        c = self.dfl(ya)
-        c1 = torch.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))
-        c2 = c1
-        c1 = c1[:, 0:2, :]
-        c2 = c2[:, 2:4, :]
-        anchor, strides = (y_all.transpose(0, 1) for y_all in make_anchors(y_all, [8, 16, 32], 0.5))
-        anchor.unsqueeze(0)
-        c1 = anchor - c1
-        c2 = anchor + c2
-        z1 = c2 - c1
-        z2 = c1 + c2
-        z2 = z2 / 2
-        z = torch.concat((z2, z1), 1)
-        z = z * strides
-        yb = torch.sigmoid(yb)
-        out = torch.concat((z, yb), 1)
-        return out
+    def forward(self, x):
+        x = self.downsample(x)
+        x = self.channel_adjust(x)
+        return x
 
 
 class Concat(nn.Module):
-    def __init__(self, dimension=1):
+    def __init__(self):
         super().__init__()
-        self.d = dimension
 
     def forward(self, x):
-        return torch.cat(x, self.d)
+        x = torch.Concat(x)
+        return x
+
+
+class C3AH(nn.Module):
+    def __init__(self, c1, c2, e=1.0, num_hyperedges=8, context="both"):
+        super().__init__()
+        c_ = int(c2 * e)
+        assert c_ % 16 == 0, "Dimension of AdaHGComputation should be a multiple of 16."
+        num_heads = c_ // 16
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c1, c_, 1, 1)
+        self.m = AdaHGComputation(
+            embed_dim=c_, num_hyperedges=num_hyperedges, num_heads=num_heads, dropout=0.1, context=context
+        )
+        self.cv3 = Conv(2 * c_, c2, 1)
+
+    def forward(self, x):
+        return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
+
+
+class AdaHyperedgeGen(nn.Module):
+    def __init__(self, node_dim, num_hyperedges, num_heads=4, dropout=0.1, context="both"):
+        super().__init__()
+        self.num_heads = num_heads
+        self.num_hyperedges = num_hyperedges
+        self.head_dim = node_dim // num_heads
+        self.context = context
+
+        self.prototype_base = nn.Parameter(torch.Tensor(num_hyperedges, node_dim))
+        nn.init.xavier_uniform_(self.prototype_base)
+        if context in ("mean", "max"):
+            self.context_net = nn.Linear(node_dim, num_hyperedges * node_dim)
+        elif context == "both":
+            self.context_net = nn.Linear(2 * node_dim, num_hyperedges * node_dim)
+        else:
+            raise ValueError(f"Unsupported context '{context}'. " "Expected one of: 'mean', 'max', 'both'.")
+
+        self.pre_head_proj = nn.Linear(node_dim, node_dim)
+
+        self.dropout = nn.Dropout(dropout)
+        self.scaling = math.sqrt(self.head_dim)
+
+    def forward(self, X):
+        B, N, D = X.shape
+        if self.context == "mean":
+            context_cat = X.mean(dim=1)
+        elif self.context == "max":
+            context_cat, _ = X.max(dim=1)
+        else:
+            avg_context = X.mean(dim=1)
+            max_context, _ = X.max(dim=1)
+            context_cat = torch.cat([avg_context, max_context], dim=-1)
+        prototype_offsets = self.context_net(context_cat).view(B, self.num_hyperedges, D)
+        prototypes = self.prototype_base.unsqueeze(0) + prototype_offsets
+
+        X_proj = self.pre_head_proj(X)
+        X_heads = X_proj.view(B, N, self.num_heads, self.head_dim).transpose(1, 2)
+        proto_heads = prototypes.view(B, self.num_hyperedges, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+
+        X_heads_flat = X_heads.reshape(B * self.num_heads, N, self.head_dim)
+        proto_heads_flat = proto_heads.reshape(B * self.num_heads, self.num_hyperedges, self.head_dim).transpose(1, 2)
+
+        logits = torch.bmm(X_heads_flat, proto_heads_flat) / self.scaling
+        logits = logits.view(B, self.num_heads, N, self.num_hyperedges).mean(dim=1)
+
+        logits = self.dropout(logits)
+
+        return F.softmax(logits, dim=1)
+
+
+class AdaHGConv(nn.Module):
+    def __init__(self, embed_dim, num_hyperedges=16, num_heads=4, dropout=0.1, context="both"):
+        super().__init__()
+        self.edge_generator = AdaHyperedgeGen(embed_dim, num_hyperedges, num_heads, dropout, context)
+        self.edge_proj = nn.Sequential(nn.Linear(embed_dim, embed_dim), nn.GELU())
+        self.node_proj = nn.Sequential(nn.Linear(embed_dim, embed_dim), nn.GELU())
+
+    def forward(self, X):
+        A = self.edge_generator(X)
+
+        He = torch.bmm(A.transpose(1, 2), X)
+        He = self.edge_proj(He)
+
+        X_new = torch.bmm(A, He)
+        X_new = self.node_proj(X_new)
+
+        return X_new + X
+
+
+class AdaHGComputation(nn.Module):
+    def __init__(self, embed_dim, num_hyperedges=16, num_heads=8, dropout=0.1, context="both"):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.hgnn = AdaHGConv(
+            embed_dim=embed_dim, num_hyperedges=num_hyperedges, num_heads=num_heads, dropout=dropout, context=context
+        )
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        tokens = x.flatten(2).transpose(1, 2)
+        tokens = self.hgnn(tokens)
+        x_out = tokens.transpose(1, 2).view(B, C, H, W)
+        return x_out
+
+
+class FuseModule(nn.Module):
+    def __init__(self, c_in, channel_adjust):
+        super(FuseModule, self).__init__()
+        self.downsample = nn.AvgPool2d(kernel_size=2)
+        self.upsample = nn.Upsample(scale_factor=2, mode="nearest")
+        if channel_adjust:
+            self.conv_out = Conv(4 * c_in, c_in, 1)
+        else:
+            self.conv_out = Conv(3 * c_in, c_in, 1)
+
+    def forward(self, x):
+        x1_ds = self.downsample(x[0])
+        x3_up = self.upsample(x[2])
+        x_cat = torch.cat([x1_ds, x[1], x3_up], dim=1)
+        out = self.conv_out(x_cat)
+        return out
+
+
+class HyperACE(nn.Module):
+    def __init__(
+        self,
+        c1,
+        c2,
+        n=1,
+        num_hyperedges=8,
+        dsc3k=True,
+        shortcut=False,
+        e1=0.5,
+        e2=1,
+        context="both",
+        channel_adjust=True,
+    ):
+        super().__init__()
+        self.c = int(c2 * e1)
+        self.cv1 = Conv(c1, 3 * self.c, 1, 1)
+        self.cv2 = Conv((4 + n) * self.c, c2, 1)
+        self.m = nn.ModuleList(
+            DSC3k(self.c, self.c, 2, shortcut, k1=3, k2=7) if dsc3k else DSBottleneck(self.c, self.c, shortcut=shortcut)
+            for _ in range(n)
+        )
+        self.fuse = FuseModule(c1, channel_adjust)
+        self.branch1 = C3AH(self.c, self.c, e2, num_hyperedges, context)
+        self.branch2 = C3AH(self.c, self.c, e2, num_hyperedges, context)
+
+    def forward(self, X):
+        x = self.fuse(X)
+        y = list(self.cv1(x).chunk(3, 1))
+        out1 = self.branch1(y[1])
+        out2 = self.branch2(y[1])
+        y.extend(m(y[-1]) for m in self.m)
+        y[1] = out1
+        y.append(out2)
+        return self.cv2(torch.cat(y, 1))
+
+
+class FullPAD_Tunnel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.gate = nn.Parameter(torch.tensor(0.0))
+
+    def forward(self, x):
+        out = x[0] + self.gate * x[1]
+        return out
 
 
 class YoloV13(nn.Module):
     def __init__(self):
         super().__init__()
         self.model = nn.Sequential(
-            Conv(3, 16, kernel=3, stride=2, padding=1),  # 0
-            Conv(16, 32, kernel=3, stride=2, padding=1),  # 1
-            C3k2(  # 2
-                [32, 48, 16, 8],
-                [32, 64, 8, 16],
-                [1, 1, 3, 3],
-                [1, 1, 1, 1],
-                [0, 0, 1, 1],
-                [1, 1, 1, 1],
-                [1, 1, 1, 1],
-                is_bk_enabled=True,
-            ),
-            Conv(64, 64, kernel=3, stride=2, padding=1),  # 3
-            C3k2(  # 4
-                [64, 96, 32, 16],
-                [64, 128, 16, 32],
-                [1, 1, 3, 3],
-                [1, 1, 1, 1],
-                [0, 0, 1, 1],
-                [1, 1, 1, 1],
-                [1, 1, 1, 1],
-                is_bk_enabled=True,
-            ),
-            Conv(128, 128, kernel=3, stride=2, padding=1),  # 5
-            C3k2(
-                [128, 192, 64, 64, 64, 32, 32, 32, 32],  # 6
-                [128, 128, 32, 32, 64, 32, 32, 32, 32],
-                [1, 1, 1, 1, 1, 3, 3, 3, 3],
-                [1, 1, 1, 1, 1, 1, 1, 1, 1],
-                [0, 0, 0, 0, 0, 1, 1, 1, 1],
-                [1, 1, 1, 1, 1, 1, 1, 1, 1],
-                [1, 1, 1, 1, 1, 1, 1, 1, 1],
-            ),
-            Conv(128, 256, kernel=3, stride=2, padding=1),  # 7
-            C3k2(
-                [256, 384, 128, 128, 128, 64, 64, 64, 64],  # 8
-                [256, 256, 64, 64, 128, 64, 64, 64, 64],
-                [1, 1, 1, 1, 1, 3, 3, 3, 3],
-                [1, 1, 1, 1, 1, 1, 1, 1, 1],
-                [0, 0, 0, 0, 0, 1, 1, 1, 1],
-                [1, 1, 1, 1, 1, 1, 1, 1, 1],
-                [1, 1, 1, 1, 1, 1, 1, 1, 1],
-            ),
-            SPPF([256, 512], [128, 256], [1, 1], [1, 1]),  # 9
-            C2PSA(
-                [256, 256, 128, 128, 128, 128, 256],  # 10
-                [256, 256, 256, 128, 128, 256, 128],
-                [1, 1, 1, 1, 3, 1, 1],
-                [1, 1, 1, 1, 1, 1, 1],
-                [0, 0, 0, 0, 1, 0, 0],
-                [1, 1, 1, 1, 1, 1, 1],
-                [1, 1, 1, 1, 128, 1, 1],
-            ),
-            nn.Upsample(scale_factor=2.0, mode="nearest"),
-            Concat(),
-            C3k2(  # 13
-                [384, 192, 64, 32],
-                [128, 128, 32, 64],
-                [1, 1, 3, 3],
-                [1, 1, 1, 1],
-                [0, 0, 1, 1],
-                [1, 1, 1, 1],
-                [1, 1, 1, 1],
-                is_bk_enabled=True,
-            ),
-            nn.Upsample(scale_factor=2.0, mode="nearest"),
-            Concat(),
-            C3k2(  # 16
-                [256, 96, 32, 16],
-                [64, 64, 16, 32],
-                [1, 1, 3, 3],
-                [1, 1, 1, 1],
-                [0, 0, 1, 1],
-                [1, 1, 1, 1],
-                [1, 1, 1, 1],
-                is_bk_enabled=True,
-            ),
-            Conv(64, 64, kernel=3, stride=2, padding=1),  # 17
-            Concat(),
-            C3k2(  # 19
-                [192, 192, 64, 32],
-                [128, 128, 32, 64],
-                [1, 1, 3, 3],
-                [1, 1, 1, 1],
-                [0, 0, 1, 1],
-                [1, 1, 1, 1],
-                [1, 1, 1, 1],
-                is_bk_enabled=True,
-            ),
-            Conv(128, 128, kernel=3, stride=2, padding=1),  # 20
-            Concat(),
-            C3k2(
-                [384, 384, 128, 128, 128, 64, 64, 64, 64],  # 22
-                [256, 256, 64, 64, 128, 64, 64, 64, 64],
-                [1, 1, 1, 1, 1, 3, 3, 3, 3],
-                [1, 1, 1, 1, 1, 1, 1, 1, 1],
-                [0, 0, 0, 0, 0, 1, 1, 1, 1],
-                [1, 1, 1, 1, 1, 1, 1, 1, 1],
-                [1, 1, 1, 1, 1, 1, 1, 1, 1],
-            ),
-            Detect(  # 23
-                [
-                    64,
-                    64,
-                    64,
-                    128,
-                    64,
-                    64,
-                    256,
-                    64,
-                    64,
-                    64,
-                    64,
-                    80,
-                    80,
-                    80,
-                    128,
-                    128,
-                    80,
-                    80,
-                    80,
-                    256,
-                    256,
-                    80,
-                    80,
-                    80,
-                    16,
-                ],
-                [64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 80, 80, 80, 80, 128, 80, 80, 80, 80, 256, 80, 80, 80, 80, 1],
-                [3, 3, 1, 3, 3, 1, 3, 3, 1, 3, 1, 3, 1, 1, 3, 1, 3, 1, 1, 3, 1, 3, 1, 1, 1],
-                [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                [1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0],
-                [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                [1, 1, 1, 1, 1, 1, 1, 1, 1, 64, 1, 80, 1, 1, 128, 1, 80, 1, 1, 256, 1, 80, 1, 1, 1],
-            ),
+            Conv(3, 96, kernel=(3, 3), stride=(2, 2), padding=(1, 1)),  # 0
+            Conv(96, 192, kernel=(3, 3), stride=(2, 2), padding=(1, 1), groups=2, bias=False),  # 1
+            Dsc3k2(
+                in_channel=[192, 384],
+                out_channel=[192, 384],
+                kernel=[(1, 1), (1, 1)],
+                stride=[(1, 1), (1, 1)],
+                padding=[(1, 1), (1, 1)],
+            ),  # 2
+            Conv(384, 384, kernel=(3, 3), stride=(2, 2), padding=(1, 1), groups=4, bias=False),  # 3
+            Dsc3k2(
+                in_channel=[384, 768],
+                out_channel=[384, 768],
+                kernel=[(1, 1), (1, 1)],
+                stride=[(1, 1), (1, 1)],
+                padding=[(1, 1), (1, 1)],
+            ),  # 4
+            DsConv(
+                in_channel=[768, 768],
+                out_channel=[768, 768],
+                kernel=[(3, 3), (1, 1)],
+                stride=[(2, 2), (1, 1)],
+                padding=[(1, 1), (1, 1)],
+                groups=[768, 1],
+                bias=False,
+                enable_act=True,
+            ),  # 5
+            A2C2f(),  # 6
+            DsConv(
+                in_channel=[768, 768],
+                out_channel=[768, 768],
+                kernel=[(3, 3), (1, 1)],
+                stride=[(2, 2), (1, 1)],
+                padding=[(1, 1), (1, 1)],
+                groups=[768, 1],
+                bias=False,
+                enable_act=True,
+            ),  # 7
+            A2C2f(),  # 8
+            HyperACE(),  # 9
+            Upsample(scale_factor=2.0, mode="nearest"),  # 10
+            DownsampleConv(),  # 11
+            FullPAD_Tunnel(),  # 12
+            FullPAD_Tunnel(),  # 13
+            FullPAD_Tunnel(),  # 14
+            Upsample(scale_factor=2.0, mode="nearest"),  # 15
+            Concat(),  # 16
+            DSC3k2(
+                in_channel=[1536, 768],
+                out_channel=[1536, 768],
+                kernel=[(1, 1), (1, 1)],
+                stride=[(1, 1), (1, 1)],
+                padding=[(1, 1), (1, 1)],
+            ),  # 17
+            FullPAD_Tunnel(),  # 18
+            Upsample(scale_factor=2.0, mode="nearest"),  # 19
+            Concat(),  # 20
+            DSC3k2(
+                in_channel=[1536, 768],
+                out_channel=[1536, 768],
+                kernel=[(1, 1), (1, 1)],
+                stride=[(1, 1), (1, 1)],
+                padding=[(1, 1), (1, 1)],
+            ),  # 21
+            Conv(),  # 22
+            FullPAD_Tunnel(),  # 23
+            Conv(),  # 24
+            Concat(),  # 25
+            DSC3k2(
+                in_channel=[1536, 768],
+                out_channel=[1536, 768],
+                kernel=[(1, 1), (1, 1)],
+                stride=[(1, 1), (1, 1)],
+                padding=[(1, 1), (1, 1)],
+            ),  # 26
+            FullPAD_Tunnel(),  # 27
+            Conv(),  # 28
+            Concat(),  # 29
+            DSC3k2(
+                in_channel=[1536, 768],
+                out_channel=[1536, 768],
+                kernel=[(1, 1), (1, 1)],
+                stride=[(1, 1), (1, 1)],
+                padding=[(1, 1), (1, 1)],
+            ),  # 30
+            FullPAD_Tunnel(),  # 31
+            Detect(),  # 32
         )
 
     def forward(self, x):
