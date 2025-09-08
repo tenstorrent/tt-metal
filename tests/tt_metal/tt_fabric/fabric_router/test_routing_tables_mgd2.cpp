@@ -833,4 +833,89 @@ TEST(MeshGraphValidation, TestDualGalaxyMeshGraphMGD2) {
         MeshCoordinateRange(MeshCoordinate(0, 4), MeshCoordinate(7, 7)));
 }
 
+// Black hole tests for p150, p100, p150 x8 - MGD2
+TEST(MeshGraphValidation, TestP150BlackHoleMeshGraphMGD2) {
+    const std::filesystem::path p150_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto";
+    auto mesh_graph = std::make_unique<MeshGraph>(p150_mesh_graph_desc_path.string());
+    
+    EXPECT_THAT(mesh_graph->get_mesh_ids(), ElementsAre(MeshId{0}));
+    EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{0}), MeshShape(1, 1));
+    EXPECT_EQ(mesh_graph->get_coord_range(MeshId{0}), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
+    
+    // Check chip IDs - single chip
+    EXPECT_EQ(
+        mesh_graph->get_chip_ids(MeshId{0}),
+        MeshContainer<chip_id_t>(MeshShape(1, 1), std::vector<chip_id_t>{0}));
+}
+
+TEST_F(ControlPlaneFixture, TestP150BlackHoleControlPlaneInitMGD2) {
+    const std::filesystem::path p150_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto";
+    [[maybe_unused]] auto control_plane = make_control_plane(p150_mesh_graph_desc_path);
+}
+
+TEST(MeshGraphValidation, TestP100BlackHoleMeshGraphMGD2) {
+    const std::filesystem::path p100_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.textproto";
+    auto mesh_graph = std::make_unique<MeshGraph>(p100_mesh_graph_desc_path.string());
+    
+    EXPECT_THAT(mesh_graph->get_mesh_ids(), ElementsAre(MeshId{0}));
+    EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{0}), MeshShape(1, 1));
+    EXPECT_EQ(mesh_graph->get_coord_range(MeshId{0}), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
+    
+    // Check chip IDs - single chip
+    EXPECT_EQ(
+        mesh_graph->get_chip_ids(MeshId{0}),
+        MeshContainer<chip_id_t>(MeshShape(1, 1), std::vector<chip_id_t>{0}));
+}
+
+TEST_F(ControlPlaneFixture, TestP100BlackHoleControlPlaneInitMGD2) {
+    const std::filesystem::path p100_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.textproto";
+    [[maybe_unused]] auto control_plane = make_control_plane(p100_mesh_graph_desc_path);
+}
+
+TEST(MeshGraphValidation, TestP150X8BlackHoleMeshGraphMGD2) {
+    const std::filesystem::path p150_x8_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto";
+    auto mesh_graph = std::make_unique<MeshGraph>(p150_x8_mesh_graph_desc_path.string());
+    
+    EXPECT_THAT(mesh_graph->get_mesh_ids(), ElementsAre(MeshId{0}));
+    EXPECT_EQ(mesh_graph->get_mesh_shape(MeshId{0}), MeshShape(2, 4));
+    EXPECT_EQ(mesh_graph->get_coord_range(MeshId{0}), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 3)));
+    
+    // Check chip IDs - 8 chips in 2x4 configuration
+    EXPECT_EQ(
+        mesh_graph->get_chip_ids(MeshId{0}),
+        MeshContainer<chip_id_t>(MeshShape(2, 4), std::vector<chip_id_t>{0, 1, 2, 3, 4, 5, 6, 7}));
+}
+
+TEST_F(ControlPlaneFixture, TestP150X8BlackHoleControlPlaneInitMGD2) {
+    const std::filesystem::path p150_x8_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto";
+    [[maybe_unused]] auto control_plane = make_control_plane(p150_x8_mesh_graph_desc_path);
+}
+
+TEST_F(ControlPlaneFixture, TestP150X8BlackHoleFabricRoutesMGD2) {
+    const std::filesystem::path p150_x8_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane(p150_x8_mesh_graph_desc_path);
+    
+    // Test routing between different chips in the 2x4 mesh
+    auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 0);
+    EXPECT_GT(valid_chans.size(), 0);
+    for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 7), chan);
+        EXPECT_EQ(path.size() > 0, true);
+    }
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests
