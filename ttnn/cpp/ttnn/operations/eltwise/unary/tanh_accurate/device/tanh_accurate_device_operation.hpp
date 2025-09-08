@@ -14,6 +14,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation_types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::operations::unary {
 
@@ -41,6 +42,7 @@ struct TanhAccurateDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
+        const std::vector<UnaryWithParam>& op_chain,
         DataType output_dtype,
         const MemoryConfig& output_memory_config,
         bool fp32_dest_acc_en,

@@ -78,61 +78,13 @@ STATIC_ONLY_ARGS_CONFIGS = [
 ]
 
 
-def get_individual_test_names(gtest_filter):
-    """
-    Get the list of individual test names that match the given filter pattern.
-    This resolves star patterns like AccessorTests/AccessorBenchmarks.GetNocAddr/*
-    into individual test names like AccessorTests/AccessorBenchmarks.GetNocAddr/0, etc.
-    """
-    ENV = os.environ.copy()
-    BASE = Path(ENV["TT_METAL_HOME"])
-    binary_path = Path(BASE / "build" / "test" / "ttnn" / "unit_tests_ttnn_accessor")
-
-    # Check if the binary exists
-    if not binary_path.exists():
-        logger.error(f"Test binary not found at: {binary_path}")
-        logger.error("This usually means the build was incomplete or ttnn tests were not built.")
-        logger.error("Make sure to build with --build-ttnn-tests or --build-all flags.")
-        return []
-
-    # Use --gtest_list_tests with the filter to get all matching test names
-    result = subprocess.run(
-        [binary_path, f"--gtest_filter={gtest_filter}", "--gtest_list_tests"], env=ENV, capture_output=True, text=True
-    )
-
-    if result.returncode != 0:
-        logger.error(f"Failed to list tests: {result.stderr}")
-        return []
-
-    # Parse the output to extract individual test names
-    test_names = []
-    current_test_case = None
-
-    for line in result.stdout.split("\n"):
-        # Skip empty lines and the "Running main() from gmock_main.cc" line
-        if not line.strip() or "Running main() from" in line:
-            continue
-
-        # Test case names don't have leading spaces and end with '.'
-        if not line.startswith(" ") and line.endswith("."):
-            current_test_case = line.rstrip(".")  # Remove trailing '.'
-        # Test names have leading spaces
-        elif line.startswith(" ") and current_test_case:
-            # Extract just the test name part (before any comment)
-            test_name = line.strip().split()[0]  # Take first word, ignore comments after #
-            if test_name:
-                full_test_name = f"{current_test_case}.{test_name}"
-                test_names.append(full_test_name)
-
-    return test_names
-
-
 def benchmark_impl(gtest_filter, res_dir, export_results_to=None, args_configs=None, n_repeat=1):
     if args_configs is None:
         args_configs = ARGS_CONFIGS
 
     ENV = os.environ.copy()
     ENV["TT_METAL_DEVICE_PROFILER"] = "1"
+    ENV["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
     BASE = Path(ENV["TT_METAL_HOME"])
 
     binary_path = Path(BASE / "build" / "test" / "ttnn" / "unit_tests_ttnn_accessor")
@@ -145,18 +97,7 @@ def benchmark_impl(gtest_filter, res_dir, export_results_to=None, args_configs=N
         logger.error("Example: ./build_metal.sh --build-ttnn-tests --enable-profiler")
         raise FileNotFoundError(f"Test binary not found: {binary_path}")
 
-    # Get individual test names if using star pattern
-    if "*" in gtest_filter:
-        individual_tests = get_individual_test_names(gtest_filter)
-        logger.info(f"Found {len(individual_tests)} individual tests for pattern '{gtest_filter}'")
-
-        # Run each test individually
-        for test_name in individual_tests:
-            logger.info(f"Running individual test: {test_name}")
-            subprocess.run([binary_path, f"--gtest_filter={test_name}"], env=ENV)
-    else:
-        # Run the test as before for non-star patterns
-        subprocess.run([binary_path, f"--gtest_filter={gtest_filter}"], env=ENV)
+    subprocess.run([binary_path, f"--gtest_filter={gtest_filter}"], env=ENV)
 
     setup = device_post_proc_config.default_setup()
     zone_names = []

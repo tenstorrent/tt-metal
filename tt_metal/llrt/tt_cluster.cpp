@@ -62,9 +62,7 @@ inline std::string get_soc_description_file(
         case tt::ARCH::BLACKHOLE:
             file = is_sim ? "blackhole_simulation_1x2_arch.yaml" : "blackhole_140_arch.yaml";
             break;
-        case tt::ARCH::QUASAR:
-            file = is_sim ? "quasar_simulation_1x3_arch.yaml" : "quasar_simulation_1x3_arch.yaml";
-            break;
+        case tt::ARCH::QUASAR: file = "quasar_simulation_1x3_arch.yaml"; break;
         default: throw std::runtime_error("Unsupported device arch");
     }
     path += file;

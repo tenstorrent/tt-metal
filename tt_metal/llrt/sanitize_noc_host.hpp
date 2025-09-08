@@ -15,7 +15,7 @@ namespace tt {
 
 #define DEBUG_VALID_REG_ADDR(a) tt::tt_metal::MetalContext::instance().hal().valid_reg_addr(a)
 #define DEBUG_VALID_WORKER_ADDR(a, l) (DEBUG_VALID_L1_ADDR(a, l) || (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
-#define DEBUG_VALID_DRAM_ADDR(a, l, b, e) (((a) >= b) && ((a) + (l) <= e))
+#define DEBUG_VALID_DRAM_ADDR(a, l, b, e) (((a) >= (b)) && ((a) + (l) <= (e)))
 
 #define DEBUG_VALID_ETH_ADDR(a, l)                                                        \
     ((((a) >= HAL_MEM_ETH_BASE) && ((a) + (l) <= HAL_MEM_ETH_BASE + HAL_MEM_ETH_SIZE)) || \
@@ -55,6 +55,7 @@ static std::string noc_address(CoreCoord core, uint64_t a, uint32_t l) {
     return ss.str();
 }
 
+// NOLINTBEGIN(cppcoreguidelines-no-malloc)
 static void print_stack_trace() {
     void* array[15];
 
@@ -69,6 +70,7 @@ static void print_stack_trace() {
 
     free(strings);
 }
+// NOLINTEND(cppcoreguidelines-no-malloc)
 
 static void watcher_sanitize_host_noc(
     const char* what,

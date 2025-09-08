@@ -11,10 +11,13 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
+#include "assert.hpp"
 #include "debug_tools_fixture.hpp"
 #include "dev_msgs.h"
+#include "hal_types.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -31,138 +34,125 @@ using namespace tt::tt_metal;
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 static void RunTest(
-    WatcherFixture* fixture,
-    IDevice* device,
-    riscv_id_t riscv_type,
+    MeshWatcherFixture* fixture,
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    HalProgrammableCoreType programmable_core_type,
+    HalProcessorClassType processor_class,
+    int processor_id,
     debug_assert_type_t assert_type = DebugAssertTripped) {
     // Set up program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     // Depending on riscv type, choose one core to run the test on (since the test hangs the board).
     CoreCoord logical_core, virtual_core;
-    if (riscv_type == DebugErisc) {
-        if (device->get_active_ethernet_cores(true).empty()) {
-            log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
-            GTEST_SKIP();
-        }
-        logical_core = *(device->get_active_ethernet_cores(true).begin());
-        virtual_core = device->ethernet_core_from_logical_core(logical_core);
-    } else if (riscv_type == DebugIErisc) {
-        if (device->get_inactive_ethernet_cores().empty()) {
-            log_info(LogTest, "Skipping this test since device has no inactive ethernet cores.");
-            GTEST_SKIP();
-        }
-        logical_core = *(device->get_inactive_ethernet_cores().begin());
-        virtual_core = device->ethernet_core_from_logical_core(logical_core);
-    } else {
-        logical_core = CoreCoord{0, 0};
-        virtual_core = device->worker_core_from_logical_core(logical_core);
+    switch (programmable_core_type) {
+        case HalProgrammableCoreType::TENSIX:
+            logical_core = {0, 0};
+            virtual_core = device->worker_core_from_logical_core(logical_core);
+            break;
+        case HalProgrammableCoreType::ACTIVE_ETH:
+            if (device->get_active_ethernet_cores(true).empty()) {
+                log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
+                GTEST_SKIP();
+            }
+            logical_core = *(device->get_active_ethernet_cores(true).begin());
+            virtual_core = device->ethernet_core_from_logical_core(logical_core);
+            break;
+        case HalProgrammableCoreType::IDLE_ETH:
+            if (device->get_inactive_ethernet_cores().empty()) {
+                log_info(LogTest, "Skipping this test since device has no inactive ethernet cores.");
+                GTEST_SKIP();
+            }
+            logical_core = *(device->get_inactive_ethernet_cores().begin());
+            virtual_core = device->ethernet_core_from_logical_core(logical_core);
+            break;
+        case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported programmable core type");
     }
     log_info(LogTest, "Running test on device {} core {}...", device->id(), virtual_core.str());
 
     // Set up the kernel on the correct risc
     KernelHandle assert_kernel;
     std::string risc;
-    switch(riscv_type) {
-        case DebugBrisc:
-            assert_kernel = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
-                logical_core,
-                DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::RISCV_0_default
-                }
-            );
-            risc = " brisc";
+    switch (programmable_core_type) {
+        case HalProgrammableCoreType::TENSIX:
+            switch (processor_class) {
+                case HalProcessorClassType::DM:
+                    switch (processor_id) {
+                        case 0:
+                            assert_kernel = CreateKernel(
+                                program_,
+                                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
+                                logical_core,
+                                DataMovementConfig{
+                                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                                    .noc = tt_metal::NOC::RISCV_0_default});
+                            risc = " brisc";
+                            break;
+                        case 1:
+                            assert_kernel = CreateKernel(
+                                program_,
+                                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
+                                logical_core,
+                                DataMovementConfig{
+                                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                                    .noc = tt_metal::NOC::RISCV_1_default});
+                            risc = "ncrisc";
+                            break;
+                        default: TT_THROW("Unsupported DM processor id {}", processor_id);
+                    }
+                    break;
+                case HalProcessorClassType::COMPUTE:
+                    TT_ASSERT(0 <= processor_id && processor_id < 3);
+                    assert_kernel = CreateKernel(
+                        program_,
+                        "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
+                        logical_core,
+                        ComputeConfig{.defines = {{fmt::format("TRISC{}", processor_id), "1"}}});
+                    risc = fmt::format("trisc{}", processor_id);
+                    break;
+            }
             break;
-        case DebugNCrisc:
+        case HalProgrammableCoreType::ACTIVE_ETH:
             assert_kernel = CreateKernel(
-                program,
+                program_,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                 logical_core,
-                DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                    .noc = tt_metal::NOC::RISCV_1_default
-                }
-            );
-            risc = "ncrisc";
-            break;
-        case DebugTrisc0:
-            assert_kernel = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
-                logical_core,
-                ComputeConfig{
-                    .defines = {{"TRISC0", "1"}}
-                }
-            );
-            risc = "trisc0";
-            break;
-        case DebugTrisc1:
-            assert_kernel = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
-                logical_core,
-                ComputeConfig{
-                    .defines = {{"TRISC1", "1"}}
-                }
-            );
-            risc = "trisc1";
-            break;
-        case DebugTrisc2:
-            assert_kernel = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
-                logical_core,
-                ComputeConfig{
-                    .defines = {{"TRISC2", "1"}}
-                }
-            );
-            risc = "trisc2";
-            break;
-        case DebugErisc:
-            assert_kernel = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
-                logical_core,
-                EthernetConfig{
-                    .noc = tt_metal::NOC::NOC_0
-                }
-            );
+                EthernetConfig{.noc = tt_metal::NOC::NOC_0});
             risc = "erisc";
             break;
-        case DebugIErisc:
+        case HalProgrammableCoreType::IDLE_ETH:
             assert_kernel = CreateKernel(
-                program,
+                program_,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                 logical_core,
-                EthernetConfig{
-                    .eth_mode = Eth::IDLE,
-                    .noc = tt_metal::NOC::NOC_0
-                }
-            );
+                EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
             risc = "erisc";
             break;
-        default: log_info(tt::LogTest, "Unsupported risc type: {}, skipping test...", riscv_type); GTEST_SKIP();
+        case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported programmable core type");
     }
 
     // Write runtime args that should not trip an assert.
     const std::vector<uint32_t> safe_args = {3, 4, static_cast<uint32_t>(assert_type)};
-    SetRuntimeArgs(program, assert_kernel, logical_core, safe_args);
+    SetRuntimeArgs(program_, assert_kernel, logical_core, safe_args);
 
     // Run the kernel, don't expect an issue here.
     log_info(LogTest, "Running args that shouldn't assert...");
-    fixture->RunProgram(device, program, true);
+    fixture->RunProgram(mesh_device, workload, true);
     log_info(LogTest, "Args did not assert!");
 
     // Write runtime args that should trip an assert.
     const std::vector<uint32_t> unsafe_args = {3, 3, static_cast<uint32_t>(assert_type)};
-    SetRuntimeArgs(program, assert_kernel, logical_core, unsafe_args);
+    SetRuntimeArgs(program_, assert_kernel, logical_core, unsafe_args);
 
     // Run the kernel, expect an exit due to the assert.
     log_info(LogTest, "Running args that should assert...");
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(mesh_device, workload);
 
     // We should be able to find the expected watcher error in the log as well,
     // expected error message depends on the risc we're running on and the assert type.
@@ -171,10 +161,11 @@ static void RunTest(
     if (assert_type == DebugAssertTripped) {
         const uint32_t line_num = 67;
         expected = fmt::format(
-            "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. Current kernel: "
-            "{}.",
+            "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. "
+            "Note that file name reporting is not yet implemented, and the reported line number for the assert may be "
+            "from a different file. Current kernel: {}.",
             device->id(),
-            (riscv_type == DebugErisc) ? "acteth" : "worker",
+            (programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) ? "acteth" : "worker",
             logical_core.x,
             logical_core.y,
             virtual_core.x,
@@ -182,9 +173,6 @@ static void RunTest(
             risc,
             line_num,
             kernel);
-        expected +=
-            " Note that file name reporting is not yet implemented, and the reported line number for the assert may be "
-            "from a different file.";
     } else {
         std::string barrier;
         if (assert_type == DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped) {
@@ -202,7 +190,7 @@ static void RunTest(
             "kernel completing with pending NOC transactions (missing {} barrier). Current kernel: "
             "{}.",
             device->id(),
-            (riscv_type == DebugErisc) ? "acteth" : "worker",
+            (programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) ? "acteth" : "worker",
             logical_core.x,
             logical_core.y,
             virtual_core.x,
@@ -220,156 +208,23 @@ static void RunTest(
 }
 }
 
-TEST_F(WatcherFixture, TestWatcherAssertBrisc) {
+// Test parameters structure
+struct WatcherTestParams {
+    std::string test_name;
+    HalProgrammableCoreType core_type;
+    HalProcessorClassType processor_class;
+    int processor_id;
+    debug_assert_type_t assert_type = DebugAssertTripped;
+};
+
+class WatcherAssertTest : public MeshWatcherFixture, public ::testing::WithParamInterface<WatcherTestParams> {};
+
+TEST_P(WatcherAssertTest, TestWatcherAssert) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (this->slow_dispatch_)
-        GTEST_SKIP();
 
-    // Only run on device 0 because this test takes the watcher server down.
-    this->RunTestOnDevice(
-        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugBrisc);},
-        this->devices_[0]
-    );
-}
+    const auto& params = GetParam();
 
-TEST_F(WatcherFixture, TestWatcherAssertNCrisc) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (this->slow_dispatch_)
-        GTEST_SKIP();
-    this->RunTestOnDevice(
-        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugNCrisc);},
-        this->devices_[0]
-    );
-}
-
-TEST_F(WatcherFixture, TestWatcherAssertTrisc0) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (this->slow_dispatch_)
-        GTEST_SKIP();
-    this->RunTestOnDevice(
-        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugTrisc0);},
-        this->devices_[0]
-    );
-}
-
-TEST_F(WatcherFixture, TestWatcherAssertTrisc1) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (this->slow_dispatch_)
-        GTEST_SKIP();
-    this->RunTestOnDevice(
-        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugTrisc1);},
-        this->devices_[0]
-    );
-}
-
-TEST_F(WatcherFixture, TestWatcherAssertTrisc2) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (this->slow_dispatch_)
-        GTEST_SKIP();
-    this->RunTestOnDevice(
-        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugTrisc2);},
-        this->devices_[0]
-    );
-}
-
-TEST_F(WatcherFixture, TestWatcherAssertErisc) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (this->slow_dispatch_)
-        GTEST_SKIP();
-    this->RunTestOnDevice(
-        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugErisc);},
-        this->devices_[0]
-    );
-}
-
-TEST_F(WatcherFixture, TestWatcherAssertIErisc) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (!this->IsSlowDispatch()) {
-        log_info(tt::LogTest, "FD-on-idle-eth not supported.");
-        GTEST_SKIP();
-    }
-    if (this->slow_dispatch_)
-        GTEST_SKIP();
-    this->RunTestOnDevice(
-        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugIErisc);},
-        this->devices_[0]
-    );
-}
-
-TEST_F(WatcherFixture, TestWatcherNonDefaultAssertBrisc) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (this->slow_dispatch_) {
-        GTEST_SKIP();
-    }
-
-    // Only run on device 0 because this test takes the watcher server down.
-    this->RunTestOnDevice(
-        [](WatcherFixture* fixture, IDevice* device) { RunTest(fixture, device, DebugBrisc); }, this->devices_[0]);
-}
-
-TEST_F(WatcherFixture, TestWatcherNonDefaultAssertNCrisc) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (this->slow_dispatch_) {
-        GTEST_SKIP();
-    }
-    this->RunTestOnDevice(
-        [](WatcherFixture* fixture, IDevice* device) {
-            RunTest(fixture, device, DebugNCrisc, DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped);
-        },
-        this->devices_[0]);
-}
-
-TEST_F(WatcherFixture, TestWatcherNonDefaultAssertTrisc0) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (this->slow_dispatch_) {
-        GTEST_SKIP();
-    }
-    this->RunTestOnDevice(
-        [](WatcherFixture* fixture, IDevice* device) {
-            RunTest(fixture, device, DebugTrisc0, DebugAssertNCriscNOCNonpostedWritesSentTripped);
-        },
-        this->devices_[0]);
-}
-
-TEST_F(WatcherFixture, TestWatcherNonDefaultAssertTrisc1) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (this->slow_dispatch_) {
-        GTEST_SKIP();
-    }
-    this->RunTestOnDevice(
-        [](WatcherFixture* fixture, IDevice* device) {
-            RunTest(fixture, device, DebugTrisc1, DebugAssertNCriscNOCPostedWritesSentTripped);
-        },
-        this->devices_[0]);
-}
-
-TEST_F(WatcherFixture, TestWatcherNonDefaultAssertTrisc2) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (this->slow_dispatch_) {
-        GTEST_SKIP();
-    }
-    this->RunTestOnDevice(
-        [](WatcherFixture* fixture, IDevice* device) {
-            RunTest(fixture, device, DebugTrisc2, DebugAssertNCriscNOCReadsFlushedTripped);
-        },
-        this->devices_[0]);
-}
-
-TEST_F(WatcherFixture, TestWatcherNonDefaultAssertErisc) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (this->slow_dispatch_) {
-        GTEST_SKIP();
-    }
-    this->RunTestOnDevice(
-        [](WatcherFixture* fixture, IDevice* device) {
-            RunTest(fixture, device, DebugErisc, DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped);
-        },
-        this->devices_[0]);
-}
-
-TEST_F(WatcherFixture, TestWatcherNonDefaultAssertIErisc) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
-    if (!this->IsSlowDispatch()) {
+    if (params.core_type == HalProgrammableCoreType::IDLE_ETH && !this->IsSlowDispatch()) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
@@ -377,8 +232,41 @@ TEST_F(WatcherFixture, TestWatcherNonDefaultAssertIErisc) {
         GTEST_SKIP();
     }
     this->RunTestOnDevice(
-        [](WatcherFixture* fixture, IDevice* device) {
-            RunTest(fixture, device, DebugIErisc, DebugAssertNCriscNOCReadsFlushedTripped);
+        [&params](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            RunTest(fixture, mesh_device, params.core_type, params.processor_class, params.processor_id, params.assert_type);
         },
         this->devices_[0]);
 }
+
+namespace {
+
+using enum HalProgrammableCoreType;
+using enum HalProcessorClassType;
+
+INSTANTIATE_TEST_SUITE_P(
+    WatcherAssertTests,
+    WatcherAssertTest,
+    ::testing::Values(
+        WatcherTestParams{"Brisc", TENSIX, DM, 0},
+        WatcherTestParams{"NCrisc", TENSIX, DM, 1},
+        WatcherTestParams{"Trisc0", TENSIX, COMPUTE, 0},
+        WatcherTestParams{"Trisc1", TENSIX, COMPUTE, 1},
+        WatcherTestParams{"Trisc2", TENSIX, COMPUTE, 2},
+        WatcherTestParams{"Erisc", ACTIVE_ETH, DM, 0},
+        WatcherTestParams{"IErisc", IDLE_ETH, DM, 0}),
+    [](const ::testing::TestParamInfo<WatcherTestParams>& info) { return info.param.test_name; });
+
+INSTANTIATE_TEST_SUITE_P(
+    WatcherNonDefaultAssertTests,
+    WatcherAssertTest,
+    ::testing::Values(
+        WatcherTestParams{"Brisc", TENSIX, DM, 0, DebugAssertTripped},
+        WatcherTestParams{"NCrisc", TENSIX, DM, 1, DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
+        WatcherTestParams{"Trisc0", TENSIX, COMPUTE, 0, DebugAssertNCriscNOCNonpostedWritesSentTripped},
+        WatcherTestParams{"Trisc1", TENSIX, COMPUTE, 1, DebugAssertNCriscNOCPostedWritesSentTripped},
+        WatcherTestParams{"Trisc2", TENSIX, COMPUTE, 2, DebugAssertNCriscNOCReadsFlushedTripped},
+        WatcherTestParams{"Erisc", ACTIVE_ETH, DM, 0, DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
+        WatcherTestParams{"IErisc", IDLE_ETH, DM, 0, DebugAssertNCriscNOCReadsFlushedTripped}),
+    [](const ::testing::TestParamInfo<WatcherTestParams>& info) { return info.param.test_name; });
+
+}  // namespace

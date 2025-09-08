@@ -16,8 +16,6 @@
 // CHANNEL CONSTANTS
 // ETH TXQ SELECTION
 
-constexpr uint32_t DEFAULT_ETH_TXQ = 0;
-
 constexpr size_t NUM_ROUTER_CARDINAL_DIRECTIONS = 4;
 
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;
@@ -115,6 +113,8 @@ static_assert(
     "Deadlock avoidance requires at least 2 receiver channels");
 // TODO: Pipe from host
 constexpr size_t NUM_USED_RECEIVER_CHANNELS = NUM_FORWARDING_PATHS;
+constexpr size_t NUM_USED_RECEIVER_CHANNELS_VC0 =
+    enable_deadlock_avoidance ? NUM_FORWARDING_PATHS - 1 : NUM_FORWARDING_PATHS;
 
 constexpr size_t VC0_RECEIVER_CHANNEL = dateline_connection ? 1 : 0;
 // On a dateline connection, we would never forward through the dateline on VC1
@@ -130,8 +130,9 @@ constexpr size_t worker_info_offset_past_connection_semaphore = 32;
 // For example if `channel_buffer_size` = 4k, with `SENDER_NUM_BUFFERS` = 2
 // then the total amount of buffering for that
 constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
+constexpr bool vc1_has_different_downstream_dest = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
 
-constexpr size_t SENDER_NUM_BUFFERS_IDX = MAIN_CT_ARGS_START_IDX + 9;
+constexpr size_t SENDER_NUM_BUFFERS_IDX = MAIN_CT_ARGS_START_IDX + 10;
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, SENDER_NUM_BUFFERS_IDX, NUM_SENDER_CHANNELS>();
 
@@ -149,7 +150,8 @@ constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = REMOTE_RECEIVER_NUM_BUFFERS
 constexpr std::array<size_t, NUM_DOWNSTREAM_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, DOWNSTREAM_SENDER_NUM_BUFFERS_IDX, NUM_DOWNSTREAM_CHANNELS>();
 // TODO: remove DOWNSTREAM_SENDER_NUM_BUFFERS and use TMP on downstream sender channels.
-constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[0];
+constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[0];
+constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[NUM_RECEIVER_CHANNELS - 1];
 
 constexpr size_t SKIP_CHANNEL_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_IDX + NUM_DOWNSTREAM_CHANNELS;
 constexpr bool skip_receiver_channel_1_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX);
@@ -255,7 +257,12 @@ constexpr size_t MY_ERISC_ID = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 15)
 constexpr size_t NUM_ACTIVE_ERISCS = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 16);
 static_assert(MY_ERISC_ID < NUM_ACTIVE_ERISCS, "MY_ERISC_ID must be less than NUM_ACTIVE_ERISCS");
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 17;
+// Defines if packet header updates (as the packet header traverses its route) are done on the receiver side or the
+// sender side. If true, then the receiver channel updates the packet header before forwarding it. If false, the sender
+// channel updates the packet header before sending it over Ethernet.
+constexpr bool UPDATE_PKT_HDR_ON_RX_CH = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 17) != 0;
+
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 18;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,

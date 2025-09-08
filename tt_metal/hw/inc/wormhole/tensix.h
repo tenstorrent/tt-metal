@@ -75,12 +75,12 @@ using byte = std::uint8_t;
 #define RISCV_TDMA_REG_CLK_GATE_EN 0xFFB11024
 #define RISCV_TDMA_REG_CLK_GATE_HYST 0xFFB11028
 #define RISCV_TDMA_REG_XMOV_L1_BASE_ADDR 0xFFB1102C
-#define RISCV_TDMA_REG_FIFO_PACKED_TILE_SIZE(packer) (0xFFB11030 | (packer << 8))
-#define RISCV_TDMA_REG_FIFO_PACKED_TILE_ZEROMASK(packer) (0xFFB11034 | (packer << 8))
+#define RISCV_TDMA_REG_FIFO_PACKED_TILE_SIZE(packer) (0xFFB11030 | ((packer) << 8))
+#define RISCV_TDMA_REG_FIFO_PACKED_TILE_ZEROMASK(packer) (0xFFB11034 | ((packer) << 8))
 #define RISCV_TDMA_REG_FIFO_PACKED_TILE_STATUS (0xFFB11038)
 
-#define RISCV_TDMA_PACKED_TILE_FIFO_EMPTY(status, packer) ((status >> (packer * 2)) & 0x1)
-#define RISCV_TDMA_PACKED_TILE_FIFO_FULL(status, packer) ((status >> (packer * 2 + 1)) & 0x1)
+#define RISCV_TDMA_PACKED_TILE_FIFO_EMPTY(status, packer) (((status) >> ((packer) * 2)) & 0x1)
+#define RISCV_TDMA_PACKED_TILE_FIFO_FULL(status, packer) (((status) >> ((packer) * 2 + 1)) & 0x1)
 #define RISCV_TDMA_STATUS_FLAG_MOVER0_BUSY_MASK 0x01
 #define RISCV_TDMA_STATUS_FLAG_MOVER1_BUSY_MASK 0x02
 #define RISCV_TDMA_STATUS_FLAG_FIFO_FULL_MASK 0x04
@@ -164,14 +164,14 @@ union riscv_debug_reg_dbg_l1_mem_reg2_u {
     riscv_debug_reg_dbg_l1_mem_reg2_t f;
 };
 
-#define SOFT_RESET_UNPACKER(arg) ((arg & 0x3) << 0)
-#define SOFT_RESET_PACKER(arg) ((arg & 0xf) << 2)
+#define SOFT_RESET_UNPACKER(arg) (((arg) & 0x3) << 0)
+#define SOFT_RESET_PACKER(arg) (((arg) & 0xf) << 2)
 #define SOFT_RESET_MOVER ((0x1) << 6)
 #define SOFT_RESET_SEARCH ((0x1) << 7)
 #define SOFT_RESET_GLUE ((0x1) << 8)
 #define SOFT_RESET_THCON ((0x1) << 9)
 #define SOFT_RESET_FPU ((0x1) << 10)
-#define SOFT_RESET_RISC_CTRL(arg) ((arg & 0xf) << 11)  // Soft reset for RISCV cores. Bit 0 - Brisc, Bit 1+ - Trisc
+#define SOFT_RESET_RISC_CTRL(arg) (((arg) & 0xf) << 11)  // Soft reset for RISCV cores. Bit 0 - Brisc, Bit 1+ - Trisc
 #define SOFT_RESET_SRCA_REG ((0x1) << 15)
 #define SOFT_RESET_SRCB_REG ((0x1) << 16)
 #define SOFT_RESET_DEST_REG ((0x1) << 17)
@@ -613,58 +613,58 @@ inline typename std::make_unsigned<T>::type pack_field(
     return ((u_x >> from_shift) & bitmask<T>(bits)) << to_shift;
 }
 
-#define ADC_FLOP_ADDR(addr, counter_id, channel_index, dimension_index)                  \
-    do {                                                                                 \
-        if ((channel_index == 0) && (counter_id == UNP0) && (dimension_index == 0))      \
-            addr = 0;                                                                    \
-        else if ((channel_index == 0) && (counter_id == UNP0) && (dimension_index == 1)) \
-            addr = 1;                                                                    \
-        else if ((channel_index == 0) && (counter_id == UNP0) && (dimension_index == 2)) \
-            addr = 2;                                                                    \
-        else if ((channel_index == 0) && (counter_id == UNP0) && (dimension_index == 3)) \
-            addr = 3;                                                                    \
-        else if ((channel_index == 0) && (counter_id == UNP1) && (dimension_index == 0)) \
-            addr = 8;                                                                    \
-        else if ((channel_index == 0) && (counter_id == UNP1) && (dimension_index == 1)) \
-            addr = 9;                                                                    \
-        else if ((channel_index == 0) && (counter_id == UNP1) && (dimension_index == 2)) \
-            addr = 10;                                                                   \
-        else if ((channel_index == 0) && (counter_id == UNP1) && (dimension_index == 3)) \
-            addr = 11;                                                                   \
-        else if ((channel_index == 0) && (counter_id == PCK0) && (dimension_index == 0)) \
-            addr = 16;                                                                   \
-        else if ((channel_index == 0) && (counter_id == PCK0) && (dimension_index == 1)) \
-            addr = 17;                                                                   \
-        else if ((channel_index == 0) && (counter_id == PCK0) && (dimension_index == 2)) \
-            addr = 18;                                                                   \
-        else if ((channel_index == 0) && (counter_id == PCK0) && (dimension_index == 3)) \
-            addr = 19;                                                                   \
-        else if ((channel_index == 1) && (counter_id == UNP0) && (dimension_index == 0)) \
-            addr = 32;                                                                   \
-        else if ((channel_index == 1) && (counter_id == UNP0) && (dimension_index == 1)) \
-            addr = 33;                                                                   \
-        else if ((channel_index == 1) && (counter_id == UNP0) && (dimension_index == 2)) \
-            addr = 34;                                                                   \
-        else if ((channel_index == 1) && (counter_id == UNP0) && (dimension_index == 3)) \
-            addr = 35;                                                                   \
-        else if ((channel_index == 1) && (counter_id == UNP1) && (dimension_index == 0)) \
-            addr = 40;                                                                   \
-        else if ((channel_index == 1) && (counter_id == UNP1) && (dimension_index == 1)) \
-            addr = 41;                                                                   \
-        else if ((channel_index == 1) && (counter_id == UNP1) && (dimension_index == 2)) \
-            addr = 42;                                                                   \
-        else if ((channel_index == 1) && (counter_id == UNP1) && (dimension_index == 3)) \
-            addr = 43;                                                                   \
-        else if ((channel_index == 1) && (counter_id == PCK0) && (dimension_index == 0)) \
-            addr = 48;                                                                   \
-        else if ((channel_index == 1) && (counter_id == PCK0) && (dimension_index == 1)) \
-            addr = 49;                                                                   \
-        else if ((channel_index == 1) && (counter_id == PCK0) && (dimension_index == 2)) \
-            addr = 50;                                                                   \
-        else if ((channel_index == 1) && (counter_id == PCK0) && (dimension_index == 3)) \
-            addr = 51;                                                                   \
-        else                                                                             \
-            addr = 0;                                                                    \
+#define ADC_FLOP_ADDR(addr, counter_id, channel_index, dimension_index)                        \
+    do {                                                                                       \
+        if (((channel_index) == 0) && ((counter_id) == UNP0) && ((dimension_index) == 0))      \
+            (addr) = 0;                                                                        \
+        else if (((channel_index) == 0) && ((counter_id) == UNP0) && ((dimension_index) == 1)) \
+            (addr) = 1;                                                                        \
+        else if (((channel_index) == 0) && ((counter_id) == UNP0) && ((dimension_index) == 2)) \
+            (addr) = 2;                                                                        \
+        else if (((channel_index) == 0) && ((counter_id) == UNP0) && ((dimension_index) == 3)) \
+            (addr) = 3;                                                                        \
+        else if (((channel_index) == 0) && ((counter_id) == UNP1) && ((dimension_index) == 0)) \
+            (addr) = 8;                                                                        \
+        else if (((channel_index) == 0) && ((counter_id) == UNP1) && ((dimension_index) == 1)) \
+            (addr) = 9;                                                                        \
+        else if (((channel_index) == 0) && ((counter_id) == UNP1) && ((dimension_index) == 2)) \
+            (addr) = 10;                                                                       \
+        else if (((channel_index) == 0) && ((counter_id) == UNP1) && ((dimension_index) == 3)) \
+            (addr) = 11;                                                                       \
+        else if (((channel_index) == 0) && ((counter_id) == PCK0) && ((dimension_index) == 0)) \
+            (addr) = 16;                                                                       \
+        else if (((channel_index) == 0) && ((counter_id) == PCK0) && ((dimension_index) == 1)) \
+            (addr) = 17;                                                                       \
+        else if (((channel_index) == 0) && ((counter_id) == PCK0) && ((dimension_index) == 2)) \
+            (addr) = 18;                                                                       \
+        else if (((channel_index) == 0) && ((counter_id) == PCK0) && ((dimension_index) == 3)) \
+            (addr) = 19;                                                                       \
+        else if (((channel_index) == 1) && ((counter_id) == UNP0) && ((dimension_index) == 0)) \
+            (addr) = 32;                                                                       \
+        else if (((channel_index) == 1) && ((counter_id) == UNP0) && ((dimension_index) == 1)) \
+            (addr) = 33;                                                                       \
+        else if (((channel_index) == 1) && ((counter_id) == UNP0) && ((dimension_index) == 2)) \
+            (addr) = 34;                                                                       \
+        else if (((channel_index) == 1) && ((counter_id) == UNP0) && ((dimension_index) == 3)) \
+            (addr) = 35;                                                                       \
+        else if (((channel_index) == 1) && ((counter_id) == UNP1) && ((dimension_index) == 0)) \
+            (addr) = 40;                                                                       \
+        else if (((channel_index) == 1) && ((counter_id) == UNP1) && ((dimension_index) == 1)) \
+            (addr) = 41;                                                                       \
+        else if (((channel_index) == 1) && ((counter_id) == UNP1) && ((dimension_index) == 2)) \
+            (addr) = 42;                                                                       \
+        else if (((channel_index) == 1) && ((counter_id) == UNP1) && ((dimension_index) == 3)) \
+            (addr) = 43;                                                                       \
+        else if (((channel_index) == 1) && ((counter_id) == PCK0) && ((dimension_index) == 0)) \
+            (addr) = 48;                                                                       \
+        else if (((channel_index) == 1) && ((counter_id) == PCK0) && ((dimension_index) == 1)) \
+            (addr) = 49;                                                                       \
+        else if (((channel_index) == 1) && ((counter_id) == PCK0) && ((dimension_index) == 2)) \
+            (addr) = 50;                                                                       \
+        else if (((channel_index) == 1) && ((counter_id) == PCK0) && ((dimension_index) == 3)) \
+            (addr) = 51;                                                                       \
+        else                                                                                   \
+            (addr) = 0;                                                                        \
     } while (0)
 
 #endif

@@ -7,36 +7,53 @@ import torch
 from torch import nn
 
 import ttnn
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-    preprocess_linear_weight,
-    preprocess_layernorm_parameter,
-    preprocess_linear_bias,
-)
+from ttnn.model_preprocessing import preprocess_model_parameters
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.swin_s.reference.mlp import MLP
 from models.experimental.swin_s.tt.tt_mlp import TtMLP
 from models.experimental.swin_s.common import load_torch_model, SWIN_S_L1_SMALL_SIZE
+from models.experimental.swin_s.tt.common import (
+    preprocess_layernorm_parameter,
+    preprocess_linear_bias,
+    preprocess_linear_weight,
+)
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 
 
-def create_custom_preprocessor(device):
-    def custom_preprocessor(torch_model, name, ttnn_module_args):
-        parameters = {}
-        if isinstance(torch_model, MLP):
-            parameters[0] = {}
-            parameters[3] = {}
-            parameters[0]["weight"] = preprocess_linear_weight(torch_model[0].weight, dtype=ttnn.bfloat16)
-            parameters[0]["bias"] = preprocess_linear_bias(torch_model[0].bias, dtype=ttnn.bfloat16)
-            parameters[3]["weight"] = preprocess_linear_weight(torch_model[3].weight, dtype=ttnn.bfloat16)
-            parameters[3]["bias"] = preprocess_linear_bias(torch_model[3].bias, dtype=ttnn.bfloat16)
-            if torch.layer_norm in torch_model:
-                parameters[1] = {}
-                parameters[1]["weight"] = preprocess_layernorm_parameter(torch_model[1].weight, dtype=ttnn.bfloat16)
-                parameters[1]["bias"] = preprocess_layernorm_parameter(torch_model[1].bias, dtype=ttnn.bfloat16)
-        return parameters
+def custom_preprocessor(torch_model, name, mesh_mapper=None):
+    parameters = {}
+    if isinstance(torch_model, MLP):
+        parameters[0] = {}
+        parameters[3] = {}
+        parameters[0]["weight"] = preprocess_linear_weight(
+            torch_model[0].weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+        )
+        parameters[0]["bias"] = preprocess_linear_bias(
+            torch_model[0].bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+        )
+        parameters[3]["weight"] = preprocess_linear_weight(
+            torch_model[3].weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+        )
+        parameters[3]["bias"] = preprocess_linear_bias(
+            torch_model[3].bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+        )
+        if torch.layer_norm in torch_model:
+            parameters[1] = {}
+            parameters[1]["weight"] = preprocess_layernorm_parameter(
+                torch_model[1].weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+            )
+            parameters[1]["bias"] = preprocess_layernorm_parameter(
+                torch_model[1].bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+            )
+    return parameters
 
-    return custom_preprocessor
+
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name):
+        return custom_preprocessor(model, name, mesh_mapper)
+
+    return custom_mesh_preprocessor
 
 
 @skip_for_grayskull()
@@ -66,9 +83,11 @@ def test_mlp(device, in_channels, hidden_channels, batch_size, seq_len, i, j, re
     # Input tensor for testing
     torch_input_tensor = torch.randn(batch_size, seq_len, seq_len, in_channels)  # Sample input tensor
     torch_output_tensor = torch_model(torch_input_tensor)
-
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device), device=device
+        initialize_model=lambda: torch_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=device,
     )
 
     # Convert the model to TTNN

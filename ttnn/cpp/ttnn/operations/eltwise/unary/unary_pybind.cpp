@@ -23,6 +23,86 @@
 namespace ttnn::operations::unary {
 
 namespace {
+template <typename unary_operation_t>
+void bind_unary_clamp(py::module& module, const unary_operation_t& operation) {
+    auto doc = fmt::format(
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword args:
+            min (ttnn.Tensor or number): Minimum value. Defaults to `None`.
+            max (ttnn.Tensor or number): Maximum value. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, BFLOAT8_B, INT32, FLOAT32
+                 - TILE
+
+            INT32 is supported only for Tensor-scalar-scalar version.
+
+        Example:
+            >>> input_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> min_tensor = ttnn.from_torch(torch.tensor([[0, 2], [0,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> max_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(input_tensor, min_tensor, max_tensor)
+
+            >>> input_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(input_tensor, min = 2, max = 9)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name());
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               std::optional<Tensor> parameter_a,
+               std::optional<Tensor> parameter_b,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor) {
+                return self(input_tensor, parameter_a, parameter_b, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg("min") = std::nullopt,
+            py::arg("max") = std::nullopt,
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt},
+
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               std::optional<std::variant<float, int32_t>> parameter_a,
+               std::optional<std::variant<float, int32_t>> parameter_b,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor) {
+                return self(input_tensor, parameter_a, parameter_b, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg("min") = std::nullopt,
+            py::arg("max") = std::nullopt,
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
+}
 
 template <typename unary_operation_t>
 void bind_unary_composite_optional_floats_with_default(
@@ -833,7 +913,7 @@ void bind_softplus(py::module& module, const unary_operation_t& operation) {
                * - Dtypes
                  - Layouts
                  - Ranks
-               * - BFLOAT16
+               * - BFLOAT16, BFLOAT8_B
                  - TILE
                  - 2, 3, 4
 
@@ -866,7 +946,7 @@ void bind_softplus(py::module& module, const unary_operation_t& operation) {
 }
 
 template <typename unary_operation_t>
-void bind_tanh(py::module& module, const unary_operation_t& operation) {
+void bind_tanh_like(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -880,7 +960,7 @@ void bind_tanh(py::module& module, const unary_operation_t& operation) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            accuracy (Boolean, optional): provides better accuracy for input range -3 to 3, for dtype BFLOAT16. Defaults to `False`.
+            fast_and_approximate_mode (Boolean, optional): Enables a performance-optimized approximation method. When True, the operation runs faster but may produce results with minor precision differences. Defaults to `False`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
@@ -899,29 +979,31 @@ void bind_tanh(py::module& module, const unary_operation_t& operation) {
                  - TILE
                  - 2, 3, 4
 
+            BFLOAT8_B/BFLOAT4_B is supported only for approx=True mode.
+
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor, accuracy=False)
+            >>> output = {1}(tensor, fast_and_approximate_mode=False)
         )doc",
-        ttnn::tanh.base_name(),
-        ttnn::tanh.python_fully_qualified_name());
+        operation.base_name(),
+        operation.python_fully_qualified_name());
 
     bind_registered_operation(
         module,
-        ttnn::tanh,
+        operation,
         doc,
         ttnn::pybind_overload_t{
             [](const unary_operation_t& self,
                const Tensor& input,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor,
-               bool accuracy,
-               const QueueId queue_id) { return self(queue_id, input, memory_config, output_tensor, accuracy); },
+               bool approx,
+               const QueueId queue_id) { return self(queue_id, input, memory_config, output_tensor, approx); },
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("accuracy") = false,
+            py::arg("fast_and_approximate_mode") = false,
             py::arg("queue_id") = DefaultQueueId});
 }
 
@@ -1743,7 +1825,7 @@ void py_module(py::module& module) {
         ttnn::eqz,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16, UINT32)doc");
     bind_unary_operation(
         module,
         ttnn::ceil,
@@ -1822,7 +1904,7 @@ void py_module(py::module& module) {
         ttnn::logical_not,
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{!input\_tensor_i}})doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
     bind_unary_operation(
         module,
         ttnn::ltz,
@@ -1840,7 +1922,7 @@ void py_module(py::module& module) {
         ttnn::nez,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ != 0}}))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16, UINT32)doc");
 
     bind_unary_operation_overload_complex_return_complex(
         module,
@@ -1894,7 +1976,7 @@ void py_module(py::module& module) {
         ttnn::square,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|square|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16 [0,255])doc");
     bind_unary_operation(
         module,
         ttnn::tan,
@@ -1921,12 +2003,6 @@ void py_module(py::module& module) {
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B)doc",
         "",
         R"doc(The last dimension of the input tensor must be even.)doc");
-    bind_unary_operation(
-        module,
-        ttnn::tanhshrink,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|tanhshrink|(\mathrm{{input\_tensor}}_i))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation(
         module,
         ttnn::deg2rad,
@@ -2088,7 +2164,8 @@ void py_module(py::module& module) {
 
     // Other unaries (unary chain operations)
     bind_softplus(module, ttnn::softplus);
-    bind_tanh(module, ttnn::tanh);
+    bind_tanh_like(module, ttnn::tanh);
+    bind_tanh_like(module, ttnn::tanhshrink);
     bind_sigmoid_accurate(module, ttnn::sigmoid_accurate);
     bind_sigmoid_mode_appx(module, ttnn::sigmoid);
 
@@ -2180,16 +2257,7 @@ void py_module(py::module& module) {
         "Maximum value",
         std::nullopt,
         R"doc(Performs clip function on :attr:`input_tensor`, :attr:`min`, :attr:`max`. Only one of 'min' or 'max' value can be None.)doc");
-    bind_unary_composite_optional_floats_with_default(
-        module,
-        ttnn::clamp,
-        "min",
-        "Minimum value",
-        std::nullopt,
-        "max",
-        "Maximum value",
-        std::nullopt,
-        R"doc(Performs clamp function on :attr:`input_tensor`, :attr:`min`, :attr:`max`. Only one of 'min' or 'max' value can be None.)doc");
+    bind_unary_clamp(module, ttnn::clamp);
     bind_unary_composite_floats_with_default(
         module, ttnn::selu, "scale", "Scale value", 1.0507, "alpha", "Alpha value", 1.67326);
     bind_unary_composite_floats_with_default(
