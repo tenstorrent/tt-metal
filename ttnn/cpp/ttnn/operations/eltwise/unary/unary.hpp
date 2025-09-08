@@ -331,10 +331,16 @@ struct Tanhshrink {
 
 struct Clamp {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         float min_val,
         float max_val,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        int32_t min_val,
+        int32_t max_val,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
