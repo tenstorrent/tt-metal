@@ -474,6 +474,8 @@ class ModelArgs:
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
+        # Multiplier applied to logits after LM head; HF Falcon models use this
+        self.lm_head_multiplier = 1.0
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -1474,6 +1476,50 @@ class ModelArgs:
 
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
+        # Optional per-branch/output multipliers (Falcon-H1 family)
+        self.attention_in_multiplier = float(text_config.get("attention_in_multiplier", 1.0) or 1.0)
+        self.attention_out_multiplier = float(text_config.get("attention_out_multiplier", 1.0) or 1.0)
+        self.ssm_in_multiplier = float(text_config.get("ssm_in_multiplier", 1.0) or 1.0)
+        self.ssm_out_multiplier = float(text_config.get("ssm_out_multiplier", 1.0) or 1.0)
+        # Falcon-H1 Mamba (SSM) params
+        self.mamba_d_conv = int(text_config.get("mamba_d_conv", 4) or 4)
+        self.mamba_d_state = int(text_config.get("mamba_d_state", 128) or 128)
+        self.mamba_n_groups = int(text_config.get("mamba_n_groups", 1) or 1)
+        default_heads = int(text_config.get("mamba_n_heads", 0) or 1)
+        default_head_dim = max(1, self.dim // max(1, default_heads))
+        self.mamba_d_head = int(text_config.get("mamba_d_head", default_head_dim))
+        # Number of SSM heads may be implicit via dt_bias; leave None if absent
+        self.mamba_n_heads = text_config.get("mamba_n_heads", None)
+        try:
+            self.mamba_n_heads = int(self.mamba_n_heads) if self.mamba_n_heads is not None else None
+        except Exception:
+            self.mamba_n_heads = None
+        self.mamba_d_ssm = int(text_config.get("mamba_d_ssm", self.dim * 2) or (self.dim * 2))
+        self.mamba_rms_norm = bool(text_config.get("mamba_rms_norm", False))
+        self.mamba_norm_before_gate = bool(text_config.get("mamba_norm_before_gate", False))
+        # Optional embedding input scale (Falcon-H1 family)
+        emb_mult = text_config.get("embedding_multiplier", None)
+        if emb_mult is not None:
+            try:
+                self.embed_scale = float(emb_mult)
+            except Exception:
+                self.embed_scale = None
+        else:
+            # Heuristic: Falcon-H1 variants scale inputs by sqrt(dim)
+            if "falcon-h1" in str(self.base_model_name).lower():
+                try:
+                    import math
+
+                    self.embed_scale = math.sqrt(float(self.dim))
+                except Exception:
+                    self.embed_scale = None
+        # Improve accuracy for Falcon-H1 LM head by avoiding bfloat8 quant on logits matmul
+        # Applies when model name suggests Falcon-H1 or Falcon3 variants
+        model_name_lower = str(self.model_name).lower()
+        if any(tag in model_name_lower for tag in ["falcon-h1", "falcon3-"]):
+            import ttnn
+
+            self.lm_head_dtype = ttnn.bfloat16
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
@@ -1801,6 +1847,12 @@ class ModelArgs:
                 if self.cache_hf_flag:
                     self.cached_hf_model = model
                 state_dict = model.state_dict()
+                # Capture HF logits multiplier if provided by the model implementation (e.g., Falcon-H1)
+                try:
+                    if hasattr(model, "model") and hasattr(model.model, "lm_head_multiplier"):
+                        self.lm_head_multiplier = float(model.model.lm_head_multiplier)
+                except Exception:
+                    pass
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
 

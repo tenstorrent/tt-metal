@@ -98,6 +98,7 @@ def map_hf_to_meta_keys(loaded_weights):
         "model.embed_tokens.weight": "tok_embeddings.weight",
         "model.norm.weight": "norm.weight",
         "lm_head.weight": "output.weight",
+        "lm_head.bias": "output.bias",
         # Layer level mappings
         "input_layernorm.weight": "attention_norm.weight",
         "post_attention_layernorm.weight": "ffn_norm.weight",
@@ -692,6 +693,7 @@ def map_meta_to_hf_keys(loaded_weights, language_prefix=""):
         "tok_embeddings.weight": "model.embed_tokens.weight",
         "norm.weight": "model.norm.weight",
         "output.weight": "lm_head.weight",
+        "output.bias": "lm_head.bias",
         # Layer level
         "attention_norm.weight": "input_layernorm.weight",
         "ffn_norm.weight": "post_attention_layernorm.weight",

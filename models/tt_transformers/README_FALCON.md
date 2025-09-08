@@ -41,10 +41,10 @@ export MESH_DEVICE=N300
 Run batch-1 (latency) and batch-32 (throughput) demos:
 
 ```bash
-# Falcon-H1-0.5B
+# Falcon-H1-0.5B (Under progress)
 export HF_MODEL=tiiuae/Falcon-H1-0.5B-Instruct
-pytest -q models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1"
-pytest -q models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-32"
+#pytest -q models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1"
+#pytest -q models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-32"
 
 # Falcon3-1B
 export HF_MODEL=tiiuae/Falcon3-1B-Instruct
@@ -62,12 +62,10 @@ Numbers captured from demo logs on N300; tokens/s/user are greedy decode. Throug
 
 | Model | Batch | 1st token (ms) | tok/s/user (avg) | Throughput (avg) |
 |---|---:|---:|---:|---:|
-| Falcon-H1-0.5B | 1 | ~10.7 | ~93.4 | ~93.4 |
-| Falcon-H1-0.5B | 32 | ~10.9 | ~91.0 | ~2911 |
-| Falcon3-1B | 1 | ~12.2 | ~83.5 | ~83.5 |
-| Falcon3-1B | 32 | ~13.1 | ~76.3 | ~2440 |
-| Falcon3-7B | 1 | ~81.3 | ~45.3 | ~45.3 |
-| Falcon3-7B | 32 | ~64 | ~40.9 | ~1305 |
+| Falcon3-1B | 1 | ~51.2 | ~78.2 | ~78.2 |
+| Falcon3-1B | 32 | ~46.9 | ~72.7 | ~2326 |
+| Falcon3-7B | 1 | ~89 | ~43.1 | ~43.1 |
+| Falcon3-7B | 32 | ~69.4 | ~39.4 | ~1260 |
 
 ### Validation and notes
 

@@ -579,6 +579,8 @@ def test_demo_text(
     if isinstance(page_params, str):  # Required for proper load of a dictionary from the override command
         page_params = json.loads(page_params)
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    if isinstance(sampling_params, str):  # Allow JSON string override
+        sampling_params = json.loads(sampling_params)
     json_config_file = request.config.getoption("--decoder_config_file")
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
     stress_test = request.config.getoption("--stress_test") or stress_test

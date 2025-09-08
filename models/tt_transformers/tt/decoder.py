@@ -1,12 +1,16 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
 from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.tt_transformers.tt.debug import is_enabled, record
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
+from models.tt_transformers.tt.mamba_falcon import FalconH1Mamba
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import TensorGroup
 
@@ -68,6 +72,22 @@ class TransformerBlock(LightweightModule):
             layer_num=layer_num,
             dtype=dtype,
             model_config=self.model_config,
+        )
+        # Optional Mamba branch (Falcon-H1 hybrid). Instantiate only if weights exist and not disabled.
+        has_mamba = any(k.startswith(f"layers.{layer_num}.mamba.") for k in state_dict.keys())
+        disable_mamba_env = os.environ.get("TT_DISABLE_MAMBA", "0").lower() in ("1", "true")
+        disable_mamba_arg = getattr(args, "disable_mamba", False)
+        enable_mamba = has_mamba and not (disable_mamba_env or disable_mamba_arg)
+        self.mamba = (
+            FalconH1Mamba(
+                mesh_device=mesh_device,
+                args=args,
+                state_dict=state_dict,
+                layer_num=layer_num,
+                weight_cache_path=weight_cache_path,
+            )
+            if enable_mamba
+            else None
         )
         self.attention_norm = DistributedNorm(
             RMSNorm(
@@ -220,6 +240,16 @@ class TransformerBlock(LightweightModule):
 
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
+        if is_enabled() and self.layer_num == 0:
+            record("layer0.attn_in", attn_in)
+        # Apply attention input multiplier if provided by config (Falcon-H1)
+        if hasattr(self.args, "attention_in_multiplier"):
+            attn_in = ttnn.multiply(attn_in, self.args.attention_in_multiplier)
+        # Compute Mamba branch BEFORE attention (attention may deallocate its input)
+        mamba_out = None
+        if mode == "prefill" and self.mamba is not None:
+            mamba_out = self.mamba.forward(attn_in, mode)
+
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
             attn_in,
@@ -232,25 +262,38 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
+        # Apply attention out multiplier if provided by config (Falcon-H1)
+        if hasattr(self.args, "attention_out_multiplier"):
+            attn_out = ttnn.multiply(attn_out, self.args.attention_out_multiplier)
+        if is_enabled() and self.layer_num == 0:
+            record("layer0.attn_out", attn_out)
+
+        # mamba_out computed above
 
         if self.pre_ff_norm is None:
+            # Residual connection after attention (no mamba path implemented yet)
             hidden_states = ttnn.add(
-                residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
+                residual,
+                attn_out if mamba_out is None else ttnn.add(attn_out, mamba_out),
+                memory_config=skip_mem_cfg,
+                dtype=ttnn.bfloat16 if TG else None,
             )
             residual = hidden_states
             if mode == "prefill":
                 x.deallocate(True)
+            # Apply FFN norm only in architectures without pre-FF norm
+            hidden_states = self.ff_norm(hidden_states, mode)
+            if is_enabled() and self.layer_num == 0:
+                record("layer0.ff_norm_out", hidden_states)
         else:
-            hidden_states = attn_out
-        hidden_states = self.ff_norm(hidden_states, mode)
-        if self.pre_ff_norm is not None:
-            # The output of the ff_norm is replicated across the device
-            # but the residual is fractured across the devices
+            # Falcon-H1 style: add residual first, then apply pre-FF norm; no extra FFN norm here
+            hidden_states = attn_out if mamba_out is None else ttnn.add(attn_out, mamba_out)
+            # The attention output is replicated; residual is fractured. Gather before add if multi-device
             if self.num_devices > 1:
                 hidden_states = tt_all_reduce(
                     hidden_states,
                     self.mesh_device,
-                    tt_ccl=self.tt_ccl,
+                    self.tt_ccl,
                     cluster_axis=0,
                     dim=3,
                     num_reduce_scatter_links=self.args.num_reduce_scatter_links,
@@ -259,7 +302,6 @@ class TransformerBlock(LightweightModule):
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=self.args.ccl_dtype,
                 )
-
                 hidden_states = ttnn.div(hidden_states, self.num_devices)
             hidden_states = ttnn.add(
                 residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
@@ -274,6 +316,8 @@ class TransformerBlock(LightweightModule):
         # MLP takes replicated inputs and produces fractured outputs
 
         hidden_states = self.feed_forward.forward(hidden_states, mode)
+        if is_enabled() and self.layer_num == 0:
+            record("layer0.mlp_out", hidden_states)
 
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
@@ -305,5 +349,7 @@ class TransformerBlock(LightweightModule):
             if TG and not self.args.is_distributed_norm(mode)
             else activation_dtype or ttnn.bfloat16,
         )
+        if is_enabled() and self.layer_num == 0:
+            record("layer0.residual_out", out)
 
         return out  # fractured across devices
