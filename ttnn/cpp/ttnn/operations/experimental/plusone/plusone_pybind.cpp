@@ -28,7 +28,7 @@ void bind_experimental_plusone_operation(py::module& module) {
             Args:
                 * :attr:`input_tensor`: Input Tensor for plusone.
                 * :attr:`sub_core_grids`: Sub core grid of cores where the addition would take place
-                * :attr:`skip_negative_entries`: Optional bool flag to skip increment by 1 on negative entries of the tensor
+                * :attr:`skip_negative_entries`: Optional bool flag to skip increment by 1 on negative entries of the tensor. Defaults to False
 
         )doc";
 
@@ -46,7 +46,7 @@ void bind_experimental_plusone_operation(py::module& module) {
             },
             py::arg("input_tensor").noconvert(),
             py::arg("sub_core_grids") = std::nullopt,
-            py::arg("skip_negative_entries") = std::nullopt});
+            py::arg("skip_negative_entries") = false});
 }
 
 }  // namespace ttnn::operations::experimental::plusone::detail
