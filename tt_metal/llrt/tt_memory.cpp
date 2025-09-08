@@ -21,7 +21,7 @@ memory::memory() {
     link_spans_.reserve(initial_span_space_);
 }
 
-memory::memory(std::string_view path, Loading loading) : loading_(loading) {
+memory::memory(const std::string& path, Loading loading) : loading_(loading) {
     ElfFile elf;
 
     elf.ReadImage(path);

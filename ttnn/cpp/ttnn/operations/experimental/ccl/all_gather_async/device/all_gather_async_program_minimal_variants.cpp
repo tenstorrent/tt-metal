@@ -258,9 +258,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         topology == ccl::Topology::Linear ? num_targets_forward : ring_size - 1,
         topology == ccl::Topology::Linear ? num_targets_backward : ring_size - 1);
 
-    auto [ring_barrier_mcast_forward_args, ring_barrier_mcast_backward_args] =
-        ccl::get_forward_backward_line_mcast_configuration(
-            topology, sender_device, forward_device, backward_device, ring_size - 1, ring_size - 1);
     TT_FATAL(
         !((topology == ccl::Topology::Linear) && fuse_op), "linear is not support when using fused for all-gather");
 
