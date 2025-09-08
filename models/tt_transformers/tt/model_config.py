@@ -1694,7 +1694,7 @@ class ModelArgs:
             "num_hidden_layers": 16,
             "num_attention_heads": 8,
             "num_key_value_heads": 8,
-            "hidden_act": "silu",
+            "hidden_act": "relu",
             "initializer_range": 0.02,
             "rms_norm_eps": 1e-05,
             "pretraining_tp": 1,
