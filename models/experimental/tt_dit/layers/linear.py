@@ -88,6 +88,8 @@ class Linear:
         )
         if self.activation_fn == "gelu":
             output = gelu(output)
+        elif self.activation_fn == "quick_gelu":
+            output = output * ttnn.sigmoid_accurate(1.702 * output)  # quick approx gelu
         elif self.activation_fn == "swiglu":
             output, gate = ttnn.chunk(output, 2, -1)
             output = output * ttnn.silu(gate)
