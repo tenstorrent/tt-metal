@@ -11,6 +11,7 @@
 #include "ops/rmsnorm_fw/rmsnorm_fw.hpp"
 #include "ops/silu_bw/silu_bw.hpp"
 #include "ops/softmax/softmax.hpp"
+#include "optimizers/sgd_fused/sgd_fused.hpp"
 
 namespace ttml::metal {
 
@@ -36,5 +37,9 @@ constexpr auto profiler_no_op =
 
 constexpr auto silu_bw =
     ttnn::register_operation<"ttml::metal::silu_bw", ttml::metal::ops::silu_bw::SiLUBackwardOperation>();
+
+// To be determined if this should be in a separate "optimizers.hpp" file
+constexpr auto sgd_fused =
+    ttnn::register_operation<"ttml::metal::sgd_fused", ttml::metal::optimizers::sgd_fused::SGDFusedOptimizer>();
 
 }  // namespace ttml::metal
