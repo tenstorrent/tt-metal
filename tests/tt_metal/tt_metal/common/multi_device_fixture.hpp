@@ -61,7 +61,7 @@ protected:
     }
 };
 
-class TwoDeviceBlackholeFixture : public DispatchFixture {
+class TwoDeviceBlackholeFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
@@ -74,7 +74,7 @@ protected:
         const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         if (this->arch_ == tt::ARCH::BLACKHOLE && num_devices == 2 && num_pci_devices >= 1) {
-            DispatchFixture::SetUp();
+            MeshDispatchFixture::SetUp();
         } else {
             GTEST_SKIP() << "This suite can only be run on two chip Blackhole systems";
         }
