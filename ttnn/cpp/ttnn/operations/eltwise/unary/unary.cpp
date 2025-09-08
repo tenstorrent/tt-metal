@@ -422,6 +422,21 @@ Tensor Hardshrink::invoke(
         optional_output_tensor);
 }
 
+Tensor Elu::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const float alpha,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::ELU;
+    return detail::unary_impl(
+        queue_id,
+        input_tensor,
+        {UnaryWithParam{op_type, static_cast<float>(alpha)}},
+        memory_config,
+        optional_output_tensor);
+}
+
 Tensor Hardtanh::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
@@ -435,7 +450,6 @@ Tensor Hardtanh::invoke(
 }
 
 Tensor Clamp::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     const float min_val,
     const float max_val,
@@ -443,7 +457,26 @@ Tensor Clamp::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::CLAMP_TSS;
     return detail::unary_impl(
-        queue_id, input_tensor, {UnaryWithParam{op_type, {min_val, max_val}}}, memory_config, optional_output_tensor);
+        ttnn::DefaultQueueId,
+        input_tensor,
+        {UnaryWithParam{op_type, {min_val, max_val}}},
+        memory_config,
+        optional_output_tensor);
+}
+
+Tensor Clamp::invoke(
+    const Tensor& input_tensor,
+    const int32_t min_val,
+    const int32_t max_val,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::CLAMP_TSS;
+    return detail::unary_impl(
+        ttnn::DefaultQueueId,
+        input_tensor,
+        {UnaryWithParam{op_type, {min_val, max_val}}},
+        memory_config,
+        optional_output_tensor);
 }
 
 Tensor Softshrink::invoke(

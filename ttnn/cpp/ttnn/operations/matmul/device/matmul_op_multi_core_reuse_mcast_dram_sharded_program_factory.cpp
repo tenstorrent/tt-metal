@@ -434,7 +434,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
         B,                       // batch
         out_block_tiles,         // out_block_num_tiles
 
-        untilize_out  // untilize_out
+        untilize_out,  // untilize_out
+        false          // get_batch_from_reader
     };
 
     // Create compute kernel

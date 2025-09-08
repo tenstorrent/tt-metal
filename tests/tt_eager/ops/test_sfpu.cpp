@@ -136,7 +136,7 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, src_cb_config);
+        tt_metal::CreateCircularBuffer(program, core, src_cb_config);
 
         // no need for c_in2 buffer since scaler=0 in the reader kernel
 
@@ -146,7 +146,7 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
             tt_metal::CircularBufferConfig(
                 num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(ouput_cb_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, core, output_cb_config);
+        tt_metal::CreateCircularBuffer(program, core, output_cb_config);
 
         std::vector<uint32_t> reader_compile_time_args;
         tt::tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_compile_time_args);
@@ -181,7 +181,7 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
 
         // defines macro expands per SFPU ops
         std::map<std::string, std::string> hlk_op_name = sfpu_op_to_hlk_op_name.at(sfpu_name);
-        auto eltwise_unary_kernel = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             hlk_kernel_name,
             core,

@@ -89,10 +89,12 @@ void init_sync_registers() {
     }
 }
 
-inline void run_subordinate_eriscs(dispatch_core_processor_masks enables) {
-    if (enables & DISPATCH_CLASS_MASK_ETH_DM1) {
+inline void run_subordinate_eriscs(uint32_t enables) {
+#if defined(ARCH_BLACKHOLE)
+    if (enables & (1u << static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM1))) {
         mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
     }
+#endif
 }
 
 inline void wait_subordinate_eriscs(uint32_t& heartbeat) {
@@ -161,17 +163,16 @@ int main() {
 
             flush_erisc_icache();
 
-            enum dispatch_core_processor_masks enables =
-                (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
+            uint32_t enables = launch_msg_address->kernel_config.enables;
             run_subordinate_eriscs(enables);
 
             uint32_t kernel_config_base =
                 firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, DISPATCH_CLASS_ETH_DM0);
 
             // Run the ERISC kernel
-            if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
+            int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
+            if (enables & (1u << index)) {
                 WAYPOINT("R");
-                int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
                 uint32_t kernel_lma =
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                 auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();

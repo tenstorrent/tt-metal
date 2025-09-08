@@ -38,6 +38,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 
+// Access to internal API: ProgramImpl::get_kernel
+#include "impl/program/program_impl.hpp"
+
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
@@ -162,7 +165,6 @@ Program create_simple_datamovement_program(
 // Copied from test_EnqueueTrace.cpp
 Program create_simple_unary_program(Buffer& input, Buffer& output, Buffer* cb_input_buffer = nullptr) {
     Program program = CreateProgram();
-    IDevice* device = input.device();
     CoreCoord worker = {0, 0};
     auto reader_kernel = CreateKernel(
         program,
