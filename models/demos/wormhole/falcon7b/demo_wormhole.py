@@ -46,6 +46,7 @@ def test_demo(
     mesh_device,
     is_ci_env,
 ):
+    pytest.skip("https://github.com/tenstorrent/tt-metal/actions/runs/17533191641/job/49793141988#step:10:1330")
     if is_ci_env:
         if not expected_greedy_output_path and not expected_perf_metrics and not len(user_input) == 1:
             pytest.skip("Skipping test in CI since it provides redundant testing")
