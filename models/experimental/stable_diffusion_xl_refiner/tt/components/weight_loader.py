@@ -34,6 +34,7 @@ class ResNetWeightLoader:
             self.has_conv_shortcut = False
 
 
+# Not used for now, might move param prepare functions into loaders
 class TransformerBlockWeightLoader:
     def __init__(self, state_dict, module_path):
         self.module_path = module_path

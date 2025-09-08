@@ -18,9 +18,13 @@ class TtAttention(LightweightModule):
 
         self.heads = num_attn_heads
 
+        print(f"Initializing TtAttention with {self.heads} heads")
+
         q_weights = state_dict[f"{module_path}.to_q.weight"].unsqueeze(0).unsqueeze(0)
         k_weights = state_dict[f"{module_path}.to_k.weight"].unsqueeze(0).unsqueeze(0)
         v_weights = state_dict[f"{module_path}.to_v.weight"].unsqueeze(0).unsqueeze(0)
+
+        print(module_path)
 
         out_weights = state_dict[f"{module_path}.to_out.0.weight"].unsqueeze(0).unsqueeze(0)
         out_bias = state_dict[f"{module_path}.to_out.0.bias"]
@@ -59,6 +63,9 @@ class TtAttention(LightweightModule):
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
         B = list(hidden_states.shape)[0]
+        print(f"Entering TtAttention forward")
+        print(f"Hidden states shape: {hidden_states.shape}")
+        print(f"Encoder hidden states shape: {encoder_hidden_states.shape}")
 
         if self.is_self_attention:
             qkv_fused = ttnn.matmul(

@@ -2,6 +2,7 @@ import ttnn
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_attention import TtAttention
 from models.experimental.stable_diffusion_xl_refiner.tt.components.tt_components import TransformerBlockLayerNorm
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_feedforward import TtFeedForward
+from models.experimental.stable_diffusion_xl_refiner.tt.tt_config import get_transformerblock_config
 
 
 class TtBasicTransformerBlock:
@@ -10,16 +11,14 @@ class TtBasicTransformerBlock:
         device,
         state_dict,
         module_path,
-        num_attn_heads,  # TODO: replace with predetermined values
     ):
         super().__init__()
 
         self.device = device
         self.module_path = module_path
-        self.num_attn_heads = num_attn_heads
 
         # Configuration setup
-        # self.block_config = get_downblock_config(module_path)
+        self.block_config = get_transformerblock_config(module_path)
 
         self._initialize_components(state_dict)
 
@@ -42,8 +41,7 @@ class TtBasicTransformerBlock:
             device=self.device,
             state_dict=state_dict,
             module_path=f"{self.module_path}.attn1",
-            num_attn_heads=self.num_attn_heads,
-            # self.block_config.attn1_num_heads,
+            num_attn_heads=self.block_config.num_attn_heads,
         )
 
         self.layer_norm_2 = TransformerBlockLayerNorm(
@@ -56,8 +54,7 @@ class TtBasicTransformerBlock:
             device=self.device,
             state_dict=state_dict,
             module_path=f"{self.module_path}.attn2",
-            num_attn_heads=self.num_attn_heads,
-            # self.block_config.attn2_num_heads,
+            num_attn_heads=self.block_config.num_attn_heads,
         )
 
         self.layer_norm_3 = TransformerBlockLayerNorm(
@@ -72,7 +69,11 @@ class TtBasicTransformerBlock:
             module_path=f"{self.module_path}.ff",
         )
 
-    def forward(self, input_tensor, encoder_tensor=None):
+    def forward(self, input_tensor, encoder_tensor):
+        print("Entering TtBasicTransformerBlock forward")
+        print(f"Input tensor shape: {input_tensor.shape}")
+        print(f"Encoder tensor shape: {encoder_tensor.shape}")
+        print(self.module_path)
         hidden_states = input_tensor
 
         # Self-attention layer

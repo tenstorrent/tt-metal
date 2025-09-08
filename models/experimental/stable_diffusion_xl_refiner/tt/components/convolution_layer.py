@@ -56,7 +56,10 @@ class ConvConfig:
 
 
 def make_conv_config(
-    kernel: Tuple[int, int], stride: Tuple[int, int], padding: Tuple[int, int], split_in: int
+    kernel: Tuple[int, int] = (3, 3),
+    stride: Tuple[int, int] = (1, 1),
+    padding: Tuple[int, int] = (1, 1),
+    split_in: int = 1,
 ) -> ConvConfig:
     return ConvConfig(kernel_size=kernel, stride=stride, padding=padding, split_in=split_in)
 
