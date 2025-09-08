@@ -1,9 +1,9 @@
 name: "Galaxy Stress"
 
 on:
+  workflow_dispatch:
   schedule:
     - cron: "0 3 * * 6" # Run @ 3am every Saturday
-  workflow_dispatch:
 
 jobs:
   build-artifact:
