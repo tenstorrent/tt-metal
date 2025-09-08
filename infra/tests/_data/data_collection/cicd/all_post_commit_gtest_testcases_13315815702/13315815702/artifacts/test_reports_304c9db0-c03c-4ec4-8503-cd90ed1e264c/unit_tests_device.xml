@@ -83,26 +83,6 @@
 ]]></skipped>
     </testcase>
   </testsuite>
-  <testsuite name="TGGFixture" tests="3" failures="0" disabled="0" skipped="3" errors="0" time="0.014" timestamp="2025-02-13T20:04:10.467">
-    <testcase name="ValidateNumMMIOChips" file="/work/tests/tt_metal/tt_metal/device/test_galaxy_cluster_api.cpp" line="170" status="run" result="skipped" time="0.004" timestamp="2025-02-13T20:04:10.467" classname="TGGFixture">
-      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19
-]]></skipped>
-      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:76&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:76
-]]></skipped>
-    </testcase>
-    <testcase name="ValidateNumGalaxyChips" file="/work/tests/tt_metal/tt_metal/device/test_galaxy_cluster_api.cpp" line="175" status="run" result="skipped" time="0.004" timestamp="2025-02-13T20:04:10.471" classname="TGGFixture">
-      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19
-]]></skipped>
-      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:76&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:76
-]]></skipped>
-    </testcase>
-    <testcase name="ValidateChipBoardTypes" file="/work/tests/tt_metal/tt_metal/device/test_galaxy_cluster_api.cpp" line="181" status="run" result="skipped" time="0.005" timestamp="2025-02-13T20:04:10.476" classname="TGGFixture">
-      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:19
-]]></skipped>
-      <skipped message="/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:76&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/device/galaxy_fixture.hpp:76
-]]></skipped>
-    </testcase>
-  </testsuite>
   <testsuite name="DeviceInit/DeviceParamFixture" tests="4" failures="0" disabled="0" skipped="0" errors="0" time="0.366" timestamp="2025-02-13T20:04:10.481">
     <testcase name="DeviceInitializeAndTeardown/0" value_param="1" file="/work/tests/tt_metal/tt_metal/device/test_device_init_and_teardown.cpp" line="64" status="run" result="completed" time="0.004" timestamp="2025-02-13T20:04:10.481" classname="DeviceInit/DeviceParamFixture" />
     <testcase name="DeviceInitializeAndTeardown/1" value_param="1" file="/work/tests/tt_metal/tt_metal/device/test_device_init_and_teardown.cpp" line="64" status="run" result="completed" time="0.004" timestamp="2025-02-13T20:04:10.486" classname="DeviceInit/DeviceParamFixture" />

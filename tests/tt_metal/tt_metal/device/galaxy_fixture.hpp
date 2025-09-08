@@ -46,18 +46,4 @@ protected:
     }
 };
 
-class TGGFixture : public GalaxyFixture {
-protected:
-    void SkipTestSuiteIfNotTGG() {
-        if (this->SkipTestSuiteIfNotGalaxyMotherboard()) {
-            GTEST_SKIP() << "Not a galaxy mobo";
-        }
-        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        const size_t num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
-        if (!(num_devices == 64 && num_pcie_devices == 8)) {
-            GTEST_SKIP() << "This test can only run on TGG";
-        }
-    }
-};
-
 }  // namespace tt::tt_metal
