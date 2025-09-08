@@ -726,7 +726,6 @@ void MetalContext::assert_cores(chip_id_t device_id) {
             tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_eth_core, false);
             // Ensure that the core has returned to base fw
             llrt::internal_::wait_for_heartbeat(device_id, virtual_eth_core);
-
             // Stop subordinate
             TensixSoftResetOptions reset_val =
                 TENSIX_ASSERT_SOFT_RESET &

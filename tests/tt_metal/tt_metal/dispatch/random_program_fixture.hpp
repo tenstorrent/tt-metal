@@ -299,11 +299,9 @@ private:
         int num = 0;
 
         if (is_eth) {
-            max_index = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+            max_index = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
                             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) -
                         1;
-            // hardcoded to subordinate for now
-            num = max_index;
         } else {
             num = this->generate_random_num(0, max_index);
         }

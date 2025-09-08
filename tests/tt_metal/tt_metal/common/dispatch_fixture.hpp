@@ -66,7 +66,6 @@ public:
     }
     int NumDevices() { return this->devices_.size(); }
     bool IsSlowDispatch() { return this->slow_dispatch_; }
-    tt::ARCH GetArch() const { return this->arch_; }
 
 protected:
     tt::ARCH arch_{tt::ARCH::Invalid};

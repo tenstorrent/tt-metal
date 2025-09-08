@@ -304,7 +304,7 @@ TEST_F(MeshDispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
         for (auto active_eth_core : device->get_active_ethernet_cores(true)) {
             log_info(tt::LogTest, "Active Eth Loopback. Logical core {}", active_eth_core.str());
             dram_test_config.core_range = {active_eth_core, active_eth_core};
-            const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+            const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
                 HalProgrammableCoreType::ACTIVE_ETH);
             for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
                 log_info(tt::LogTest, "Active Eth DM{} Loopback. Logical core {}", erisc_idx, active_eth_core.str());
@@ -341,8 +341,8 @@ TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
         for (auto idle_eth_core : device->get_inactive_ethernet_cores()) {
             log_info(tt::LogTest, "Single Idle Eth Loopback. Logical core {}", idle_eth_core.str());
             dram_test_config.core_range = {idle_eth_core, idle_eth_core};
-            const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-                HalProgrammableCoreType::IDLE_ETH);
+            const auto erisc_count =
+                tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
             for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
                 log_info(tt::LogTest, "Single Idle Eth DM{} Loopback. Logical core {}", erisc_idx, idle_eth_core.str());
                 dram_test_config.kernel_cfg = tt_metal::EthernetConfig{
