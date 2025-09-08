@@ -538,8 +538,9 @@ inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
         noc0_posted_writes_num_issued, noc1_posted_writes_num_issued);
 }
 
+template <uint8_t NOC_COUNT = NUM_NOCS>
 inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
-    for (int noc = 0; noc < NUM_NOCS; noc++) {
+    for (int noc = 0; noc < NOC_COUNT; noc++) {
         // Hide latency of NOC reg reads by reading first, writing second
         uint32_t reads_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
         uint32_t nonposted_writes_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
@@ -555,8 +556,9 @@ inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
     }
 }
 
+template <uint8_t NOC_COUNT = NUM_NOCS>
 inline __attribute__((always_inline)) void ncrisc_noc_full_sync() {
-    for (uint32_t n = 0; n < NUM_NOCS; n++) {
+    for (uint32_t n = 0; n < NOC_COUNT; n++) {
         while (!ncrisc_noc_reads_flushed(n));
         while (!ncrisc_noc_nonposted_writes_sent(n));
         while (!ncrisc_noc_nonposted_writes_flushed(n));

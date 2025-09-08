@@ -64,10 +64,10 @@ static void test_sems_across_core_types(
             continue;
         }
 
-        auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
             tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
         if (active_eth) {
-            erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+            erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
                 tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
         }
         for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
@@ -170,8 +170,7 @@ TEST_F(MeshDispatchFixture, EthTestBlank) {
     if (eth_cores.size() > 0) {
         const auto prog_core_type = this->slow_dispatch_ ? tt::tt_metal::HalProgrammableCoreType::IDLE_ETH
                                                          : tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
-        const auto erisc_count =
-            tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(prog_core_type);
+        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(prog_core_type);
         for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
             log_info(tt::LogTest, "Add ethernet DM{}", erisc_idx);
             DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
@@ -250,10 +249,10 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
         return;
     }
 
-    auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+    auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
     if (is_idle_eth) {
-        erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
             tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
     }
     for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
@@ -315,7 +314,7 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
             return;
         }
 
-        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 
         for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
