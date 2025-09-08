@@ -163,32 +163,16 @@ void set_or_update_runtime_arguments(
             bND = extract_nD_dims(value_true_tensor.value(), out_rank);  // value_true nD
             cND = extract_nD_dims(output, out_rank);                     // output nD
 
-            // Extract shape dimensions
-            const auto predicate_shape = predicate_tensor.padded_shape();
+            // Extract shape dimensions for value_true (b) - TTS specific
             const auto value_true_shape = value_true_tensor.value().padded_shape();
-            const auto& output_shape = output.padded_shape();
             const auto& tile = output.tensor_spec().tile();
 
-            // Get shape dims (D, N, C, Ht, Wt) for predicate (a)
-            aD = predicate_shape.rank() >= 5 ? predicate_shape[-5] : 1;
-            aN = predicate_shape[-4];
-            aC = predicate_shape[-3];
-            aHt = predicate_shape[-2] / tile.get_height();
-            aWt = predicate_shape[-1] / tile.get_width();
-
-            // Get shape dims for value_true (b)
+            // Get shape dims for value_true (b) - TTS specific
             bD = value_true_shape.rank() >= 5 ? value_true_shape[-5] : 1;
             bN = value_true_shape[-4];
             bC = value_true_shape[-3];
             bHt = value_true_shape[-2] / tile.get_height();
             bWt = value_true_shape[-1] / tile.get_width();
-
-            // Get shape dims for output (c)
-            cD = output_shape.rank() >= 5 ? output_shape[-5] : 1;
-            cN = output_shape[-4];
-            cC = output_shape[-3];
-            cHt = output_shape[-2] / tile.get_height();
-            cWt = output_shape[-1] / tile.get_width();
 
             // Only set tile counts if sharding is enabled
             // For non-sharded (interleaved) mode, these remain 0

@@ -26,6 +26,9 @@ def torch_equal_nan(a, b):
         ((1, 1, 32, 32), (1, 1, 32, 32), (1, 1, 32, 32)),  # LLK
         ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),  # LLK
         ((3, 2, 3, 64, 128), (3, 2, 3, 64, 128), (3, 2, 3, 64, 128)),  # LLK
+        ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # A, Bcol, C
+        ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1024)),  # Acol, B, C
+        ((1, 1, 64, 1), (1, 1, 64, 64), (1, 1, 64, 64)),  # Acol, B, C
         ((256,), (256,), (256,)),  # LLK
         # Bcast cases for dims -5, -4, -3 (outer dims)
         ((128, 128), (2, 2, 2, 128, 128), (2, 2, 128, 128)),
@@ -78,43 +81,24 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
         ((2, 2, 1024, 1024), (1, 1024), (1024, 1024)),
         # Bcast cases for dim -1 (col)
         ((1024), (1), (1024)),
-        ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # A, Bcol, C
-        ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1024)),  # Acol, B, C
         ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1)),  # A, Bcol, Ccol
-        ((1, 1, 64, 1), (1, 1, 64, 64), (1, 1, 64, 64)),  # Acol, B, C
         ((1, 1, 1024, 1), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # Acol, Bcol, C
         ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1)),  # A, Bcol, Ccol
         ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1)),  # Acol, B, Ccol
         ((4, 1, 1, 1, 128, 128), (4, 2, 2, 2, 128, 128), (4, 1, 2, 1, 128, 1)),
     ],
 )
-@pytest.mark.parametrize("variant", ["TTS", "TTT"])
-@pytest.mark.parametrize("scalar", [15.5, 10.0, 5.0, -11.33])
-@pytest.mark.parametrize("condition", [1])
-def test_ttnn_where_bcast(c_shape, t_shape, f_shape, variant, scalar, condition, device):
+@pytest.mark.parametrize("condition", [1, 0])
+def test_ttnn_where_bcast(c_shape, t_shape, f_shape, condition, device):
     torch.manual_seed(0)
     C = torch.ones(c_shape, dtype=torch.float32) * condition
-    if variant == "TTS":
-        T = torch.randn(t_shape, dtype=torch.float32)
-        F = scalar
-    elif variant == "TST":
-        T = scalar
-        F = torch.randn(f_shape, dtype=torch.float32)
-    elif variant == "TTT":
-        T = torch.randn(t_shape, dtype=torch.float32)
-        F = torch.ones(f_shape, dtype=torch.float32) * 10
+    T = torch.randn(t_shape, dtype=torch.float32)
+    F = torch.ones(f_shape, dtype=torch.float32) * 10
     golden = torch.where(C.bool(), T, F)
 
     ttnn_C = ttnn.from_torch(C, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    if variant == "TTS":
-        ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-        ttnn_F = scalar
-    elif variant == "TST":
-        ttnn_T = scalar
-        ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    elif variant == "TTT":
-        ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-        ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
     result = ttnn.to_torch(ttnn_result)
 
