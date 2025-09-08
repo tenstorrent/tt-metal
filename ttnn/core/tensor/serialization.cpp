@@ -27,18 +27,6 @@
 namespace tt::tt_metal {
 namespace {
 
-auto make_file_closer(FILE* file) {
-    return ttsl::make_cleanup([file]() {
-        if (file && fclose(file) != 0) {
-            log_warning(tt::LogAlways, "Failed to close file");
-        }
-    });
-}
-
-void safe_fread(void* buffer, size_t size, size_t count, FILE* file) {
-    TT_FATAL(fread(buffer, size, count, file) == count, "Failed to read tensor data, file must be corrupted");
-}
-
 void safe_fwrite(const void* buffer, size_t size, size_t count, FILE* file) {
     TT_FATAL(fwrite(buffer, size, count, file) == count, "Failed to write tensor data: file write failed");
 }
@@ -50,7 +38,11 @@ constexpr std::uint32_t kFlatbufferAlignment = alignof(std::uint64_t);
 void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) {
     FILE* output_file = fopen(file_name.c_str(), "wb");
     TT_FATAL(output_file != nullptr, "Cannot open \"{}\"", file_name);
-    auto cleanup = make_file_closer(output_file);
+    auto cleanup = ttsl::make_cleanup([f = output_file]() {
+        if (f && fclose(f) != 0) {
+            log_warning(tt::LogAlways, "Failed to close file");
+        }
+    });
 
     Tensor cpu_tensor = tensor.cpu();
 
