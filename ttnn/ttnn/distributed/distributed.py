@@ -65,47 +65,48 @@ class TensorShardingInfo:
         )
 
     def _create_coordinate_mapper(self):
-        """Create bidirectional mapping between logical and physical coordinates."""
+        """Create bidirectional mapping between distribution and mesh coordinates."""
         if self.distribution_mode == "SUBMESH":
             # For submesh, coordinates map directly
-            return lambda logical_coord: logical_coord, lambda physical_coord: physical_coord
+            return lambda distribution_coord: distribution_coord, lambda mesh_coord: mesh_coord
 
         # Create both forward and reverse mappings
-        physical_coords = [
-            ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())])
-            for coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(self.mesh_shape))
+        distribution_coords = [
+            ttnn.MeshCoordinate([distribution_coord[i] for i in range(distribution_coord.dims())])
+            for distribution_coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(self.distribution_shape))
         ]
-        logical_to_physical = {}
-        physical_to_logical = {}
+        distribution_to_mesh = {}
+        mesh_to_distribution = {}
         coord_idx = 0
 
-        for logical_coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(self.distribution_shape)):
-            if coord_idx < len(physical_coords):
-                # Create copies to avoid iterator object reuse
-                logical_key = ttnn.MeshCoordinate([logical_coord[i] for i in range(logical_coord.dims())])
-                physical_key = physical_coords[coord_idx]
+        for distribution_coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(self.distribution_shape)):
+            if coord_idx < len(distribution_coords):
+                distribution_key = ttnn.MeshCoordinate(
+                    [distribution_coord[i] for i in range(distribution_coord.dims())]
+                )
+                mesh_key = distribution_coords[coord_idx]
 
-                logical_to_physical[logical_key] = physical_key
-                physical_to_logical[physical_key] = logical_key
+                distribution_to_mesh[distribution_key] = mesh_key
+                mesh_to_distribution[mesh_key] = distribution_key
                 coord_idx += 1
 
-        def forward_mapper(logical_coord):
-            return logical_to_physical.get(logical_coord, physical_coords[0] if physical_coords else (0,))
+        def forward_mapper(distribution_coord):
+            return distribution_to_mesh.get(distribution_coord, distribution_coords[0] if distribution_coords else (0,))
 
-        def reverse_mapper(physical_coord):
-            return physical_to_logical.get(physical_coord, physical_coord)
+        def reverse_mapper(mesh_coord):
+            return mesh_to_distribution.get(mesh_coord, mesh_coord)
 
         return forward_mapper, reverse_mapper
 
-    def _physical_to_logical_coord(self, physical_coord):
-        """Convert physical coordinate to logical coordinate using O(1) reverse lookup."""
-        return self.reverse_coord_mapper(physical_coord)
+    def _mesh_to_distribution_coord(self, mesh_coord):
+        """Convert mesh coordinate to distribution coordinate using O(1) reverse lookup."""
+        return self.reverse_coord_mapper(mesh_coord)
 
-    def _iter_logical_to_physical_coords(self):
-        """Generator that yields (logical_coord, physical_coord) pairs using the coord_mapper."""
-        for logical_coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(self.distribution_shape)):
-            physical_coord = self.coord_mapper(logical_coord)
-            yield logical_coord, physical_coord
+    def _iter_distribution_to_mesh_coords(self):
+        """Generator that yields (distribution_coord, mesh_coord) pairs using the coord_mapper."""
+        for distribution_coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(self.distribution_shape)):
+            mesh_coord = self.coord_mapper(distribution_coord)
+            yield distribution_coord, mesh_coord
 
     def _compute_global_tensor_shape(self):
         """Compute the global tensor shape using distribution_shape for scaling."""
@@ -120,26 +121,26 @@ class TensorShardingInfo:
 
         if self.tensor.storage_type() == ttnn.StorageType.HOST:
             for host_idx, mesh_coord in enumerate(self.mesh_coords):
-                logical_coord = self._physical_to_logical_coord(mesh_coord)
+                distribution_coord = self._mesh_to_distribution_coord(mesh_coord)
 
-                for axis in range(min(self.distribution_rank, logical_coord.dims())):
-                    part_index = int(logical_coord[axis])
+                for axis in range(min(self.distribution_rank, distribution_coord.dims())):
+                    part_index = int(distribution_coord[axis])
                     if part_index not in mapping[axis]:
                         mapping[axis][part_index] = host_idx
         else:
             mesh_device = self.tensor.device()
 
-            # Generate logical->physical coordinate pairs using the coord_mapper
-            for logical_coord, mesh_coord in self._iter_logical_to_physical_coords():
+            # Generate distribution->mesh coordinate pairs using the coord_mapper
+            for distribution_coord, mesh_coord in self._iter_distribution_to_mesh_coords():
                 try:
                     device_id = mesh_device.get_device_id(mesh_coord)
 
-                    # Record representative for each logical axis
+                    # Record representative for each distribution axis
                     if self.distribution_rank == 1:
-                        mapping[0][logical_coord] = device_id
+                        mapping[0][distribution_coord] = device_id
                     elif self.distribution_rank == 2:
-                        mapping[0][logical_coord[0]] = device_id
-                        mapping[1][logical_coord[1]] = device_id
+                        mapping[0][distribution_coord[0]] = device_id
+                        mapping[1][distribution_coord[1]] = device_id
                 except:
                     continue
 
@@ -258,13 +259,13 @@ def _compute_global_slice_ranges(device_coord, sharding_info):
     """Compute global tensor slice ranges for a specific device coordinate."""
     tensor_shape = list(sharding_info.tensor.shape)
     slice_ranges = []
-    logical_coord = sharding_info._physical_to_logical_coord(device_coord)
+    distribution_coord = sharding_info._mesh_to_distribution_coord(device_coord)
 
     for tensor_dim, dim_size in enumerate(tensor_shape):
         if tensor_dim in sharding_info.dim_to_axis:
             axis = sharding_info.dim_to_axis[tensor_dim]
             try:
-                part_index = int(logical_coord[axis]) if axis < logical_coord.dims() else 0
+                part_index = int(distribution_coord[axis]) if axis < distribution_coord.dims() else 0
                 if (
                     axis in sharding_info.axis_offsets
                     and axis in sharding_info.axis_sizes
@@ -508,8 +509,8 @@ def visualize_tensor(tensor: "ttnn.Tensor"):
                     if device_id is None:
                         return ""
 
-                    logical_coord = ttnn.MeshCoordinate(r, c)
-                    return _create_shard_annotation_text(device_id, logical_coord, sharding_info)
+                    distribution_coord = ttnn.MeshCoordinate(r, c)
+                    return _create_shard_annotation_text(device_id, distribution_coord, sharding_info)
                 except Exception:
                     return ""
 
@@ -517,8 +518,8 @@ def visualize_tensor(tensor: "ttnn.Tensor"):
             style_func = style_host_cell
         else:
 
-            def annotate_with_shard_info(device_id, device_coord=None):
-                return _create_shard_annotation_text(device_id, device_coord, sharding_info)
+            def annotate_with_shard_info(device_id, distribution_coord=None):
+                return _create_shard_annotation_text(device_id, distribution_coord, sharding_info)
 
             def style_device_cell(device_id):
                 return device_to_style.get(device_id)
