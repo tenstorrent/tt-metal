@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_model_utils import get_conv_input_memory_config
-from models.utility_functions import _nearest_y, is_blackhole, is_wormhole_b0
+from models.utility_functions import _nearest_y, is_blackhole, is_single_chip, is_wormhole_b0
 
 hardcoded_matmul_config_linear = {
     8: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -581,7 +581,7 @@ class resnet50:
             enable_split_reader=True,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             reshard_if_not_optimal=False,
-            enable_activation_reuse=True,
+            enable_activation_reuse=is_single_chip(),
         )
         self.conv1_compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
