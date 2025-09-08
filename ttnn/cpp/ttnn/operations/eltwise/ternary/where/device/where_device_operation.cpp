@@ -243,57 +243,6 @@ TensorSpec WhereDeviceOperation::compute_output_specs(
         return ttnn::Shape(output_shape);
     };
 
-    const auto compute_broadcasted_output_tts = [&]() {
-        auto pred_shape = tensor_args.predicate.logical_shape();
-        auto true_shape = tensor_args.value_true.value().logical_shape();
-
-        const int rank_a = pred_shape.rank();
-        const int rank_b = true_shape.rank();
-        const int largest_rank = std::max(rank_a, rank_b);
-
-        SmallVector<uint32_t> output_shape(largest_rank, 1);
-
-        for (int i = -1; i >= -largest_rank; --i) {
-            auto dim_a = (i >= -rank_a) ? pred_shape[i] : 1;
-            auto dim_b = (i >= -rank_b) ? true_shape[i] : 1;
-
-            // Find the maximum dimension size (ignoring 1s which can be broadcast)
-            uint32_t max_dim = 1;
-            if (dim_a != 1) {
-                max_dim = std::max(max_dim, dim_a);
-            }
-            if (dim_b != 1) {
-                max_dim = std::max(max_dim, dim_b);
-            }
-
-            // Validate broadcasting compatibility for TTS (only predicate and true tensor)
-            bool compatible = true;
-            if (dim_a != 1 && dim_a != max_dim) {
-                compatible = false;
-            }
-            if (dim_b != 1 && dim_b != max_dim) {
-                compatible = false;
-            }
-
-            TT_FATAL(
-                compatible, "Broadcasting rule violation for TTS rank {}, dim pred: {}, dim true: {}", i, dim_a, dim_b);
-
-            // For ranks >= 6, ensure exact match (following existing pattern)
-            if (i <= -6) {
-                TT_FATAL(
-                    dim_a == dim_b,
-                    "Broadcasting rule violation for TTS rank >= 6 : dim {}, Broadcast is supported up to rank 5, "
-                    "dim pred: {}, dim true: {}",
-                    i,
-                    dim_a,
-                    dim_b);
-            }
-
-            output_shape[i + largest_rank] = max_dim;
-        }
-        return ttnn::Shape(output_shape);
-    };
-
     const auto compute_broadcasted_output_binary = [&](const auto& pred_shape, const auto& b_shape) {
         const int rank_a = pred_shape.rank();
         const int rank_b = b_shape.rank();
@@ -304,6 +253,7 @@ TensorSpec WhereDeviceOperation::compute_output_specs(
             auto a_dim = (i >= -rank_a) ? pred_shape[i] : 1;
             auto b_dim = (i >= -rank_b) ? b_shape[i] : 1;
 
+            // Standard broadcasting validation for all binary cases
             TT_FATAL(
                 a_dim == b_dim || a_dim == 1 || b_dim == 1,
                 "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}",
@@ -336,14 +286,9 @@ TensorSpec WhereDeviceOperation::compute_output_specs(
 
         output_shape = compute_broadcasted_output_ternary(pred_shape, true_shape, false_shape);
     } else if (args.where_variant == WhereVariant::TTS) {
-        // Use column broadcast-aware function if column broadcast is detected
-        if (args.broadcast_type == WhereBroadcastType::COL_BCAST) {
-            output_shape = compute_broadcasted_output_tts();
-        } else {
-            // Use binary function for outer broadcast and other cases
-            output_shape = compute_broadcasted_output_binary(
-                tensor_args.predicate.logical_shape(), tensor_args.value_true.value().logical_shape());
-        }
+        // Use binary function for TTS (handles both outer broadcast and column broadcast)
+        output_shape = compute_broadcasted_output_binary(
+            tensor_args.predicate.logical_shape(), tensor_args.value_true.value().logical_shape());
     } else if (args.where_variant == WhereVariant::TST) {
         output_shape = compute_broadcasted_output_binary(
             tensor_args.predicate.logical_shape(), tensor_args.value_false.value().logical_shape());
