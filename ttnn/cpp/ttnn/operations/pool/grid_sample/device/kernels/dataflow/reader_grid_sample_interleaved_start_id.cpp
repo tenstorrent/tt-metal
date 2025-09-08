@@ -6,12 +6,15 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/height_sharded_reader_common.hpp"
-#include "debug/dprint.h"
 
 #define ALWI inline __attribute__((always_inline))
 
 constexpr uint32_t PRECOMPUTED_GRID_ELEMENTS_PER_POINT = 6;
 constexpr uint32_t STANDARD_GRID_ELEMENTS_PER_POINT = 2;
+
+// Data type constants (from ttnn/api/ttnn/tensor/types.hpp DataType enum)
+constexpr uint32_t DTYPE_BFLOAT16 = 0;
+constexpr uint32_t DTYPE_FLOAT32 = 1;
 
 ALWI bool is_coordinate_valid(int32_t coord, uint32_t max_size) {
     return (coord >= 0) && (coord < static_cast<int32_t>(max_size));
@@ -52,8 +55,9 @@ void kernel_main() {
     constexpr uint32_t input_width = get_compile_time_arg_val(6);
     constexpr uint32_t output_hw_size = get_compile_time_arg_val(7);
     constexpr uint32_t grid_batches = get_compile_time_arg_val(8);
+    constexpr uint32_t grid_dtype = get_compile_time_arg_val(9);
 
-    constexpr auto src_args = TensorAccessorArgs<9>();
+    constexpr auto src_args = TensorAccessorArgs<10>();
     constexpr auto grid_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     const auto s0 = TensorAccessor(grid_args, grid_addr, grid_stick_nbytes);
@@ -92,7 +96,9 @@ void kernel_main() {
         noc_async_read(grid_noc_addr, l1_write_grid_addr, grid_stick_nbytes);
         noc_async_read_barrier();
 
+        // Cast to appropriate pointer type based on grid data type
         volatile tt_l1_ptr uint16_t* grid_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_grid_addr);
+        volatile tt_l1_ptr float* grid_float_ptr = reinterpret_cast<volatile tt_l1_ptr float*>(l1_write_grid_addr);
 
         uint32_t curr_batch = spatial_pos / output_hw_size;
         uint32_t batch_offset = curr_batch * input_height * input_width;
@@ -120,12 +126,22 @@ void kernel_main() {
             weight_se_bf = grid_ptr[precomputed_data_offset + 5];
 #else
             // Each regular grid entry has 2 values: x, y coordinates
-            uint32_t coordinate_pair_offset = grid_idx * STANDARD_GRID_ELEMENTS_PER_POINT;
-            uint16_t h_coord_raw = grid_ptr[coordinate_pair_offset + 1];  // y coordinate
-            uint16_t w_coord_raw = grid_ptr[coordinate_pair_offset + 0];  // x coordinate
-
-            float h_coord_rel = bfloat16_to_float(h_coord_raw);
-            float w_coord_rel = bfloat16_to_float(w_coord_raw);
+            float h_coord_rel, w_coord_rel;
+            if constexpr (grid_dtype == DTYPE_FLOAT32) {
+                // For FLOAT32 grid, each coordinate is a 32-bit float
+                // Read from the base address with proper float32 offsets
+                volatile tt_l1_ptr float* float_data = reinterpret_cast<volatile tt_l1_ptr float*>(l1_write_grid_addr);
+                uint32_t float_offset = grid_idx * STANDARD_GRID_ELEMENTS_PER_POINT;
+                w_coord_rel = float_data[float_offset + 0];  // x coordinate
+                h_coord_rel = float_data[float_offset + 1];  // y coordinate
+            } else {
+                // For BFLOAT16 grid, read as uint16 and convert
+                uint32_t coordinate_pair_offset = grid_idx * STANDARD_GRID_ELEMENTS_PER_POINT;
+                uint16_t h_coord_raw = grid_ptr[coordinate_pair_offset + 1];  // y coordinate
+                uint16_t w_coord_raw = grid_ptr[coordinate_pair_offset + 0];  // x coordinate
+                h_coord_rel = bfloat16_to_float(h_coord_raw);
+                w_coord_rel = bfloat16_to_float(w_coord_raw);
+            }
 
             float h_coord_image = h_coord_rel * height_scale + height_offset;
             float w_coord_image = w_coord_rel * width_scale + width_offset;

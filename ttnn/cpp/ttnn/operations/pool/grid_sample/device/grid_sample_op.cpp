@@ -55,7 +55,13 @@ void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
 
     // Data type validation
     TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16, "Input tensor must be BFLOAT16");
-    TT_FATAL(grid_tensor.dtype() == DataType::BFLOAT16, "Grid tensor must be BFLOAT16");
+    if (use_precomputed_grid_) {
+        TT_FATAL(grid_tensor.dtype() == DataType::BFLOAT16, "Precomputed grid tensor must be BFLOAT16");
+    } else {
+        TT_FATAL(
+            grid_tensor.dtype() == DataType::BFLOAT16 || grid_tensor.dtype() == DataType::FLOAT32,
+            "Grid tensor must be BFLOAT16 or FLOAT32");
+    }
 
     // Layout validation
     TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Input tensor must be ROW_MAJOR layout");
