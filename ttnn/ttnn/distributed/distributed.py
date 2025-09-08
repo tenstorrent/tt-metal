@@ -71,14 +71,18 @@ class TensorShardingInfo:
             return lambda logical_coord: logical_coord, lambda physical_coord: physical_coord
 
         # Create both forward and reverse mappings
-        physical_coords = [tuple(i) for i in ttnn.MeshCoordinateRange(ttnn.MeshShape(self.mesh_shape))]
+        physical_coords = [
+            ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())])
+            for coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(self.mesh_shape))
+        ]
         logical_to_physical = {}
         physical_to_logical = {}
         coord_idx = 0
 
         for logical_coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(self.distribution_shape)):
             if coord_idx < len(physical_coords):
-                logical_key = tuple(logical_coord)
+                # Create copies to avoid iterator object reuse
+                logical_key = ttnn.MeshCoordinate([logical_coord[i] for i in range(logical_coord.dims())])
                 physical_key = physical_coords[coord_idx]
 
                 logical_to_physical[logical_key] = physical_key
@@ -86,36 +90,22 @@ class TensorShardingInfo:
                 coord_idx += 1
 
         def forward_mapper(logical_coord):
-            if isinstance(logical_coord, (tuple, list)):
-                key = tuple(logical_coord)
-            else:
-                key = (logical_coord,) if self.distribution_rank == 1 else logical_coord
-            return logical_to_physical.get(key, physical_coords[0] if physical_coords else (0,))
+            return logical_to_physical.get(logical_coord, physical_coords[0] if physical_coords else (0,))
 
         def reverse_mapper(physical_coord):
-            if isinstance(physical_coord, (tuple, list)):
-                key = tuple(physical_coord)
-            else:
-                key = (
-                    (physical_coord,)
-                    if len(physical_coords) > 0
-                    and isinstance(physical_coords[0], tuple)
-                    and len(physical_coords[0]) == 1
-                    else physical_coord
-                )
-            return physical_to_logical.get(key, key)
+            return physical_to_logical.get(physical_coord, physical_coord)
 
         return forward_mapper, reverse_mapper
 
-    def _physical_to_logical_coord(self, physical_tuple):
+    def _physical_to_logical_coord(self, physical_coord):
         """Convert physical coordinate to logical coordinate using O(1) reverse lookup."""
-        return self.reverse_coord_mapper(physical_tuple)
+        return self.reverse_coord_mapper(physical_coord)
 
     def _iter_logical_to_physical_coords(self):
         """Generator that yields (logical_coord, physical_coord) pairs using the coord_mapper."""
         for logical_coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(self.distribution_shape)):
-            physical_coord = self.coord_mapper(tuple(logical_coord))
-            yield tuple(logical_coord), physical_coord
+            physical_coord = self.coord_mapper(logical_coord)
+            yield logical_coord, physical_coord
 
     def _compute_global_tensor_shape(self):
         """Compute the global tensor shape using distribution_shape for scaling."""
@@ -129,27 +119,19 @@ class TensorShardingInfo:
         mapping = {axis: {} for axis in range(self.distribution_rank)}
 
         if self.tensor.storage_type() == ttnn.StorageType.HOST:
-            for host_idx, physical_coord_obj in enumerate(self.mesh_coords):
-                physical_tuple = tuple(int(physical_coord_obj[i]) for i in range(physical_coord_obj.dims()))
-                logical_tuple = self._physical_to_logical_coord(physical_tuple)
+            for host_idx, mesh_coord in enumerate(self.mesh_coords):
+                logical_coord = self._physical_to_logical_coord(mesh_coord)
 
-                for axis in range(min(self.distribution_rank, len(logical_tuple))):
-                    part_index = int(logical_tuple[axis])
+                for axis in range(min(self.distribution_rank, logical_coord.dims())):
+                    part_index = int(logical_coord[axis])
                     if part_index not in mapping[axis]:
                         mapping[axis][part_index] = host_idx
         else:
             mesh_device = self.tensor.device()
 
             # Generate logical->physical coordinate pairs using the coord_mapper
-            for logical_coord, physical_coord in self._iter_logical_to_physical_coords():
+            for logical_coord, mesh_coord in self._iter_logical_to_physical_coords():
                 try:
-                    if isinstance(physical_coord, tuple) and len(physical_coord) >= 2:
-                        mesh_coord = ttnn.MeshCoordinate(physical_coord[0], physical_coord[1])
-                    elif isinstance(physical_coord, tuple) and len(physical_coord) == 1:
-                        mesh_coord = ttnn.MeshCoordinate(physical_coord[0], 0)
-                    else:
-                        continue
-
                     device_id = mesh_device.get_device_id(mesh_coord)
 
                     # Record representative for each logical axis
@@ -173,16 +155,7 @@ class TensorShardingInfo:
         mapping = {}
         try:
             mesh_device = self.tensor.device()
-            for i, physical_coord_obj in enumerate(self.mesh_coords):
-                physical_tuple = tuple(int(physical_coord_obj[j]) for j in range(physical_coord_obj.dims()))
-
-                if len(physical_tuple) >= 2:
-                    mesh_coord = ttnn.MeshCoordinate(physical_tuple[0], physical_tuple[1])
-                elif len(physical_tuple) == 1:
-                    mesh_coord = ttnn.MeshCoordinate(physical_tuple[0], 0)
-                else:
-                    continue
-
+            for i, mesh_coord in enumerate(self.mesh_coords):
                 dev_id = mesh_device.get_device_id(mesh_coord)
                 mapping[dev_id] = i
 
@@ -285,19 +258,13 @@ def _compute_global_slice_ranges(device_coord, sharding_info):
     """Compute global tensor slice ranges for a specific device coordinate."""
     tensor_shape = list(sharding_info.tensor.shape)
     slice_ranges = []
-
-    if hasattr(device_coord, "dims"):
-        device_tuple = tuple(int(device_coord[i]) for i in range(device_coord.dims()))
-    else:
-        device_tuple = device_coord
-
-    logical_coord = sharding_info._physical_to_logical_coord(device_tuple)
+    logical_coord = sharding_info._physical_to_logical_coord(device_coord)
 
     for tensor_dim, dim_size in enumerate(tensor_shape):
         if tensor_dim in sharding_info.dim_to_axis:
             axis = sharding_info.dim_to_axis[tensor_dim]
             try:
-                part_index = int(logical_coord[axis]) if axis < len(logical_coord) else 0
+                part_index = int(logical_coord[axis]) if axis < logical_coord.dims() else 0
                 if (
                     axis in sharding_info.axis_offsets
                     and axis in sharding_info.axis_sizes

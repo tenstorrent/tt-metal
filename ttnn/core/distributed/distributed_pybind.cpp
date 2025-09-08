@@ -156,7 +156,9 @@ void py_module(py::module& module) {
             py::keep_alive<0, 1>())
         .def(
             "__getitem__", [](const MeshCoordinate& mc, int index) { return mc[index]; }, py::arg("index"))
-        .def("dims", &MeshCoordinate::dims);
+        .def("dims", &MeshCoordinate::dims)
+        .def("__hash__", [](const MeshCoordinate& mc) { return std::hash<MeshCoordinate>{}(mc); })
+        .def("__eq__", [](const MeshCoordinate& a, const MeshCoordinate& b) { return a == b; });
 
     static_cast<py::class_<MeshCoordinateRange>>(module.attr("MeshCoordinateRange"))
         .def(
