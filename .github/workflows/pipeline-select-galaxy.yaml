@@ -164,7 +164,7 @@ jobs:
     if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/tg-unit-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-unit-tests-impl.yaml
     with:
       extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
