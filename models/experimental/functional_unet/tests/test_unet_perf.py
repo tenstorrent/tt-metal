@@ -139,7 +139,6 @@ def test_unet_trace_perf_multi_device(
     mesh_device,
     reset_seeds,
 ):
-    pytest.skip("https://github.com/tenstorrent/tt-metal/actions/runs/17535612474/job/49798745183#step:8:364")
     from models.experimental.functional_unet.tests.test_unet_trace import (
         test_unet_trace_2cq_multi_device,
     )
