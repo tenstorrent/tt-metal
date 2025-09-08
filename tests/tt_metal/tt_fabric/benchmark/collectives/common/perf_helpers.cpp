@@ -11,9 +11,7 @@
 #include <tt-metalium/device_pool.hpp>
 using tt::DevicePool;
 
-namespace tt {
-namespace tt_fabric {
-namespace fabric_router_tests {
+namespace tt::tt_fabric::bench {
 
 double mean_of(const std::vector<double>& v) {
     if (v.empty()) {
@@ -73,14 +71,14 @@ PerfStats aggregate_stats(const std::vector<PerfPoint>& pts) {
     return s;
 }
 
-void warmup_once(BaseFabricFixture* fixture, PerfParams base, int iters) {
+void warmup_once(Fixture* fixture, PerfParams base, int iters) {
     base.tensor_bytes = std::max<uint32_t>(base.page_size, 4 * base.page_size);
     for (int i = 0; i < iters; ++i) {
         (void)RunUnicastConnWithParams(fixture, base);
     }
 }
 
-PerfStats run_repeated(BaseFabricFixture* fixture, const PerfParams& p, int warmup_iters, int iters) {
+PerfStats run_repeated(Fixture* fixture, const PerfParams& p, int warmup_iters, int iters) {
     for (int w = 0; w < warmup_iters; ++w) {
         (void)RunUnicastConnWithParams(fixture, p);
     }
@@ -102,6 +100,4 @@ tt::tt_metal::IDevice* find_device_by_id(chip_id_t phys_id) {
     return nullptr;
 }
 
-}  // namespace fabric_router_tests
-}  // namespace tt_fabric
-}  // namespace tt
+}  // namespace tt::tt_fabric::bench

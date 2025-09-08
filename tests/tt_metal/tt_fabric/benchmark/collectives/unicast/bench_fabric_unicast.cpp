@@ -18,10 +18,11 @@
 #include <tt-metalium/global_semaphore.hpp>
 using tt::DevicePool;
 
-namespace tt::tt_fabric {
-namespace fabric_router_tests {
+namespace tt::tt_fabric::bench {
 
-PerfPoint RunUnicastConnWithParams(BaseFabricFixture* fixture, const PerfParams& p) {
+using FabricFixture = ::tt::tt_fabric::fabric_router_tests::Fabric2DFixture;
+
+PerfPoint RunUnicastConnWithParams(Fixture* fixture, const PerfParams& p) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};
@@ -38,8 +39,8 @@ PerfPoint RunUnicastConnWithParams(BaseFabricFixture* fixture, const PerfParams&
         return PerfPoint{};
     }
 
-    CoreCoord tx_xy = src_dev->worker_core_from_logical_core(p.sender_core);
-    CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
+    tt::tt_metal::CoreCoord tx_xy = src_dev->worker_core_from_logical_core(p.sender_core);
+    tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
 
     // Allocate simple flat buffers (you control size via p.tensor_bytes)
     tt::tt_metal::BufferConfig src_cfg{
@@ -70,7 +71,7 @@ PerfPoint RunUnicastConnWithParams(BaseFabricFixture* fixture, const PerfParams&
         /*initial=*/0,
         tt::tt_metal::BufferType::L1);
 
-    const CoreCoord receiver_core = p.receiver_core;
+    const tt::tt_metal::CoreCoord receiver_core = p.receiver_core;
 
     constexpr const char* KDIR = "tests/tt_metal/tt_fabric/benchmark/collectives/unicast/kernels/";
     auto rx_wait_k = tt::tt_metal::CreateKernel(
@@ -204,7 +205,7 @@ PerfPoint RunUnicastConnWithParams(BaseFabricFixture* fixture, const PerfParams&
     };
 }
 
-TEST_F(Fabric2DFixture, UnicastConn_CodeControlled) {
+TEST_F(FabricFixture, UnicastConn_CodeControlled) {
     PerfParams p;
     p.mesh_id = 0;
     p.src_chip = 0;
@@ -216,7 +217,7 @@ TEST_F(Fabric2DFixture, UnicastConn_CodeControlled) {
     RunUnicastConnWithParams(this, p);
 }
 
-TEST_F(Fabric2DFixture, UnicastConn_SweepTensorSize) {
+TEST_F(FabricFixture, UnicastConn_SweepTensorSize) {
     PerfParams base;
     base.mesh_id = 0;
     base.src_chip = 0;
@@ -284,7 +285,7 @@ TEST_F(Fabric2DFixture, UnicastConn_SweepTensorSize) {
     std::cout << "[perf] wrote " << results.size() << " points -> " << csv_name << "\n";
 }
 
-TEST_F(Fabric2DFixture, UnicastConn_HeatmapDstCore) {
+TEST_F(FabricFixture, UnicastConn_HeatmapDstCore) {
     PerfParams base;
     base.mesh_id = 0;
     base.src_chip = 0;
@@ -329,7 +330,7 @@ TEST_F(Fabric2DFixture, UnicastConn_HeatmapDstCore) {
 
     for (const auto& rect : dst_workers.ranges()) {
         for (auto it = rect.begin(); it != rect.end(); ++it) {
-            CoreCoord rc = *it;  // logical dest worker core (x,y)
+            tt::tt_metal::CoreCoord rc = *it;  // logical dest worker core (x,y)
 
             PerfParams p = base;
             p.receiver_core = rc;
@@ -344,5 +345,4 @@ TEST_F(Fabric2DFixture, UnicastConn_HeatmapDstCore) {
     std::cout << "[perf] wrote heatmap CSV -> " << csv_name << "\n";
 }
 
-}  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::bench
