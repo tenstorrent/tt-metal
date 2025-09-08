@@ -369,6 +369,22 @@ Tests:
     patterns:
       - type: all_to_one
 
+  - name: AllToOneRandomUnicastMesh
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_one_random
+
   - name: "FabricMuxSimpleUnicastWriteLinear"
     fabric_setup:
       topology: Linear
