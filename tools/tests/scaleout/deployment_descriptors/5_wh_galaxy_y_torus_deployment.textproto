@@ -1,0 +1,35 @@
+hosts: {
+  hall: "120"
+  aisle: "A"
+  rack: 3
+  shelf_u: 2
+  host: "wh-glx-a03u02"
+}
+hosts: {
+  hall: "120"
+  aisle: "A"
+  rack: 3
+  shelf_u: 6
+  host: "wh-glx-a03u08"
+}
+hosts: {
+  hall: "120"
+  aisle: "A"
+  rack: 3
+  shelf_u: 14
+  host: "wh-glx-a03u14"
+}
+hosts: {
+  hall: "120"
+  aisle: "A"
+  rack: 4
+  shelf_u: 2
+  host: "wh-glx-a04u02"
+}
+hosts: {
+  hall: "120"
+  aisle: "A"
+  rack: 4
+  shelf_u: 8
+  host: "wh-glx-a04u08"
+}

@@ -237,7 +237,6 @@ For example, to compute the element-wise sum of two tiles:
 
     // Configure the (un)packer based on the data formats of the CBs.
     init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    add_binary_tile_init();
 
     for(int i=0; i < 8; i++) {
         cb_wait_front(CBIndex::c_0, 1); cb_wait_front(CBIndex::c_1, 1);

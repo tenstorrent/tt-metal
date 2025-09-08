@@ -16,6 +16,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -61,123 +62,124 @@ void inc_populate(std::vector<std::uint32_t>& vec, float start_from) {
     }
 }
 
-void RunDelayTestOnCore(WatcherDelayFixture* fixture, IDevice* device, CoreCoord &core) {
+void RunDelayTestOnCore(
+    MeshWatcherDelayFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device, CoreCoord& core) {
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
 
-        const uint32_t SINGLE_TILE_SIZE = 2 * 1024;
-        const uint32_t NUM_TILES = 4;
-        const uint32_t DRAM_BUFFER_SIZE = SINGLE_TILE_SIZE * NUM_TILES;  // NUM_TILES of FP16_B, hard-coded in the reader/writer kernels
-        const uint32_t PAGE_SIZE = DRAM_BUFFER_SIZE;
+    const uint32_t SINGLE_TILE_SIZE = 2 * 1024;
+    const uint32_t NUM_TILES = 4;
+    const uint32_t DRAM_BUFFER_SIZE =
+        SINGLE_TILE_SIZE * NUM_TILES;  // NUM_TILES of FP16_B, hard-coded in the reader/writer kernels
+    const uint32_t PAGE_SIZE = DRAM_BUFFER_SIZE;
 
-        tt_metal::InterleavedBufferConfig dram_config{
-                    .device=device,
-                    .size = DRAM_BUFFER_SIZE,
-                    .page_size = PAGE_SIZE,
-                    .buffer_type = tt_metal::BufferType::DRAM
-                    };
+    distributed::DeviceLocalBufferConfig dram_config{.page_size = PAGE_SIZE, .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = DRAM_BUFFER_SIZE};
 
-        auto src0_dram_buffer = CreateBuffer(dram_config);
-        uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
-        auto src1_dram_buffer = CreateBuffer(dram_config);
-        uint32_t dram_buffer_src1_addr = src1_dram_buffer->address();
-        auto dst_dram_buffer = CreateBuffer(dram_config);
-        uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
+    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    uint32_t dram_buffer_src1_addr = src1_dram_buffer->address();
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-        uint32_t src0_cb_index = tt::CBIndex::c_0;
-        uint32_t num_input_tiles = 2;
-        tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * SINGLE_TILE_SIZE, {{src0_cb_index, tt::DataFormat::Float16_b}})
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
+    uint32_t num_input_tiles = 2;
+    tt_metal::CircularBufferConfig cb_src0_config =
+        tt_metal::CircularBufferConfig(num_input_tiles * SINGLE_TILE_SIZE, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, SINGLE_TILE_SIZE);
-        tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
-        uint32_t src1_cb_index = tt::CBIndex::c_1;
-        tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(num_input_tiles * SINGLE_TILE_SIZE, {{src1_cb_index, tt::DataFormat::Float16_b}})
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
+    tt_metal::CircularBufferConfig cb_src1_config =
+        tt_metal::CircularBufferConfig(num_input_tiles * SINGLE_TILE_SIZE, {{src1_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src1_cb_index, SINGLE_TILE_SIZE);
-        tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_src1_config);
 
-        uint32_t ouput_cb_index = tt::CBIndex::c_16;
-        uint32_t num_output_tiles = 2;
-        tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * SINGLE_TILE_SIZE, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+    uint32_t ouput_cb_index = tt::CBIndex::c_16;
+    uint32_t num_output_tiles = 2;
+    tt_metal::CircularBufferConfig cb_output_config =
+        tt_metal::CircularBufferConfig(
+            num_output_tiles * SINGLE_TILE_SIZE, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, SINGLE_TILE_SIZE);
-        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
-        auto binary_reader_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
-            core,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+    auto binary_reader_kernel = tt_metal::CreateKernel(
+        program_,
+        "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-        auto unary_writer_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
-            core,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+    auto unary_writer_kernel = tt_metal::CreateKernel(
+        program_,
+        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-        vector<uint32_t> compute_kernel_args = { };
+    vector<uint32_t> compute_kernel_args = {};
 
-        std::map<std::string, std::string> binary_defines = {
-            {"ELTWISE_OP", "add_tiles"}, {"ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD"}};
-        auto eltwise_binary_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/kernels/compute/eltwise_binary.cpp",
-            core,
-            tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
+    std::map<std::string, std::string> binary_defines = {
+        {"ELTWISE_OP", "add_tiles"}, {"ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD"}};
+    auto eltwise_binary_kernel = tt_metal::CreateKernel(
+        program_,
+        "tt_metal/kernels/compute/eltwise_binary.cpp",
+        core,
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
 
-        SetRuntimeArgs(
-            program,
-            eltwise_binary_kernel,
-            core,
-            {NUM_TILES, 1}
-        );
+    SetRuntimeArgs(program_, eltwise_binary_kernel, core, {NUM_TILES, 1});
 
-        float constant = 0.0f;
-        float start_from = 0.0f;
-        std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(DRAM_BUFFER_SIZE, constant);
-        std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(DRAM_BUFFER_SIZE, 0.0f);
-        inc_populate(src1_vec, start_from);
-        std::vector<uint32_t> expected_vec = create_constant_vector_of_bfloat16(DRAM_BUFFER_SIZE, 0.0f);
-        inc_populate(expected_vec, start_from + constant);
+    float constant = 0.0f;
+    float start_from = 0.0f;
+    std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(DRAM_BUFFER_SIZE, constant);
+    std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(DRAM_BUFFER_SIZE, 0.0f);
+    inc_populate(src1_vec, start_from);
+    std::vector<uint32_t> expected_vec = create_constant_vector_of_bfloat16(DRAM_BUFFER_SIZE, 0.0f);
+    inc_populate(expected_vec, start_from + constant);
 
-        CommandQueue& cq = device->command_queue();
+    distributed::WriteShard(cq, src0_dram_buffer, src0_vec, zero_coord);
+    distributed::WriteShard(cq, src1_dram_buffer, src1_vec, zero_coord);
 
-        EnqueueWriteBuffer(cq, std::ref(src0_dram_buffer), src0_vec, false);
-        EnqueueWriteBuffer(cq, std::ref(src1_dram_buffer), src1_vec, false);
+    vector<uint32_t> reader_args = {
+        dram_buffer_src0_addr, (std::uint32_t)0, NUM_TILES, dram_buffer_src1_addr, (std::uint32_t)0, NUM_TILES, 0};
 
-        vector<uint32_t> reader_args = {
-            dram_buffer_src0_addr, (std::uint32_t)0, NUM_TILES, dram_buffer_src1_addr, (std::uint32_t)0, NUM_TILES, 0};
+    vector<uint32_t> writer_args = {dram_buffer_dst_addr, (std::uint32_t)0, NUM_TILES};
 
-        vector<uint32_t> writer_args = {dram_buffer_dst_addr, (std::uint32_t)0, NUM_TILES};
+    SetRuntimeArgs(program_, unary_writer_kernel, core, writer_args);
+    SetRuntimeArgs(program_, binary_reader_kernel, core, reader_args);
 
-        SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
-        SetRuntimeArgs(program, binary_reader_kernel, core, reader_args);
+    fixture->RunProgram(mesh_device, workload);
+    std::vector<uint32_t> result_vec;
+    distributed::ReadShard(cq, result_vec, dst_dram_buffer, zero_coord);
 
-        EnqueueProgram(cq, program, false);
-        std::vector<uint32_t> result_vec;
-        EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+    // Print the feedback generated by debug_delay functionality
+    std::vector<uint32_t> read_vec;
+    CoreCoord virtual_core = device->virtual_core_from_logical_core({0, 0}, CoreType::WORKER);
+    read_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        device->id(),
+        virtual_core,
+        device->get_dev_addr(virtual_core, HalL1MemAddrType::WATCHER) + offsetof(watcher_msg_t, debug_insert_delays),
+        sizeof(debug_insert_delays_msg_t));
 
-        // Print the feedback generated by debug_delay functionality
-        std::vector<uint32_t> read_vec;
-
-        CoreCoord virtual_core = device->virtual_core_from_logical_core({0, 0}, CoreType::WORKER);
-        read_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            device->id(),
-            virtual_core,
-            device->get_dev_addr(virtual_core, HalL1MemAddrType::WATCHER) +
-                offsetof(watcher_msg_t, debug_insert_delays),
-            sizeof(debug_insert_delays_msg_t));
-
-        log_info(tt::LogTest, "Read back debug_insert_delays: 0x{:x}", read_vec[0]);
-        EXPECT_TRUE((read_vec[0] >> 24) == 0x3);
+    log_info(tt::LogTest, "Read back debug_insert_delays: 0x{:x}", read_vec[0]);
+    EXPECT_TRUE((read_vec[0] >> 24) == 0x3);
 }
 
-TEST_F(WatcherDelayFixture, TensixTestWatcherSanitizeInsertDelays) {
+TEST_F(MeshWatcherDelayFixture, TensixTestWatcherSanitizeInsertDelays) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
 
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, IDevice* device){
+        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
             CoreCoord core{0, 0};
-            RunDelayTestOnCore(dynamic_cast<WatcherDelayFixture*>(fixture), device, core);
+            RunDelayTestOnCore(dynamic_cast<MeshWatcherDelayFixture*>(fixture), mesh_device, core);
         },
-        this->devices_[0]
-    );
+        this->devices_[0]);
 }

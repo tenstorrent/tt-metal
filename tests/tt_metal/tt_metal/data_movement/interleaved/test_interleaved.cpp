@@ -9,6 +9,7 @@
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt::tt_metal {
 
@@ -78,9 +79,9 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const InterleavedCo
         (uint32_t)test_config.page_size_bytes,
         (uint32_t)l1_cb_index,
         (uint32_t)test_config.test_id,
-        (uint32_t)test_config.is_dram,
         (uint32_t)sync,
         (uint32_t)test_config.default_noc};
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_args);
 
     vector<uint32_t> writer_compile_args = {
         (uint32_t)test_config.num_of_transactions,
@@ -88,9 +89,9 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const InterleavedCo
         (uint32_t)test_config.page_size_bytes,
         (uint32_t)l1_cb_index,
         (uint32_t)test_config.test_id,
-        (uint32_t)test_config.is_dram,
         (uint32_t)sync,
         (uint32_t)test_config.default_noc};
+    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_args);
 
     if (sync) {
         // Create circular buffers
