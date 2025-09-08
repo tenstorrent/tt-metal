@@ -326,29 +326,34 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
     }
 }
 
-class EarlyReturnFixture : public DispatchFixture {
+class EarlyReturnFixture : public MeshDispatchFixture {
     void SetUp() override {
         tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(true);
-        DispatchFixture::SetUp();
+        MeshDispatchFixture::SetUp();
     }
     void TearDown() override {
-        DispatchFixture::TearDown();
+        MeshDispatchFixture::TearDown();
         tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(false);
     }
 };
 
 TEST_F(EarlyReturnFixture, TensixKernelEarlyReturn) {
-    for (IDevice* device : devices_) {
+    for (const auto& mesh_device : devices_) {
         CoreCoord worker{0, 0};
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program;
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
         // Kernel will block if it doesn't early return.
         CreateKernel(
-            program,
+            program_,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             worker,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-        this->RunProgram(device, program);
+        this->RunProgram(mesh_device, workload);
     }
 }
 
