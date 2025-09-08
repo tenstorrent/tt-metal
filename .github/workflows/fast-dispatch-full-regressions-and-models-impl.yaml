@@ -92,7 +92,7 @@ jobs:
 
           SEL='${{ inputs.models-to-run }}'
           echo "SEL raw: ${SEL}"
-          echo "${SEL}" | jq -e type && echo "Looks like valid JSON" || echo "Not JSON (will treat as CSV)"
+          echo "${SEL}" | jq -e type && echo "Looks like valid JSON" || echo "Not JSON"
 
           # ---- Normalize selection to a JSON array (SEL_ARR) ----
           if [ -z "${SEL}" ] || [ "${SEL}" = "all" ]; then
