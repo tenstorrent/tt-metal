@@ -90,7 +90,6 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::Buffer* input_buffer_type = input.buffer();
     std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(dim)};
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
 
