@@ -401,7 +401,10 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
     return nullptr;
 }
 
-std::vector<std::shared_ptr<Kernel>> Program::kernels() const { return internal_->kernels(); }
+std::vector<KernelMeta> Program::kernels() const {
+    // return internal_->kernels();
+    return {};
+}
 
 std::vector<std::shared_ptr<Kernel>> ProgramImpl::kernels() const {
     std::vector<std::shared_ptr<Kernel>> result;
