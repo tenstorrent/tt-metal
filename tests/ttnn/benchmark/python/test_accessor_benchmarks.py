@@ -50,11 +50,11 @@ ARGS_CONFIGS = [
 
 # For benchmarks that only support all-static configuration
 STATIC_ONLY_SHARDED_ARGS_CONFIGS = [
-    "0000001",  # Everything static
+    "0000001",  # Everything static, sharded tensor
 ]
 
 STATIC_ONLY_INTERLEAVED_ARGS_CONFIGS = [
-    "0000000",  # Everything static
+    "0000000",  # Everything static, interleaved tensor
 ]
 
 
@@ -110,18 +110,18 @@ def impl_test(gtest_filter, res_dir, args_configs=None):
 
     binary_path = Path(BASE / "build" / "test" / "ttnn" / "unit_tests_ttnn_accessor")
 
-    # # Get individual test names if using star pattern
-    # if "*" in gtest_filter:
-    #     individual_tests = get_individual_test_names(gtest_filter)
-    #     logger.info(f"Found {len(individual_tests)} individual tests for pattern '{gtest_filter}'")
+    # Get individual test names if using star pattern
+    if "*" in gtest_filter:
+        individual_tests = get_individual_test_names(gtest_filter)
+        logger.info(f"Found {len(individual_tests)} individual tests for pattern '{gtest_filter}'")
 
-    #     # Run each test individually
-    #     for test_name in individual_tests:
-    #         logger.info(f"Running individual test: {test_name}")
-    #         subprocess.run([binary_path, f"--gtest_filter={test_name}"], env=ENV)
-    # else:
-    #     # Run the test as before for non-star patterns
-    #     subprocess.run([binary_path, f"--gtest_filter={gtest_filter}"], env=ENV)
+        # Run each test individually
+        for test_name in individual_tests:
+            logger.info(f"Running individual test: {test_name}")
+            subprocess.run([binary_path, f"--gtest_filter={test_name}"], env=ENV)
+    else:
+        # Run the test as before for non-star patterns
+        subprocess.run([binary_path, f"--gtest_filter={gtest_filter}"], env=ENV)
 
     setup = device_post_proc_config.default_setup()
     zone_names = []
