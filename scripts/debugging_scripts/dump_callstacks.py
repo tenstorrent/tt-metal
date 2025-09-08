@@ -19,7 +19,7 @@ Description:
 """
 
 from dataclasses import dataclass
-from triage import ScriptConfig, TTTriageError, recurse_field, triage_field, hex_serializer, run_script
+from triage import ScriptConfig, TTTriageError, log_check, recurse_field, triage_field, hex_serializer, run_script
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
 from check_per_block_location import run as get_check_per_block_location
 from ttexalens.coordinate import OnChipCoordinate
@@ -190,7 +190,6 @@ def get_callstack(
             pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
             return top_callstack(pc, elfs, offsets, context)
         else:
-            device_id = location._device._id
             return callstack(location, elfs, offsets, risc_name)
     except:
         return []
@@ -238,6 +237,8 @@ def dump_callstacks(
         dump_callstacks.elfs_cache: dict[str, ParsedElfFile] = {}
     if not hasattr(dump_callstacks, "gdb_server"):
         dump_callstacks.gdb_server: GdbServer | None = None
+    if not hasattr(dump_callstacks, "process_ids"):
+        dump_callstacks.process_ids: dict[OnChipCoordinate, dict[str, int]] = {}
 
     result: list[DumpCallstacksData] = []
 
@@ -252,7 +253,9 @@ def dump_callstacks(
         except Exception as e:
             raise TTTriageError(f"Failed to start GDB server on port {port}. Error: {e}")
         # Get mapping form risc location and name to process id
-        process_ids = get_process_ids(dump_callstacks.gdb_server)
+        dump_callstacks.process_ids = get_process_ids(dump_callstacks.gdb_server)
+
+    process_ids = dump_callstacks.process_ids
 
     try:
         noc_block = location._device.get_block(location)
@@ -262,6 +265,10 @@ def dump_callstacks(
             if active_cores and dispatcher_core_data.go_message != "GO":
                 continue
             if gdb_callstack:
+                risc_debug = noc_block.get_risc_debug(risc_name)
+                if risc_debug.is_in_reset():
+                    continue
+
                 if risc_name == "ncrisc":
                     # Cannot attach to NCRISC process due to lack of debug hardware so we return empty struct
                     callstack = [CallstackEntry()]
@@ -277,17 +284,21 @@ def dump_callstacks(
                 callstack = get_callstack(
                     location, risc_name, dispatcher_core_data, dump_callstacks.elfs_cache, full_callstack
                 )
-                result.append(
-                    DumpCallstacksData(
-                        location=location,
-                        risc_name=risc_name,
-                        dispatcher_core_data=dispatcher_core_data,
-                        pc=callstack[0].pc if len(callstack) > 0 else None,
-                        kernel_callstack=callstack,
-                    )
+            result.append(
+                DumpCallstacksData(
+                    location=location,
+                    risc_name=risc_name,
+                    dispatcher_core_data=dispatcher_core_data,
+                    pc=callstack[0].pc if len(callstack) > 0 else None,
+                    kernel_callstack=callstack,
                 )
+            )
 
-    except:
+    except Exception as e:
+        log_check(
+            False,
+            f"{ORANGE}Failed to dump callstacks for {risc_name} at {location} on device {location._device._id}: {e}{RST}",
+        )
         return result
 
     return result
