@@ -69,6 +69,7 @@ void kernel_main() {
     if constexpr (split_reader) {
         packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
         reader_idx = 0;
+        cb_wait_front(cb_reader_indices, 1);
     }
 
 #ifndef SKIP_MCAST

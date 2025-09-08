@@ -79,5 +79,6 @@ void load_config_tensor_if_in_dram(uint32_t core_index) {
 
     noc_async_read(src_noc_addr, get_write_ptr(cb_reader_index), config_page_size);
     noc_async_read_barrier();
+    cb_push_back(cb_reader_index, 1);
 #endif
 }
