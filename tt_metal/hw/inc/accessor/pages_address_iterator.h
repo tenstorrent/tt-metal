@@ -269,17 +269,12 @@ public:
     using reference = const Page&;
     using pointer = const Page*;
 
-    // Constructor that initializes the iterator at a starting position
-    PagesAddressIteratorInterleaved(const Accessor& accessor, uint32_t start_page_id = 0, uint8_t noc = noc_index) :
-        accessor(accessor), current_page_id(start_page_id), noc(noc), tensor_volume(0) {
-        update_current_page();
-    }
-
-    // Constructor for end iterator with known tensor volume
     PagesAddressIteratorInterleaved(
         const Accessor& accessor, uint32_t start_page_id, uint32_t tensor_vol, uint8_t noc) :
-        accessor(accessor), current_page_id(start_page_id), noc(noc), tensor_volume(tensor_vol) {
-        // This constructor is used for creating end iterators
+        accessor(accessor), current_page_id(start_page_id), tensor_volume(tensor_vol), noc(noc) {
+        if (current_page_id < tensor_volume) {
+            update_current_page();
+        }
     }
 
     // Getters
@@ -290,12 +285,8 @@ public:
 
     // Arithmetic operators
     PagesAddressIteratorInterleaved& operator++() {
-        if (tensor_volume > 0 && current_page_id >= tensor_volume) {
-            return *this;  // End iterator
-        }
-
         current_page_id++;
-        if (tensor_volume > 0 && current_page_id >= tensor_volume) {
+        if (current_page_id >= tensor_volume) {
             current_page_id = tensor_volume;
             return *this;
         }
@@ -312,12 +303,8 @@ public:
 
     PagesAddressIteratorInterleaved& operator+=(difference_type steps) {
         ASSERT(steps >= 0);
-        if (tensor_volume > 0 && current_page_id >= tensor_volume) {
-            return *this;  // End iterator
-        }
-
         current_page_id += steps;
-        if (tensor_volume > 0 && current_page_id >= tensor_volume) {
+        if (current_page_id >= tensor_volume) {
             current_page_id = tensor_volume;
             return *this;
         }
@@ -357,15 +344,14 @@ public:
 
 private:
     const Accessor& accessor;
-    uint32_t current_page_id = 0;   // current page id
-    uint64_t current_noc_addr = 0;  // current NOC address for this page
-    uint8_t noc = noc_index;
-    uint32_t tensor_volume = 0;  // tensor volume, 0 means unknown
+    uint32_t current_page_id = 0;
+    const uint32_t tensor_volume = 0;
+    const uint8_t noc = noc_index;
     mutable Page current_page{0, 0, 0};
 
     void update_current_page() {
-        current_noc_addr = accessor.get_noc_addr(current_page_id, 0, noc);
-        current_page = Page(current_noc_addr, current_page_id, current_page_id);  // For interleaved, shard_id = page_id
+        auto current_noc_addr = accessor.get_noc_addr(current_page_id, 0, noc);
+        current_page = Page(current_noc_addr, current_page_id, current_page_id);
     }
 };
 
@@ -398,7 +384,7 @@ public:
 
     iterator begin() const {
         if constexpr (Accessor::DSpec::is_interleaved) {
-            return PagesAddressIteratorInterleaved<Accessor>(accessor_, start_page_id_, noc_);
+            return PagesAddressIteratorInterleaved<Accessor>(accessor_, start_page_id_, tensor_volume_, noc_);
         } else {
             return PagesAddressIteratorSharded<Accessor>(accessor_, start_page_id_, noc_);
         }
