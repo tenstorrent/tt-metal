@@ -12,7 +12,7 @@ void kernel_main() {
     auto args = TensorAccessorArgs<base_idx_cta, base_idx_crta>();
     auto tensor_accessor = TensorAccessor(args, 0, 1024);
 
-#ifdef INTERLEAVED_LAYOUT
+#if INTERLEAVED_LAYOUT
     // For interleaved layout, get tensor volume from runtime args
     uint32_t tensor_volume = get_compile_time_arg_val(args.next_compile_time_args_offset());
 #else

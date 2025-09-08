@@ -67,28 +67,6 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_input_m
 
     return input_mesh_buffer;
 }
-
-std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_interleaved_mesh_buffer_from_inputs(
-    const InputBufferParams& inputs, tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    // These values would be passed from tensor correctly based on PageConfig
-    const auto host_size_in_bytes = inputs.physical_tensor_shape.volume() * inputs.bytes_per_element;
-    const auto page_size = inputs.page_shape.height() * inputs.page_shape.width() * inputs.bytes_per_element;
-
-    // Mirrors allocate_device_buffer in ttnn
-    const tt::tt_metal::distributed::ReplicatedBufferConfig mesh_buffer_config{.size = host_size_in_bytes};
-
-    // Create interleaved input mesh buffer - no sharding args needed for interleaved
-    const tt::tt_metal::distributed::DeviceLocalBufferConfig input_device_local_config{
-        .page_size = page_size,
-        .buffer_type = inputs.input_shard_spec.buffer_type,  // Use L1 or DRAM as specified
-        .sharding_args = std::nullopt,                       // No sharding for interleaved
-    };
-    const auto input_mesh_buffer =
-        tt::tt_metal::distributed::MeshBuffer::create(mesh_buffer_config, input_device_local_config, mesh_device);
-
-    return input_mesh_buffer;
-}
-
 }  // namespace accessor_benchmarks
 
 using namespace accessor_benchmarks;
@@ -145,14 +123,10 @@ void benchmark_args_combinations_single_core(
         // Set up accessor compile-time args for reader kernel
         const auto accessor_args = TensorAccessorArgs(*input_device_buffer, arg_config);
         auto cta = accessor_args.get_compile_time_args();
-        if (is_interleaved) {
-            cta.push_back(params.physical_tensor_shape.volume());
-        }
+        cta.push_back(params.physical_tensor_shape.volume());  // tensor volume for interleaved tensors
 
         std::map<std::string, std::string> defines{{"ACCESSOR_CONFIG_NAME", crta_config_str}};
-        if (is_interleaved) {
-            defines["INTERLEAVED_LAYOUT"] = "1";
-        }
+        defines["INTERLEAVED_LAYOUT"] = is_interleaved ? "1" : "0";
         // Create reader kernel
         KernelHandle reader_kernel_id = CreateKernel(
             program,

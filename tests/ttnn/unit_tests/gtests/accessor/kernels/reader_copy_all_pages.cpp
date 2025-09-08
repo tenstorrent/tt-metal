@@ -24,7 +24,7 @@ void kernel_main() {
     // For interleaved tensors, we need to pass tensor_volume to pages()
     // For sharded tensors, pages() doesn't need tensor_volume
     auto all_pages = [&]() {
-#ifdef INTERLEAVED_LAYOUT
+#if INTERLEAVED_LAYOUT
         return tensor_accessor_src.pages(tensor_volume);
 #else
         return tensor_accessor_src.pages();
