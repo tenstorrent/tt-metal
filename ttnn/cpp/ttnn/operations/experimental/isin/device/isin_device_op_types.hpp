@@ -20,7 +20,6 @@ struct operation_attributes_t {
     const bool assume_unique;
     const bool invert;
     const uint32_t single_fetch_subchunk_size;
-    const std::optional<MemoryConfig> memory_config;
 };
 
 struct tensor_args_t {
