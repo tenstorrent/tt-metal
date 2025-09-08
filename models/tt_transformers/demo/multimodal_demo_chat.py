@@ -98,6 +98,7 @@ def test_multimodal_demo_chat(
 
         out_message = result
         print(f"> {out_message.role.capitalize()}: {out_message.content}")
+        # TODO: add tool_calls functionality
         # for t in out_message.tool_calls:
         #     print(f"  Tool call: {t.tool_name} ({t.arguments})")
         print("\n==================================\n")

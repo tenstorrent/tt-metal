@@ -58,6 +58,8 @@ SINGLE_CARD_MODELS = [
 ]
 
 T3K_MODELS = [
+    "google/gemma-3-4b-it",
+    "google/gemma-3-27b-it",
     "meta-llama/Llama-3.1-8B-Instruct",
     "meta-llama/Llama-3.1-70B-Instruct",
     "meta-llama/Llama-3.2-1B-Instruct",
@@ -131,6 +133,7 @@ def download_models(args):
 
 
 def download_datasets(args):
+    """Currently makes no sense to use it since datasets are loading in test-time"""
     logger.info("Downloading datasets...")
     # download(DATASETS, args, artifact_type="dataset")
     # datasets are using different structure then models/huggingface_hub and it's better use different API for downloading
@@ -140,6 +143,7 @@ def download_datasets(args):
 
 
 def download_metrics(args):
+    """Currently makes no sense to use it since metrics are loading in test-time"""
     logger.info("Downloading metrics...")
     for metric in METRICS:
         _ = evaluate.load(metric)
