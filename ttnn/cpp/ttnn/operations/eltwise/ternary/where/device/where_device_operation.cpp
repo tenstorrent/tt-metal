@@ -94,9 +94,6 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
                 "{}",
                 predicate_tensor.logical_shape(),
                 value_true_tensor.value().logical_shape());
-        } else if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
-            // For outer broadcast, shapes should be compatible
-            // The broadcast detection should have already validated this
         } else if (broadcast_type == WhereBroadcastType::COL_BCAST) {
             // For column broadcast, validate that dimensions are broadcastable
             // Either heights are same, or one is 1 (broadcastable)
