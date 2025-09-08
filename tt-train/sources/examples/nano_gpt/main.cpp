@@ -911,6 +911,16 @@ int main(int argc, char **argv) {
         throw std::logic_error("Clip grad norm is not supported with 3 tier training");
     }
 
+    if (device_config.enable_ddp) {
+        auto num_devices = static_cast<uint32_t>(device->num_devices());
+        if (config.batch_size % num_devices != 0) {
+            throw std::logic_error(fmt::format(
+                "Batch size must be divisible by the number of devices. Batch size = {}, devices = {}",
+                config.batch_size,
+                num_devices));
+        }
+    }
+
     auto get_samples_count = [&config](uint32_t global_step) {
         return global_step * config.batch_size * config.gradient_accumulation_steps;
     };
