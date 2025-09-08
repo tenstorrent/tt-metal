@@ -64,7 +64,8 @@ class LazyParams:
         self.data = None
         self.fake = fake
         if not fake:
-            self.data = torch.load(gzip.open(self.data_path, "rb"))
+            with open(self.data_path, "rb") as f:
+                self.data = torch.load(f)
         else:
             # load const meta json and fake the data
             with open(self.meta_path, "r") as f:

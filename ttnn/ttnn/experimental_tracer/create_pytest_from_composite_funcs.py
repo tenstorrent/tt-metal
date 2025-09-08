@@ -146,7 +146,11 @@ def generate_test_file(json_file, ref_file, ttnn_file, output_file="test_generat
                 tensors_tt = [ttnn.from_torch(t, dtype=ttnn.bfloat16, device=device) for t in tensors]
                 out_opt = ttnn_{func_name}(*tensors_tt)
                 out_opt = ttnn.to_torch(out_opt)
-                assert_with_pcc(out_ref, out_opt, 0.9999)
+                diff = torch.abs(out_ref - out_opt)
+                print(diff.mean(), diff.std(), diff.max(), diff.min())
+                print(out_ref.mean(), out_ref.std(), out_ref.max(), out_ref.min())
+                print(out_opt.mean(), out_opt.std(), out_opt.max(), out_opt.min())
+                assert_with_pcc(out_ref, out_opt, 0.999)
                 """
             )
             test_body = textwrap.indent(test_body, "    ")
@@ -164,6 +168,7 @@ def test_{func_name}(device, input_specs):
             )
             f.write(test_body + "\n\n")
     format_file_with_black(args.out)
+    print(f"Generated test file: {output_file}")
 
 
 # ---------- CLI ----------

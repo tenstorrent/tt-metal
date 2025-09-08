@@ -24,7 +24,7 @@ class PytorchGraph:
     def get_imports_and_code_lines(self) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
         imports: Dict[str, List[str]] = {}
         code_lines: Dict[str, List[str]] = {}
-        for node_id in list(nx.topological_sort(self.graph)):
+        for node_id in list(nx.topological_sort(self.graph.graph)):
             operation = self.graph.graph.nodes[node_id].get("operation")
             if operation:
                 imports[node_id] = operation.generate_import_code()
@@ -129,10 +129,10 @@ class CustomModel(torch.nn.Module):
     def __init__(self, params):
         self.params = params
         super().__init__()
-        
+
     def state_dict(self):
         return self.params.to_dict()
-        
+
     def load_state_dict(self, state_dict, *args, **kwargs):
         self.params.from_dict(state_dict)
 
@@ -147,7 +147,7 @@ class CustomModel(torch.nn.Module):
 fake = True
 params = LazyParams(
     meta_path="const_meta.json",
-    data_path="graph.pth.gz",
+    data_path="graph.pth",
     fake=fake
 )\n"""
         input_shapes = [tuple(input_op.args[0]) for input_op in input_ops]
@@ -172,7 +172,7 @@ params = LazyParams(
     pytorch_graph.dump_to_python_file('clustered_graph.py', True)
 """
             tensor_dict = {k: v.value.detach() for k, v in CompositeOperation.ALL_CONSTANTS.items()}
-            with gzip.open("graph.pth.gz", "wb") as f:
+            with open("graph.pth", "wb") as f:
                 torch.save(tensor_dict, f)
         ConstantTensor.ConstantTensorFromModel = self.orig_config
         return imports, code_lines

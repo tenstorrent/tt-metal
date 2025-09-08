@@ -48,41 +48,6 @@ class WrappedOpPatternObjBaseMeta(type):
         return super().__new__(cls, name, bases, dct)
 
 
-class PatternObjFactory:
-    WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY = {}
-
-    @staticmethod
-    def init_wrapped_operation_pattern_obj_registry():
-        if PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY:
-            return
-        for k, v in WRAPPED_OPERATION_REGISTRY.items():
-            PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY[
-                v.__name__ + "PatternObj"
-            ] = WrappedOpPatternObjBaseMeta(v.__name__ + "PatternObj", (), {"wrapped_op": v})
-            setattr(
-                PatternObjFactory,
-                f"{v.__name__ }PatternObj",
-                PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY[v.__name__ + "PatternObj"],
-            )
-        PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY["TupleOpPatternObj"] = WrappedOpPatternObjBaseMeta(
-            "TupleOpPatternObj", (), {"wrapped_op": TupleOp}
-        )
-        PatternObjFactory.TupleOpPatternObj = PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY[
-            "TupleOpPatternObj"
-        ]
-        PatternObjFactory.WildcardPatternObj = WrappedOpPatternObjBaseMeta("WildcardPatternObj", (), {})
-
-    @staticmethod
-    def get_pattern_obj_from(wrapped_op: WrappedOperation) -> WrappedOpPatternObj:
-        assert (
-            wrapped_op.__class__.__name__ + "PatternObj" in PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY
-        ), f"Could not find op {wrapped_op.__class__.__name__} in pattern object registry. This should never happen."
-        return PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY[wrapped_op.__class__.__name__ + "PatternObj"]
-
-
-PatternObjFactory.init_wrapped_operation_pattern_obj_registry()
-
-
 @dataclass
 class CompositeOperation(Operation):
     """An operation that represents a subgraph of nested operations."""
@@ -265,6 +230,47 @@ def {self.id}({','.join(args_not_in_var_names) + ", " if len(args_not_in_var_nam
         return import_code
 
 
+class PatternObjFactory:
+    WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY = {}
+
+    @staticmethod
+    def init_wrapped_operation_pattern_obj_registry():
+        if PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY:
+            return
+        for k, v in WRAPPED_OPERATION_REGISTRY.items():
+            PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY[
+                v.__name__ + "PatternObj"
+            ] = WrappedOpPatternObjBaseMeta(v.__name__ + "PatternObj", (), {"wrapped_op": v})
+            setattr(
+                PatternObjFactory,
+                f"{v.__name__ }PatternObj",
+                PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY[v.__name__ + "PatternObj"],
+            )
+        PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY["TupleOpPatternObj"] = WrappedOpPatternObjBaseMeta(
+            "TupleOpPatternObj", (), {"wrapped_op": TupleOp}
+        )
+        PatternObjFactory.TupleOpPatternObj = PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY[
+            "TupleOpPatternObj"
+        ]
+        PatternObjFactory.WildcardPatternObj = WrappedOpPatternObjBaseMeta("WildcardPatternObj", (), {})
+        PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY[
+            "CompositeOperationPatternObj"
+        ] = WrappedOpPatternObjBaseMeta("CompositeOperationPatternObj", (), {"wrapped_op": CompositeOperation})
+        PatternObjFactory.CompositeOperationPatternObj = PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY[
+            "CompositeOperationPatternObj"
+        ]
+
+    @staticmethod
+    def get_pattern_obj_from(wrapped_op: WrappedOperation) -> WrappedOpPatternObj:
+        assert (
+            wrapped_op.__class__.__name__ + "PatternObj" in PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY
+        ), f"Could not find op {wrapped_op.__class__.__name__} in pattern object registry. This should never happen."
+        return PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY[wrapped_op.__class__.__name__ + "PatternObj"]
+
+
+PatternObjFactory.init_wrapped_operation_pattern_obj_registry()
+
+
 def hash_dict(d: Dict[str, Any]) -> str:
     """Stable hash of a dict (e.g. node or edge attributes)."""
     return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()
@@ -445,7 +451,7 @@ def get_predecessor_ordering(G, op, predecessors):
 
 def combine_custom_patterns(operation_graph, custom_patterns):
     G = operation_graph.graph
-    for pattern in custom_patterns:
+    for pattern_idx, pattern in enumerate(custom_patterns):
         assert isinstance(
             pattern, WrappedOpPatternObj
         ), f"Patterns can only be represented by Pattern Objects. Got {pattern}"
@@ -468,7 +474,7 @@ def combine_custom_patterns(operation_graph, custom_patterns):
                         if len(pat.parents) != len(predecessors):
                             passed = False
                             print(
-                                f"Pattern {pat} parent count {len(pat.parents)} does not match predecessor count {len(predecessors)}. Found node {curr_op} that has {len(predecessors)}"
+                                f"Pattern {pattern_idx}: Pattern {pat} parent count {len(pat.parents)} does not match predecessor count {len(predecessors)}. Found node {op.unique_name}->{curr_op} that has {len(predecessors)}"
                             )
                             continue
                         for par_pat, par_node in zip(pat.parents, predecessors):
@@ -559,12 +565,12 @@ def dump_graph_patterns(operation_graph: OperationGraph, file_path: str):
         op = G.nodes[node]["operation"]
         parents = list(G.predecessors(node))
         parents = get_predecessor_ordering(G, op, parents)
-        if isinstance(op, (WrappedOperation, TupleOp)):
+        if isinstance(op, (WrappedOperation, TupleOp, CompositeOperation)):
             op_po = PatternObjFactory.get_pattern_obj_from(op)
             parent_unique_names = [
                 (
                     to_valid_variable_name(G.nodes[parent]["operation"].unique_name)
-                    if isinstance(G.nodes[parent]["operation"], (WrappedOperation, TupleOp))
+                    if isinstance(G.nodes[parent]["operation"], (WrappedOperation, TupleOp, CompositeOperation))
                     else "POFactory.WildcardPatternObj()"
                 )
                 for parent in parents

@@ -156,7 +156,6 @@ class Operation:
                 args_shapes[index] = elem.shape
         return args_shapes
 
-
     @property
     def output_shapes(self) -> Optional[List[Any]]:
         try:
@@ -202,8 +201,8 @@ class AtenConvolution(WrappedOperation):
                 input_height=self.meta_data.meta["i_shapes"][0][2],
                 input_width=self.meta_data.meta["i_shapes"][0][3],
                 input_depth=self.meta_data.meta["i_shapes"][0][1],
-                hidden_units=self.args[1].value.shape[0],
-                kernel=[self.args[1].value.shape[2], self.args[1].value.shape[3]],
+                hidden_units=self.args[1].shape[0],
+                kernel=[self.args[1].shape[2], self.args[1].shape[3]],
                 stride=self.args[3],
                 padding=self.args[4],
                 dilation=self.args[5],
@@ -812,6 +811,7 @@ class AtenScaledDotProductFlashAttention(WrappedOperation):
 
     pass
 
+
 @dataclass
 @register_operation("torch.ops.aten.detach")
 class AtenDetach(WrappedOperation):
@@ -909,10 +909,8 @@ class ConstantTensor(Parameter):
     def generate_code(self) -> str:
         """Generate the serialization code for this constant tensor."""
         if ConstantTensor.ConstantTensorFromModel:
-            return f"\"{self.id}\""
-        if self.value.numel() > 10:
-            return f"torch.zeros({self.value.shape}, dtype={self.value.dtype})"
-        return f"torch.tensor({self.value.tolist()})"
+            return f'"{self.id}"'
+        return f"torch.zeros({self.shape}, dtype={self.value.dtype if self.value is not None else torch.float32})"
 
     def size(self) -> int:
         """Return the number of elements in the tensor."""

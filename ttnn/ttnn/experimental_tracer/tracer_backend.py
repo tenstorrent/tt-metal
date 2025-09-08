@@ -814,8 +814,8 @@ def get_attrs_for_op(operation: Operation, node) -> Dict[str, Any]:
     """
     attrs = {}
     if operation.function_call_name == "torch.ops.aten.convolution":
-        attrs["hidden_units"] = operation.args[1].value.shape[0]
-        attrs["kernel"] = [operation.args[1].value.shape[2], operation.args[1].value.shape[3]]
+        attrs["hidden_units"] = operation.args[1].shape[0]
+        attrs["kernel"] = [operation.args[1].shape[2], operation.args[1].shape[3]]
         attrs["stride"] = operation.args[3]
         attrs["padding"] = operation.args[4]
         attrs["dilation"] = operation.args[5]
@@ -855,7 +855,7 @@ def get_attrs_for_op(operation: Operation, node) -> Dict[str, Any]:
         attrs["dims"] = operation.args[1] if len(operation.args) > 1 else None
     for index, arg in enumerate(operation.args):
         if isinstance(arg, ConstantTensor):
-            attrs[f"arg_{index}_shape"] = arg.value.shape
+            attrs[f"arg_{index}_shape"] = arg.shape
     delete_attrs = []
     for key, value in attrs.items():
         if isinstance(value, Parameter):
