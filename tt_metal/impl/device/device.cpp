@@ -344,15 +344,10 @@ void Device::init_command_queue_device() {
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const auto& logical_dispatch_cores = logical_cores[index];
         CoreType core_type = hal.get_core_type(index);
-        auto dev_msgs_factory = hal.get_dev_msgs_factory(hal.get_programmable_core_type(index));
         for (const CoreCoord& logical_dispatch_core : logical_dispatch_cores) {
             const auto* kernel = command_queue_program.impl().kernels_on_core(logical_dispatch_core, index);
-            // TODO: port KernelGroup to use HAL types and remove the memcpy here.
-            auto msg = dev_msgs_factory.create<dev_msgs::launch_msg_t>();
-            TT_ASSERT(msg.size() == sizeof kernel->launch_msg);
-            memcpy(msg.data(), &kernel->launch_msg, sizeof kernel->launch_msg);
-            auto go_msg =
-                dev_msgs_factory.create_view<dev_msgs::go_msg_t>(reinterpret_cast<const std::byte*>(&kernel->go_msg));
+            dev_msgs::launch_msg_t msg = kernel->launch_msg;  // copy
+            dev_msgs::go_msg_t::ConstView go_msg = kernel->go_msg.view();
             CoreCoord virtual_core = this->virtual_core_from_logical_core(logical_dispatch_core, core_type);
             tt::llrt::write_launch_msg_to_core(
                 this->id(),
@@ -395,13 +390,10 @@ void Device::configure_fabric() {
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
          programmable_core_type_index++) {
         CoreType core_type = hal.get_core_type(programmable_core_type_index);
-        auto dev_msgs_factory = hal.get_dev_msgs_factory(hal.get_programmable_core_type(programmable_core_type_index));
         for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
             auto* kg = fabric_program_->impl().kernels_on_core(logical_core, programmable_core_type_index);
-            // TODO: port KernelGroup to use HAL types.
-            auto msg =
-                dev_msgs_factory.create_view<dev_msgs::launch_msg_t>(reinterpret_cast<std::byte*>(&kg->launch_msg));
-            auto go_msg = dev_msgs_factory.create_view<dev_msgs::go_msg_t>(reinterpret_cast<std::byte*>(&kg->go_msg));
+            dev_msgs::launch_msg_t::View msg = kg->launch_msg.view();
+            dev_msgs::go_msg_t::ConstView go_msg = kg->go_msg.view();
             msg.kernel_config().host_assigned_id() = fabric_program_->get_runtime_id();
 
             auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
