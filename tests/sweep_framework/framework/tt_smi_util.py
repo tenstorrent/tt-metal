@@ -67,5 +67,8 @@ class ResetUtil:
         """Execute the reset command."""
         result = subprocess.run([self.command, *self.args], stdout=subprocess.DEVNULL)
         if result.returncode != 0:
-            raise RuntimeError(f"SWEEPS: TT-SMI Reset Failed with Exit Code: {result.returncode}")
+            # give it one more try
+            result = subprocess.run([self.command, *self.args])
+            if result.returncode != 0:
+                raise RuntimeError(f"SWEEPS: TT-SMI Reset Failed with Exit Code: {result.returncode}")
         logger.info("TT-SMI Reset Complete Successfully")
