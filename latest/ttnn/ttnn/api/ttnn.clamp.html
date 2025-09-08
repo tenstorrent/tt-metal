@@ -324,7 +324,7 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">clamp</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.clamp',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.unary.clamp_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function_clamp&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.clamp" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Performs clamp function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <a class="reference internal" href="ttnn.min.html#ttnn.min" title="ttnn.min"><code class="xref py py-attr docutils literal notranslate"><span class="pre">min</span></code></a>, <a class="reference internal" href="ttnn.max.html#ttnn.max" title="ttnn.max"><code class="xref py py-attr docutils literal notranslate"><span class="pre">max</span></code></a>. Only one of ‘min’ or ‘max’ value can be None.</p>
+<p>Applies clamp to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -335,9 +335,11 @@
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>min</strong> (<em>float</em><em> or </em><em>ttnn.Tensor</em>) – Minimum value. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>max</strong> (<em>float</em><em> or </em><em>ttnn.Tensor</em>) – Maximum value. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>min</strong> (<em>ttnn.Tensor</em><em> or </em><em>number</em>) – Minimum value. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>max</strong> (<em>ttnn.Tensor</em><em> or </em><em>number</em>) – Maximum value. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – command queue id. Defaults to <cite>0</cite>.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
@@ -354,17 +356,16 @@
 <tr class="row-odd">
 <th class="head"><p>Dtypes</p></th>
 <th class="head"><p>Layouts</p></th>
-<th class="head"><p>Ranks</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16</p></td>
+<td><p>BFLOAT16, BFLOAT8_B, INT32, FLOAT32</p></td>
 <td><p>TILE</p></td>
-<td><p>2, 3, 4</p></td>
 </tr>
 </tbody>
 </table>
+<p>INT32 is supported only for Tensor-scalar-scalar version.</p>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
