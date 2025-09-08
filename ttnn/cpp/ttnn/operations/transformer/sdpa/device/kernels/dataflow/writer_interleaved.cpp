@@ -38,8 +38,15 @@ void kernel_main() {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(5);
     const uint32_t local_q_start = get_arg_val<uint32_t>(6);
     const uint32_t local_q_end = get_arg_val<uint32_t>(7);
-    const uint32_t chunk_start_t_in_q_chunks = get_arg_val<uint32_t>(8);
-    const uint32_t write_offset = get_arg_val<uint32_t>(9);
+    const uint32_t num_phases = get_arg_val<uint32_t>(8);
+    const uint32_t chunk_start_t_in_q_chunks_phase_1 = get_arg_val<uint32_t>(9);
+    const uint32_t write_offset_phase_1 = get_arg_val<uint32_t>(10);
+    uint32_t chunk_start_t_in_q_chunks_phase_2 = 0;
+    uint32_t write_offset_phase_2 = 0;
+    if (num_phases == 2) {
+        chunk_start_t_in_q_chunks_phase_2 = get_arg_val<uint32_t>(11);
+        write_offset_phase_2 = get_arg_val<uint32_t>(12);
+    }
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
@@ -64,11 +71,21 @@ void kernel_main() {
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
-    for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-        const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;
-        for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-            for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
-                uint32_t q_chunk;
+    uint32_t chunk_start_t_in_q_chunks = 0;
+    uint32_t write_offset = 0;
+    for (uint32_t phase = 0; phase < num_phases; ++phase) {
+        if (phase == 0) {
+            chunk_start_t_in_q_chunks = chunk_start_t_in_q_chunks_phase_1;
+            write_offset = write_offset_phase_1;
+        } else {
+            chunk_start_t_in_q_chunks = chunk_start_t_in_q_chunks_phase_2;
+            write_offset = write_offset_phase_2;
+        }
+        for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
+            const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;
+            for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
+                for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
+                    uint32_t q_chunk;
 #if defined BALANCED_Q_PARALLEL
                 uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
                 if (q_iter < q_chunk_div_2) {  // bottom half
@@ -136,6 +153,7 @@ void kernel_main() {
                 }
                 noc_async_write_barrier();
                 cb_pop_front(cb_out, out_chunk_tiles);
+                }
             }
         }
     }

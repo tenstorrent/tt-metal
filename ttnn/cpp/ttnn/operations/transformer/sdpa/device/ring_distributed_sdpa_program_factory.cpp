@@ -102,27 +102,16 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
     uint32_t chunked_q_chunk_offset_phase_1 = (chunk_1 * Sq) / q_chunk_size;
     uint32_t chunked_q_chunk_offset_phase_2 = (chunk_2 * Sq) / q_chunk_size;
 
-    uint32_t num_cores_phase_1 = (chunk_1 + 1) * (num_cores / (chunk_1 + 1 + chunk_2));
-    uint32_t num_cores_phase_2 = num_cores - num_cores_phase_1;
-
     // Parallelization scheme
     // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
-    uint32_t batch_parallel_factor_phase_1 = std::min(B, num_cores_phase_1);
-    uint32_t batch_parallel_factor_phase_2 = std::min(B, num_cores_phase_2);
-    uint32_t nh_parallel_factor_phase_1 = std::min(num_cores_phase_1 / batch_parallel_factor_phase_1, NQH);
-    uint32_t nh_parallel_factor_phase_2 = std::min(num_cores_phase_2 / batch_parallel_factor_phase_2, NQH);
-    uint32_t q_parallel_factor_phase_1 =
-        std::min(num_cores_phase_1 / (batch_parallel_factor_phase_1 * nh_parallel_factor_phase_1), q_num_chunks);
-    uint32_t q_parallel_factor_phase_2 =
-        std::min(num_cores_phase_2 / (batch_parallel_factor_phase_2 * nh_parallel_factor_phase_2), q_num_chunks);
+    uint32_t batch_parallel_factor = std::min(B, num_cores);
+    uint32_t nh_parallel_factor = std::min(num_cores / batch_parallel_factor, NQH);
+    uint32_t q_parallel_factor = std::min(num_cores / (batch_parallel_factor * nh_parallel_factor), q_num_chunks);
 
     // Ceiling divide to allow for non-perfect divisions
-    const uint32_t batch_per_core_phase_1 = (B + batch_parallel_factor_phase_1 - 1) / batch_parallel_factor_phase_1;
-    const uint32_t batch_per_core_phase_2 = (B + batch_parallel_factor_phase_2 - 1) / batch_parallel_factor_phase_2;
-    const uint32_t nh_per_core_phase_1 = (NQH + nh_parallel_factor_phase_1 - 1) / nh_parallel_factor_phase_1;
-    const uint32_t nh_per_core_phase_2 = (NQH + nh_parallel_factor_phase_2 - 1) / nh_parallel_factor_phase_2;
-    const uint32_t q_per_core_phase_1 = (q_num_chunks + q_parallel_factor_phase_1 - 1) / q_parallel_factor_phase_1;
-    const uint32_t q_per_core_phase_2 = (q_num_chunks + q_parallel_factor_phase_2 - 1) / q_parallel_factor_phase_2;
+    const uint32_t batch_per_core = (B + batch_parallel_factor - 1) / batch_parallel_factor;
+    const uint32_t nh_per_core = (NQH + nh_parallel_factor - 1) / nh_parallel_factor;
+    const uint32_t q_per_core = (q_num_chunks + q_parallel_factor - 1) / q_parallel_factor;
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * 2;
@@ -297,10 +286,7 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    uint32_t balanced_q_parallel =
-        ((q_per_core_phase_1 * q_parallel_factor_phase_1 == q_num_chunks) &&
-         (q_per_core_phase_2 * q_parallel_factor_phase_2 == q_num_chunks) && (q_per_core_phase_1 % 2 == 0) &&
-         (q_per_core_phase_2 % 2 == 0));
+    uint32_t balanced_q_parallel = (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0);
     if (balanced_q_parallel) {
         defines["BALANCED_Q_PARALLEL"] = "1";
     }
@@ -432,40 +418,12 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
-
-        uint32_t batch_per_core = 0;
-        uint32_t nh_per_core = 0;
-        uint32_t q_per_core = 0;
-        uint32_t nh_parallel_factor = 0;
-        uint32_t q_parallel_factor = 0;
-        uint32_t batch_parallel_factor = 0;
-        uint32_t chunked_q_chunk_offset = 0;
         uint32_t core_id = i;
-        uint32_t write_offset = 0;
-        uint32_t read_offset = 0;
-        if (i < num_cores_phase_1) {
-            // phase 1
-            batch_per_core = batch_per_core_phase_1;
-            nh_per_core = nh_per_core_phase_1;
-            q_per_core = q_per_core_phase_1;
-            nh_parallel_factor = nh_parallel_factor_phase_1;
-            q_parallel_factor = q_parallel_factor_phase_1;
-            batch_parallel_factor = batch_parallel_factor_phase_1;
-            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1;
-            read_offset = chunk_1 * Sqt;
-        } else {
-            // phase 2
-            batch_per_core = batch_per_core_phase_2;
-            nh_per_core = nh_per_core_phase_2;
-            q_per_core = q_per_core_phase_2;
-            nh_parallel_factor = nh_parallel_factor_phase_2;
-            q_parallel_factor = q_parallel_factor_phase_2;
-            batch_parallel_factor = batch_parallel_factor_phase_2;
-            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2;
-            core_id = i - num_cores_phase_1;
-            write_offset = Sqt;
-            read_offset = chunk_2 * Sqt;
-        }
+
+        uint32_t read_offset_phase_1 = chunk_1 * Sqt;
+        uint32_t read_offset_phase_2 = chunk_2 * Sqt;
+        uint32_t write_offset_phase_1 = 0;
+        uint32_t write_offset_phase_2 = Sqt;
 
         uint32_t local_batch_start = (core_id / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
         uint32_t local_batch_end = local_batch_start + batch_per_core;
@@ -498,8 +456,11 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
              local_nh_end,
              local_q_start,
              local_q_end,
-             chunked_q_chunk_offset,
-             read_offset});
+             2,
+             chunked_q_chunk_offset_phase_1,
+             read_offset_phase_1,
+             chunked_q_chunk_offset_phase_2,
+             read_offset_phase_2});
         SetRuntimeArgs(
             program,
             writer_kernels_id,
@@ -512,8 +473,11 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
              local_nh_end,
              local_q_start,
              local_q_end,
-             chunked_q_chunk_offset,
-             write_offset});
+             2,
+             chunked_q_chunk_offset_phase_1,
+             write_offset_phase_1,
+             chunked_q_chunk_offset_phase_2,
+             write_offset_phase_2});
         SetRuntimeArgs(
             program,
             compute_kernels_id,
@@ -525,7 +489,9 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
              local_nh_end,
              local_q_start,
              local_q_end,
-             chunked_q_chunk_offset});
+             2,
+             chunked_q_chunk_offset_phase_1,
+             chunked_q_chunk_offset_phase_2});
     }
 
     auto override_runtime_arguments_callback =
