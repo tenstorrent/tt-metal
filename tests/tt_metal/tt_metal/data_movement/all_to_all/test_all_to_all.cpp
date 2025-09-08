@@ -359,7 +359,6 @@ void custom_test(
     uint32_t pages_per_transaction,
     uint32_t num_virtual_channels) {
     auto device = mesh_device->get_device(0);
-    NOC noc_id = NOC::NOC_0;
 
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
@@ -417,7 +416,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllDirectedIdeal) {
     CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
     CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
 
-    unit_tests::dm::all_to_all::packet_sizes_test(
+    unit_tests::dm::all_to_all::directed_ideal_test(
         mesh_device, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
 }
 
@@ -436,7 +435,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllPacketSizes) {
     CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
     CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
 
-    unit_tests::dm::all_to_all::directed_ideal_test(
+    unit_tests::dm::all_to_all::packet_sizes_test(
         mesh_device, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
 }
 

@@ -6,6 +6,7 @@ from itertools import takewhile
 from typing import Any, Sequence
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
@@ -580,20 +581,27 @@ def sub_state_dicts(
     return tuple(None if d is None else sub_state_dict(d, prefix) for d in state_dicts)
 
 
+TENSOR_CACHE_EXTENSION = ".tensorbin"
+
+
 def save_and_get_path(path, tensor):
     """Save a tensor to a file and return the path."""
+    # Ensure the path has an appropriate extension
+    if not path.name.endswith(TENSOR_CACHE_EXTENSION):
+        path = path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
+
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
     memory_config = tensor.memory_config()
-    ttnn.dump_tensor(path, tensor, enable_multihost_format=True)
+    ttnn.dump_tensor(path, tensor)
     ttnn.deallocate(tensor)
     return SavedWeight(
         path=path, memory_config=memory_config
     )  # TODO: bring regular tensor saving back once Issue #26763 is resolved
 
 
-def get_mesh_coords(mesh_shape: list[int], row: int = None, col: int = None) -> set[ttnn.MeshCoordinate]:
+def get_mesh_coords(mesh_shape: list[int], row: int = None, col: int = None) -> list[ttnn.MeshCoordinate]:
     """Get mesh coordinates for a given mesh shape and optional row and column indices."""
     if row:
         assert 0 <= row < mesh_shape[0], "Row index out of bounds"

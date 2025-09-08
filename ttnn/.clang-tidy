@@ -1,0 +1,2 @@
+InheritParentConfig: true
+Checks: -bugprone-suspicious-stringview-data-usage

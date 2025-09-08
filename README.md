@@ -21,18 +21,6 @@
 
 </div>
 
-## Latest Releases
-
-| Release | Release Date |
-|---------|--------------|
-| [0.62.2](https://github.com/tenstorrent/tt-metal/releases/tag/v0.62.2) | Aug 20, 2025 |
-| 0.61.0  | Skipped |
-| [0.60.1](https://github.com/tenstorrent/tt-metal/releases/tag/v0.60.1) | Jul 22, 2025 |
-| [0.59.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.59.0) | Jun 18, 2025 |
-| [0.58.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.58.0) | May 13, 2025 |
-| [0.57.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.57.0) | Apr 15, 2025 |
-| [0.56.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.56.0) | Mar 7, 2025  |
-
 ## Quick Links
 
 - [TT-Forge](https://github.com/tenstorrent/tt-forge/tree/main)
@@ -46,6 +34,9 @@
 ## Featured Models
 
 The Models team is focused on developing the following models to a customer-ready state. Ongoing work includes optimizations for performance, accuracy, and compatibility. Follow each model link for more details.
+
+>[!IMPORTANT]
+> For a **full model list** see the **[Model Matrix](https://github.com/tenstorrent/tt-metal/tree/main/models/README.md)**, or visit the **[Developer Hub](https://tenstorrent.com/developers)**.
 
 >[!NOTE]
 > Performance Metrics:
@@ -69,8 +60,6 @@ The Models team is focused on developing the following models to a customer-read
 Blackhole software optimization is under active development.  Please join us in shaping the future of open source AI! <br> [\[Discord\]](https://discord.gg/tenstorrent) [\[Developer Hub\]](https://tenstorrent.com/developers)
 
 For more information regarding vLLM installation and environment creation visit the [Tenstorrent vLLM repository](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md).
-
-See the [model matrix](https://github.com/tenstorrent/tt-metal/tree/main/models/README.md), or visit the [Developer Hub](https://tenstorrent.com/developers) for a full list of models.
 
 ## Model Updates
 
@@ -177,6 +166,21 @@ pip install ttnn-visualizer
 - [TT-XLA](https://github.com/tenstorrent/tt-xla)
 - [TT-MLIR](https://github.com/tenstorrent/tt-mlir)
 - [TT-TVM](https://github.com/tenstorrent/tt-tvm)
+
+## Latest Releases
+
+| Release | Release Date |
+|---------|--------------|
+| 0.63.0  | ETA Sep 15, 2025 |
+| [0.62.2](https://github.com/tenstorrent/tt-metal/releases/tag/v0.62.2) | Aug 20, 2025 |
+| 0.61.0  | Skipped |
+| [0.60.1](https://github.com/tenstorrent/tt-metal/releases/tag/v0.60.1) | Jul 22, 2025 |
+| [0.59.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.59.0) | Jun 18, 2025 |
+| [0.58.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.58.0) | May 13, 2025 |
+| [0.57.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.57.0) | Apr 15, 2025 |
+| [0.56.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.56.0) | Mar 7, 2025  |
+
+Visit the [releases](https://github.com/tenstorrent/tt-metal/tree/main/releases) folder for details on releases, release notes, and estimated release dates.
 
 ## Tenstorrent Bounty Program Terms and Conditions
 This repo is a part of Tenstorrent’s bounty program. If you are interested in helping to improve tt-metal, please make sure to read the [Tenstorrent Bounty Program Terms and Conditions](https://docs.tenstorrent.com/bounty_terms.html) before heading to the issues tab. Look for the issues that are tagged with both “bounty” and difficulty level!

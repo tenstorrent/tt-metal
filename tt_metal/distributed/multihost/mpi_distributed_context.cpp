@@ -71,7 +71,7 @@ constexpr inline int mpi_dtype_size(DType dt) noexcept {
         case DType::FLOAT32: return 4;
         case DType::INT64:
         case DType::UINT64:
-        case DType::FLOAT64: return 8;
+        case DType::FLOAT64:
         case DType::COMPLEX_FLOAT: return 8;
         case DType::COMPLEX_DOUBLE: return 16;
     }

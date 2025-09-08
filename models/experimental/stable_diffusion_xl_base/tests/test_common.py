@@ -22,7 +22,7 @@ import ttnn
 
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 
-SDXL_L1_SMALL_SIZE = 47000
+SDXL_L1_SMALL_SIZE = 27000
 SDXL_TRACE_REGION_SIZE = 34000000
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
 
@@ -179,7 +179,6 @@ def batch_encode_prompt_on_device(
     num_devices = ttnn_device.get_num_devices()
     assert len(prompt) == num_devices, "Prompt length must be equal to number of devices"
     assert prompt_2 is None, "Prompt 2 is not supported currently"
-    assert negative_prompt is None, "Negative prompt is not tested currently with on device text encoders"
     assert lora_scale is None, "Lora scale is not supported currently with on device text encoders"
     assert clip_skip is None, "Clip skip is not supported currently with on device text encoders"
     assert prompt_embeds is None, "Prompt embeds is not supported currently with on device text encoders"

@@ -52,16 +52,23 @@ using namespace tt::tt_metal::distributed;
  * https://docs.google.com/spreadsheets/d/1zy1teJtgf7hsMMdgy5uIOtcuI73AGVqy4lnyYwL7YFQ/edit
  */
 
-static const auto KB = 1024;
-static const auto MB = 1024 * KB;
+static constexpr auto num_test_repetitions = 101;
+
+static constexpr uint64_t KB = 1024;
+static constexpr uint64_t MB = 1024 * KB;
+static constexpr uint64_t GB = 1024 * MB;
+using ElementType = uint32_t;
+static constexpr uint32_t ElementSize = sizeof(ElementType);
 
 static const std::vector<int64_t> PAGE_SIZE_ARGS = benchmark::CreateRange(32, 2048, 2);
+static constexpr uint64_t max_transfer_size{8 * GB};
 static const std::vector<int64_t> TRANSFER_SIZE_ARGS = {64 * MB};
 
 static constexpr std::array<BufferType, 2> BUFFER_TYPES = {BufferType::DRAM, BufferType::L1};
 static const std::vector<int64_t> BUFFER_TYPE_ARGS = {0, 1};
 
-static void BM_write(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
+static void BM_write(
+    benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device, const std::vector<ElementType>& host_buffer) {
     auto page_size = state.range(0);
     auto transfer_size = state.range(1);
     auto buffer_type = BUFFER_TYPES[state.range(2)];
@@ -74,9 +81,6 @@ static void BM_write(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_d
         transfer_size,
         buffer_type == BufferType::DRAM ? "DRAM" : "L1",
         device_id);
-
-    auto random_buffer_seed = std::chrono::system_clock::now().time_since_epoch().count();
-    auto host_buffer = create_random_vector_of_bfloat16(transfer_size, 1000, random_buffer_seed);
 
     auto device_buffer = MeshBuffer::create(
         ReplicatedBufferConfig{transfer_size},
@@ -92,7 +96,7 @@ static void BM_write(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_d
 
 static void BM_read(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
     auto page_size = state.range(0);
-    auto transfer_size = state.range(1);
+    uint64_t transfer_size = state.range(1);
     auto buffer_type = BUFFER_TYPES[state.range(2)];
     [[maybe_unused]] auto device_id = state.range(3);
 
@@ -108,7 +112,7 @@ static void BM_read(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_de
         ReplicatedBufferConfig{transfer_size},
         DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
         mesh_device.get());
-    std::vector<uint32_t> host_buffer;
+    std::vector<ElementType> host_buffer;
 
     for (auto _ : state) {
         // EnqueueReadMeshBuffer cannot read from a replicated buffer yet, have to use ReadShard
@@ -121,6 +125,8 @@ static void BM_read(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_de
 int main(int argc, char** argv) {
     benchmark::Initialize(&argc, argv);
 
+    // no need to initialize for bandwidth measurement, saves test initialization time
+    std::vector<ElementType> host_buffer_max(max_transfer_size / ElementSize);
     auto available_device_ids = MetalContext::instance().get_cluster().all_chip_ids();
 
     TT_ASSERT(available_device_ids.contains(0));
@@ -137,10 +143,25 @@ int main(int argc, char** argv) {
     for (auto [device_id, device] : devices) {
         // Device ID embedded here for extraction
         auto benchmark_args = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS, BUFFER_TYPE_ARGS, {device_id}};
+        auto compute_min = [](const std::vector<double>& v) -> double { return *std::min_element(v.begin(), v.end()); };
+        auto compute_max = [](const std::vector<double>& v) -> double { return *std::max_element(v.begin(), v.end()); };
         // Google Benchmark uses CPU time to calculate throughput by default, which is not suitable for this
         // benchmark
-        benchmark::RegisterBenchmark("Write", BM_write, device)->ArgsProduct(benchmark_args)->UseRealTime();
-        benchmark::RegisterBenchmark("Read", BM_read, device)->ArgsProduct(benchmark_args)->UseRealTime();
+        benchmark::RegisterBenchmark("Write", BM_write, device, host_buffer_max)
+            ->ArgsProduct(benchmark_args)
+            ->UseRealTime()
+            ->Repetitions(num_test_repetitions)
+            ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
+            ->ComputeStatistics("min", compute_min)
+            ->ComputeStatistics("max", compute_max);
+
+        benchmark::RegisterBenchmark("Read", BM_read, device)
+            ->ArgsProduct(benchmark_args)
+            ->UseRealTime()
+            ->Repetitions(num_test_repetitions)
+            ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
+            ->ComputeStatistics("min", compute_min)
+            ->ComputeStatistics("max", compute_max);
     }
 
     benchmark::RunSpecifiedBenchmarks();

@@ -70,19 +70,16 @@ def run_with_trace(
     # Compile Run
     logger.info("Compiling model")
     if use_all_gather_async:
-        tt_out_tensor = ttnn.experimental.all_gather_async(
+        tt_out_tensor = ttnn.experimental.all_gather_command_processor_async(
             input_tensor,
             dim,
+            multi_device_global_semaphore=ccl_semaphore_handles[0],
             cluster_axis=cluster_axis,
-            mesh_device=mesh_device,
             topology=all_gather_topology,
-            multi_device_global_semaphore=[ccl_semaphore_handles[0], ccl_semaphore_handles[1]]
-            if type(ccl_semaphore_handles) == list
-            else ccl_semaphore_handles,
-            persistent_output_tensor=persistent_output_tensor,
+            persistent_output_buffer=persistent_output_tensor,
             num_links=num_links,
             memory_config=output_mem_config,
-            subdevice_id=worker_sub_device_id,
+            sub_device_id=worker_sub_device_id,
         )
     else:
         # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
@@ -105,22 +102,16 @@ def run_with_trace(
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for i in range(n_iters):
             if use_all_gather_async:
-                tt_out_tensor = ttnn.experimental.all_gather_async(
+                tt_out_tensor = ttnn.experimental.all_gather_command_processor_async(
                     input_tensor,
                     dim,
+                    multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS],
                     cluster_axis=cluster_axis,
-                    mesh_device=mesh_device,
                     topology=all_gather_topology,
-                    multi_device_global_semaphore=[
-                        ccl_semaphore_handles[i % NUM_BUFFERS],
-                        ccl_semaphore_handles[(i + 1) % NUM_BUFFERS],
-                    ]
-                    if type(ccl_semaphore_handles) == list
-                    else ccl_semaphore_handles,
-                    persistent_output_tensor=persistent_output_tensor,
+                    persistent_output_buffer=persistent_output_tensor,
                     num_links=num_links,
                     memory_config=output_mem_config,
-                    subdevice_id=worker_sub_device_id,
+                    sub_device_id=worker_sub_device_id,
                 )
             else:
                 # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
@@ -311,17 +302,16 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
             for i in range(num_iters):
                 if use_all_gather_async:
                     logger.info("Running all-gather async")
-                    ttnn_tensor_out = ttnn.experimental.all_gather_async(
+                    ttnn_tensor_out = ttnn.experimental.all_gather_command_processor_async(
                         ttnn_tensor,
                         dim,
-                        cluster_axis=cluster_axis,
-                        mesh_device=mesh_device,
-                        topology=all_gather_topology,
                         multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS],
-                        persistent_output_tensor=ttnn_persistent_output_tensor,
+                        cluster_axis=cluster_axis,
+                        topology=all_gather_topology,
+                        persistent_output_buffer=ttnn_persistent_output_tensor,
                         num_links=num_links,
                         memory_config=output_mem_config,
-                        subdevice_id=worker_sub_device_id,
+                        sub_device_id=worker_sub_device_id,
                     )
                 else:
                     # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649

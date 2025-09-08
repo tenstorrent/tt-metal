@@ -546,12 +546,40 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
 @pytest.fixture(scope="function")
 def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
     # Generic blackhole configuration
-    # This creates a snake pattern on 2D meshes to appear as a long line or
-    # donut shaped ring in rackbox
-    # Not compatible with blackhole galaxy
+    # This configures an [m,n] blackhole mesh device to appear as a [1,m*n] line or ring
+    # Implements wraparound in rackboxes
     import ttnn
 
-    if ttnn.get_num_devices() not in [1, 2, 4, 8]:
+    if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
+        pytest.skip()
+
+    request.node.pci_ids = ttnn.get_pcie_device_ids()
+    updated_device_params = get_updated_device_params(device_params)
+    fabric_config = updated_device_params.pop("fabric_config", None)
+    reliability_mode = updated_device_params.pop("reliability_mode", None)
+    set_fabric(fabric_config)
+    mesh_device = ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(ttnn.get_num_devices(), 1),
+        **updated_device_params,
+    )
+    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    yield mesh_device
+
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
+
+    ttnn.close_mesh_device(mesh_device)
+    reset_fabric(fabric_config)
+    del mesh_device
+
+
+@pytest.fixture(scope="function")
+def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
+    # Generic blackhole configuration
+    # This preserves the 2D mesh configuration in rackbox and galaxy
+    import ttnn
+
+    if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
         pytest.skip()
 
     request.node.pci_ids = ttnn.get_pcie_device_ids()
