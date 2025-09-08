@@ -84,10 +84,18 @@ static FabricType topology_to_fabric_type(const proto::TorusTopology& topology) 
 
 MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path, const bool version_2) {
     if (version_2) {
+        TT_FATAL(
+            mesh_graph_desc_file_path.ends_with(".textproto"),
+            "Mesh graph descriptor file must end with .textproto for version 2");
+
         auto filepath = std::filesystem::path(mesh_graph_desc_file_path);
         MeshGraphDescriptor mgd2(filepath, true);
         this->initialize_from_mgd2(mgd2);
     } else {
+        TT_FATAL(
+            mesh_graph_desc_file_path.ends_with(".yaml"),
+            "Mesh graph descriptor file must end with .yaml for version 1");
+
         this->initialize_from_yaml(mesh_graph_desc_file_path);
     }
 }

@@ -449,17 +449,6 @@ void ControlPlane::init_control_plane(
     std::optional<std::reference_wrapper<const std::map<FabricNodeId, chip_id_t>>>
         logical_mesh_chip_id_to_physical_chip_id_mapping) {
 
-    // Check file extension for version 2 to make sure text proto is used
-    if (version_2_) {
-        TT_FATAL(
-            mesh_graph_desc_file.ends_with(".textproto"),
-            "Mesh graph descriptor file must end with .textproto for version 2");
-    } else {
-        TT_FATAL(
-            mesh_graph_desc_file.ends_with(".yaml"),
-            "Mesh graph descriptor file must end with .yaml for version 1");
-    }
-
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file, version_2_);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
