@@ -1,4 +1,7 @@
 function(GENERATE_PROTO_FILES PROTO_FILE)
+    # Generates C++ source and header files from a protobuf schema file.
+    # The generated files are automatically excluded from clang-tidy analysis.
+    #
     # Optional Arguments:
     # - TARGET: Target to associate the generated files with
     # - OUTPUT_DIR: Directory to place the generated files (CMAKE_CURRENT_BINARY_DIR/protobuf by default)
@@ -46,6 +49,18 @@ function(GENERATE_PROTO_FILES PROTO_FILE)
         ${GENERATED_CC}
         ${GENERATED_H}
         PARENT_SCOPE
+    )
+
+    # Exclude generated protobuf files from clang-tidy
+    # This needs to be set in the directory where the files will be used
+    set_source_files_properties(
+        ${GENERATED_CC}
+        ${GENERATED_H}
+        DIRECTORY
+            ${CMAKE_CURRENT_SOURCE_DIR}
+        PROPERTIES
+            CXX_CLANG_TIDY
+                ""
     )
 
     # Add to all_generated_files target if it exists
