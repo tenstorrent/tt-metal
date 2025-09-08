@@ -118,7 +118,7 @@ public:
 
     // Static functions for mesh graph descriptor management
     static std::filesystem::path get_mesh_graph_descriptor_path_for_cluster_type(
-        tt::tt_metal::ClusterType cluster_type, const std::string& root_dir, const bool version_2 = false);
+        tt::tt_metal::ClusterType cluster_type, const std::string& root_dir, const bool version_2 = true);
 
 private:
     void validate_mesh_id(MeshId mesh_id) const;

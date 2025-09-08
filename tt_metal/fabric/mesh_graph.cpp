@@ -215,15 +215,15 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
 }
 
 namespace {
-RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirection& routing_direction) {
-    switch (routing_direction) {
-        case proto::RoutingDirection::N: return RoutingDirection::N;
-        case proto::RoutingDirection::E: return RoutingDirection::E;
-        case proto::RoutingDirection::S: return RoutingDirection::S;
-        case proto::RoutingDirection::W: return RoutingDirection::W;
-        case proto::RoutingDirection::C: return RoutingDirection::C;
-        case proto::RoutingDirection::NONE: return RoutingDirection::NONE;
-        default: TT_FATAL(false, "Invalid routing direction: {}", routing_direction);
+RoutingDirection routing_direction_to_port_direction(int routing_direction_value) {
+    switch (routing_direction_value) {
+        case 1: return RoutingDirection::N;
+        case 2: return RoutingDirection::E;
+        case 3: return RoutingDirection::S;
+        case 4: return RoutingDirection::W;
+        case 5: return RoutingDirection::C;
+        case 6: return RoutingDirection::NONE;
+        default: TT_FATAL(false, "Invalid routing direction value: {}", routing_direction_value);
     }
 }
 }  // namespace
@@ -265,7 +265,7 @@ void MeshGraph::initialize_from_mgd2(const MeshGraphDescriptor& mgd2) {
         const chip_id_t dst_chip_id = dst_instance.local_id;  // ONly expect one single dest chip
 
         RouterEdge router_edge{
-            .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
+            .port_direction = routing_direction_to_port_direction(static_cast<int>(connection_data.routing_direction)),
             .connected_chip_ids = std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, dst_chip_id),
             .weight = 0,
         };
@@ -306,7 +306,7 @@ void MeshGraph::initialize_from_mgd2(const MeshGraphDescriptor& mgd2) {
             auto [it, is_inserted] = edge.insert(
                 {dst_mesh_id,
                  RouterEdge{
-                     .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
+                     .port_direction = routing_direction_to_port_direction(static_cast<int>(connection_data.routing_direction)),
                      .connected_chip_ids = {dst_chip_id},
                      .weight = 0}});
             if (!is_inserted) {
@@ -318,7 +318,7 @@ void MeshGraph::initialize_from_mgd2(const MeshGraphDescriptor& mgd2) {
             auto [it, is_inserted] = edge.insert(
                 {dst_chip_id,
                  RouterEdge{
-                     .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
+                     .port_direction = routing_direction_to_port_direction(static_cast<int>(connection_data.routing_direction)),
                      .connected_chip_ids = {dst_chip_id},
                      .weight = 0}});
             if (!is_inserted) {
