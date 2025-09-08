@@ -118,16 +118,19 @@ class Generator:
                 model_id=model_id,
                 **local_kwargs,
             )
-            out_list.append(logits)
+            # out_list.append(logits)
 
-        for idx, out in enumerate(out_list):
             seq_len = int(prompt_lens[idx])
             last_token_idx = seq_len - 1
             user_id = empty_slots[idx]
             model_id = user_id // max_batch_size_per_model
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=(last_token_idx % 32))
+            output_logits[idx] = self.model[model_id].process_output_prefill(
+                logits, last_token_idx=(last_token_idx % 32)
+            )
+            # deallocate logits
+            del logits
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
