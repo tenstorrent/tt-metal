@@ -1806,7 +1806,7 @@ class ModelArgs:
                 self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
                 self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
                 state_dict = standardize_hf_keys(state_dict)
-                state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+                state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
