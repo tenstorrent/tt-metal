@@ -127,5 +127,5 @@ class OftNet(nn.Module):
             scores,
             pos_offsets,
             dim_offsets,
-            ang_offsets
+            ang_offsets,
         )

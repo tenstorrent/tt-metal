@@ -496,10 +496,10 @@ class TTOftNet:
             calib_torch,
             grid_torch,
             td,
-            ttnn.to_torch(tt_scores), # just a hack to avoid hardcoded permute
-            ttnn.to_torch(tt_pos_offsets), # just a hack to avoid hardcoded permute
-            ttnn.to_torch(tt_dim_offsets), # just a hack to avoid hardcoded permute
-            ttnn.to_torch(tt_ang_offsets)   # just a hack to avoid hardcoded permute
+            ttnn.to_torch(tt_scores),  # just a hack to avoid hardcoded permute
+            ttnn.to_torch(tt_pos_offsets),  # just a hack to avoid hardcoded permute
+            ttnn.to_torch(tt_dim_offsets),  # just a hack to avoid hardcoded permute
+            ttnn.to_torch(tt_ang_offsets),  # just a hack to avoid hardcoded permute
         ), (
             "feats8",
             "feats16",
@@ -534,6 +534,5 @@ class TTOftNet:
             "dim_offsets",
             "ang_offsets",
         )
-
 
         return parts
