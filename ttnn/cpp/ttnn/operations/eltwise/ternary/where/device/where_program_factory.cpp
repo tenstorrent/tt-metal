@@ -58,7 +58,7 @@ void set_or_update_runtime_arguments(
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
     constexpr size_t num_reader_args = 27;
     constexpr size_t num_writer_args = 3;
-    constexpr size_t num_kernel_args = 3;
+    constexpr size_t num_kernel_args = 4;
 
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
