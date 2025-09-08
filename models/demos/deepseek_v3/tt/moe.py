@@ -90,10 +90,10 @@ class MoE(SharedStateAddOn, AbstractModule):
             "expert_mapping_tensors": expert_mapping_tensors,
             # CCL-specific parameters (semaphores and num_links)
             "all_to_all_dispatch": {
-                "num_links": 1,
+                "num_links": 3,
             },
             "all_to_all_combine": {
-                "num_links": 1,
+                "num_links": 3,
             },
             "final_output_reduce_scatter": {
                 "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(1),
