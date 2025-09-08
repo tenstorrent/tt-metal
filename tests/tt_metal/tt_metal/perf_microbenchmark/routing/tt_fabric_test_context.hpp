@@ -1044,6 +1044,7 @@ private:
             }
             num_devices_str += "]";
 
+            // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
             std::string topology_str = enchantum::to_string(config.fabric_setup.topology).data();
             double tolerance = get_tolerance_percent(
                 config.name,
@@ -1071,6 +1072,7 @@ private:
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
 
         // Convert cluster type enum to lowercase string
+        // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
         std::string cluster_name = enchantum::to_string(cluster_type).data();
         std::transform(cluster_name.begin(), cluster_name.end(), cluster_name.begin(), ::tolower);
 
@@ -1192,6 +1194,7 @@ private:
             }
             num_devices_str += "]";
 
+            // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
             std::string topology_str = enchantum::to_string(config.fabric_setup.topology).data();
 
             // Find matching golden entry
