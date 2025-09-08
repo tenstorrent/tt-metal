@@ -27,10 +27,10 @@ from loguru import logger
     "use_host_oft, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     [
        (False, 0.074, 0.105, 0.124, 0.105),  # Using device OFT
-    #  ( True, 0.86, 0.99, 0.99, 0.99, 0.99)
+       ( True, 0.997, 0.997, 0.997, 0.997)
     ],
     # fmt: on
-    # ids=["use_device_oft", "use_host_oft"],
+    ids=["use_device_oft", "use_host_oft"],
 )
 def test_oftnet(
     device,
@@ -86,6 +86,10 @@ def test_oftnet(
         calib=calib,
         grid=grid,
         topdown_layers=topdown_layers,
+        grid_res=grid_res,
+        grid_height=grid_height,
+        host_fallback_model=ref_model if use_host_oft else None,
+        OFT_fallback=use_host_oft,
     )
 
     tt_scores, tt_pos_offsets, tt_dim_offsets, tt_ang_offsets = tt_module.forward(
