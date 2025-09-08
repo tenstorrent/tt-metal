@@ -109,6 +109,7 @@ class OFT:
         self.linear_weight = parameters.conv3d.weight
         self.linear_bias = parameters.conv3d.bias
         self.scale = scale
+        self.use_precomputed_grid = use_precomputed_grid
 
         self.bbox_corners, self.visible, self.area, self.shape = calculate_initialization_parameters(
             device, channels, cell_size, grid_height, features_shape_hw, calib, grid, self.scale, use_precomputed_grid
@@ -122,10 +123,18 @@ class OFT:
         if integral_image.get_layout() == ttnn.TILE_LAYOUT:
             integral_image = ttnn.to_layout(integral_image, ttnn.ROW_MAJOR_LAYOUT)
 
-        top_left = ttnn.grid_sample(integral_image, self.bbox_corners[0])
-        btm_right = ttnn.grid_sample(integral_image, self.bbox_corners[1])
-        top_right = ttnn.grid_sample(integral_image, self.bbox_corners[2])
-        btm_left = ttnn.grid_sample(integral_image, self.bbox_corners[3])
+        top_left = ttnn.grid_sample(
+            integral_image, self.bbox_corners[0], use_precomputed_grid=self.use_precomputed_grid
+        )
+        btm_right = ttnn.grid_sample(
+            integral_image, self.bbox_corners[1], use_precomputed_grid=self.use_precomputed_grid
+        )
+        top_right = ttnn.grid_sample(
+            integral_image, self.bbox_corners[2], use_precomputed_grid=self.use_precomputed_grid
+        )
+        btm_left = ttnn.grid_sample(
+            integral_image, self.bbox_corners[3], use_precomputed_grid=self.use_precomputed_grid
+        )
 
         vox_feats = ttnn.subtract(top_left, top_right)
         vox_feats = ttnn.add(vox_feats, btm_right)

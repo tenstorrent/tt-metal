@@ -10,18 +10,43 @@ from loguru import logger
 
 
 @pytest.mark.parametrize(
-    "input_shape, channels, cell_size, grid_height, scale, pcc_threshold",
+    "input_shape, channels, cell_size, grid_height, scale, torch_model_dtype, use_precomputed_grid, pcc_threshold",
     [
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, 0.88),  # feats8
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, 0.79),  # feats16
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, 0.60),  # feats32
+        # fmt: off
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32, False, 0.88),  # feats8
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32, False, 0.41),  # feats16
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32, False, 0.30),  # feats32
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,  True, 0.80),  # feats8
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,  True, 0.41),  # feats16
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,  True, 0.27),  # feats32
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16, False, 0.69),  # feats8
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16, False, 0.35),  # feats16
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.bfloat16, False, 0.23),  # feats32
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16,  True, 0.64),  # feats8
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16,  True, 0.34),  # feats16
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.bfloat16,  True, 0.22),
+        # feats32
+        # fmt: on
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
 @pytest.mark.parametrize("seed", [0])
-def test_oft_forward(device, input_shape, channels, cell_size, grid_height, scale, pcc_threshold, seed):
+def test_oft_forward(
+    device,
+    input_shape,
+    channels,
+    cell_size,
+    grid_height,
+    scale,
+    torch_model_dtype,
+    use_precomputed_grid,
+    pcc_threshold,
+    seed,
+):
     torch.manual_seed(seed)
-    features = torch.randn(*input_shape, dtype=torch.float32)
+    features = (
+        torch.randn(*input_shape, dtype=torch.float32) + 1.0
+    )  # 0.1 to avoid negative values, features is output of ReLU
     calib = torch.tensor(
         [
             [
@@ -35,8 +60,19 @@ def test_oft_forward(device, input_shape, channels, cell_size, grid_height, scal
     grid = make_grid(grid_size=(80.0, 80.0), grid_offset=(-40.0, 1.74, 0.0), grid_res=0.5)
     grid = grid.unsqueeze(0)
 
-    ref_oft = ReferenceOFT(channels, cell_size, grid_height, scale=scale, dtype=torch.float32)
-    ref_out = ref_oft.forward(features, calib, grid)
+    ref_oft = ReferenceOFT(channels, cell_size, grid_height, scale=scale, dtype=torch_model_dtype)
+    features = features.to(torch_model_dtype)
+    calib = calib.to(torch_model_dtype)
+    grid = grid.to(torch_model_dtype)
+
+    (
+        ref_out,
+        ref_integral_img,
+        ref_bbox_top_left,
+        ref_bbox_btm_right,
+        ref_bbox_top_right,
+        ref_bbox_btm_left8,
+    ) = ref_oft.forward(features, calib, grid)
     # Prepare TTNN input
     params = create_OFT_model_parameters_oft(ref_oft, (features, calib, grid), device)
 
@@ -55,9 +91,11 @@ def test_oft_forward(device, input_shape, channels, cell_size, grid_height, scal
         calib,
         grid,
         scale=scale,
-        use_precomputed_grid=False,
+        use_precomputed_grid=use_precomputed_grid,
     )
-    tt_out = tt_oft.forward(device, tt_features, tt_calib, tt_grid)
+    tt_out, integral_img, bbox_top_left, bbox_btm_right, bbox_top_right, bbox_btm_left8 = tt_oft.forward(
+        device, tt_features, tt_calib, tt_grid
+    )
     tt_out = ttnn.to_torch(tt_out)
 
     n, c, h, w = ref_out.shape

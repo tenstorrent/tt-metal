@@ -130,7 +130,7 @@ def test_oftnet(
         if isinstance(tt_out, ttnn.Tensor):
             tt_out_torch = ttnn.to_torch(tt_out).permute(0, 3, 1, 2).reshape(out.shape)
         else:
-            logger.debug(f"Output {i} is not a ttnn.Tensor, skipping conversion")
+            # logger.debug(f"Output {i} is not a ttnn.Tensor, skipping conversion")
             tt_out_torch = tt_out.reshape(out.shape)  # assume it's already a torch tensor in the right format
         passed, pcc = check_with_pcc(tt_out_torch, out, PCC_THRESHOLD)
         all_passed = all_passed and passed
