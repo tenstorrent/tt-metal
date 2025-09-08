@@ -890,7 +890,7 @@ class ModelArgs:
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=max(
-                    8,
+                    1,
                     8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(
@@ -1311,20 +1311,12 @@ class ModelArgs:
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
     def get_xqkv_prefill_mem_cfg(self, seq_len):
-        print(
-            "get_xqkv_prefill_mem_cfg",
-            self.n_kv_heads,
-            self.cluster_shape[1],
-            seq_len,
-            self.head_dim,
-            (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
-        )
         return ttnn.create_sharded_memory_config(
             (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
             ttnn.CoreGrid(y=8, x=8),
-            ttnn.ShardStrategy.BLOCK,
+            ttnn.ShardStrategy.HEIGHT,
             ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=False,
+            use_height_and_width_as_shard_shape=True,
         )
 
     def is_distributed_norm(self, mode):
@@ -1896,7 +1888,7 @@ class ModelArgs:
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
         for k in keys_dict:
-            print(k, state_dict[k].shape)
+            # print(k, state_dict[k].shape)
             if (k == "tok_embeddings.weight") or (k == "output.weight"):
                 state_dict[k] = state_dict[k][:, :1024]
             elif ("w1" in k) or ("w3" in k):
@@ -1907,7 +1899,7 @@ class ModelArgs:
                 state_dict[k] = state_dict[k][:1024, :1024]
             elif "norm" in k:
                 state_dict[k] = state_dict[k][:1024]
-            print("\t", state_dict[k].shape)
+            # print("\t", state_dict[k].shape)
 
             if any([r in k for r in remv]):
                 state_dict.pop(k)
