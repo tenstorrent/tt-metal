@@ -35,6 +35,7 @@
 #include <tt_stl/span.hpp>
 #include "test_gold_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -121,21 +122,29 @@ int main(int argc, char** argv) {
         uint32_t HW = H * W;
         uint32_t CHW = C * H * W;
 
+        std::vector<uint32_t> reader_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(src0_dram_buffer).append_to(reader_compile_time_args);
         auto reader_kernel = tt_metal::CreateKernel(
             program,
             multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/transpose_hc_8bank.cpp"
                       : "tests/tt_metal/tt_metal/test_kernels/dataflow/transpose_hc.cpp",
             core,
             tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::RISCV_1_default,
+                .compile_args = reader_compile_time_args});
 
+        std::vector<uint32_t> writer_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp"
                       : "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+                .compile_args = writer_compile_time_args});
 
         vector<uint32_t> compute_kernel_args = {uint(num_tensor_tiles)};
 

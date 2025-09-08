@@ -7,12 +7,10 @@
 
 #include "tt_align.hpp"
 #include "dev_msgs.h"
-#include <cstddef>
 #include <cstdint>
-#include <vector>
 
 #include "quasar/qa_hal.hpp"
-#include "core_config.h"
+#include "quasar/bh_hal_eth_asserts.hpp"
 #include "dev_mem_map.h"
 #include "eth_l1_address_map.h"
 #include "eth_fw_api.h"
@@ -24,6 +22,14 @@
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_AERISC_MAILBOX_BASE)->x))
 
 namespace tt::tt_metal::quasar {
+
+// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
+#include "core_config.h"
+
+// This file is intended to be wrapped inside arch/core-specific namespace.
+namespace active_eth_dev_msgs {
+#include "hal/generated/dev_msgs_impl.hpp"
+}
 
 HalCoreInfoType create_active_eth_mem_map() {
     std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
@@ -57,6 +63,9 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         MEM_ERISC_FABRIC_ROUTER_CONFIG_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] = MEM_SYSENG_ETH_MAILBOX_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = MEM_SYSENG_BOOT_RESULTS_BASE +
+                                                                         offsetof(boot_results_t, eth_live_status) +
+                                                                         offsetof(eth_live_status_t, rx_link_up);
 
     std::vector<std::uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
@@ -83,6 +92,7 @@ HalCoreInfoType create_active_eth_mem_map() {
         MEM_ERISC_FABRIC_ROUTER_CONFIG_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] =
         sizeof(uint32_t) + (sizeof(uint32_t) * MEM_SYSENG_ETH_MAILBOX_NUM_ARGS);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = sizeof(uint32_t);
 
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
     fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_STATUS_MASK)] =
@@ -96,6 +106,17 @@ HalCoreInfoType create_active_eth_mem_map() {
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses - 1);
     std::vector<HalJitBuildConfig> processor_types(1);
+    for (std::size_t processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
+        // BH active ethernet runs idle erisc FW on the second ethernet
+        processor_types[0] = HalJitBuildConfig{
+            .fw_base_addr = MEM_AERISC_FIRMWARE_BASE,
+            .local_init_addr = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
+            .fw_launch_addr = 0,
+            .fw_launch_addr_value = MEM_AERISC_FIRMWARE_BASE,
+            .memory_load = ll_api::memory::Loading::CONTIGUOUS,
+        };
+        processor_classes[processor_class_idx] = processor_types;
+    }
 
     static_assert(llrt_common::k_SingleProcessorMailboxSize<EthProcessorTypes> <= MEM_AERISC_MAILBOX_SIZE);
     return {
@@ -106,7 +127,8 @@ HalCoreInfoType create_active_eth_mem_map() {
         mem_map_sizes,
         fw_mailbox_addr,
         false /*supports_cbs*/,
-        false /*supports_receiving_multicast_cmds*/};
+        false /*supports_receiving_multicast_cmds*/,
+        active_eth_dev_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::quasar

@@ -20,6 +20,11 @@
 #include "tensix.h"
 #include <umd/device/tt_core_coordinates.h>
 
+// This file is intended to be wrapped inside arch/core-specific namespace.
+namespace tensix_dev_msgs {
+#include "hal/generated/dev_msgs_impl.hpp"
+}
+
 #define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t)&(((mailboxes_t*)MEM_MAILBOX_BASE)->x))
 
 namespace tt::tt_metal::quasar {
@@ -137,7 +142,8 @@ HalCoreInfoType create_tensix_mem_map() {
         mem_map_sizes,
         fw_mailbox_addr,
         true /*supports_cbs*/,
-        true /*supports_receiving_multicast_cmds*/};
+        true /*supports_receiving_multicast_cmds*/,
+        tensix_dev_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::quasar

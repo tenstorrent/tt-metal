@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <functional>
+#include <unordered_map>
 
 namespace tt::tt_metal {
 
@@ -27,6 +28,9 @@ public:
     virtual void process_defines(std::function<void(const std::string& define, const std::string& value)>) const = 0;
     // Called to process the user compile time args
     virtual void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const = 0;
+    // Called to process the user named compile time args
+    virtual void process_named_compile_time_args(
+        std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const = 0;
 
     virtual ~JitBuildSettings() = default;
 };
