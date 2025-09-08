@@ -4,9 +4,9 @@
 
 #pragma once
 
+#include <algorithm>
 #include <unordered_set>
 
-#include "thread_pool.hpp"
 #include "core_coord.hpp"
 #include "profiler.hpp"
 
@@ -22,14 +22,15 @@ public:
 
     void cleanup_device_profilers() {
         ZoneScoped;
-        std::vector<std::thread> threads;
-        threads.reserve(this->device_profiler_map.size());
+        std::vector<std::thread> threads(this->device_profiler_map.size());
 
+        uint32_t i = 0;
         for (auto it = this->device_profiler_map.begin(); it != this->device_profiler_map.end(); ++it) {
-            threads.emplace_back([it]() {
+            threads[i] = std::thread([it]() {
                 DeviceProfiler& profiler = it->second;
                 profiler.dumpDeviceResults();
             });
+            i++;
         }
 
         for (auto& thread : threads) {
@@ -37,6 +38,21 @@ public:
         }
 
         this->device_profiler_map.clear();
+    }
+
+    uint32_t calculate_optimal_num_threads_for_device_profiler_thread_pool() const {
+        // Multiply by 0.75 to account for other programs that are running on the CPU
+        const uint32_t num_threads_available = std::thread::hardware_concurrency() * 0.75;
+
+        if (num_threads_available == 0 || this->device_profiler_map.size() > num_threads_available) {
+            // If hardware_concurrency() is unable to determine the number of threads supported by the CPU, or the
+            // number of device profilers is greater than the max number of threads, return 2
+            return 2;
+        } else {
+            // Otherwise, return min(16, number of threads available / number of device profilers)
+            // Empirically, 16 threads per device profiler seems to result in optimal performance
+            return std::min(16U, static_cast<uint32_t>(num_threads_available / this->device_profiler_map.size()));
+        }
     }
 
     ProfilerStateManager& operator=(const ProfilerStateManager&) = delete;
@@ -57,9 +73,7 @@ public:
 
     std::unordered_set<chip_id_t> sync_set_devices{};
 
-    // std::shared_ptr<ThreadPool> thread_pool{};
-
-    std::mutex mid_run_dump_mutex{};
+    std::mutex file_write_mutex{};
 };
 
 }  // namespace tt_metal

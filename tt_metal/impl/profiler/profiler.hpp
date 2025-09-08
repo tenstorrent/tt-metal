@@ -175,6 +175,15 @@ private:
     // Track the smallest timestamp read
     void updateFirstTimestamp(uint64_t timestamp);
 
+    // Dump device results to files
+    void writeDeviceResultsToFiles() const;
+
+    // Push device results to tracy
+    void pushTracyDeviceResults(std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec);
+
+    // Initialize tracy contexts that haven't been initialized yet
+    void initializeMissingTracyContexts(bool blocking = true);
+
     // Update tracy context for the core
     void updateTracyContext(const std::pair<chip_id_t, CoreCoord>& device_core);
 
@@ -187,8 +196,6 @@ public:
     DeviceProfiler() = delete;
 
     ~DeviceProfiler();
-
-    void dumpDeviceResults();
 
     std::shared_ptr<ThreadPool> thread_pool{};
 
@@ -240,17 +247,11 @@ public:
 
     void dumpClusterCoordinates() const;
 
-    // Dump device results to files
-    void writeDeviceResultsToFiles() const;
-
-    // Push device results to tracy
-    void pushTracyDeviceResults(std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec);
+    // Dump device results to files and tracy
+    void dumpDeviceResults(bool is_mid_run_dump = false);
 
     // Update sync info for this device
     void setSyncInfo(const SyncInfo& sync_info);
-
-    // Initialize tracy contexts that haven't been initialized yet
-    void initializeMissingTracyContexts(bool blocking = true);
 
     // Get marker details for the marker corresponding to the given timer id
     tracy::MarkerDetails getMarkerDetails(uint16_t timer_id) const;
