@@ -59,7 +59,7 @@ def test_grid_sample_random_grid(device, input_shape, grid_shape, grid_dtype):
 
     # Test allclose with grid type specific tolerances
     if grid_dtype == "float32":
-        atol, rtol = 0.2, 1e-2
+        atol, rtol = 0.02, 1e-2
     else:  # bfloat16
         atol, rtol = 1.0, 1e-1
 
@@ -122,7 +122,7 @@ def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape, grid_dty
 
     # Test allclose with grid type specific tolerances
     if grid_dtype == "float32":
-        atol, rtol = 0.2, 1e-2
+        atol, rtol = 0.02, 1e-2
     else:  # bfloat16
         atol, rtol = 1.0, 1e-1
 
