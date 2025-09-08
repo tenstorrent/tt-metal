@@ -513,8 +513,6 @@ void SetRuntimeArgs(
     const std::vector<CoreCoord>& core_spec,
     const std::vector<std::vector<uint32_t>>& runtime_args);
 
-class Kernel;
-
 // clang-format off
 /**
  * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs to be called to update the common runtime args for the kernel.
