@@ -479,9 +479,7 @@ class FileResultDestination(ResultDestination):
 
         # Build OpRun record
         try:
-            run_start_ts = (
-                self._run_metadata.get("start_time_ts") or self._run_metadata.get("run_start_ts") or dt.datetime.now()
-            )
+            run_start_ts = self._run_metadata.get("run_start_ts")
             run_end_ts = dt.datetime.now()
             card_type = self._run_metadata.get("device") or self._run_metadata.get("card_type") or "unknown"
 
@@ -635,14 +633,13 @@ class SupersetResultDestination(FileResultDestination):
 
         # Compute the path of the just-written oprun file
         try:
-            run_start_ts = (
-                self._run_metadata.get("start_time_ts") or self._run_metadata.get("run_start_ts") or dt.datetime.now()
-            )
-            run_id_str = run_id or self._run_id or run_start_ts.strftime("%Y%m%d_%H%M%S")
+            run_id_str = run_id or self._run_id
             run_path = self.export_dir / f"oprun_{run_id_str}.json"
         except Exception as e:
             logger.error(f"Superset: failed to determine oprun file path for upload: {e}")
             return
+        print(f"Superset: run_path: {run_path}")
+        print(f"Superset: run_id: {run_id}")
 
         # Upload via SFTP if environment/configuration is available
         try:
