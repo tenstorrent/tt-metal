@@ -94,19 +94,19 @@ def run_benchmark_regression_test(benchmark_name: str, perf_baseline_dir: Path =
         try:
             baseline = load_baseline(benchmark_name, perf_baseline_dir)
         except Exception as e:
-            pytest.skip(f"Could not load baseline for {benchmark_name}: {e}")
+            pytest.fail(f"Could not load baseline for {benchmark_name}: {e}")
 
         # Run current benchmark
         try:
             current = run_current_benchmark(benchmark_name)
         except Exception as e:
-            pytest.skip(f"Could not run benchmark {benchmark_name}: {e}")
+            pytest.fail(f"Could not run benchmark {benchmark_name}: {e}")
 
         # Run regression check
         try:
             results = check_regression(baseline, current)
         except Exception as e:
-            pytest.skip(f"Could not compare results for {benchmark_name}: {e}")
+            pytest.fail(f"Could not compare results for {benchmark_name}: {e}")
 
         # Summarize results
         summary = summarize_regression_results(results)
