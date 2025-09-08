@@ -61,25 +61,25 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
             });
 
 const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
-    MeshGraph::cluster_type_to_mesh_graph_descriptor_mgd2 =
-        *new tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>(
-            std::unordered_map<tt::tt_metal::ClusterType, std::string_view>{
-                {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.textproto"},
-                {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.textproto"},
-                {tt::tt_metal::ClusterType::T3K, "t3k_mesh_graph_descriptor.textproto"},
-                {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_mesh_graph_descriptor.textproto"},
-                {tt::tt_metal::ClusterType::TG, "tg_mesh_graph_descriptor.textproto"},
-                {tt::tt_metal::ClusterType::P100, "p100_mesh_graph_descriptor.textproto"},
-                {tt::tt_metal::ClusterType::P150, "p150_mesh_graph_descriptor.textproto"},
-                {tt::tt_metal::ClusterType::P150_X2, "p150_x2_mesh_graph_descriptor.textproto"},
-                {tt::tt_metal::ClusterType::P150_X4, "p150_x4_mesh_graph_descriptor.textproto"},
-                {tt::tt_metal::ClusterType::P150_X8, "p150_x8_mesh_graph_descriptor.textproto"},
-                {tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.textproto"},
-                {tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.textproto"},
-                {tt::tt_metal::ClusterType::SIMULATOR_QUASAR, "p150_mesh_graph_descriptor.textproto"},
-                {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.textproto"},
-                {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.textproto"},
-            });
+MeshGraph::cluster_type_to_mesh_graph_descriptor_mgd2 =
+    *new tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>(
+        std::unordered_map<tt::tt_metal::ClusterType, std::string_view>{
+            {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.textproto"},
+            {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.textproto"},
+            {tt::tt_metal::ClusterType::T3K, "t3k_mesh_graph_descriptor.textproto"},
+            {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_mesh_graph_descriptor.textproto"},
+            {tt::tt_metal::ClusterType::TG, "tg_mesh_graph_descriptor.textproto"},
+            {tt::tt_metal::ClusterType::P100, "p100_mesh_graph_descriptor.textproto"},
+            {tt::tt_metal::ClusterType::P150, "p150_mesh_graph_descriptor.textproto"},
+            {tt::tt_metal::ClusterType::P150_X2, "p150_x2_mesh_graph_descriptor.textproto"},
+            {tt::tt_metal::ClusterType::P150_X4, "p150_x4_mesh_graph_descriptor.textproto"},
+            {tt::tt_metal::ClusterType::P150_X8, "p150_x8_mesh_graph_descriptor.textproto"},
+            {tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.textproto"},
+            {tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.textproto"},
+            {tt::tt_metal::ClusterType::SIMULATOR_QUASAR, "p150_mesh_graph_descriptor.textproto"},
+            {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.textproto"},
+            {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.textproto"},
+        });
 
 bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test; }
 
@@ -215,15 +215,15 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
 }
 
 namespace {
-RoutingDirection routing_direction_to_port_direction(int routing_direction_value) {
-    switch (routing_direction_value) {
-        case 1: return RoutingDirection::N;
-        case 2: return RoutingDirection::E;
-        case 3: return RoutingDirection::S;
-        case 4: return RoutingDirection::W;
-        case 5: return RoutingDirection::C;
-        case 6: return RoutingDirection::NONE;
-        default: TT_FATAL(false, "Invalid routing direction value: {}", routing_direction_value);
+RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirection& routing_direction) {
+    switch (routing_direction) {
+        case proto::RoutingDirection::N: return RoutingDirection::N;
+        case proto::RoutingDirection::E: return RoutingDirection::E;
+        case proto::RoutingDirection::S: return RoutingDirection::S;
+        case proto::RoutingDirection::W: return RoutingDirection::W;
+        case proto::RoutingDirection::C: return RoutingDirection::C;
+        case proto::RoutingDirection::NONE: return RoutingDirection::NONE;
+        default: TT_FATAL(false, "Invalid routing direction: {}", routing_direction);
     }
 }
 }  // namespace
@@ -265,7 +265,7 @@ void MeshGraph::initialize_from_mgd2(const MeshGraphDescriptor& mgd2) {
         const chip_id_t dst_chip_id = dst_instance.local_id;  // ONly expect one single dest chip
 
         RouterEdge router_edge{
-            .port_direction = routing_direction_to_port_direction(static_cast<int>(connection_data.routing_direction)),
+            .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
             .connected_chip_ids = std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, dst_chip_id),
             .weight = 0,
         };
@@ -306,7 +306,7 @@ void MeshGraph::initialize_from_mgd2(const MeshGraphDescriptor& mgd2) {
             auto [it, is_inserted] = edge.insert(
                 {dst_mesh_id,
                  RouterEdge{
-                     .port_direction = routing_direction_to_port_direction(static_cast<int>(connection_data.routing_direction)),
+                     .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
                      .connected_chip_ids = {dst_chip_id},
                      .weight = 0}});
             if (!is_inserted) {
@@ -318,7 +318,7 @@ void MeshGraph::initialize_from_mgd2(const MeshGraphDescriptor& mgd2) {
             auto [it, is_inserted] = edge.insert(
                 {dst_chip_id,
                  RouterEdge{
-                     .port_direction = routing_direction_to_port_direction(static_cast<int>(connection_data.routing_direction)),
+                     .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
                      .connected_chip_ids = {dst_chip_id},
                      .weight = 0}});
             if (!is_inserted) {
@@ -734,11 +734,11 @@ const MeshContainer<MeshHostRankId>& MeshGraph::get_host_ranks(MeshId mesh_id) c
 
 std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
     tt::tt_metal::ClusterType cluster_type, const std::string& root_dir, const bool version_2) {
-    auto& descriptor_map = version_2
+    auto & descriptor_map = version_2
         ? cluster_type_to_mesh_graph_descriptor_mgd2.get()
         : cluster_type_to_mesh_graph_descriptor.get();
     auto it = descriptor_map.find(cluster_type);
-    if (it != cluster_type_to_mesh_graph_descriptor.get().end()) {
+    if (it != descriptor_map.end()) {
         return std::filesystem::path(root_dir) / MESH_GRAPH_DESCRIPTOR_DIR / it->second;
     }
     TT_THROW("Cannot find mesh graph descriptor for cluster type {}", cluster_type);
