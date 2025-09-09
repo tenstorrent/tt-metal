@@ -1326,7 +1326,7 @@ private:
                     max_iterations = std::max(max_iterations, p.iterations.value());
                 } else if (p.type == "all_to_one") {
                     // Dynamically calculate iterations for all_to_one patterns based on number of devices
-                    uint32_t num_devices = static_cast<uint32_t>(device_info_provider_.get_local_node_ids().size());
+                    uint32_t num_devices = static_cast<uint32_t>(device_info_provider_.get_global_node_ids().size());
                     max_iterations = std::max(max_iterations, num_devices);
                     log_info(
                         LogTest,
@@ -1638,9 +1638,9 @@ private:
                     expand_one_or_all_to_all_multicast(test, defaults, HighLevelTrafficPattern::OneToAll);
                 }
             } else if (pattern.type == "all_to_one") {
-                expand_all_to_one_unicast(test, defaults, HighLevelTrafficPattern::AllToOne, iteration_idx);
+                expand_all_to_one_unicast(test, defaults, iteration_idx);
             } else if (pattern.type == "all_to_one_random") {
-                expand_all_to_one_random_unicast(test, defaults, HighLevelTrafficPattern::AllToOneRandom);
+                expand_all_to_one_random_unicast(test, defaults);
             } else if (pattern.type == "full_device_random_pairing") {
                 expand_full_device_random_pairing(test, defaults);
             } else if (pattern.type == "unidirectional_linear") {
@@ -1684,80 +1684,18 @@ private:
     }
 
     void expand_all_to_one_unicast(
-        ParsedTestConfig& test,
-        const ParsedTrafficPatternConfig& base_pattern,
-        HighLevelTrafficPattern pattern_type,
-        uint32_t iteration_idx) {
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx) {
         log_info(LogTest, "Expanding all_to_one_unicast pattern for test: {} (iteration {})", test.name, iteration_idx);
-        std::vector<std::pair<FabricNodeId, FabricNodeId>> all_pairs =
-            this->route_manager_.get_all_to_all_unicast_pairs();
-
-        TT_FATAL(!all_pairs.empty(), "Cannot expand all_to_one_unicast because no device pairs were found.");
-
-        // Get all unique devices that can be destinations
-        std::set<FabricNodeId> unique_devices;
-        for (const auto& pair : all_pairs) {
-            unique_devices.insert(pair.first);
-            unique_devices.insert(pair.second);
-        }
-
-        // Convert to vector for indexed access and sort for deterministic behavior
-        std::vector<FabricNodeId> dest_devices(unique_devices.begin(), unique_devices.end());
-        std::sort(dest_devices.begin(), dest_devices.end(), [](const FabricNodeId& a, const FabricNodeId& b) {
-            if (a.mesh_id != b.mesh_id) {
-                return *a.mesh_id < *b.mesh_id;
-            }
-            return a.chip_id < b.chip_id;
-        });
-
-        // Select destination device based on iteration index
-        if (iteration_idx >= dest_devices.size()) {
-            // If iteration index exceeds available devices, skip this iteration
-            log_info(
-                LogTest,
-                "Skipping iteration {} for test '{}' - only {} devices available",
-                iteration_idx,
-                test.name,
-                dest_devices.size());
-            return;
-        }
-
-        FabricNodeId selected_dest_device = dest_devices[iteration_idx];
-        log_info(
-            LogTest, "Selected destination device {} for iteration {}", selected_dest_device.chip_id, iteration_idx);
-
-        // Filter pairs to only include those with selected device as receiver
-        std::vector<std::pair<FabricNodeId, FabricNodeId>> filtered_pairs;
-        for (const auto& pair : all_pairs) {
-            if (pair.second == selected_dest_device) {
-                filtered_pairs.push_back(pair);
-            }
-        }
-
+        auto filtered_pairs = this->route_manager_.get_all_to_one_unicast_pairs(iteration_idx);
         if (!filtered_pairs.empty()) {
             add_senders_from_pairs(test, filtered_pairs, base_pattern);
         }
     }
 
-    void expand_all_to_one_random_unicast(
-        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
+    void expand_all_to_one_random_unicast(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
         log_info(LogTest, "Expanding all_to_one_unicast pattern for test: {}", test.name);
-        std::vector<std::pair<FabricNodeId, FabricNodeId>> all_pairs =
-            this->route_manager_.get_all_to_all_unicast_pairs();
-
-        TT_FATAL(!all_pairs.empty(), "Cannot expand all_to_one_unicast because no device pairs were found.");
-
-        // Get the first device as the single receiver (destination)
-        uint32_t index = get_random_in_range(0, all_pairs.size() - 1);
-        FabricNodeId first_device = all_pairs[index].first;
-
-        // Filter pairs to only include those with the first device as receiver
-        std::vector<std::pair<FabricNodeId, FabricNodeId>> filtered_pairs;
-        for (const auto& pair : all_pairs) {
-            if (pair.second == first_device) {
-                filtered_pairs.push_back(pair);
-            }
-        }
+        uint32_t index = get_random_in_range(0, 2048);
+        auto filtered_pairs = this->route_manager_.get_all_to_one_unicast_pairs(index);
         add_senders_from_pairs(test, filtered_pairs, base_pattern);
     }
 

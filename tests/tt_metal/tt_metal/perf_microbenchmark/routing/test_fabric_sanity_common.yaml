@@ -384,6 +384,7 @@ Tests:
 
     patterns:
       - type: all_to_one_random
+        iterations: 10
 
   - name: "FabricMuxSimpleUnicastWriteLinear"
     fabric_setup:
