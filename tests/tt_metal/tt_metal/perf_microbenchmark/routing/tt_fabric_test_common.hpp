@@ -526,6 +526,7 @@ public:
 
     std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_to_one_unicast_pairs(
         const uint32_t device_idx) const override {
+        // device_idx is used to deterministically select a destination node from all available global nodes
         const auto device_ids = get_global_node_ids();
         std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
         auto dst_node_id = device_ids[device_idx % device_ids.size()];
