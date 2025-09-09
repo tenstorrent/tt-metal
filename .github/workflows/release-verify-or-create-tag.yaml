@@ -27,10 +27,13 @@ on:
 jobs:
   verify-create-new-tag:
     permissions:
+        actions: read
         contents: write
-        packages: write
+        pull-requests: write
         pages: write
         id-token: write
+        packages: write
+        checks: write
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.get-tag-version.outputs.version }}
