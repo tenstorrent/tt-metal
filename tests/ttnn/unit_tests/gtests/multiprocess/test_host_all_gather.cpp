@@ -60,9 +60,15 @@ TEST_F(BigMeshDualRankTest2x4, HostAllGather) {
     EXPECT_THAT(get_device_tensors(all_gather_tensor), SizeIs(num_devices));
 
     auto composer = concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
-    Tensor concatenated_tensor = aggregate_tensor(all_gather_tensor, *composer);
 
-    EXPECT_THAT(concatenated_tensor.to_vector<float>(), Pointwise(FloatEq(), test_data));
+    EXPECT_THAT(aggregate_tensor(all_gather_tensor, *composer).to_vector<float>(), Pointwise(FloatEq(), test_data));
+
+    // Calling `all_gather` again should be a no-op.
+    all_gather_tensor = host_ccl::all_gather(all_gather_tensor);
+    EXPECT_EQ(all_gather_tensor.storage_type(), tt::tt_metal::StorageType::HOST);
+    EXPECT_THAT(get_device_tensors(all_gather_tensor), SizeIs(num_devices));
+
+    EXPECT_THAT(aggregate_tensor(all_gather_tensor, *composer).to_vector<float>(), Pointwise(FloatEq(), test_data));
 }
 
 }  // namespace
