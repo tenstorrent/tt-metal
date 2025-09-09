@@ -141,46 +141,50 @@ int main(int argc, char** argv) {
         test_context.open_devices(test_config.fabric_setup);
         device_opened = true;
 
-        log_info(tt::LogTest, "Building tests");
-        auto built_tests = builder.build_tests({test_config}, cmdline_parser);
+        for (uint32_t iter = 0; iter < test_config.num_top_level_iterations; ++iter) {
+            log_info(tt::LogTest, "Starting top-level iteration {}/{}", iter + 1, test_config.num_top_level_iterations);
 
-        // Set benchmark mode and line sync for this test group
-        test_context.set_benchmark_mode(test_config.benchmark_mode);
+            log_info(tt::LogTest, "Building tests");
+            auto built_tests = builder.build_tests({test_config}, cmdline_parser);
 
-        for (auto& built_test : built_tests) {
-            log_info(tt::LogTest, "Running Test: {}", built_test.name);
+            // Set benchmark mode and line sync for this test group
+            test_context.set_benchmark_mode(test_config.benchmark_mode);
 
-            test_context.setup_devices();
-            log_info(tt::LogTest, "Device setup complete");
+            for (auto& built_test : built_tests) {
+                log_info(tt::LogTest, "Running Test: {}", built_test.name);
 
-            test_context.process_traffic_config(built_test);
-            log_info(tt::LogTest, "Traffic config processed");
+                test_context.setup_devices();
+                log_info(tt::LogTest, "Device setup complete");
 
-            // Initialize sync memory if line sync is enabled
-            test_context.initialize_sync_memory();
+                test_context.process_traffic_config(built_test);
+                log_info(tt::LogTest, "Traffic config processed");
 
-            if (dump_built_tests) {
-                YamlTestConfigSerializer::dump({built_test}, output_stream);
+                // Initialize sync memory if line sync is enabled
+                test_context.initialize_sync_memory();
+
+                if (dump_built_tests) {
+                    YamlTestConfigSerializer::dump({built_test}, output_stream);
+                }
+
+                log_info(tt::LogTest, "Compiling programs");
+                test_context.compile_programs();
+
+                log_info(tt::LogTest, "Launching programs");
+                test_context.launch_programs();
+
+                test_context.wait_for_programs();
+                log_info(tt::LogTest, "Test {} Finished.", built_test.name);
+
+                test_context.validate_results();
+                log_info(tt::LogTest, "Test {} Results validated.", built_test.name);
+
+                if (test_context.get_benchmark_mode()) {
+                    test_context.profile_results(built_test);
+                }
+                // Synchronize across all hosts after running the current test variant
+                fixture->barrier();
+                test_context.reset_devices();
             }
-
-            log_info(tt::LogTest, "Compiling programs");
-            test_context.compile_programs();
-
-            log_info(tt::LogTest, "Launching programs");
-            test_context.launch_programs();
-
-            test_context.wait_for_programs();
-            log_info(tt::LogTest, "Test {} Finished.", built_test.name);
-
-            test_context.validate_results();
-            log_info(tt::LogTest, "Test {} Results validated.", built_test.name);
-
-            if (test_context.get_benchmark_mode()) {
-                test_context.profile_results(built_test);
-            }
-            // Synchronize across all hosts after running the current test variant
-            fixture->barrier();
-            test_context.reset_devices();
         }
     }
 
