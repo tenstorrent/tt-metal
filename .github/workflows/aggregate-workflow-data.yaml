@@ -81,14 +81,17 @@ jobs:
               owner,
               repo,
               branch,
-              status: 'success',
+              status: 'completed',
               per_page: 100
             });
             const targetPath = '.github/workflows/aggregate-workflow-data.yaml';
+            const all = res.data.workflow_runs || [];
+            core.info(`Total runs fetched: ${all.length}`);
             let selectedId = '';
-            const candidates = res.data.workflow_runs
-              .filter(r => r.path === targetPath && r.run_number < currentRunNumber)
+            const candidates = all
+              .filter(r => r.path === targetPath && r.run_number < currentRunNumber && r.conclusion === 'success')
               .sort((a, b) => b.run_number - a.run_number);
+            core.info(`Candidates after filter: ${candidates.length}`);
             for (const r of candidates) {
               const arts = await github.rest.actions.listWorkflowRunArtifacts({ owner, repo, run_id: r.id, per_page: 100 });
               const hasValid = arts.data.artifacts.some(a => a.name === 'workflow-data' && !a.expired && a.size_in_bytes > 0);
