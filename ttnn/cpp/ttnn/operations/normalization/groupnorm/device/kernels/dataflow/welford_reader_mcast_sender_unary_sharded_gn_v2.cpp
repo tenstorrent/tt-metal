@@ -178,9 +178,7 @@ void kernel_main() {
     for (uint32_t m = 0; m < num_batch_group; ++m) {
         // wait for local data ready
         cb_reserve_back(cb_ex_global, 2);
-        DPRINT << "waiting for local data ready" << ENDL();
         cb_wait_front(cb_ex_partial, 2);
-        DPRINT << "local data ready" << ENDL();
 
         // Read mean and variance arrays from cb_ex_partial, then combine using Welford
         auto local_read_ptr = get_read_ptr(cb_ex_partial);
@@ -188,9 +186,6 @@ void kernel_main() {
         auto p_local_vars = p_local_means + TILE_WIDTH * TILE_HEIGHT;
 
         auto local_result = combine_welford_stats<TILE_WIDTH, block_hw * TILE_WIDTH, 2>(p_local_means, p_local_vars);
-        DPRINT << "local combined mean: " << BF16(local_result.mean)
-               << " local combined var: " << BF16(local_result.variance) << " local count: " << local_result.count
-               << ENDL();
 
         // Write this to cb_ex_global
         auto global_means_ptr = get_write_ptr(cb_ex_global);
@@ -217,8 +212,6 @@ void kernel_main() {
         // Read mean and variance arrays from cb_ex_global, then combine using Welford
         auto global_result =
             combine_welford_stats<num_mcast_cores, block_hw * 32 * 32, 16>(p_global_means, p_global_vars);
-        DPRINT << "global combined mean: " << BF16(global_result.mean)
-               << " global combined var: " << BF16(global_result.variance) << ENDL();
 
         // Write this to cb_ex_global
         p_global_means[0] = global_result.mean;
