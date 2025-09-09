@@ -75,7 +75,7 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const branch = context.ref.replace('refs/heads/', '');
+            const branch = 'main'; // explicitly look on main branch
             const currentRunNumber = context.runNumber;
             const res = await github.rest.actions.listWorkflowRunsForRepo({
               owner,
