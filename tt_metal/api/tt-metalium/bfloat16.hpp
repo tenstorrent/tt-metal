@@ -35,7 +35,11 @@ public:
     static bfloat16 truncate(float float_num);
 
     // Widening conversion
-    constexpr operator float() const { return to_float(); }
+    constexpr operator float() const {
+        // move lower 16 to upper 16 (of 32) and convert to float
+        uint32_t uint32_data = (uint32_t)uint16_data << 16;
+        return std::bit_cast<float>(uint32_data);
+    }
 
     // -- Comparison Operators ---
     constexpr bool operator==(bfloat16 rhs) const { return static_cast<float>(*this) == static_cast<float>(rhs); };
@@ -54,14 +58,8 @@ public:
     bfloat16 operator*(bfloat16 rhs) const;
     bfloat16 operator/(bfloat16 rhs) const;
 
-    constexpr float to_float() const {
-        // move lower 16 to upper 16 (of 32) and convert to float
-        uint32_t uint32_data = (uint32_t)uint16_data << 16;
-        return std::bit_cast<float>(uint32_data);
-    }
+private:
     uint16_t from_float(float val);
-    constexpr uint16_t to_packed() const { return uint16_data; }
-
     friend constexpr bfloat16 bfloat16_from_bits(std::uint16_t raw) noexcept;
     friend constexpr std::uint16_t bfloat16_to_bits(const bfloat16& bf) noexcept;
 };

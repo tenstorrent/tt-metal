@@ -4,7 +4,7 @@
 
 #pragma once
 #include <algorithm>
-#include <random>
+#include <tt-metalium/bfloat16.hpp>
 
 #include <tt-logger/tt-logger.hpp>
 
@@ -43,7 +43,11 @@ std::vector<PackType> pack_vector(const std::vector<ValueType>& values) {
     unsigned int index = 0;
     std::for_each(results.begin(), results.end(), [&](PackType& result) {
         for (unsigned j = 0; j < num_values_to_pack; j++) {
-            result |= values[index].to_packed() << (j * ValueType::SIZEOF * CHAR_BIT);
+            if constexpr (std::is_same_v<ValueType, bfloat16>) {
+                result |= bfloat16_to_bits(values[index]) << (j * ValueType::SIZEOF * CHAR_BIT);
+            } else {
+                result |= values[index].to_packed() << (j * ValueType::SIZEOF * CHAR_BIT);
+            }
             index++;
         }
         return result;
