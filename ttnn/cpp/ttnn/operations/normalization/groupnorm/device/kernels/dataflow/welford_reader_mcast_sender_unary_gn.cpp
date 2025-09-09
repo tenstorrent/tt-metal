@@ -362,7 +362,7 @@ void kernel_main() {
                     // Read mean and variance arrays from cb_ex_partial, then combine using Welford
                     auto local_read_ptr = get_read_ptr(cb_ex_partial);
                     auto p_local_means = reinterpret_cast<volatile uint16_t*>(local_read_ptr);
-                    auto p_local_vars = p_local_means + TILE_WIDTH * TILE_HEIGHT;
+                    auto p_local_vars = reinterpret_cast<volatile uint16_t*>(local_read_ptr + single_tile_size_bytes);
 
                     // Print local means
                     DPRINT << "local means: ";
