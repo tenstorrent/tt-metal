@@ -4,9 +4,9 @@
 import ttnn
 import torch
 import pytest
-from models.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc
 
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import FF1_CRS_RS_OUT
 from tests.ttnn.unit_tests.operations.test_distributed_layernorm_sharded import (
     create_input_and_weight_tensors,

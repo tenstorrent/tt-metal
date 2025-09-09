@@ -13,11 +13,11 @@ from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs,
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 
 import ttnn
+from models.common.utility_functions import nearest_32
 from models.demos.gemma3.demo.vision_demo import create_multimodal_model
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
-from models.utility_functions import nearest_32
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):

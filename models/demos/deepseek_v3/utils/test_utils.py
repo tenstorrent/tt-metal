@@ -12,9 +12,9 @@ import safetensors.torch
 import torch
 from loguru import logger
 
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.utility_functions import comp_pcc
 
 # Constant for testing
 MAX_START_POS = 512

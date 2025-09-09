@@ -8,6 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3DecoderLayer
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block import DecoderBlock
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block import MoEDecoderBlock
@@ -21,7 +22,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
     load_reference_io_tensors_for_module,
     load_state_dict,
 )
-from models.utility_functions import comp_pcc
 
 
 @pytest.fixture
