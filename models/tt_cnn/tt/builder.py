@@ -64,11 +64,13 @@ class Conv2dConfiguration:
     out_channels: int
     batch_size: int
     kernel_size: Tuple[int, int]
+    weight: torch.Tensor
     stride: Tuple[int, int] = (1, 1)
     padding: Tuple[int, int] = (0, 0)
     groups: int = 1
     dilation: Tuple[int, int] = (1, 1)
     activation: str = ""
+    bias: Optional[torch.Tensor] = None
 
     activation_dtype = ttnn.bfloat16
     weights_dtype = ttnn.bfloat16
@@ -88,6 +90,81 @@ class Conv2dConfiguration:
 
     deallocate_activation: bool = True
     reallocate_halo_output: bool = True
+
+    @classmethod
+    def with_random_weights(
+        cls,
+        input_height: int,
+        input_width: int,
+        in_channels: int,
+        out_channels: int,
+        batch_size: int,
+        kernel_size: Tuple[int, int],
+        **kwargs,
+    ):
+        """Create Conv2dConfiguration with randomly initialized weights."""
+        weight_shape = (
+            out_channels,
+            in_channels // kwargs.get("groups", 1),
+            kernel_size[0],
+            kernel_size[1],
+        )
+        weight = torch.randn(weight_shape, dtype=torch.bfloat16).float()
+        bias = torch.randn(out_channels, dtype=torch.bfloat16).float()
+
+        return cls(
+            input_height=input_height,
+            input_width=input_width,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            batch_size=batch_size,
+            kernel_size=kernel_size,
+            weight=weight,
+            bias=bias,
+            **kwargs,
+        )
+
+    @classmethod
+    def from_torch_layer(
+        cls, torch_layer: torch.nn.Conv2d, input_height: int, input_width: int, batch_size: int, **kwargs
+    ):
+        """Create Conv2dConfiguration from existing PyTorch Conv2d layer."""
+        return cls(
+            input_height=input_height,
+            input_width=input_width,
+            in_channels=torch_layer.in_channels,
+            out_channels=torch_layer.out_channels,
+            batch_size=batch_size,
+            kernel_size=torch_layer.kernel_size,
+            stride=torch_layer.stride,
+            padding=torch_layer.padding,
+            groups=torch_layer.groups,
+            dilation=torch_layer.dilation,
+            weight=torch_layer.weight.data.clone(),
+            bias=torch_layer.bias.data.clone() if torch_layer.bias is not None else None,
+            **kwargs,
+        )
+
+    def validate_weights(self):
+        """Validate that weight and bias shapes match configuration parameters."""
+        expected_weight_shape = (
+            self.out_channels,
+            self.in_channels // self.groups,
+            self.kernel_size[0],
+            self.kernel_size[1],
+        )
+
+        if self.weight.shape != expected_weight_shape:
+            raise ValueError(
+                f"Weight shape {self.weight.shape} doesn't match expected shape "
+                f"{expected_weight_shape} for configuration parameters"
+            )
+
+        if self.bias is not None and self.bias.shape != (self.out_channels,):
+            raise ValueError(
+                f"Bias shape {self.bias.shape} doesn't match expected shape "
+                f"({self.out_channels},) for out_channels={self.out_channels}"
+            )
 
 
 @dataclass(frozen=True)
@@ -210,8 +287,6 @@ class TtConv2d:
     def __init__(
         self,
         configuration: Conv2dConfiguration,
-        weight,
-        bias,
         device_descriptor,
         mesh_mapper=None,
     ):
@@ -221,11 +296,15 @@ class TtConv2d:
 
         self.device = device_descriptor.device
 
-        # TODO: Here we should check the weight shapes to see if they are correct
-        self.weight = ttnn.from_torch(weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
-        if bias is not None:
-            bias = torch.reshape(bias, (1, 1, 1, -1))
+        # Validate weight shapes match configuration
+        configuration.validate_weights()
+
+        self.weight = ttnn.from_torch(configuration.weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
+        if configuration.bias is not None:
+            bias = torch.reshape(configuration.bias, (1, 1, 1, -1))
             self.bias = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
+        else:
+            self.bias = None
 
     def get_conv2d_kwargs(self):
         return {

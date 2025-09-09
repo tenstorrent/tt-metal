@@ -16,24 +16,6 @@ from models.tt_cnn.tt.builder import (
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def create_torch_weight_and_bias(configuration: Conv2dConfiguration):
-    weight_shape = (
-        configuration.out_channels,
-        configuration.in_channels // configuration.groups,
-        configuration.kernel_size[0],
-        configuration.kernel_size[1],
-    )
-    weight = torch.randn(weight_shape, dtype=torch.bfloat16).float()
-    bias_shape = (
-        1,
-        1,
-        1,
-        configuration.out_channels,
-    )
-    bias = torch.randn(bias_shape, dtype=torch.bfloat16).float()
-    return weight, bias
-
-
 def create_conv2d_input_tensor(configuration: Conv2dConfiguration):
     shape = (configuration.batch_size, configuration.in_channels, configuration.input_height, configuration.input_width)
     nchw = torch.randn(shape, dtype=torch.bfloat16).float()
@@ -62,32 +44,32 @@ def create_conv2d_input_tensor(configuration: Conv2dConfiguration):
         (128, 64, 16, 32, 1, 3, 1, BlockShardedStrategyConfiguration()),
     ),
 )
-def test_basic_conv2d(
+def test_conv2d(
     input_height, input_width, in_channels, out_channels, batch_size, kernel_size, padding, sharding_strategy, device
 ):
     device_descriptor = DeviceDescriptor(device, (4, 4))
 
-    configuration = Conv2dConfiguration(
-        input_height,
-        input_width,
-        in_channels,
-        out_channels,
+    configuration = Conv2dConfiguration.with_random_weights(
+        input_height=input_height,
+        input_width=input_width,
+        in_channels=in_channels,
+        out_channels=out_channels,
         batch_size=batch_size,
         kernel_size=(kernel_size, kernel_size),
         padding=(padding, padding),
         sharding_strategy=sharding_strategy,
     )
 
-    weight, bias = create_torch_weight_and_bias(configuration)
+    weight, bias = configuration.weight, configuration.bias
     torch_input_tensor, ttnn_input_tensor = create_conv2d_input_tensor(configuration)
 
-    layer = TtConv2d(configuration, weight, bias, device_descriptor)
+    layer = TtConv2d(configuration, device_descriptor)
 
     ttnn_output_tensor = layer(ttnn_input_tensor)
     torch_output_tensor = torch.nn.functional.conv2d(
         torch_input_tensor,
         weight,
-        bias.reshape(-1),
+        bias.reshape(-1) if bias is not None else None,
         padding=configuration.padding,
     )
 
@@ -129,7 +111,7 @@ def create_pool2d_input_tensor(configuration: MaxPool2dConfiguration):
         (128, 64, 8, 4, 4, 0, False),
     ),
 )
-def test_basic_pool2d(input_height, input_width, channels, batch_size, kernel_size, padding, ceil_mode, device):
+def test_pool2d(input_height, input_width, channels, batch_size, kernel_size, padding, ceil_mode, device):
     device_descriptor = DeviceDescriptor(device, (4, 4))
 
     configuration = MaxPool2dConfiguration(
@@ -189,21 +171,21 @@ def test_downblock(input_height, input_width, batch_size, device):
     sharding_strategy = HeightShardedStrategyConfiguration(act_block_h_override=64, reshard_if_not_optimal=False)
 
     configurations = [
-        Conv2dConfiguration(
-            input_height,
-            input_width,
-            16,
-            32,
+        Conv2dConfiguration.with_random_weights(
+            input_height=input_height,
+            input_width=input_width,
+            in_channels=16,
+            out_channels=32,
             batch_size=batch_size,
             kernel_size=(3, 3),
             padding=(1, 1),
             sharding_strategy=sharding_strategy,
         ),
-        Conv2dConfiguration(
-            input_height,
-            input_width,
-            32,
-            32,
+        Conv2dConfiguration.with_random_weights(
+            input_height=input_height,
+            input_width=input_width,
+            in_channels=32,
+            out_channels=32,
             batch_size=batch_size,
             kernel_size=(3, 3),
             padding=(1, 1),
@@ -214,14 +196,11 @@ def test_downblock(input_height, input_width, batch_size, device):
         ),
     ]
 
-    weight0, bias0 = create_torch_weight_and_bias(configurations[0])
-    weight1, bias1 = create_torch_weight_and_bias(configurations[1])
-
     torch_input_tensor, ttnn_input_tensor = create_conv2d_input_tensor(configurations[0])
 
     downblock = [
-        TtConv2d(configurations[0], weight0, bias0, device_descriptor),
-        TtConv2d(configurations[1], weight1, bias1, device_descriptor),
+        TtConv2d(configurations[0], device_descriptor),
+        TtConv2d(configurations[1], device_descriptor),
         TtMaxPool2d(configurations[2], device_descriptor),
     ]
 
