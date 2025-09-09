@@ -351,8 +351,6 @@ class Flux1Pipeline:
         assert prompt_count == 1, "generating multiple images is not supported"
 
         with timer.time_section("total") if timer else nullcontext():
-            start_time = time.time()
-
             assert height % (self._vae_scale_factor * self._patch_size) == 0
             assert width % (self._vae_scale_factor * self._patch_size) == 0
 
@@ -369,7 +367,6 @@ class Flux1Pipeline:
                 if self.desired_encoder_submesh_shape != self.original_submesh_shape:
                     # HACK: reshape submesh device 0 from 2D to 1D
                     self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
-                prompt_encoding_start_time = time.time()
                 prompt_embeds, pooled_prompt_embeds = self._encode_prompts(
                     prompt_1=prompt_1,
                     prompt_2=prompt_2,
@@ -385,7 +382,6 @@ class Flux1Pipeline:
                 if self.desired_encoder_submesh_shape != self.original_submesh_shape:
                     # HACK: reshape submesh device 0 from 1D to 2D
                     self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
-                prompt_encoding_end_time = time.time()
 
             logger.info("preparing timesteps...")
 
@@ -586,7 +582,6 @@ class Flux1Pipeline:
                 tt_prompt_rope_sin_list.append(tt_prompt_rope_sin)
 
             logger.info("denoising...")
-            denoising_start_time = time.time()
 
             for i, t in enumerate(tqdm.tqdm(self._scheduler.timesteps)):
                 with timer.time_step("denoising_step") if timer else nullcontext():
@@ -631,13 +626,9 @@ class Flux1Pipeline:
                         traced=traced,
                     )
 
-            denoising_end_time = time.time()
-
             logger.info("decoding image...")
 
             with timer.time_section("vae_decoding") if timer else nullcontext():
-                image_decoding_start_time = time.time()
-
                 # Sync because we don't pass a persistent buffer or a barrier semaphore.
                 ttnn.synchronize_device(self.vae_device)
 
@@ -676,16 +667,8 @@ class Flux1Pipeline:
                     self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
                 image = self._image_processor.postprocess(decoded_output, output_type="pt")
                 assert isinstance(image, torch.Tensor)
-                image_decoding_end_time = time.time()
 
                 output = self._image_processor.numpy_to_pil(self._image_processor.pt_to_numpy(image))
-
-                end_time = time.time()
-
-                logger.info(f"prompt encoding duration: {prompt_encoding_end_time - prompt_encoding_start_time}")
-                logger.info(f"denoising duration: {denoising_end_time - denoising_start_time}")
-                logger.info(f"image decoding duration: {image_decoding_end_time - image_decoding_start_time}")
-                logger.info(f"total runtime: {end_time - start_time}")
 
         return output
 
