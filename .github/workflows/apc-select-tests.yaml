@@ -241,7 +241,7 @@ jobs:
     needs: [parse-tests-json, build-artifact]
     if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 't3000-apc-fast-tests') }}
     secrets: inherit
-    uses: ./.github/workflows/t3000-apc-fast-tests-impl.yaml
+    uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
