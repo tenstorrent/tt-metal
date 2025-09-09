@@ -106,7 +106,9 @@ def run_demo_inference(
         logger.info(f"{key}: {data[-1]:.2f} seconds")
     logger.info("=" * 80)
 
+    total_preproc_time = profiler.get("encode_prompts") + profiler.get("prepare_latents")
     profiler.clear()
+    profiler.times["__total_preprocessing_time__"] = [total_preproc_time]
 
     if not is_ci_env and not os.path.exists("output"):
         os.mkdir("output")
