@@ -81,7 +81,6 @@ def custom_preprocessor(model, name, mesh_mapper=None):
             parameters["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
 
     if isinstance(model, Conv):
-        print("split weights is ", model.split_weights)
         weight, bias = fold_batch_norm2d_into_conv2d(model.conv, model.bn)
         bias = bias.reshape((1, 1, 1, -1))
         if model.split_weights:
