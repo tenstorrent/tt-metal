@@ -4,9 +4,10 @@
 
 #pragma once
 
-#include <cstdint>
-
 #include <tt-metalium/constants.hpp>
+
+#include <array>
+#include <cstdint>
 
 constexpr uint32_t ONE_PAGE = 1;
 
@@ -71,6 +72,7 @@ struct ScatterCTAs {
     const uint32_t index_stick_size_bytes;
     const uint32_t source_stick_size_bytes;
     const uint32_t output_stick_size_bytes;
+    const uint32_t input_rank;
     const InputAccessorArgs input_args;
     const IndexAccessorArgs index_args;
     const SourceAccessorArgs source_args;
@@ -78,7 +80,7 @@ struct ScatterCTAs {
 };
 
 FORCE_INLINE constexpr auto get_ctas() {
-    constexpr auto input_args = TensorAccessorArgs<16>();
+    constexpr auto input_args = TensorAccessorArgs<17>();
     constexpr auto index_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto source_args = TensorAccessorArgs<index_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<source_args.next_compile_time_args_offset()>();
@@ -99,9 +101,20 @@ FORCE_INLINE constexpr auto get_ctas() {
         get_compile_time_arg_val(13),
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
+        get_compile_time_arg_val(16),
         input_args,
         index_args,
         source_args,
         output_args,
     };
+}
+
+template <uint32_t N>
+std::array<uint32_t, N> make_shape_array_from_runtime_args(const uint32_t& C) {
+    std::array<uint32_t, N> ret{};
+    for (uint32_t i = C; i < C + N; ++i) {
+        ret[i - C] = get_arg_val<uint32_t>(i);
+    }
+
+    return ret;
 }
