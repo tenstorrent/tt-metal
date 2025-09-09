@@ -1,0 +1,88 @@
+boards {
+  board {
+    tray_id: 1
+    board_type: "N300"
+  }
+  board {
+    tray_id: 2
+    board_type: "N300"
+  }
+  board {
+    tray_id: 3
+    board_type: "N300"
+  }
+  board {
+    tray_id: 4
+    board_type: "N300"
+  }
+}
+port_type_connections {
+  key: "QSFP"
+  value {
+    connections {
+      port_a {
+        tray_id: 1
+        port_id: 1
+      }
+      port_b {
+        tray_id: 4
+        port_id: 1
+      }
+    }
+    connections {
+      port_a {
+        tray_id: 2
+        port_id: 2
+      }
+      port_b {
+        tray_id: 3
+        port_id: 2
+      }
+    }
+  }
+}
+port_type_connections {
+  key: "WARP100"
+  value {
+    connections {
+      port_a {
+        tray_id: 1
+        port_id: 1
+      }
+      port_b {
+        tray_id: 2
+        port_id: 1
+      }
+    }
+    connections {
+      port_a {
+        tray_id: 1
+        port_id: 2
+      }
+      port_b {
+        tray_id: 2
+        port_id: 2
+      }
+    }
+    connections {
+      port_a {
+        tray_id: 3
+        port_id: 1
+      }
+      port_b {
+        tray_id: 4
+        port_id: 1
+      }
+    }
+    connections {
+      port_a {
+        tray_id: 3
+        port_id: 2
+      }
+      port_b {
+        tray_id: 4
+        port_id: 2
+      }
+    }
+  }
+}
