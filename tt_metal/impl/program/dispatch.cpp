@@ -7,6 +7,8 @@
 #include <mesh_workload.hpp>
 #include <stddef.h>
 #include <string.h>
+#include <mutex>
+#include <span>
 #include <sub_device_types.hpp>
 #include <tracy/Tracy.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -1641,6 +1643,38 @@ private:
     LaunchMessageCmds<CQDispatchWritePackedUnicastSubCmd> unicast_cmds;
 };
 
+namespace {
+
+uint32_t go_msg_u32_value(uint8_t signal, uint8_t master_x, uint8_t master_y, uint8_t dispatch_message_offset) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    // Multiple things in this file assume that go_msg_t is 4B and has the same layout for all core types.
+    // This assumption is currently valid, and probably will always hold.
+    // In any case, query the size from HAL and assert that it equals sizeof(uint32_t).
+    std::once_flag once_flag;
+    std::call_once(once_flag, [&]() {
+        for (uint32_t programmable_core_type_index = 0;
+             programmable_core_type_index < tt::tt_metal::NumHalProgrammableCoreTypes;
+             ++programmable_core_type_index) {
+            auto factory = hal.get_dev_msgs_factory(hal.get_programmable_core_type(programmable_core_type_index));
+            TT_FATAL(
+                factory.size_of<dev_msgs::go_msg_t>() == sizeof(uint32_t),
+                "go_msg_t size must be 4 bytes for all programmable core types.");
+        }
+    });
+    // Note: because of the assumption, we can use the dev_msgs factory for whatever core type.
+    uint32_t go_msg_u32_val = 0;
+    auto dev_msgs_factory =
+        tt::tt_metal::MetalContext::instance().hal().get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
+    auto go_msg = dev_msgs_factory.create_view<dev_msgs::go_msg_t>(reinterpret_cast<std::byte*>(&go_msg_u32_val));
+    go_msg.signal() = signal;
+    go_msg.master_x() = master_x;
+    go_msg.master_y() = master_y;
+    go_msg.dispatch_message_offset() = dispatch_message_offset;
+    return go_msg_u32_val;
+}
+
+}  // namespace
+
 class GoSignalGenerator {
 public:
     // Determine the size of the go signal commands.
@@ -1691,19 +1725,18 @@ public:
                 device_command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
             }
         }
-        go_msg_t run_program_go_signal{};
-        run_program_go_signal.signal = RUN_MSG_GO;
-        // Dispatch X/Y resolved when the program is enqueued
-        run_program_go_signal.master_x = 0;
-        run_program_go_signal.master_y = 0;
-        run_program_go_signal.dispatch_message_offset = MetalContext::instance()
-                                                            .dispatch_mem_map(constants.dispatch_core_type)
-                                                            .get_dispatch_message_update_offset(sub_device_index);
         uint32_t write_offset_bytes = device_command_sequence.write_offset_bytes();
         // Num Workers Resolved when the program is enqueued
         device_command_sequence.add_dispatch_go_signal_mcast(
             0,
-            *reinterpret_cast<uint32_t*>(&run_program_go_signal),
+            go_msg_u32_value(
+                dev_msgs::RUN_MSG_GO,
+                // Dispatch X/Y resolved when the program is enqueued
+                0,
+                0,
+                MetalContext::instance()
+                    .dispatch_mem_map(constants.dispatch_core_type)
+                    .get_dispatch_message_update_offset(sub_device_index)),
             MetalContext::instance()
                 .dispatch_mem_map(constants.dispatch_core_type)
                 .get_dispatch_stream_index(sub_device_index),
@@ -1834,7 +1867,7 @@ void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, 
     }
     // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
     // previous launch message.
-    config_buffer_mgr.init_add_buffer(0, launch_msg_buffer_num_entries - 1);
+    config_buffer_mgr.init_add_buffer(0, dev_msgs::launch_msg_buffer_num_entries - 1);
     if (hal.get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType::ACTIVE_ETH)) {
         // Keeping it the same
         config_buffer_mgr.init_add_buffer(0, 1);
@@ -2047,28 +2080,28 @@ void update_program_dispatch_commands(
     // Update launch message addresses to reflect new launch_msg slot in ring buffer
     uint32_t multicast_cores_launch_msg_addr =
         hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::LAUNCH) +
-        multicast_cores_launch_message_wptr * sizeof(launch_msg_t);
+        multicast_cores_launch_message_wptr *
+            hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).size_of<dev_msgs::launch_msg_t>();
     for (auto launch_msg_cmd_ptr : cached_program_command_sequence.launch_msg_write_packed_cmd_ptrs) {
         launch_msg_cmd_ptr->addr = multicast_cores_launch_msg_addr;
     }
     if (cached_program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs.size()) {
         uint32_t unicast_cores_launch_message_addr =
             hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH) +
-            unicast_cores_launch_message_wptr * sizeof(launch_msg_t);
+            unicast_cores_launch_message_wptr *
+                hal.get_dev_msgs_factory(HalProgrammableCoreType::ACTIVE_ETH).size_of<dev_msgs::launch_msg_t>();
         for (auto launch_msg_cmd_ptr : cached_program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs) {
             launch_msg_cmd_ptr->addr = unicast_cores_launch_message_addr;
         }
     }
     // Update go signal to reflect potentially modified dispatch core and new wait count
-    go_msg_t run_program_go_signal{};
-    run_program_go_signal.signal = RUN_MSG_GO;
-    run_program_go_signal.master_x = (uint8_t)dispatch_core.x;
-    run_program_go_signal.master_y = (uint8_t)dispatch_core.y;
-    run_program_go_signal.dispatch_message_offset = MetalContext::instance()
-                                                        .dispatch_mem_map(dispatch_core_type)
-                                                        .get_dispatch_message_update_offset(*sub_device_id);
-    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal =
-        *reinterpret_cast<uint32_t*>(&run_program_go_signal);
+    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = go_msg_u32_value(
+        dev_msgs::RUN_MSG_GO,
+        dispatch_core.x,
+        dispatch_core.y,
+        MetalContext::instance()
+            .dispatch_mem_map(dispatch_core_type)
+            .get_dispatch_message_update_offset(*sub_device_id));
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
@@ -2214,39 +2247,41 @@ void update_traced_program_dispatch_commands(
         }
         launch_msg.kernel_config().host_assigned_id() = trace_node.program_runtime_id;
         if (is_multicast) {
-            for (uint32_t i = 0; i < NUM_PROCESSORS_PER_CORE_TYPE; i++) {
+            uint32_t i = 0;
+            for (auto original_kernel_text_offset : original_launch_msg.view().kernel_config().kernel_text_offset()) {
                 // Adjust the kernel text offset to account for the difference between the RTA and binary base.
                 launch_msg.kernel_config().kernel_text_offset()[i] =
-                    original_launch_msg.view().kernel_config().kernel_text_offset()[i] + binary_write_offset -
+                    original_kernel_text_offset + binary_write_offset -
                     dispatch_md.nonbinary_kernel_config_addrs[tensix_index].addr;
+                i++;
             }
         }
     }
     // Update launch message addresses to reflect new launch_msg slot in ring buffer
     uint32_t multicast_cores_launch_msg_addr =
         hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::LAUNCH) +
-        multicast_cores_launch_message_wptr * sizeof(launch_msg_t);
+        multicast_cores_launch_message_wptr *
+            hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).size_of<dev_msgs::launch_msg_t>();
     for (auto launch_msg_cmd_ptr : cached_program_command_sequence.launch_msg_write_packed_cmd_ptrs) {
         launch_msg_cmd_ptr->addr = multicast_cores_launch_msg_addr;
     }
     if (cached_program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs.size()) {
         uint32_t unicast_cores_launch_message_addr =
             hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH) +
-            unicast_cores_launch_message_wptr * sizeof(launch_msg_t);
+            unicast_cores_launch_message_wptr *
+                hal.get_dev_msgs_factory(HalProgrammableCoreType::ACTIVE_ETH).size_of<dev_msgs::launch_msg_t>();
         for (auto launch_msg_cmd_ptr : cached_program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs) {
             launch_msg_cmd_ptr->addr = unicast_cores_launch_message_addr;
         }
     }
     // Update go signal to reflect potentially modified dispatch core and new wait count
-    go_msg_t run_program_go_signal{};
-    run_program_go_signal.signal = RUN_MSG_GO;
-    run_program_go_signal.master_x = (uint8_t)dispatch_core.x;
-    run_program_go_signal.master_y = (uint8_t)dispatch_core.y;
-    run_program_go_signal.dispatch_message_offset = MetalContext::instance()
-                                                        .dispatch_mem_map(dispatch_core_type)
-                                                        .get_dispatch_message_update_offset(*sub_device_id);
-    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal =
-        *reinterpret_cast<uint32_t*>(&run_program_go_signal);
+    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = go_msg_u32_value(
+        dev_msgs::RUN_MSG_GO,
+        dispatch_core.x,
+        dispatch_core.y,
+        MetalContext::instance()
+            .dispatch_mem_map(dispatch_core_type)
+            .get_dispatch_message_update_offset(*sub_device_id));
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
@@ -2486,18 +2521,16 @@ void reset_worker_dispatch_state_on_device(
             command_sequence.add_notify_dispatch_s_go_signal_cmd(false, index_bitmask);
             dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SUBORDINATE;
         }
-        go_msg_t reset_launch_message_read_ptr_go_signal{};
-        reset_launch_message_read_ptr_go_signal.signal = RUN_MSG_RESET_READ_PTR;
-        reset_launch_message_read_ptr_go_signal.master_x = (uint8_t)dispatch_core.x;
-        reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)dispatch_core.y;
         for (uint32_t i = 0; i < num_sub_devices; ++i) {
-            reset_launch_message_read_ptr_go_signal.dispatch_message_offset =
-                MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(i);
             // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
             SubDeviceId sub_device_id(static_cast<uint8_t>(i));
             command_sequence.add_dispatch_go_signal_mcast(
                 expected_num_workers_completed[i],
-                *reinterpret_cast<uint32_t*>(&reset_launch_message_read_ptr_go_signal),
+                go_msg_u32_value(
+                    dev_msgs::RUN_MSG_RESET_READ_PTR,
+                    dispatch_core.x,
+                    dispatch_core.y,
+                    MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(i)),
                 MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
                 device->has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
                 device->num_noc_unicast_txns(sub_device_id),
@@ -2628,7 +2661,7 @@ ExpectedNumWorkerUpdates get_expected_num_workers_completed_updates(
 }
 
 static_assert(
-    DispatchSettings::DISPATCH_MESSAGE_ENTRIES + 1 == go_message_num_entries,
+    DispatchSettings::DISPATCH_MESSAGE_ENTRIES + 1 == dev_msgs::go_message_num_entries,
     "Max number of dispatch message entries + 1 must be equal to the number of go message entries");
 
 void set_core_go_message_mapping_on_device(
@@ -2685,7 +2718,7 @@ void set_core_go_message_mapping_on_device(
 
     // Write done to all indices on all tensix cores. All cores should already be idle at this point, but they may have
     // garbage in the GO message entries they aren't using.
-    std::vector<uint32_t> go_data(go_message_num_entries, RUN_MSG_DONE);
+    std::vector<uint32_t> go_data(dev_msgs::go_message_num_entries, dev_msgs::RUN_MSG_DONE);
     TT_ASSERT(
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG) %
             MetalContext::instance().hal().get_alignment(HalMemType::L1) ==
