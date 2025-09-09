@@ -22,7 +22,7 @@ namespace fabric_router_tests::multihost {
 namespace multihost_utils {
 
 // System Types currently supported for testing
-enum class SystemConfig { SPLIT_T3K, DUAL_T3K, NANO_EXABOX };
+enum class SystemConfig { SPLIT_T3K, DUAL_T3K, NANO_EXABOX, EXABOX };
 
 // Socket Test Variants
 enum class TestVariant { SINGLE_CONN_BWD, SINGLE_CONN_FWD, MULTI_CONN_FWD, MULTI_CONN_BIDIR };
