@@ -177,9 +177,6 @@ void set_or_update_runtime_arguments(
                 b_num_tiles = bHt * bWt;  // value_true tiles per core
                 c_current_shard_width = cWt;
             }
-            // If not sharded, a_num_tiles, b_num_tiles, c_current_shard_width remain 0
-
-            uint32_t true_tensor_addr = value_true_tensor.value().buffer()->address();
 
             // Standard first 5 args + extended args for broadcast
             std::array<uint32_t, num_reader_args> reader_runtime_args{};  // zero-initialized
@@ -192,7 +189,7 @@ void set_or_update_runtime_arguments(
             reader_runtime_args[4] = start_tile_id;                                  // 4: start_id
 
             // Extended broadcast arguments
-            if (broadcast_type == WhereBroadcastType::OUTER_BCAST || broadcast_type == WhereBroadcastType::COL_BCAST) {
+            if (broadcast_type != WhereBroadcastType::NONE) {
                 reader_runtime_args[5] = aHt * aWt * aC * aN * aD * (aND > 1);   // 5: nD_stride
                 reader_runtime_args[6] = aHt * aWt * aC * aN * (aD > 1);         // 6: d_stride
                 reader_runtime_args[7] = aHt * aWt * aC * (aN > 1);              // 7: n_stride
