@@ -95,7 +95,7 @@ void check_mesh_devices_simple(
         ASSERT_TRUE(it != mesh_inst.sub_instances_local_id_to_global_id.end())
             << "Missing device local id " << local_id << " in mesh '" << mesh_name << "'";
         const auto & dev = desc.get_instance(it->second);
-        EXPECT_EQ(dev.kind, MeshGraphDescriptor::NodeKind::Device);
+        EXPECT_EQ(dev.kind, NodeKind::Device);
         EXPECT_EQ(std::string(dev.type), "DEVICE");
         EXPECT_EQ(dev.local_id, local_id);
     }
@@ -103,11 +103,11 @@ void check_mesh_devices_simple(
 
 void check_connections(
     MeshGraphDescriptor& desc,
-    const std::vector<MeshGraphDescriptor::ConnectionId>& connections,
-    const std::unordered_set<MeshGraphDescriptor::LocalNodeId>& expected_nodes,
+    const std::vector<ConnectionId>& connections,
+    const std::unordered_set<LocalNodeId>& expected_nodes,
     uint32_t expected_channel_count,
     bool expected_directional,
-    MeshGraphDescriptor::GlobalNodeId expected_parent_instance_id,
+    GlobalNodeId expected_parent_instance_id,
     const std::unordered_set<std::string>& expected_node_names
 ) {
     for (size_t idx = 0; idx < connections.size(); ++idx) {
@@ -121,7 +121,7 @@ void check_connections(
         const auto& global_nodes = connection.nodes;
 
 
-        auto dst_nodes = std::vector<MeshGraphDescriptor::GlobalNodeId>(global_nodes.begin() + 1, global_nodes.end());
+        auto dst_nodes = std::vector<GlobalNodeId>(global_nodes.begin() + 1, global_nodes.end());
         for (const auto& node : dst_nodes) {
             auto & instance = desc.get_instance(node);
             EXPECT_TRUE(expected_nodes.contains(instance.local_id))
