@@ -24,6 +24,7 @@ public:
         placements_(std::move(placements)),
         mesh_coords_(std::move(mesh_coords)) {}
 
+    // Returns the shape that the original tensor was sharded over.
     const tt::tt_metal::distributed::MeshShape& distribution_shape() const { return distribution_shape_; }
     const tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>& placements() const {
         return placements_;
