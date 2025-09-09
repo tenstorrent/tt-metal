@@ -39,12 +39,26 @@ Mesh: [
   device_topology: [1, 32],
   host_topology: [1, 1],
   host_ranks: [[0]]},
+{
+  id: 4,
+  board: Galaxy,
+  device_topology: [1, 32],
+  host_topology: [1, 1],
+  host_ranks: [[0]]},
+{
+  id: 5,
+  board: Galaxy,
+  device_topology: [1, 32],
+  host_topology: [1, 1],
+  host_ranks: [[0]]},
 ]
 galaxies:
   0: "120A3U2"
   1: "120A3U8"
   2: "120A3U14"
   3: "120A4U2"
+  4: "120A4U8"
+  5: "120A414"
 
 Graph: [
   #generated in mesh graph

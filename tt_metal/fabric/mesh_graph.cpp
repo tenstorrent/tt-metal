@@ -36,7 +36,7 @@ FabricType operator&(FabricType lhs, FabricType rhs) {
 
 namespace {
 constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
-std::string get_ubb_edge_label(int tray_id, int nid, int chan_id, MeshShape topology) {
+std::string get_ubb_edge_label(int tray_id, int asic_location, int chan_id, MeshShape topology) {
     std::map<std::tuple<int, int, int>, std::string> label_map;
 
     if (topology == MeshShape{8, 4}) {
@@ -222,52 +222,77 @@ std::string get_ubb_edge_label(int tray_id, int nid, int chan_id, MeshShape topo
         label_map[{3, 4, 3}] = "N91";
     }
 
-    auto key = std::make_tuple(tray_id, nid, chan_id);
+    auto key = std::make_tuple(tray_id, asic_location, chan_id);
     auto it = label_map.find(key);
     if (it == label_map.end()) {
         throw std::runtime_error(
-            "No label found for tray_id: " + std::to_string(tray_id) + ", nid: " + std::to_string(nid) +
-            ", chan_id: " + std::to_string(chan_id));
+            "No label found for tray_id: " + std::to_string(tray_id) +
+            ", asic_location: " + std::to_string(asic_location) + ", chan_id: " + std::to_string(chan_id));
     }
     return it->second;
 }
 
 YAML::Node get_mgd_graph_from_physical_system_descriptor(
-    tt::tt_metal::PhysicalSystemDescriptor& physical_system_desc, MeshShape topology) {
+    tt::tt_metal::PhysicalSystemDescriptor& physical_system_desc,
+    MeshShape topology,
+    std::uint32_t num_eth_ports_per_direction) {
     YAML::Node mgd_graph;
     const auto& host_to_rank = physical_system_desc.get_host_to_rank_map();
     const auto& system_graph = physical_system_desc.get_system_graph();
     const auto& asic_descriptors = physical_system_desc.get_asic_descriptors();
     auto hostnames = physical_system_desc.get_all_hostnames();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+
     for (const auto& src_host : hostnames) {
         for (const auto& dst_host : hostnames) {
             if (src_host == dst_host) {
                 continue;
             }
             auto exit_nodes = physical_system_desc.get_connecting_exit_nodes(src_host, dst_host);
+            // Group exit nodes by src_asic_desc.asic_location, currently do not support intramesh to intramesh
+            // connections mismatching
+            std::map<tt_metal::TrayID, std::map<tt_metal::ASICLocation, std::vector<tt_metal::ExitNodeConnection>>>
+                exit_nodes_by_src_asic_location;
             for (const auto& exit_node : exit_nodes) {
                 auto src_asic = exit_node.src_exit_node;
-                auto src_chan = exit_node.eth_conn.src_chan;
-                auto dst_asic = exit_node.dst_exit_node;
-                auto dst_chan = exit_node.eth_conn.dst_chan;
                 auto src_asic_desc = asic_descriptors.at(src_asic);
-                auto dst_asic_desc = asic_descriptors.at(dst_asic);
+                exit_nodes_by_src_asic_location[src_asic_desc.tray_id][src_asic_desc.asic_location].push_back(
+                    exit_node);
+            }
+            if (*(distributed_context->rank()) == 0) {
+                log_info(tt::LogFabric, "Detected {} exit nodes from {} to {}", exit_nodes.size(), src_host, dst_host);
+            }
+            for (const auto& [src_tray_id, src_asic_location_exit_nodes] : exit_nodes_by_src_asic_location) {
+                for (const auto& [src_asic_location, exit_nodes] : src_asic_location_exit_nodes) {
+                    for (const auto& exit_node : exit_nodes) {
+                        if (exit_nodes.size() == num_eth_ports_per_direction) {
+                            auto src_asic = exit_node.src_exit_node;
+                            auto src_chan = exit_node.eth_conn.src_chan;
+                            auto dst_asic = exit_node.dst_exit_node;
+                            auto dst_chan = exit_node.eth_conn.dst_chan;
+                            auto src_asic_desc = asic_descriptors.at(src_asic);
+                            auto dst_asic_desc = asic_descriptors.at(dst_asic);
 
-                YAML::Node port_0 = YAML::Node(YAML::NodeType::Sequence);
-                port_0.SetStyle(YAML::EmitterStyle::Flow);
-                port_0.push_back(host_to_rank.at(src_asic_desc.host_name));
-                port_0.push_back(get_ubb_edge_label(*src_asic_desc.tray_id, *src_asic_desc.n_id, src_chan, topology));
-                YAML::Node port_1 = YAML::Node(YAML::NodeType::Sequence);
-                port_1.SetStyle(YAML::EmitterStyle::Flow);
-                port_1.push_back(host_to_rank.at(dst_asic_desc.host_name));
-                port_1.push_back(get_ubb_edge_label(*dst_asic_desc.tray_id, *dst_asic_desc.n_id, dst_chan, topology));
+                            YAML::Node port_0 = YAML::Node(YAML::NodeType::Sequence);
+                            port_0.SetStyle(YAML::EmitterStyle::Flow);
+                            port_0.push_back(host_to_rank.at(src_asic_desc.host_name));
+                            port_0.push_back(get_ubb_edge_label(
+                                *src_asic_desc.tray_id, *src_asic_desc.asic_location, src_chan, topology));
+                            YAML::Node port_1 = YAML::Node(YAML::NodeType::Sequence);
+                            port_1.SetStyle(YAML::EmitterStyle::Flow);
+                            port_1.push_back(host_to_rank.at(dst_asic_desc.host_name));
+                            port_1.push_back(get_ubb_edge_label(
+                                *dst_asic_desc.tray_id, *dst_asic_desc.asic_location, dst_chan, topology));
 
-                YAML::Node connection_pair_fwd = YAML::Node(YAML::NodeType::Sequence);
-                connection_pair_fwd.SetStyle(YAML::EmitterStyle::Flow);
-                connection_pair_fwd.push_back(port_0);
-                connection_pair_fwd.push_back(port_1);
+                            YAML::Node connection_pair_fwd = YAML::Node(YAML::NodeType::Sequence);
+                            connection_pair_fwd.SetStyle(YAML::EmitterStyle::Flow);
+                            connection_pair_fwd.push_back(port_0);
+                            connection_pair_fwd.push_back(port_1);
 
-                mgd_graph.push_back(connection_pair_fwd);
+                            mgd_graph.push_back(connection_pair_fwd);
+                        }
+                    }
+                }
             }
         }
     }
@@ -618,7 +643,9 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         // Use the physical system descriptor to populate the inter mesh connectivity, to work around instability in
         // exabox
         graph = get_mgd_graph_from_physical_system_descriptor(
-            physical_system_desc, MeshShape(board_name_to_topology["Galaxy"][0], board_name_to_topology["Galaxy"][1]));
+            physical_system_desc,
+            MeshShape(board_name_to_topology["Galaxy"][0], board_name_to_topology["Galaxy"][1]),
+            this->chip_spec_.num_eth_ports_per_direction);
     }
     for (const auto& mesh_connection : graph) {
         TT_FATAL(mesh_connection.size() == 2, "MeshGraph: Expecting 2 elements in each Graph connection");
