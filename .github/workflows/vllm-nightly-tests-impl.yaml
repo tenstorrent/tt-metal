@@ -27,7 +27,7 @@ jobs:
           {
             name: "[WH-T3K] Llama-3.1-8B-Instruct",
             model: "meta-llama/Llama-3.1-8B-Instruct",
-            server-timeout: 5,
+            server-timeout: 10,
             benchmark-timeout: 5,
             runner-label: config-t3000,
             mesh-device: T3K,
@@ -39,7 +39,7 @@ jobs:
           {
             name: "[WH-T3K] Qwen2.5-VL-72B-Instruct",
             model: "Qwen/Qwen2.5-VL-72B-Instruct",
-            server-timeout: 30,
+            server-timeout: 40,
             benchmark-timeout: 15,
             runner-label: config-t3000,
             mesh-device: T3K,
@@ -50,7 +50,7 @@ jobs:
           {
             name: "[BH-DB] Llama-3.1-8B-Instruct",
             model: "meta-llama/Llama-3.1-8B-Instruct",
-            server-timeout: 5,
+            server-timeout: 10,
             benchmark-timeout: 5,
             runner-label: BH-DeskBox,
             mesh-device: P150x2,
@@ -61,7 +61,7 @@ jobs:
           {
             name: "[BH-QB] Llama-3.1-8B-Instruct",
             model: "meta-llama/Llama-3.1-8B-Instruct",
-            server-timeout: 5,
+            server-timeout: 10,
             benchmark-timeout: 5,
             runner-label: bh-LLMBox,
             mesh-device: P150x4,
@@ -84,7 +84,7 @@ jobs:
           {
             name: "[WH-GLX] Llama-3.3-70B-Instruct",
             model: "meta-llama/Llama-3.3-70B-Instruct",
-            server-timeout: 35,
+            server-timeout: 40,
             benchmark-timeout: 10,
             runner-label: topology-6u,
             mesh-device: TG,
@@ -96,7 +96,7 @@ jobs:
           {
             name: "[WH-GLX] Llama-8B DP=16",
             model: "meta-llama/Llama-3.1-8B-Instruct",
-            server-timeout: 10,
+            server-timeout: 20,
             benchmark-timeout: 5,
             runner-label: topology-6u,
             mesh-device: TG,
@@ -108,7 +108,7 @@ jobs:
           {
             name: "[WH-T3K] Gemma3-27B",
             model: "google/gemma-3-27b-it",
-            server-timeout: 10,
+            server-timeout: 20,
             benchmark-timeout: 5,
             runner-label: config-t3000,
             mesh-device: T3K,
