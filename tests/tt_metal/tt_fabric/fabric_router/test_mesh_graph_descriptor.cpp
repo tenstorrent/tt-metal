@@ -519,7 +519,7 @@ TEST(MeshGraphDescriptorTests, TestIntraMeshConnections) {
           name: "M0"
           arch: WORMHOLE_B0
           device_topology: { dims: [ 2, 3 ]
-                             dim_types: [ LINE, RING ] }
+                             dim_types: [ RING, LINE ] }
           channels: { count: 1 }
           host_topology: { dims: [ 2, 3 ] }
           express_connections: { src: 0 dst: 5 }
