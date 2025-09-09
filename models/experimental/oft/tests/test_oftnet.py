@@ -6,6 +6,7 @@ from models.experimental.oft.reference.oftnet import OftNet
 from models.experimental.oft.tt.tt_oftnet import TTOftNet
 from models.experimental.oft.tt.tt_resnet import TTBasicBlock
 from models.experimental.oft.reference.utils import make_grid, load_calib, load_image
+from models.experimental.oft.reference.utils import get_abs_and_relative_error
 
 from tests.ttnn.utils_for_testing import check_with_pcc
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters
@@ -23,23 +24,38 @@ from loguru import logger
     ],
 )
 @pytest.mark.parametrize(
+    "model_dtype, use_host_oft, scale_features, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
-    "use_host_oft, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     [
-       (False, 0.074, 0.105, 0.124, 0.105),  # Using device OFT
-       ( True, 0.997, 0.997, 0.997, 0.997)
+       (torch.bfloat16, False, False, 0.210, 0.533, 0.986, 0.507),  # Using device OFT without scaling
+       (torch.bfloat16, False,  True, 0.954, 0.991, 0.999, 0.850),  # Using device OFT with scaling
+       (torch.bfloat16,  True, False, 0.793, 0.891, 0.998, 0.858),
+       (torch.bfloat16,  True,  True, 0.886, 0.987, 0.999, 0.831),
+       ( torch.float32, False, False, 0.211, 0.593, 0.989, 0.632),  # Using device OFT without scaling
+       ( torch.float32, False,  True, 0.964, 0.994, 0.998, 0.806),  # Using device OFT with scaling
+       ( torch.float32,  True, False, 0.923, 0.889, 0.997, 0.931),
+       ( torch.float32,  True,  True, 0.921, 0.993, 0.998, 0.821)
     ],
     # fmt: on
-    ids=["use_device_oft", "use_host_oft"],
+    ids=[
+        "bfp16_use_device_oft_no_scaling",
+        "bfp16_use_device_oft_with_scaling",
+        "bfp16_use_host_oft_no_scaling",
+        "bfp16_use_host_oft_with_scaling",
+        "fp32_use_device_oft_no_scaling",
+        "fp32_use_device_oft_with_scaling",
+        "fp32_use_host_oft_no_scaling",
+        "fp32_use_host_oft_with_scaling",
+    ],
 )
 @pytest.mark.parametrize("checkpoints_path", [r"/home/mbezulj/checkpoint-0600.pth"])
-@pytest.mark.parametrize("model_dtype", [torch.bfloat16])
 def test_oftnet(
     device,
     checkpoints_path,
     input_image_path,
     calib_path,
     model_dtype,
+    scale_features,
     use_host_oft,
     pcc_scores_oft,
     pcc_positions_oft,
@@ -65,6 +81,7 @@ def test_oftnet(
         grid_res=grid_res,
         grid_height=grid_height,
         dtype=model_dtype,
+        scale_features=scale_features,
     )
 
     if checkpoints_path is not None and os.path.isfile(checkpoints_path):
@@ -90,12 +107,12 @@ def test_oftnet(
 
     parameters = create_OFT_model_parameters(ref_model, (input_tensor, calib, grid), device=device)
 
-    ttnn_input = input_tensor.permute((0, 2, 3, 1))
-    ttnn_input = ttnn.from_torch(ttnn_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_calib = ttnn.from_torch(
+    tt_input = input_tensor.permute((0, 2, 3, 1))
+    tt_input = ttnn.from_torch(tt_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_calib = ttnn.from_torch(
         calib, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    ttnn_grid = ttnn.from_torch(
+    tt_grid = ttnn.from_torch(
         grid, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
@@ -118,10 +135,13 @@ def test_oftnet(
         OFT_fallback=use_host_oft,
         FeedForward_fallback=False,
         Lateral_fallback=False,
+        scale_features=scale_features,
     )
 
-    outputs = ref_model(input_tensor, calib, grid)
-    tt_outputs, layer_names = tt_module.forward(device, ttnn_input, ttnn_calib, ttnn_grid)
+    outputs, scores, pos_offsets, dim_offsets, ang_offsets = ref_model(input_tensor, calib, grid)
+    (tt_outputs, layer_names), tt_scores, tt_pos_offsets, tt_dim_offsets, tt_ang_offsets = tt_module.forward(
+        device, tt_input, tt_calib, tt_grid
+    )
 
     all_passed = True
     PCC_THRESHOLD = 0.990
@@ -132,70 +152,29 @@ def test_oftnet(
         else:
             # logger.debug(f"Output {i} is not a ttnn.Tensor, skipping conversion")
             tt_out_torch = tt_out.reshape(out.shape)  # assume it's already a torch tensor in the right format
-        passed, pcc = check_with_pcc(tt_out_torch, out, PCC_THRESHOLD)
+        passed, pcc = check_with_pcc(out, tt_out_torch, PCC_THRESHOLD)
+        abs, rel = get_abs_and_relative_error(out, tt_out_torch)
+
         all_passed = all_passed and passed
         special_char = "✅" if passed else "❌"
-        logger.warning(f"{special_char} Output {i} {layer_name}: {passed=}, {pcc=}")
+        logger.warning(f"{special_char} Intermediate {i} {layer_name}: {passed=}, {pcc=}, {abs=:.3f}, {rel=:.3f}")
 
-        # if (i == 9):
-        #     # this is one of the bbox_corener outputs
-        #     # Print statistics for bbox_corner output
-        #     out = out.to(dtype=torch.float32)
-        #     tt_out_torch = tt_out_torch.to(dtype=torch.float32)
-        #     logger.info(f"Output {i} statistics:")
-        #     logger.info(f"Reference: min={out.min().item():.6f}, max={out.max().item():.6f}, mean={out.mean().item():.6f}, std={out.std().item():.6f}")
-        #     logger.info(f"TT model: min={tt_out_torch.min().item():.6f}, max={tt_out_torch.max().item():.6f}, mean={tt_out_torch.mean().item():.6f}, std={tt_out_torch.std().item():.6f}")
+    tt_scores = ttnn.to_torch(tt_scores)
+    tt_pos_offsets = ttnn.to_torch(tt_pos_offsets)
+    tt_dim_offsets = ttnn.to_torch(tt_dim_offsets)
+    tt_ang_offsets = ttnn.to_torch(tt_ang_offsets)
 
-        #     # Create visualization of the bbox_corner outputs
-        #     import matplotlib.pyplot as plt
+    all_passed = []
+    ref_outs = [scores, pos_offsets, dim_offsets, ang_offsets]
+    tt_outs = [tt_scores, tt_pos_offsets, tt_dim_offsets, tt_ang_offsets]
+    names = ["scores", "pos_offsets", "dim_offsets", "ang_offsets"]
+    expected_pcc = [pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft]
+    for i, (out, tt_out, layer_name, exp_pcc) in enumerate(zip(ref_outs, tt_outs, names, expected_pcc)):
+        tt_out_torch = tt_out.reshape(out.shape)  # assume it's already a torch tensor in the right format
+        passed, pcc = check_with_pcc(out, tt_out_torch, exp_pcc)
+        abs, rel = get_abs_and_relative_error(out, tt_out_torch)
 
-        #     # Shape is [1,7,25281,2]
-        #     fig, axs = plt.subplots(2, 7, figsize=(20, 6))
-        #     fig.suptitle(f"Output {i}: {layer_name} Comparison")
-
-        #     for col in range(out.shape[1]):  # 7 columns
-        #         for row in range(out.shape[3]):  # 2 rows
-        #             ref_data = out[0, col, :, row].detach().cpu().numpy()
-        #             tt_data = tt_out_torch[0, col, :, row].detach().cpu().numpy()
-
-        #             ax = axs[row, col]
-        #             ax.scatter(np.arange(len(ref_data)), ref_data, s=1, alpha=0.5, label="Reference", color='blue')
-        #             ax.scatter(np.arange(len(tt_data)), tt_data, s=1, alpha=0.5, label="TT model", color='red')
-        #             ax.set_title(f"col={col}, row={row}")
-
-        #             if col == 0:
-        #                 ax.set_ylabel("Value")
-        #             if row == 1:
-        #                 ax.set_xlabel("Index")
-
-        #     # Add a common legend
-        #     handles, labels = axs[0, 0].get_legend_handles_labels()
-        #     fig.legend(handles, labels, loc='upper right')
-
-        #     plt.tight_layout()
-        #     output_dir = os.path.dirname(os.path.abspath(__file__))
-        #     output_path = os.path.join(output_dir, f"output_{i}_{layer_name}.png")
-        #     plt.savefig(output_path)
-        #     plt.close(fig)
-        #     logger.info(f"Saved visualization to {output_path}")
-    assert all_passed, "Failed PCC OFTNet"
-
-    # scores, pos_offsets, dim_offsets, ang_offsets = outputs
-    # tt_scores, tt_pos_offsets, tt_dim_offsets, tt_ang_offsets = tt_outputs
-    # tt_scores = ttnn.to_torch(tt_scores)
-    # tt_pos_offsets = ttnn.to_torch(tt_pos_offsets)
-    # tt_dim_offsets = ttnn.to_torch(tt_dim_offsets)
-    # tt_ang_offsets = ttnn.to_torch(tt_ang_offsets)
-
-    # scores_pcc_passed, scores_pcc = check_with_pcc(tt_scores, scores, pcc_scores_oft)
-    # logger.info(f"{scores_pcc_passed=}, {scores_pcc=}")
-    # positions_pcc_passed, positions_pcc = check_with_pcc(tt_pos_offsets, pos_offsets, pcc_positions_oft)
-    # logger.info(f"{positions_pcc_passed=}, {positions_pcc=}")
-    # dimensions_pcc_passed, dimensions_pcc = check_with_pcc(tt_dim_offsets, dim_offsets, pcc_dimensions_oft)
-    # logger.info(f"{dimensions_pcc_passed=}, {dimensions_pcc=}")
-    # angles_pcc_passed, angles_pcc = check_with_pcc(tt_ang_offsets, ang_offsets, pcc_angles_oft)
-    # logger.info(f"{angles_pcc_passed=}, {angles_pcc=}")
-
-    # assert (
-    #     scores_pcc_passed and positions_pcc_passed and dimensions_pcc_passed and angles_pcc_passed
-    # ), f"Failed PCC OFT {scores_pcc_passed=}, {positions_pcc_passed=}, {dimensions_pcc_passed=}, {angles_pcc_passed=}"
+        all_passed.append(passed)
+        special_char = "✅" if passed else "❌"
+        logger.warning(f"{special_char} Output {i} {layer_name}: {passed=}, {pcc=}, {abs=:.3f}, {rel=:.3f}")
+    assert all(all_passed), f"OFTnet outputs did not pass the PCC check {all_passed=}"

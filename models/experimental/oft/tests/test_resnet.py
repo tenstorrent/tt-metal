@@ -5,9 +5,12 @@
 import torch
 import ttnn
 import pytest
+import os
+from models.experimental.oft.reference.utils import get_abs_and_relative_error
 from models.experimental.oft.reference.resnet import resnet18
 from models.experimental.oft.tt.tt_resnet import TTBasicBlock, TTResNetFeatures
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.experimental.oft.reference.utils import load_image
+from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 
 # from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters_resnet
@@ -15,20 +18,27 @@ from loguru import logger
 
 
 @pytest.mark.parametrize(
-    "input_shape, layers",
+    "input_shape, layers, expected_pcc",
     [
-        ((1, 3, 384, 1280), [2, 2, 2, 2]),  # ResNet-18
-        # ((2, 3, 128, 128), [2, 2, 2, 2]),  # batch size2
+        ((1, 3, 384, 1280), [2, 2, 2, 2], (0.996, 0.995, 0.993)),  # ResNet-18
+    ],
+)
+@pytest.mark.parametrize(
+    "input_image_path",
+    [
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000022.jpg")),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
-def test_resnetfeatures_forward(device, input_shape, layers):
+def test_resnetfeatures_forward(device, input_image_path, input_shape, layers, expected_pcc):
     torch.manual_seed(0)
-    model = resnet18(pretrained=False)
-    torch_tensor = torch.randn(*input_shape)
+
+    torch_tensor = load_image(input_image_path, pad_hw=(input_shape[-2], input_shape[-1]), dtype=torch.float32)[None]
+
+    model = resnet18(pretrained=False, return_intermediates=True)  # .to(torch.bfloat16) - to debug
 
     params = create_OFT_model_parameters_resnet(model, torch_tensor, device)
-    feats8, feats16, feats32 = model.forward(torch_tensor)
+    ref_intermediates, feats8, feats16, feats32 = model.forward(torch_tensor)
 
     n, c, h, w = feats8.shape
     feats8 = feats8.permute(0, 2, 3, 1)
@@ -50,8 +60,10 @@ def test_resnetfeatures_forward(device, input_shape, layers):
         params.conv_args,
         TTBasicBlock,
         layers,
+        return_intermediates=True,
     )
-    ttnn_feats8, ttnn_feats16, ttnn_feats32 = tt_module.forward(device, ttnn_input)
+    ttnn_intermediates, ttnn_feats8, ttnn_feats16, ttnn_feats32 = tt_module.forward(device, ttnn_input)
+
     logger.info("-----------------------------------------")
     logger.info(
         f"TTNN feats8 shape: {ttnn_feats8.shape} dtype: {ttnn_feats8.dtype}, layout: {ttnn_feats8.layout}, memory_config: {ttnn_feats8.memory_config()}"
@@ -59,7 +71,7 @@ def test_resnetfeatures_forward(device, input_shape, layers):
     logger.info(
         f"TTNN feats16 shape: {ttnn_feats16.shape} dtype: {ttnn_feats16.dtype},layout: {ttnn_feats16.layout}, memory_config: {ttnn_feats16.memory_config()}"
     )
-    logger.infot(
+    logger.info(
         f"TTNN feats32 shape: {ttnn_feats32.shape} dtype: {ttnn_feats32.dtype},layout: {ttnn_feats32.layout}, memory_config: {ttnn_feats32.memory_config()}"
     )
     logger.info("------------------------------------------")
@@ -69,9 +81,23 @@ def test_resnetfeatures_forward(device, input_shape, layers):
     logger.info(f"TTNN feats16 shape: {ttnn_feats16.shape}")
     ttnn_feats32 = ttnn.to_torch(ttnn_feats32)
 
-    message, pcc = assert_with_pcc(ttnn_feats8, feats8, 0.99)
+    for i, (ref_tensor, ttnn_tensor, name, pcc) in enumerate(
+        zip(
+            [*ref_intermediates, feats8, feats16, feats32],
+            [*ttnn_intermediates, ttnn_feats8, ttnn_feats16, ttnn_feats32],
+            ["x", "conv1f", "gn", "relu", "conv1mp", "feats8", "feats16", "feats32"],
+            [0.999, 0.999, 0.999, 0.999, 0.999, expected_pcc[0], expected_pcc[1], expected_pcc[2]],
+        )
+    ):
+        ttnn_tensor = ttnn_tensor.reshape(ref_tensor.shape)
+        abs, rel = get_abs_and_relative_error(ref_tensor, ttnn_tensor)
+        passed, pcc = check_with_pcc(ref_tensor, ttnn_tensor, pcc=pcc)
+        special_char = "✅" if passed else "❌"
+        logger.info(f"{special_char} Output {i} {name}: {pcc=} {abs=:.3f}, {rel=:.3f}")
+
+    message, pcc = assert_with_pcc(ttnn_feats8, feats8, expected_pcc[0])
     logger.info(f"Passing: {message}, PCC: {pcc}")
-    message, pcc = assert_with_pcc(ttnn_feats16, feats16, 0.99)
+    message, pcc = assert_with_pcc(ttnn_feats16, feats16, expected_pcc[1])
     logger.info(f"Passing: {message}, PCC: {pcc}")
-    message, pcc = assert_with_pcc(ttnn_feats32, feats32, 0.99)
+    message, pcc = assert_with_pcc(ttnn_feats32, feats32, expected_pcc[2])
     logger.info(f"Passing: {message}, PCC: {pcc}")

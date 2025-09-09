@@ -76,7 +76,9 @@ class BasicBlock(nn.Module):
 
 
 class ResNetFeatures(nn.Module):
-    def __init__(self, block, layers, num_classes=1000, zero_init_residual=False, dtype=torch.float32):
+    def __init__(
+        self, block, layers, num_classes=1000, zero_init_residual=False, dtype=torch.float32, return_intermediates=False
+    ):
         super(ResNetFeatures, self).__init__()
         self.inplanes = 64
         self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False, dtype=dtype)
@@ -100,6 +102,8 @@ class ResNetFeatures(nn.Module):
                 if isinstance(m, BasicBlock):
                     nn.init.constant_(m.bn2.weight, 0)
 
+        self.return_intermediates = return_intermediates
+
         # Convert all parameters and buffers to the specified dtype using PyTorch's to() method
         self.to(dtype)
 
@@ -116,15 +120,25 @@ class ResNetFeatures(nn.Module):
         if x.dtype != self.dtype:
             x = x.to(self.dtype)
 
-        conv1 = F.relu(self.bn1(self.conv1(x)), inplace=True)
+        ref_x = x.clone()
+        conv1f = self.conv1(x)
+        ref_conv1f = conv1f.clone()
+        gn = self.bn1(conv1f)
+        ref_gn = gn.clone()
+        conv1 = F.relu(gn, inplace=True)
+        ref_conv1 = conv1.clone()
         conv1 = F.max_pool2d(conv1, 3, stride=2, padding=1)
+        ref_conv1_maxpool = conv1.clone()
 
         feats4 = self.layer1(conv1)
         feats8 = self.layer2(feats4)
         feats16 = self.layer3(feats8)
         feats32 = self.layer4(feats16)
 
-        return feats8, feats16, feats32
+        if self.return_intermediates:
+            return [ref_x, ref_conv1f, ref_gn, ref_conv1, ref_conv1_maxpool], feats8, feats16, feats32
+        else:
+            return feats8, feats16, feats32
 
 
 def resnet18(pretrained=False, dtype=torch.float32, **kwargs):

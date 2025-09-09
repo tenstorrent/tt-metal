@@ -1,4 +1,5 @@
 import ttnn
+import torch
 from models.experimental.oft.tt.common import Conv, GroupNorm
 from models.experimental.oft.tt.tt_resnet import TTResNetFeatures
 from models.experimental.oft.tt.tt_oft import OFT as TtOFT
@@ -33,6 +34,7 @@ class TTOftNet:
         FeedForward_fallback=False,
         Lateral_fallback=False,
         OFT_fallback=False,
+        scale_features=False,
     ):
         self.frontend = TTResNetFeatures(device, parameters.frontend, conv_pt.frontend, block, layers)
         self.lat8 = Conv(parameters.lat8, conv_pt.lat8, output_layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -102,6 +104,18 @@ class TTOftNet:
         self.std = ttnn.from_torch(
             std, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
+
+        self.scale_features = scale_features
+        if scale_features:
+            self.scale_lat8 = ttnn.from_torch(
+                torch.tensor(1.0 / (48.0 * 160.0 * 8.0)), dtype=ttnn.bfloat16, device=device
+            )
+            self.scale_lat16 = ttnn.from_torch(
+                torch.tensor(1.0 / (24.0 * 80.0 * 8.0)), dtype=ttnn.bfloat16, device=device
+            )
+            self.scale_lat32 = ttnn.from_torch(
+                torch.tensor(1.0 / (12.0 * 40.0 * 8.0)), dtype=ttnn.bfloat16, device=device
+            )
 
         self.host_fallback_model = host_fallback_model
         self.OFT_fallback = OFT_fallback
@@ -348,6 +362,7 @@ class TTOftNet:
                 feats32_torch.permute((0, 2, 3, 1)), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
             )
         else:
+            # feats8, feats16, feats32 = self.frontend.forward(device, normalized_input)
             feats8, feats16, feats32 = self.frontend.forward(device, normalized_input)
 
         # Apply lateral layers
@@ -373,6 +388,12 @@ class TTOftNet:
             )
         else:
             lat8, lat16, lat32 = self.forward_lateral_layers(device, feats8, feats16, feats32)
+
+        # ##### to move this to initialization
+        if self.scale_features:
+            lat8 = ttnn.mul(lat8, self.scale_lat8)
+            lat16 = ttnn.mul(lat16, self.scale_lat16)
+            lat32 = ttnn.mul(lat32, self.scale_lat32)
 
         # Apply OFT transformation
         import torch  # HACK
@@ -468,71 +489,70 @@ class TTOftNet:
         signpost(header="OftNet finished")
 
         return (
-            feats8,
-            feats16,
-            feats32,
-            lat8,
-            lat16,
-            lat32,
-            integral_img8,
-            integral_img16,
-            integral_img32,
-            bbox_top_left8,
-            bbox_btm_right8,
-            bbox_top_right8,
-            bbox_btm_left8,
-            bbox_top_left16,
-            bbox_btm_right16,
-            bbox_top_right16,
-            bbox_btm_left16,
-            bbox_top_left32,
-            bbox_btm_right32,
-            bbox_top_right32,
-            bbox_btm_left32,
-            ortho8,
-            ortho16,
-            ortho32,
-            ortho,
-            calib_torch,
-            grid_torch,
-            td,
-            ttnn.to_torch(tt_scores),  # just a hack to avoid hardcoded permute
-            ttnn.to_torch(tt_pos_offsets),  # just a hack to avoid hardcoded permute
-            ttnn.to_torch(tt_dim_offsets),  # just a hack to avoid hardcoded permute
-            ttnn.to_torch(tt_ang_offsets),  # just a hack to avoid hardcoded permute
-        ), (
-            "feats8",
-            "feats16",
-            "feats32",
-            "lat8",
-            "lat16",
-            "lat32",
-            "integral_img8",
-            "integral_img16",
-            "integral_img32",
-            "bbox_top_left8",
-            "bbox_btm_right8",
-            "bbox_top_right8",
-            "bbox_btm_left8",
-            "bbox_top_left16",
-            "bbox_btm_right16",
-            "bbox_top_right16",
-            "bbox_btm_left16",
-            "bbox_top_left32",
-            "bbox_btm_right32",
-            "bbox_top_right32",
-            "bbox_btm_left32",
-            "ortho8",
-            "ortho16",
-            "ortho32",
-            "ortho",
-            "calib",
-            "grid",
-            "td",
-            "scores",
-            "pos_offsets",
-            "dim_offsets",
-            "ang_offsets",
+            [
+                (
+                    feats8,
+                    feats16,
+                    feats32,
+                    lat8,
+                    lat16,
+                    lat32,
+                    integral_img8,
+                    integral_img16,
+                    integral_img32,
+                    ttnn.to_torch(bbox_top_left8) if self.OFT_fallback == False else bbox_top_left8,
+                    ttnn.to_torch(bbox_btm_right8) if self.OFT_fallback == False else bbox_btm_right8,
+                    ttnn.to_torch(bbox_top_right8) if self.OFT_fallback == False else bbox_top_right8,
+                    ttnn.to_torch(bbox_btm_left8) if self.OFT_fallback == False else bbox_btm_left8,
+                    ttnn.to_torch(bbox_top_left16) if self.OFT_fallback == False else bbox_top_left16,
+                    ttnn.to_torch(bbox_btm_right16) if self.OFT_fallback == False else bbox_btm_right16,
+                    ttnn.to_torch(bbox_top_right16) if self.OFT_fallback == False else bbox_top_right16,
+                    ttnn.to_torch(bbox_btm_left16) if self.OFT_fallback == False else bbox_btm_left16,
+                    ttnn.to_torch(bbox_top_left32) if self.OFT_fallback == False else bbox_top_left32,
+                    ttnn.to_torch(bbox_btm_right32) if self.OFT_fallback == False else bbox_btm_right32,
+                    ttnn.to_torch(bbox_top_right32) if self.OFT_fallback == False else bbox_top_right32,
+                    ttnn.to_torch(bbox_btm_left32) if self.OFT_fallback == False else bbox_btm_left32,
+                    ortho8,
+                    ortho16,
+                    ortho32,
+                    ortho,
+                    calib_torch,
+                    grid_torch,
+                    td,
+                ),
+                (
+                    "feats8",
+                    "feats16",
+                    "feats32",
+                    "lat8",
+                    "lat16",
+                    "lat32",
+                    "integral_img8",
+                    "integral_img16",
+                    "integral_img32",
+                    "bbox_top_left8",
+                    "bbox_btm_right8",
+                    "bbox_top_right8",
+                    "bbox_btm_left8",
+                    "bbox_top_left16",
+                    "bbox_btm_right16",
+                    "bbox_top_right16",
+                    "bbox_btm_left16",
+                    "bbox_top_left32",
+                    "bbox_btm_right32",
+                    "bbox_top_right32",
+                    "bbox_btm_left32",
+                    "ortho8",
+                    "ortho16",
+                    "ortho32",
+                    "ortho",
+                    "calib",
+                    "grid",
+                    "td",
+                ),
+            ],
+            tt_scores,
+            tt_pos_offsets,
+            tt_dim_offsets,
+            tt_ang_offsets,
         )
-
-        return parts

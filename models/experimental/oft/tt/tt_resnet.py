@@ -92,7 +92,7 @@ class TTBasicBlock:
 
 
 class TTResNetFeatures:
-    def __init__(self, device, parameters, conv_pt, block, layers):
+    def __init__(self, device, parameters, conv_pt, block, layers, return_intermediates=False):
         self.inplanes = 64
 
         self.conv1 = Conv(parameters.conv1, conv_pt.conv1, stride=2, padding=3)
@@ -118,6 +118,7 @@ class TTResNetFeatures:
             layers[3],
             stride=2,
         )
+        self.return_intermediates = return_intermediates
 
     def _make_layer(self, device, parameters, conv_pt, block, planes, blocks, stride=1):
         layers = []
@@ -153,12 +154,17 @@ class TTResNetFeatures:
     def forward(self, device, x):
         if use_signpost:
             signpost(header="ResNet module started")
+
+        host_x = ttnn.to_torch(x).permute(0, 3, 1, 2)
         conv1, out_h, out_w = self.conv1(device, x)
+        host_conv1f = ttnn.to_torch(conv1).permute(0, 3, 1, 2)
 
         conv1 = ttnn.to_layout(conv1, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         conv1 = self.bn1(device, conv1, out_h, out_w, num_splits=10)
-
+        conv1 = ttnn.to_layout(conv1, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        host_gn = ttnn.to_torch(conv1).permute(0, 3, 1, 2)
         conv1 = ttnn.relu(conv1)
+        host_relu = ttnn.to_torch(conv1).permute(0, 3, 1, 2)
 
         cv1 = conv1[:, :, :, :32]  # Assuming conv1 has shape [N, H, W, C] and we want to keep the first 32 channels
         cv2 = conv1[:, :, :, 32:]  # The rest of the channels
@@ -194,6 +200,8 @@ class TTResNetFeatures:
         ttnn.deallocate(conv1)
         ttnn.deallocate(conv2)
         conv_c = ttnn.move(conv_c)
+
+        host_mp = ttnn.to_torch(conv_c).permute(0, 3, 1, 2)
         feats4 = self._run_layer(device, conv_c, self.layer1)
 
         ttnn.deallocate(conv_c)
@@ -210,4 +218,13 @@ class TTResNetFeatures:
 
         if use_signpost:
             signpost(header="ResNet module finished")
-        return feats8_interleaved, feats16_interleaved, feats32_interleaved
+
+        if self.return_intermediates:
+            return (
+                [host_x, host_conv1f, host_gn, host_relu, host_mp],
+                feats8_interleaved,
+                feats16_interleaved,
+                feats32_interleaved,
+            )
+        else:
+            return feats8_interleaved, feats16_interleaved, feats32_interleaved
