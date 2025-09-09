@@ -20,8 +20,6 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/welford.h"
-#include "debug/dprint.h"
-#include "debug/dprint_tensix.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -201,7 +199,6 @@ void MAIN {
                         transpose_wh_init_short(cb_in0);
                         transpose_wh_tile(cb_in0, index, 0);
 #endif
-                        dprint_tensix_dest_reg(0);
                         welford_tile<0, 1, 2, false, false>(curr_xy_coord, curr_xy_limit, this_tile_offset, 0);
                         curr_xy_coord += std::min(32 - this_tile_offset, curr_xy_limit - curr_xy_coord);
                     }
@@ -219,7 +216,6 @@ void MAIN {
             pack_tile_block(1, cb_ex_partial, 2);
             tile_regs_release();
             cb_push_back(cb_ex_partial, 2);
-            DPRINT << "welford done" << ENDL();
 
             // x - E[x]
             reconfig_data_format_srcb(cb_x, cb_ex_global);
@@ -242,7 +238,6 @@ void MAIN {
 #else
                         sub_tiles_bcast_scalar(cb_in0, cb_ex_global, index, 0, w);
 #endif
-                        dprint_tensix_dest_reg(w);
                     }
                     tile_regs_commit();
                     cb_reserve_back(cb_x, subblock_w);
@@ -256,7 +251,6 @@ void MAIN {
                 }
                 index_h_offset += per_core_N;
             }
-            DPRINT << "xmm done" << ENDL();
 
             // Mask out the garbage values
             reconfig_data_format_srcb(cb_ex_global, cb_input_mask);
@@ -287,7 +281,6 @@ void MAIN {
             }
             cb_pop_front(cb_input_mask, block_w);
             reconfig_data_format_srcb(cb_input_mask, cb_eps);
-            DPRINT << "Mask done" << ENDL();
 
             // (Var + eps)
             cb_wait_front(cb_eps, 1);
@@ -307,7 +300,6 @@ void MAIN {
             tile_regs_release();
             cb_push_back(cb_ex2pe, 1);
             cb_pop_front(cb_ex_global, 2);
-            DPRINT << "ex2pe done" << ENDL();
 
             //  (x - Ex) * 1/[sqrt(Var + eps)]
             mul_tiles_bcast_scalar_init_short(cb_x, cb_ex2pe);
@@ -335,7 +327,6 @@ void MAIN {
                 }
             }
             cb_pop_front(cb_ex2pe, 1);
-            DPRINT << "norm done" << ENDL();
             cb_wait_front(cb_x, block_hw);
             //  add or copy with previous output results
             uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
