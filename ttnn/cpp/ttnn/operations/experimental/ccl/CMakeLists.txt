@@ -25,6 +25,7 @@ target_sources(
             send_recv_async/recv_async/device/kernels/receiver_reader.cpp
     PRIVATE
         llama_common.cpp
+        common.cpp
         ring_attention_all_gather_async/ring_attention_all_gather_async.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_program.cpp
