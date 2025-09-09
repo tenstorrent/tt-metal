@@ -24,7 +24,8 @@ if "TT_METAL_PROFILER_DIR" in ENVS.keys():
     PROFILER_ARTIFACTS_DIR = Path(ENVS["TT_METAL_PROFILER_DIR"])
 
 
-PROFILER_BIN_DIR = TT_METAL_HOME / "build/tools/profiler/bin"
+# PROFILER_BIN_DIR = TT_METAL_HOME / "build/tools/profiler/bin"
+PROFILER_BIN_DIR = TT_METAL_HOME / "../Tracy/tt-metal/tools/profiler/bin"
 
 TRACY_OPS_TIMES_FILE_NAME = "tracy_ops_times.csv"
 TRACY_OPS_DATA_FILE_NAME = "tracy_ops_data.csv"
