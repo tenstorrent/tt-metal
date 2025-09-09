@@ -192,7 +192,7 @@ jobs:
           # Keep TT cache separate from HF hub
           export HF_MODEL="${{ matrix.test-group.model }}"
           MODEL_NAME="${HF_MODEL/\//--}"
-          export TT_CACHE_PATH="$HF_HOME/tt_cache/$MODEL_NAME"
+          export TT_CACHE_PATH="vllm/tt_cache"
 
           # vLLM environment variables
           export VLLM_RPC_TIMEOUT=300000
@@ -234,7 +234,6 @@ jobs:
             --backend vllm \
             --model ${{ matrix.test-group.model }} \
             --num-prompts 32 \
-            --output-len 100 \
             --percentile-metrics ttft,tpot,itl,e2el \
             --save-result \
             --result-filename output/vllm_result.json \
