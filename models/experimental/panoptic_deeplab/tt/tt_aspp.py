@@ -3,16 +3,14 @@
 
 from math import floor
 import torch.nn as nn
-import torch
 
 import ttnn
+from typing import Any
 from loguru import logger
 
 from models.experimental.panoptic_deeplab.tt.tt_conv2d_wrapper import (
     TtConv2d,
     TtConv2dParameters,
-    SliceConfig,
-    SliceMode,
 )
 from models.experimental.panoptic_deeplab.tt.tt_upsample_wrapper import TtUpsample
 
@@ -27,7 +25,7 @@ def get_ttnn_activation(activation_name: str):
         raise NotImplementedError(f"Activation '{activation_name}' not supported in ttnn.")
 
 
-def get_ttnn_norm(norm_name: str, num_channels: int, device, norm_params: dict = None):
+def get_ttnn_norm(norm_name: str, num_channels: int, device, norm_params: Any = None):
     """
     Returns a ttnn normalization function.
 
@@ -41,30 +39,10 @@ def get_ttnn_norm(norm_name: str, num_channels: int, device, norm_params: dict =
     if norm_name.lower() in ["bn", "syncbn", "batchnorm"]:
         # BatchNorm / SyncBN implementation
         if norm_params is not None:
-            weight = ttnn.from_torch(
-                norm_params.get("weight", torch.ones(num_channels, dtype=torch.bfloat16)).view(1, -1, 1, 1),
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-            )
-            bias = ttnn.from_torch(
-                norm_params.get("bias", torch.zeros(num_channels, dtype=torch.bfloat16)).view(1, -1, 1, 1),
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-            )
-            running_mean = ttnn.from_torch(
-                norm_params.get("running_mean", torch.zeros(num_channels, dtype=torch.bfloat16)).view(1, -1, 1, 1),
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-            )
-            running_var = ttnn.from_torch(
-                norm_params.get("running_var", torch.ones(num_channels, dtype=torch.bfloat16)).view(1, -1, 1, 1),
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-            )
+            weight = norm_params.weight
+            bias = norm_params.bias
+            running_mean = norm_params.running_mean
+            running_var = norm_params.running_var
         else:
             weight = ttnn.ones((1, num_channels, 1, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
             bias = ttnn.zeros((1, num_channels, 1, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
@@ -114,18 +92,18 @@ def get_ttnn_norm(norm_name: str, num_channels: int, device, norm_params: dict =
 class TtASPP(nn.Module):
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        dilations,
-        device: ttnn.MeshDevice,
+        # NOVO: Potpuno promijenjen __init__ potpis
+        parameters,
+        device: ttnn.Device,
         *,
-        norm,
-        activation,
+        # Konfiguracioni parametri ostaju
+        in_channels: int,
+        out_channels: int,
+        dilations,
+        norm: str,
+        activation: str,
         dropout: float = 0.0,
         pool_kernel_size,
-        shared_weight_tensor_kernel1: torch.Tensor,
-        shared_weight_tensor_kernel3: torch.Tensor,
-        shared_weight_tensor_kernel1_output5: torch.Tensor,
     ):
         super(TtASPP, self).__init__()
         logger.debug(
@@ -134,99 +112,82 @@ class TtASPP(nn.Module):
         assert len(dilations) == 3, "ASPP expects 3 dilations, got {}".format(len(dilations))
         self.dropout = dropout
         use_bias = False
-        self.conv_branches = []
 
         self.activation = get_ttnn_activation(activation)
         self.device = device
         self.pool_kernel_size = pool_kernel_size
 
-        self.shared_weight_tensor_kernel1 = shared_weight_tensor_kernel1
-        self.shared_weight_tensor_kernel3 = shared_weight_tensor_kernel3
-        self.shared_weight_tensor_kernel1_output5 = shared_weight_tensor_kernel1_output5
+        # --- NOVO: Kreiranje slojeva iz 'parameters' objekta ---
 
-        def create_ttconv2d(
-            out_channels, kernel_size, stride, padding, channel_slice_num, dilation=1, bias=False, isProjectConv=False
-        ):
-            if kernel_size == 1 and isProjectConv:
-                weight = self.shared_weight_tensor_kernel1_output5
-            elif kernel_size == 3:
-                weight = self.shared_weight_tensor_kernel3
-            else:
-                weight = self.shared_weight_tensor_kernel1
-            param_dict = {
-                "weight": weight,
-                "dilation": (dilation, dilation),
-            }
-            if bias:
-                param_dict["bias"] = torch.empty(1, 1, 1, out_channels, dtype=torch.bfloat16)
+        self.conv_branches = []
 
-            # Create slice configuration
-            slice_config = None
-            if channel_slice_num > 1:
-                slice_config = SliceConfig(mode=SliceMode.CHANNEL, num_slices=channel_slice_num)
+        # --- ISPRAVKA OVDJE ---
+        # Grana 1: 1x1 konvolucija
+        conv0_path = parameters.convs[0]
+        conv0_bias = conv0_path.bias if "bias" in conv0_path else None
 
-            parameters = TtConv2dParameters.from_torch(param_dict, device=self.device, slice_config=slice_config)
-
-            return TtConv2d(parameters, stride=stride, padding=padding)
-
-        # 1x1 conv
-        conv = create_ttconv2d(
-            out_channels=out_channels,
-            kernel_size=1,
-            stride=(1, 1),
-            padding=(0, 0),
-            dilation=1,
-            channel_slice_num=1,
-            bias=use_bias,
+        conv0_params = TtConv2dParameters(
+            weight=conv0_path.weight,
+            bias=conv0_bias,
+            device=self.device,
         )
-        norm_func = get_ttnn_norm(norm, out_channels, device=self.device, norm_params=None)
-        self.conv_branches.append((conv, norm_func))
+        conv0 = TtConv2d.create(conv0_params, stride=(1, 1), padding=(0, 0))
 
+        norm0_params = parameters.convs[0].norm if "norm" in parameters.convs[0] else None
+        norm0 = get_ttnn_norm(norm, out_channels, device=self.device, norm_params=norm0_params)
+        self.conv_branches.append((conv0, norm0))
+
+        # --- ISPRAVKA OVDJE ---
+        # Grane 2, 3, 4: 3x3 konvolucije sa dilatacijama
         channel_slices = [2, 4, 8]
-        i = 0
-        # Dilations convs
-        for dilation in dilations:
-            channel_slice_num = channel_slices[i]
-            i += 1
-            conv = create_ttconv2d(
-                out_channels=out_channels,
-                kernel_size=3,
-                stride=(1, 1),
-                padding=(dilation, dilation),
-                dilation=dilation,
-                channel_slice_num=channel_slice_num,
-                bias=use_bias,
+
+        for i, dilation in enumerate(dilations):
+            conv_idx = i + 1
+            conv_params_path = parameters.convs[conv_idx]
+
+            conv_bias = conv_params_path.bias if "bias" in conv_params_path else None
+            conv_params = TtConv2dParameters(
+                weight=conv_params_path.weight, bias=conv_bias, device=self.device, dilation=(dilation, dilation)
             )
-            norm_func = get_ttnn_norm(norm, out_channels, device=self.device, norm_params=None)
+            conv = TtConv2d.create_with_channel_slicing(
+                conv_params, stride=(1, 1), padding=(dilation, dilation), num_slices=channel_slices[i]
+            )
+
+            norm_params = conv_params_path.norm if "norm" in conv_params_path else None
+            norm_func = get_ttnn_norm(norm, out_channels, device=self.device, norm_params=norm_params)
             self.conv_branches.append((conv, norm_func))
 
-        # Global pooling conv
-        self.pool_conv = create_ttconv2d(
-            out_channels=out_channels,
-            kernel_size=1,
-            stride=(1, 1),
-            padding=(0, 0),
-            dilation=1,
-            channel_slice_num=1,
-            bias=False,
+        # --- ISPRAVKA OVDJE ---
+        # Grana 5: Global pooling
+        pool_conv_path = parameters.aspp_pool[1]
+        pool_conv_bias = pool_conv_path.bias if "bias" in pool_conv_path else None
+        pool_conv_params = TtConv2dParameters(
+            weight=pool_conv_path.weight,
+            bias=pool_conv_bias,
+            device=self.device,
         )
+        self.pool_conv = TtConv2d.create(pool_conv_params, stride=(1, 1), padding=(0, 0))
 
-        # Project conv to concatenate all branches
-        self.project_conv = create_ttconv2d(
-            out_channels=out_channels,
-            kernel_size=1,
-            stride=(1, 1),
-            padding=(0, 0),
-            dilation=1,
-            channel_slice_num=1,
-            bias=use_bias,
-            isProjectConv=True,
+        pool_norm_params = pool_conv_path.norm if "norm" in pool_conv_path else None
+        self.pool_norm = get_ttnn_norm(norm, out_channels, device=self.device, norm_params=pool_norm_params)
+
+        # --- ISPRAVKA OVDJE ---
+        # Finalna Project konvolucija
+        project_conv_path = parameters.project_conv
+        project_conv_bias = project_conv_path.bias if "bias" in project_conv_path else None
+        project_conv_params = TtConv2dParameters(
+            weight=project_conv_path.weight,
+            bias=project_conv_bias,
+            device=self.device,
         )
+        self.project_conv = TtConv2d.create(project_conv_params, stride=(1, 1), padding=(0, 0))
 
-        self.project_norm = get_ttnn_norm(norm, out_channels, device=self.device, norm_params=None)
+        project_norm_params = project_conv_path.norm if "norm" in project_conv_path else None
+        self.project_norm = get_ttnn_norm(norm, out_channels, device=self.device, norm_params=project_norm_params)
 
-        # Initialize upsample wrapper for global pooling branch
+        # Inicijalizacija upsample wrappera (ostaje ista)
         self.pool_upsample = TtUpsample.create(device=device, scale_factor=(1, 1), mode="bilinear")
+
         logger.debug("TtASPP initialization complete")
 
     def forward(self, x):
@@ -274,6 +235,7 @@ class TtASPP(nn.Module):
         pooled = ttnn.to_memory_config(pooled, ttnn.DRAM_MEMORY_CONFIG)
 
         pooled = self.pool_conv(pooled)
+        pooled = self.pool_norm(pooled)
         pooled = self.activation(pooled)
 
         current_h, current_w = pooled.shape[1], pooled.shape[2]

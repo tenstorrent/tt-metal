@@ -42,13 +42,6 @@ class DeepLabV3PlusHead(nn.Module):
         ignore_value: int = -1,
         num_classes: Optional[int] = None,
         use_depthwise_separable_conv: bool = False,
-        shared_weight_tensor_kernel1: torch.Tensor,
-        shared_weight_tensor_kernel3: torch.Tensor,
-        shared_weight_tensor_kernel1_output5: torch.Tensor,
-        project_conv_weights: Dict[str, torch.Tensor],
-        fuse_conv_0_weights: Dict[str, torch.Tensor],
-        fuse_conv_1_weights: Dict[str, torch.Tensor],
-        predictor_weight: Optional[torch.Tensor] = None,
     ):
         """
         NOTE: this interface is experimental.
@@ -92,9 +85,6 @@ class DeepLabV3PlusHead(nn.Module):
         self.loss_type = loss_type
         self.decoder_only = num_classes is None
         self.use_depthwise_separable_conv = use_depthwise_separable_conv
-        self.shared_weight_tensor_kernel1 = shared_weight_tensor_kernel1
-        self.shared_weight_tensor_kernel3 = shared_weight_tensor_kernel3
-        self.shared_weight_tensor_kernel1_output5 = shared_weight_tensor_kernel1_output5
 
         assert len(project_channels) == len(self.in_features) - 1, "Expected {} project_channels, got {}".format(
             len(self.in_features) - 1, len(project_channels)
@@ -130,9 +120,6 @@ class DeepLabV3PlusHead(nn.Module):
                     activation=F.relu,
                     pool_kernel_size=pool_kernel_size,
                     dropout=aspp_dropout,
-                    shared_weight_tensor_kernel1=self.shared_weight_tensor_kernel1,
-                    shared_weight_tensor_kernel3=self.shared_weight_tensor_kernel3,
-                    shared_weight_tensor_kernel1_output5=self.shared_weight_tensor_kernel1_output5,
                 )
                 fuse_conv = None
             else:
@@ -144,9 +131,6 @@ class DeepLabV3PlusHead(nn.Module):
                     norm=get_norm(norm, project_channels[idx]),
                     activation=F.relu,
                 )
-
-                project_conv.weight.data = project_conv_weights[feature_name]
-
                 conv1 = Conv2d(
                     project_channels[idx] + decoder_channels[idx + 1],
                     decoder_channels[idx],
@@ -156,7 +140,6 @@ class DeepLabV3PlusHead(nn.Module):
                     norm=get_norm(norm, decoder_channels[idx]),
                     activation=F.relu,
                 )
-                conv1.weight.data = fuse_conv_0_weights[feature_name]
                 conv2 = Conv2d(
                     decoder_channels[idx],
                     decoder_channels[idx],
@@ -166,8 +149,6 @@ class DeepLabV3PlusHead(nn.Module):
                     norm=get_norm(norm, decoder_channels[idx]),
                     activation=F.relu,
                 )
-                conv2.weight.data = fuse_conv_1_weights[feature_name]
-
                 fuse_conv = nn.Sequential(
                     conv1,
                     conv2,
@@ -267,15 +248,6 @@ class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
         norm: Union[str, Callable],
         train_size: Optional[Tuple],
         use_depthwise_separable_conv: bool,
-        shared_weight_tensor_kernel1: torch.Tensor,
-        shared_weight_tensor_kernel3: torch.Tensor,
-        shared_weight_tensor_kernel1_output5: torch.Tensor,
-        project_conv_weights: Dict[str, torch.Tensor],
-        fuse_conv_0_weights: Dict[str, torch.Tensor],
-        fuse_conv_1_weights: Dict[str, torch.Tensor],
-        panoptic_head_0_weight: torch.Tensor,
-        panoptic_head_1_weight: torch.Tensor,
-        panoptic_predictor_weight: torch.Tensor,
     ):
         """
         NOTE: this interface is experimental.
@@ -305,13 +277,6 @@ class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
             use_depthwise_separable_conv=use_depthwise_separable_conv,
             ignore_value=ignore_value,
             num_classes=None,
-            predictor_weight=None,
-            shared_weight_tensor_kernel1=shared_weight_tensor_kernel1,
-            shared_weight_tensor_kernel3=shared_weight_tensor_kernel3,
-            shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
-            project_conv_weights=project_conv_weights,
-            fuse_conv_0_weights=fuse_conv_0_weights,
-            fuse_conv_1_weights=fuse_conv_1_weights,
         )
         assert self.decoder_only
 
@@ -326,7 +291,6 @@ class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
             norm=get_norm(norm, decoder_channels[0]),
             activation=F.relu,
         )
-        conv1.weight.data = panoptic_head_0_weight
         conv2 = Conv2d(
             decoder_channels[0],
             head_channels,
@@ -336,15 +300,12 @@ class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
             norm=get_norm(norm, head_channels),
             activation=F.relu,
         )
-        conv2.weight.data = panoptic_head_1_weight
-
         self.head = nn.Sequential(
             conv1,
             conv2,
         )
 
         self.predictor = Conv2d(head_channels, num_classes, kernel_size=1)
-        self.predictor.weight.data = panoptic_predictor_weight
         nn.init.normal_(self.predictor.weight, 0, 0.001)
         nn.init.constant_(self.predictor.bias, 0)
 
