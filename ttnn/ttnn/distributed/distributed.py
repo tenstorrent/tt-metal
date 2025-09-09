@@ -36,10 +36,10 @@ class TensorShardingInfo:
         self.distribution_shape = list(self.topology.distribution_shape())
         self.mesh_shape = list(tensor.device().shape) if tensor.device() else list(tensor.host_buffer().shape())
         self.mesh_coords = self.topology.mesh_coords()
-        self.mesh_rank = len(self.mesh_shape)
-        self.distribution_rank = len(self.distribution_shape)
 
-        self.coord_mapper, self.reverse_coord_mapper = self._create_coordinate_mapper()
+        assert len(self.distribution_shape) <= 2, "Tensor visualization only supports up to 2D meshes"
+
+        self.reverse_coord_mapper = self._create_coordinate_mapper()
         self.dim_to_axis = self._compute_dim_to_axis_mapping()
         self.global_tensor_shape = self._compute_global_tensor_shape()
         self.axis_representatives = self._compute_axis_representatives()
@@ -58,12 +58,11 @@ class TensorShardingInfo:
         return mapping
 
     def _create_coordinate_mapper(self):
-        """Create reverse mapping using C++ implementation for both SUBMESH and ROW_MAJOR modes."""
+        """Create mapping from distribution coordinates to mesh coordinates."""
         self.mesh_coords_ordered = ttnn.compute_distribution_to_mesh_mapping(
             ttnn.MeshShape(self.distribution_shape), ttnn.MeshShape(self.mesh_shape)
         )
 
-        # Create O(1) reverse mapping lookup
         mesh_to_distribution_map = {}
         coord_idx = 0
         for distribution_coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(self.distribution_shape)):
@@ -74,14 +73,10 @@ class TensorShardingInfo:
                 mesh_to_distribution_map[self.mesh_coords_ordered[coord_idx]] = distribution_key
                 coord_idx += 1
 
-        def reverse_mapper(mesh_coord):
+        def mapper(mesh_coord):
             return mesh_to_distribution_map.get(mesh_coord, mesh_coord)
 
-        return None, reverse_mapper
-
-    def _mesh_to_distribution_coord(self, mesh_coord):
-        """Convert mesh coordinate to distribution coordinate using O(1) reverse lookup."""
-        return self.reverse_coord_mapper(mesh_coord)
+        return mapper
 
     def _iter_distribution_to_mesh_coords(self):
         """Generator that yields (distribution_coord, mesh_coord) pairs using C++ results directly."""
@@ -100,13 +95,14 @@ class TensorShardingInfo:
 
     def _compute_axis_representatives(self):
         """Find representative device for each axis partition in distribution coordinate space."""
-        mapping = {axis: {} for axis in range(self.distribution_rank)}
+        distribution_shape_rank = len(self.distribution_shape)
+        mapping = {axis: {} for axis in range(distribution_shape_rank)}
 
         if self.tensor.storage_type() == ttnn.StorageType.HOST:
             for host_idx, mesh_coord in enumerate(self.mesh_coords):
-                distribution_coord = self._mesh_to_distribution_coord(mesh_coord)
+                distribution_coord = self.reverse_coord_mapper(mesh_coord)
 
-                for axis in range(min(self.distribution_rank, distribution_coord.dims())):
+                for axis in range(min(distribution_shape_rank, distribution_coord.dims())):
                     part_index = int(distribution_coord[axis])
                     if part_index not in mapping[axis]:
                         mapping[axis][part_index] = host_idx
@@ -119,9 +115,9 @@ class TensorShardingInfo:
                     device_id = mesh_device.get_device_id(mesh_coord)
 
                     # Record representative for each distribution axis
-                    if self.distribution_rank == 1:
+                    if distribution_shape_rank == 1:
                         mapping[0][distribution_coord] = device_id
-                    elif self.distribution_rank == 2:
+                    elif distribution_shape_rank == 2:
                         mapping[0][distribution_coord[0]] = device_id
                         mapping[1][distribution_coord[1]] = device_id
                 except:
@@ -242,7 +238,7 @@ def _compute_global_slice_ranges(device_coord, sharding_info):
     """Compute global tensor slice ranges for a specific device coordinate."""
     tensor_shape = list(sharding_info.tensor.shape)
     slice_ranges = []
-    distribution_coord = sharding_info._mesh_to_distribution_coord(device_coord)
+    distribution_coord = sharding_info.reverse_coord_mapper(device_coord)
 
     for tensor_dim, dim_size in enumerate(tensor_shape):
         if tensor_dim in sharding_info.dim_to_axis:
