@@ -5,7 +5,7 @@
 import torch
 import ttnn
 from .attention_wan import WanAttention
-from ....layers.normalization import DistributedLayerNorm
+from ....layers.normalization import LayerNorm
 from ....layers.linear import ColParallelLinear, Linear
 from ....layers.feedforward import ParallelFeedForward
 
@@ -46,13 +46,13 @@ class WanTransformerBlock:
 
         fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
-        self.norm1 = DistributedLayerNorm(
+        self.norm1 = LayerNorm(
             dim,
             norm_eps=eps,
             norm_elementwise_affine=False,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            # mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
+            # ccl_manager=ccl_manager,
             init=init,
         )
 
@@ -79,13 +79,13 @@ class WanTransformerBlock:
         )
 
         self.norm2 = (
-            DistributedLayerNorm(
+            LayerNorm(
                 dim,
                 norm_eps=eps,
                 norm_elementwise_affine=True,
-                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                # mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 mesh_device=mesh_device,
-                ccl_manager=ccl_manager,
+                # ccl_manager=ccl_manager,
                 init=init,
             )
             if cross_attention_norm
@@ -104,13 +104,13 @@ class WanTransformerBlock:
             fsdp_mesh_axis=fsdp_mesh_axis,
         )
 
-        self.norm3 = DistributedLayerNorm(
+        self.norm3 = LayerNorm(
             dim,
             norm_eps=eps,
             norm_elementwise_affine=False,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            # mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
+            # ccl_manager=ccl_manager,
             init=init,
         )
 
@@ -242,9 +242,10 @@ class WanTransformerBlock:
         else:
             spatial_sharded_1BND = spatial_1BND
 
-        spatial_normed_1BND = self.norm1(
-            spatial_sharded_1BND, compute_kernel_config=self.layernorm_compute_kernel_config
-        )
+        spatial_normed_1BND = spatial_sharded_1BND
+        # spatial_normed_1BND = self.norm1(
+        #     spatial_sharded_1BND#, compute_kernel_config=self.layernorm_compute_kernel_config
+        # )
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_normed_1BND = ttnn.experimental.all_gather_async(
                 spatial_normed_1BND,
@@ -281,9 +282,10 @@ class WanTransformerBlock:
             )
         else:
             spatial_sharded_1BND = spatial_1BND
-        spatial_normed_1BND = self.norm2(
-            spatial_sharded_1BND, compute_kernel_config=self.layernorm_compute_kernel_config
-        )
+        spatial_normed_1BND = spatial_sharded_1BND
+        # spatial_normed_1BND = self.norm2(
+        #     spatial_sharded_1BND#, compute_kernel_config=self.layernorm_compute_kernel_config
+        # )
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_normed_1BND = ttnn.experimental.all_gather_async(
                 spatial_normed_1BND,
@@ -314,9 +316,10 @@ class WanTransformerBlock:
             )
         else:
             spatial_sharded_1BND = spatial_1BND
-        spatial_normed_1BND = self.norm3(
-            spatial_sharded_1BND, compute_kernel_config=self.layernorm_compute_kernel_config
-        )
+        spatial_normed_1BND = spatial_sharded_1BND
+        # spatial_normed_1BND = self.norm3(
+        #     spatial_sharded_1BND#, compute_kernel_config=self.layernorm_compute_kernel_config
+        # )
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_normed_1BND = ttnn.experimental.all_gather_async(
                 spatial_normed_1BND,
@@ -442,13 +445,13 @@ class WanTransformer3DModel:
             init=init,
         )
 
-        self.norm_out = DistributedLayerNorm(
+        self.norm_out = LayerNorm(
             dim,
             norm_eps=eps,
             norm_elementwise_affine=False,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            # mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
+            # ccl_manager=ccl_manager,
             init=False,
         )
 
@@ -644,19 +647,20 @@ class WanTransformer3DModel:
         logger.info(f"Postprocessing spatial output with shape {spatial_1BND.shape}")
 
         # Gather sequence-parallel output
-        spatial_1BND = ttnn.experimental.all_gather_async(
-            spatial_1BND,
-            persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                spatial_1BND.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
-            ),
-            dim=2,
-            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                self.parallel_config.sequence_parallel.mesh_axis
-            ),
-            num_links=self.ccl_manager.num_links,
-            topology=self.ccl_manager.topology,
-            cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
-        )
+        if self.parallel_config.sequence_parallel.factor > 1:
+            spatial_1BND = ttnn.experimental.all_gather_async(
+                spatial_1BND,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    spatial_1BND.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                ),
+                dim=2,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.sequence_parallel.mesh_axis
+                ),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
+            )
         logger.info(f"Spatial output after gathering: {spatial_1BND.shape}")
         spatial_BND = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BND)[0]).squeeze(0)
 
