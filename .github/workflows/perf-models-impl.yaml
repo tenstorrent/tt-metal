@@ -31,7 +31,62 @@ jobs:
           {name: "N300 WH B0", model-group: "other_magic_env", timeout: 45, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
         ]
 
+<<<<<<< HEAD
     name: "${{ matrix.test-info.model-group }} ${{ matrix.test-info.name }}"
+=======
+          - name: cnn_javelin
+            timeout: 10
+            model-list:
+              - models/experimental/functional_unet/tests
+              - models/demos/wormhole/stable_diffusion/tests
+
+          - name: other
+            timeout: 5
+            model-list:
+              - models/demos/convnet_mnist/tests/
+              # This is bad. These should be referencing .../tests directories
+              - models/demos/bert_tiny/tests/test_performance.py
+              - models/demos/squeezebert/tests/test_performance.py
+              - models/demos/roberta/tests/test_performance.py
+
+          - name: other_magic_env
+            timeout: 45
+            model-list:
+              - models/demos/yolov10x/tests/perf/
+              - models/demos/sentence_bert/tests/perf/
+              # This is bad. This should be referencing .../tests directory
+              - models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py
+              - models/demos/yolov11/tests/perf/
+              - models/demos/yolov11m/tests/perf/
+              # This is bad. This should be referencing .../tests directory
+              - models/demos/wormhole/bert_tiny/tests/test_performance.py
+              - models/demos/yolov4/tests/perf/
+              - models/demos/yolov7/tests/perf/
+              # This is bad. This should be referencing .../tests directory
+              - models/demos/wormhole/distilbert/tests/test_perf_distilbert.py
+              - models/demos/segformer/tests/perf/
+              - models/demos/metal_BERT_large_11/tests/
+
+              - models/demos/yolov8s_world/tests/perf/
+              - models/demos/yolov8s/tests/perf/
+              - models/demos/yolov6l/tests/perf/
+              - models/demos/mobilenetv2/tests/perf/
+              - models/demos/vgg_unet/tests/
+              - models/demos/yolov9c/tests/perf/
+              - models/demos/vanilla_unet/tests/perf/
+              - models/demos/yolov8x/tests/perf/
+              # e2e performant test is present in .../vit/demo folder only
+              - models/demos/wormhole/vit/demo/
+              - models/experimental/swin_v2/tests/perf/
+              - models/experimental/swin_s/tests/perf/
+              - models/experimental/yolov5x/tests/perf/
+              - models/experimental/vovnet/tests/perf/
+              - models/demos/yolov12x/tests/perf/
+              - models/demos/ufld_v2/tests/perf/
+              - models/experimental/efficientnetb0/tests/perf/
+
+    name: "${{ matrix.model-group.name }} ${{ matrix.test-info.name }}"
+>>>>>>> 6329d00b789 ( #27629: Add Yolov11m to all of CI/CD pipelines)
     defaults:
       run:
         shell: bash
