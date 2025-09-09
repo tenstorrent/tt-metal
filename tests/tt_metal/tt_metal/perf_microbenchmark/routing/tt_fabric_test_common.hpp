@@ -525,10 +525,10 @@ public:
     }
 
     std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_to_one_unicast_pairs(
-        const uint32_t iteration_idx) const override {
+        const uint32_t device_idx) const override {
         const auto device_ids = get_global_node_ids();
         std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
-        auto dst_node_id = device_ids[iteration_idx % device_ids.size()];
+        auto dst_node_id = device_ids[device_idx % device_ids.size()];
         pairs.reserve(device_ids.size() - 1);
         for (const auto& src_node : device_ids) {
             if (src_node == dst_node_id) {

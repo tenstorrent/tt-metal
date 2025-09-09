@@ -1694,7 +1694,7 @@ private:
 
     void expand_all_to_one_random_unicast(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
         log_info(LogTest, "Expanding all_to_one_unicast pattern for test: {}", test.name);
-        uint32_t index = get_random_in_range(0, 2048);
+        uint32_t index = get_random_in_range(0, device_info_provider_.get_global_node_ids().size() - 1);
         auto filtered_pairs = this->route_manager_.get_all_to_one_unicast_pairs(index);
         add_senders_from_pairs(test, filtered_pairs, base_pattern);
     }
