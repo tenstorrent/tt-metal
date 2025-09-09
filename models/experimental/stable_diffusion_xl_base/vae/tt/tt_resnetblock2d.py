@@ -27,7 +27,7 @@ class TtResnetBlock2D(LightweightModule):
         self.groups = 1
 
         self.norm_groups = 32
-        self.norm_eps = 1e-5
+        self.norm_eps = 1e-6
 
         # loading weights
         self.norm_weights_1 = state_dict[f"{module_path}.norm1.weight"]
@@ -87,6 +87,7 @@ class TtResnetBlock2D(LightweightModule):
             )
 
         self.compute1_config = model_config.get_conv_compute_config(module_path=f"{module_path}.conv1")
+        self.conv1_config = model_config.get_conv_config(conv_path=f"{module_path}.conv1")
         (
             self.tt_conv1_weights,
             self.tt_conv1_bias,
@@ -94,13 +95,13 @@ class TtResnetBlock2D(LightweightModule):
         ) = prepare_conv_params(
             conv_weights_1,
             conv_bias_1,
-            model_config.conv_w_dtype,
+            self.conv1_config.weights_dtype,
         )
         self.conv1_slice_config = get_DRAM_conv_config(module_path, 1)
-        self.conv1_config = model_config.get_conv_config(conv_path=f"{module_path}.conv1")
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
         self.compute2_config = model_config.get_conv_compute_config(module_path=f"{module_path}.conv2")
+        self.conv2_config = model_config.get_conv_config(conv_path=f"{module_path}.conv2")
         (
             self.tt_conv2_weights,
             self.tt_conv2_bias,
@@ -108,10 +109,9 @@ class TtResnetBlock2D(LightweightModule):
         ) = prepare_conv_params(
             conv_weights_2,
             conv_bias_2,
-            model_config.conv_w_dtype,
+            self.conv2_config.weights_dtype,
         )
         self.conv2_slice_config = get_DRAM_conv_config(module_path, 2)
-        self.conv2_config = model_config.get_conv_config(conv_path=f"{module_path}.conv2")
 
         if conv_shortcut:
             self.tt_conv3_weights, self.tt_conv3_bias = prepare_linear_params(
