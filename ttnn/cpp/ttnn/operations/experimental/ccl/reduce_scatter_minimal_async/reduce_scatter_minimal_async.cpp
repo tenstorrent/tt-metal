@@ -15,49 +15,6 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-bool use_composite_reduce_scatter(
-    const ttnn::Tensor& input_tensor, const int32_t dim, std::optional<uint32_t> cluster_axis) {
-    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
-    uint32_t tile_width = tile_shape[1];
-
-    int32_t rank = input_tensor.logical_shape().rank();
-    int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
-
-    uint32_t num_devices;
-    if (cluster_axis.has_value()) {
-        auto mesh_device = input_tensor.device();
-        const auto& mesh_view = mesh_device->get_view();
-        num_devices = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    } else {
-        num_devices = ttnn::ccl::get_active_physical_devices(input_tensor).size();
-    }
-
-    // Must scatter evenly
-    auto input_shape = input_tensor.logical_shape();
-    if (input_shape[scatter_dim] % num_devices != 0) {
-        return false;
-    }
-
-    // Use composite for row major tensors
-    if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        return true;
-    }
-
-    // Use composite if scattering on a dim that isn't 3
-    if (scatter_dim != 3) {
-        return true;
-    }
-
-    // Use composite if tiled and scattering on padded dim 3
-    auto output_shape = input_shape;
-    output_shape[scatter_dim] /= num_devices;
-    if (scatter_dim == 3 && output_shape[scatter_dim] % tile_width != 0) {
-        return true;
-    }
-
-    return false;
-}
-
 // Composite always runs in row-major
 ttnn::Tensor composite_reduce_scatter(
     ttnn::Tensor input_tensor,
@@ -147,7 +104,7 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
-    if (use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
+    if (composite_common::use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
         return composite_reduce_scatter(input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
     } else {
         return ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
