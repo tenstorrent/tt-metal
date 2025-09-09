@@ -30,7 +30,7 @@ constexpr auto kComputeKernelPath =
 // reader runtime args
 constexpr uint32_t kParamInAddrIdx = 0;
 constexpr uint32_t kGradAddrIdx = 1U;
-constexpr uint32_t kLrIdx = 2U;
+constexpr uint32_t kLrIdx = 0;
 // writer runtime args
 constexpr uint32_t kOutputAddrIdx = 0;
 
