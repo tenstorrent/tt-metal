@@ -296,13 +296,7 @@ private:
 
     DataMovementProcessor get_processor() {
         const uint32_t num = this->generate_random_num(0, 1);
-        DataMovementProcessor processor;
-        if (num == 0) {
-            processor = DataMovementProcessor::RISCV_0;
-        } else {
-            processor = DataMovementProcessor::RISCV_1;
-        }
-        return processor;
+        return (num == 0) ? DataMovementProcessor::RISCV_0 : DataMovementProcessor::RISCV_1;
     }
 
     CoreRangeSet get_cores(const CoreType core_type) {
