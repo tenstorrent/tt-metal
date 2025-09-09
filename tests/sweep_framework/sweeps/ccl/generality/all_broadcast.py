@@ -57,6 +57,10 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     """
     Prunes the test space by invalidating known unsupported or problematic configurations.
     """
+    mesh_shape, cluster_axis = test_vector["mesh_shape"], test_vector["cluster_axis"]
+    if cluster_axis and mesh_shape[cluster_axis] == 1:
+        return True, "Unit cluster axis"
+
     if test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_dtype"] == ttnn.bfloat8_b:
         return True, "Row major not supported for bfloat8_b"
 

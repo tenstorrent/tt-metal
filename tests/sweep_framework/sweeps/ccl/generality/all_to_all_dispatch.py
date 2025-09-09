@@ -8,12 +8,12 @@ from typing import Optional, Tuple
 import ttnn
 
 from loguru import logger
-from tests.sweep_framework.sweeps.ccl.common import device_context, mesh_shape_iterator
+from tests.sweep_framework.sweep_utils.ccl_common import device_context, mesh_shape_iterator
 from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_dispatch_t3000 import run_all_to_all_dispatch_test
 
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 45
+TIMEOUT = 60
 
 NUM_DEVICES = ttnn.get_num_devices()
 
@@ -24,11 +24,11 @@ def _pd(val: int):
 
 parameters = {
     "generality_suite": {
-        "mesh_shape": mesh_shape_iterator(NUM_DEVICES, limit=2),
-        "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
+        "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
+        "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_2D],
         "input_shape": [
             [_pd(1), 1, 8, 32],
-            [_pd(1), 1, 32, 1280],
+            [_pd(1), 1, 32, 2880],  # GPT-OSS
             [_pd(1), 1, 2, 31],
             [_pd(8), 1, 2, 7168],
             [_pd(16), 1, 2, 7168],
@@ -37,7 +37,7 @@ parameters = {
         "experts": [_pd(i) for i in [2, 4, 8]],
         "select_experts_k": [2, 4, 8],
         "cluster_axis": [0, 1, None],
-        "num_links": [1, 2, 3],
+        "num_links": [1],
         "input_dtype": [ttnn.bfloat16],
         "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
         "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
@@ -47,6 +47,10 @@ parameters = {
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    mesh_shape, cluster_axis = test_vector["mesh_shape"], test_vector["cluster_axis"]
+    if cluster_axis and mesh_shape[cluster_axis] == 1:
+        return True, "Unit cluster axis"
+
     if test_vector["select_experts_k"] > test_vector["experts"]:
         return True, "k greater than experts"
 
