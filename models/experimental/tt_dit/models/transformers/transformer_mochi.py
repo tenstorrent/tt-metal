@@ -5,7 +5,7 @@
 import torch
 import ttnn
 from .attention_mochi import MochiAttention
-from ...layers.normalization import RMSNorm, DistributedLayerNorm
+from ...layers.normalization import RMSNorm, LayerNorm
 from ...layers.linear import ColParallelLinear, Linear
 from ...layers.feedforward import ParallelFeedForward
 from ...layers.embeddings import MochiPatchEmbed
@@ -376,7 +376,7 @@ class MochiTransformerBlock:
         # ModulatedRMSNorm
         spatial_attn_mod_1BND = self.norm2_norm(
             spatial_attn_1BND, compute_kernel_config=self.rms_compute_kernel_config
-        ) * ttnn.tanh(gate_msa_11BD, accuracy=True)
+        ) * ttnn.tanh(gate_msa_11BD)
 
         # Residual
         spatial_1BND = spatial_1BND + spatial_attn_mod_1BND
@@ -408,7 +408,7 @@ class MochiTransformerBlock:
 
         spatial_ff_mod_1BND = self.norm4_norm(
             spatial_ff_1BND, compute_kernel_config=self.rms_compute_kernel_config
-        ) * ttnn.tanh(gate_mlp_11BD, accuracy=True)
+        ) * ttnn.tanh(gate_mlp_11BD)
 
         # Residual
         spatial_1BND = spatial_1BND + spatial_ff_mod_1BND
@@ -417,7 +417,7 @@ class MochiTransformerBlock:
             # Norm attention output (MochiRMSNormZero)
             prompt_attn_mod_1BLP = self.norm2_context_norm(
                 prompt_attn_1BLP, compute_kernel_config=self.rms_compute_kernel_config
-            ) * ttnn.tanh(prompt_gate_msa_11BD, accuracy=True)
+            ) * ttnn.tanh(prompt_gate_msa_11BD)
 
             # Residual
             prompt_1BLP = prompt_1BLP + prompt_attn_mod_1BLP
@@ -450,7 +450,7 @@ class MochiTransformerBlock:
 
             prompt_ff_mod_1BLP = self.norm4_context_norm(
                 prompt_ff_1BLP, compute_kernel_config=self.rms_compute_kernel_config
-            ) * ttnn.tanh(prompt_gate_mlp_11BD, accuracy=True)
+            ) * ttnn.tanh(prompt_gate_mlp_11BD)
 
             # Residual
             prompt_1BLP = prompt_1BLP + prompt_ff_mod_1BLP
@@ -546,14 +546,14 @@ class MochiTransformer3DModel:
         #     # use_row_major_workaround=True, # Issue #20789, hang for large tensor layernorm
         # )
 
-        self.norm_out_norm = DistributedLayerNorm(
+        self.norm_out_norm = LayerNorm(
             embedding_dim=inner_dim,
             norm_eps=1e-6,
             norm_elementwise_affine=False,
             bias=False,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            # mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
+            # ccl_manager=ccl_manager,
             init=False,
         )
 
@@ -759,19 +759,20 @@ class MochiTransformer3DModel:
 
         # AllGather hanging for large seqlen
         # # Gather sequence-parallel output
-        spatial_1BND = ttnn.experimental.all_gather_async(
-            spatial_1BND,
-            persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                spatial_1BND.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
-            ),
-            dim=2,
-            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                self.parallel_config.sequence_parallel.mesh_axis
-            ),
-            num_links=self.ccl_manager.num_links,
-            topology=self.ccl_manager.topology,
-            cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
-        )
+        if self.parallel_config.sequence_parallel.factor > 1:
+            spatial_1BND = ttnn.experimental.all_gather_async(
+                spatial_1BND,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    spatial_1BND.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                ),
+                dim=2,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.sequence_parallel.mesh_axis
+                ),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
+            )
         logger.info(f"Spatial output after gathering: {spatial_1BND.shape}")
         spatial_BND = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BND)[0]).squeeze(0)
 
@@ -820,19 +821,22 @@ class MochiTransformer3DModel:
         )
         spatial_norm_fractured_1BND = self.norm_out_norm(spatial_fractured_1BND)
 
-        spatial_norm_1BND = ttnn.experimental.all_gather_async(
-            spatial_norm_fractured_1BND,
-            persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                spatial_norm_fractured_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
-            ),
-            dim=3,
-            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                self.parallel_config.tensor_parallel.mesh_axis
-            ),
-            num_links=self.ccl_manager.num_links,
-            topology=self.ccl_manager.topology,
-            cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-        )
+        if self.parallel_config.tensor_parallel.factor > 1:
+            spatial_norm_1BND = ttnn.experimental.all_gather_async(
+                spatial_norm_fractured_1BND,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    spatial_norm_fractured_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            )
+        else:
+            spatial_norm_1BND = spatial_norm_fractured_1BND
 
         spatial_norm_1BND = spatial_norm_1BND * (1 + scale) + shift
 

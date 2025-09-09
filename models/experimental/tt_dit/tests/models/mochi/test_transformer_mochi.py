@@ -244,6 +244,7 @@ def test_mochi_transformer_block(
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, num_links",
     [
+        [(1, 1), 0, 1, 1],
         [(2, 2), 0, 1, 1],
         [(2, 2), 1, 0, 1],
         [(2, 4), 0, 1, 1],
@@ -252,6 +253,7 @@ def test_mochi_transformer_block(
         [(4, 8), 1, 0, 4],
     ],
     ids=[
+        "1x1sp0tp1",
         "2x2sp0tp1",
         "2x2sp1tp0",
         "2x4sp0tp1",
