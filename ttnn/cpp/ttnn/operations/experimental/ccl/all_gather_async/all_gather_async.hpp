@@ -21,7 +21,8 @@ struct ExecuteAllGatherAsync {
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
         bool use_optimal_ccl_for_llama = false,
-        const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
+        const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
+        bool backward = false);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -37,7 +38,8 @@ struct ExecuteAllGatherAsync {
         const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
         std::optional<uint32_t> chunks_per_sync = std::nullopt,
         std::optional<uint32_t> num_workers_per_link = std::nullopt,
-        std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
+        std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
+        bool backward = false);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -51,7 +53,8 @@ struct ExecuteAllGatherAsync {
         std::optional<size_t> num_preferred_links = std::nullopt,
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
         bool use_optimal_ccl_for_llama = false,
-        const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
+        const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
+        bool backward = false);
 };
 
 }  // namespace operations::experimental::ccl

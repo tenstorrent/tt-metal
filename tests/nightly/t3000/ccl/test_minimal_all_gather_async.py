@@ -42,6 +42,7 @@ def run_all_gather_impl(
     num_buffers_per_channel=None,
     allowed_pcc=1,
     skip_check=False,
+    backward=False,
 ):
     torch.manual_seed(0)
 
@@ -140,6 +141,7 @@ def run_all_gather_impl(
             chunks_per_sync=chunks_per_sync,
             num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=num_buffers_per_channel,
+            backward=backward,
         )
 
         return tt_all_gather_out_tensor
@@ -181,11 +183,38 @@ def run_all_gather_impl(
             tt_ag_out_tensor = tt_all_gather_out_tensor_list[i]
             torch_ag_out_tensor = ag_output_tensor_goldens_list[i if not enable_trace else 0]
 
+            # Create expected output tensor based on backward parameter
+            if backward:
+                # For backward all-gather, we need to backward the order along the gather dimension
+                expected_tensor = torch_ag_out_tensor.clone()
+                shard_size = torch_ag_out_tensor.shape[dim] // num_devices
+
+                # Reverse the shards along the gather dimension
+                for device_id in range(num_devices):
+                    src_start = device_id * shard_size
+                    src_end = (device_id + 1) * shard_size
+                    dst_start = (num_devices - 1 - device_id) * shard_size
+                    dst_end = (num_devices - device_id) * shard_size
+
+                    if dim == 0:
+                        expected_tensor[dst_start:dst_end] = torch_ag_out_tensor[src_start:src_end]
+                    elif dim == 1:
+                        expected_tensor[:, dst_start:dst_end] = torch_ag_out_tensor[:, src_start:src_end]
+                    elif dim == 2:
+                        print(f"dst_start: {dst_start}, dst_end: {dst_end}, src_start: {src_start}, src_end: {src_end}")
+                        expected_tensor[:, :, dst_start:dst_end] = torch_ag_out_tensor[:, :, src_start:src_end]
+                    elif dim == 3:
+                        expected_tensor[:, :, :, dst_start:dst_end] = torch_ag_out_tensor[:, :, :, src_start:src_end]
+                    else:
+                        raise NotImplementedError(f"Reverse all-gather not implemented for dim {dim}")
+            else:
+                expected_tensor = torch_ag_out_tensor
+
             tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
             tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
-            tt_ag_out = tt_ag_out[:, :, :, 0 : torch_ag_out_tensor.shape[3]]
-            eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensor, allowed_pcc)
-            logger.info(f"{output}, iteration {i}")
+            tt_ag_out = tt_ag_out[:, :, :, 0 : expected_tensor.shape[3]]
+            eq, output = comp_pcc(tt_ag_out, expected_tensor, allowed_pcc)
+            logger.info(f"{output}, iteration {i}, backward={backward}")
             assert eq, f"{i} FAILED ag: {output}"
 
     t3k_mesh_device.reset_sub_device_stall_group()

@@ -148,7 +148,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel) {
+    std::optional<uint32_t> num_buffers_per_channel,
+    const bool backward) {
     tt::tt_metal::Program program{};
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
     return all_gather_async_minimal_default_helper(
@@ -170,7 +171,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
         empty_fused_op_signaler,
         chunks_per_sync,
         num_workers_per_link,
-        num_buffers_per_channel);
+        num_buffers_per_channel,
+        CoreCoord(0, 0),
+        backward);
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_helper(
@@ -193,7 +196,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
-    const CoreCoord core_grid_offset) {
+    const CoreCoord core_grid_offset,
+    const bool backward) {
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
@@ -461,6 +465,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     dir,                              // direction
                     fuse_op,                          // fused op
                     chunks_per_sync_val,
+                    backward,
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -540,6 +545,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     static_cast<uint32_t>(topology),  // topology
                     dir,                              // direction
                     chunks_per_sync_val,
+                    backward,
                 };
                 fabric_mux_connection_ct_args(
                     worker == 0,

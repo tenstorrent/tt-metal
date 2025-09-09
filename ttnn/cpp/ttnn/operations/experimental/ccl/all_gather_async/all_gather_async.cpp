@@ -194,7 +194,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_optimal_ccl_for_llama,
-    const std::optional<GlobalSemaphore>& barrier_semaphore) {
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool backward) {
     bool composite_all_gather_case = use_composite_all_gather(input_tensor, dim, memory_config);
     bool all_gather_async_llama_sharded_case =
         use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
@@ -215,9 +216,10 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
             memory_config,
             topology,
             subdevice_id,
-            all_gather_async_llama_sharded_case,
             use_optimal_ccl_for_llama,
-            barrier_semaphore);
+            all_gather_async_llama_sharded_case,
+            barrier_semaphore,
+            backward);
     }
 }
 
@@ -235,7 +237,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel) {
+    std::optional<uint32_t> num_buffers_per_channel,
+    bool backward) {
     bool composite_all_gather_case = use_composite_all_gather(input_tensor, dim, memory_config);
     bool all_gather_async_llama_sharded_case =
         use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
@@ -252,12 +255,13 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
             topology,
             subdevice_id,
             cluster_axis,
-            all_gather_async_llama_sharded_case,
             use_optimal_ccl_for_llama,
+            all_gather_async_llama_sharded_case,
             barrier_semaphore,
             chunks_per_sync,
             num_workers_per_link,
-            num_buffers_per_channel);
+            num_buffers_per_channel,
+            backward);
     }
 }
 
@@ -273,7 +277,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_optimal_ccl_for_llama,
-    const std::optional<GlobalSemaphore>& barrier_semaphore) {
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool backward) {
     bool composite_all_gather_case = use_composite_all_gather(input_tensor, dim, memory_config);
     bool all_gather_async_llama_sharded_case =
         use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
@@ -294,7 +299,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
             subdevice_id,
             all_gather_async_llama_sharded_case,
             use_optimal_ccl_for_llama,
-            barrier_semaphore);
+            barrier_semaphore,
+            backward);
     }
 }
 
