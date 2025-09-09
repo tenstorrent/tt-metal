@@ -63,7 +63,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory_sharde
     const uint32_t output_nsticks_per_core = output_tensor.shard_spec().value().shape[0];
 
     // Enable split reader for improved performance
-    const bool split_reader = false;
+    const bool split_reader = true;
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t buffering_factor = 2;  // Data is already in shards

@@ -166,14 +166,14 @@ void kernel_main() {
 
         // Reserve CB space for 4 corner input sticks for this grid point
         {
-            DeviceZoneScopedN("CB reserve");
+            // DeviceZoneScopedN("CB reserve");
             cb_reserve_back(input_cb_index, 1);
         }
 
         uint32_t l1_write_input_addr = get_write_ptr(input_cb_index);
 
         {
-            DeviceZoneScopedN("NOC reads");
+            // DeviceZoneScopedN("NOC reads");
             // Read 4 corner input sticks via NOC from remote input tensor shards
             if (h0_valid && w0_valid) {
                 const uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
@@ -204,7 +204,7 @@ void kernel_main() {
         }
 
         {
-            DeviceZoneScopedN("Read barrier");
+            // DeviceZoneScopedN("Read barrier");
             noc_async_read_barrier();
         }
         cb_push_back(input_cb_index, 1);
