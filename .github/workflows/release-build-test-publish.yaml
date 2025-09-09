@@ -12,6 +12,11 @@ on:
         required: false
         default: 22.04
         type: number
+      distro:
+        description: "Ubuntu distribution for building and testing"
+        required: false
+        default: ubuntu
+        type: string
       tag-version:
         description: "Tag version to create, e.g. 'rc' for release candidate, 'dev' for dev development, or '' for normal release"
         required: true
@@ -40,6 +45,7 @@ jobs:
       secrets: inherit
       with:
         version: ${{ inputs.version || 22.04 }}
+        distro: ${{ inputs.distro || 'ubuntu' }}
         build-wheel: true
         fetch-depth: 0
         skip-tt-train: false
