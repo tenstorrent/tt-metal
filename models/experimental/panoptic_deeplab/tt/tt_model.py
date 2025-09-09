@@ -22,7 +22,6 @@ from loguru import logger
 from models.experimental.panoptic_deeplab.tt.tt_resnet import TtResNet
 from models.experimental.panoptic_deeplab.tt.tt_semseg import TtPanopticDeepLabSemSegHead
 from models.experimental.panoptic_deeplab.tt.tt_insemb import TtPanopticDeepLabInsEmbedHead
-from models.experimental.panoptic_deeplab.tt.common import create_resnet_state_dict
 from models.experimental.panoptic_deeplab.reference.pytorch_postprocessing import get_panoptic_segmentation
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 
@@ -49,24 +48,23 @@ class TtPanopticDeepLab:
         common_stride: int = 4,
         # Head configuration
         sem_seg_head_channels: int = 256,
-        ins_embed_head_channels: int = 128,
+        ins_embed_head_channels: int = 32,
         # Decoder configuration
-        project_channels: List[int] = [48, 48],
+        project_channels: List[int] = [32, 64],
         aspp_dilations: List[int] = [6, 12, 18],
         aspp_dropout: float = 0.1,
-        decoder_channels: List[int] = [256, 256, 256],
+        decoder_channels: List[int] = [256, 256, 256],  # Default for semantic head
         # Normalization and activation
         norm: str = "SyncBN",  # Synchronized Batch Normalization
         # Training configuration
         train_size: Optional[Tuple[int, int]] = None,
-        # Weight initialization
-        weights_path: Optional[str] = None,
-        # Shared weight tensors for heads
     ):
         """
-        Initialize the Panoptic-DeepLab model.
+        Initialize the Panoptic-DeepLab model with unified parameter loading.
 
         Args:
+            parameters: Preprocessed model parameters from preprocess_model_parameters
+                       Should contain: parameters.backbone, parameters.semantic_head, parameters.instance_head
             device: TTNN device for computation
             num_classes: Number of semantic classes
             backbone_name: Name of the backbone network
@@ -79,18 +77,15 @@ class TtPanopticDeepLab:
             decoder_channels: Channels for decoder layers
             norm: Normalization type
             train_size: Training image size for ASPP pooling
-            weights_path: Path to weight file (uses weights from R-52.pkl)
-            **_weight arguments: Pre-computed weight tensors for all components
         """
         self.device = device
         self.num_classes = num_classes
         self.common_stride = common_stride
         self.train_size = train_size
 
-        # Initialize backbone
-        logger.debug("Initializing ResNet backbone with loaded weights")
-        backbone_state_dict = create_resnet_state_dict(weights_path)
-        self.backbone = TtResNet(device=device, state_dict=backbone_state_dict, dtype=ttnn.bfloat16)
+        # Initialize backbone with unified parameters
+        logger.debug("Initializing ResNet backbone with preprocessed parameters")
+        self.backbone = TtResNet(parameters=parameters.backbone, device=device, dtype=ttnn.bfloat16)
         logger.debug("ResNet backbone initialization complete")
 
         # Define feature map specifications based on ResNet output
@@ -133,7 +128,7 @@ class TtPanopticDeepLab:
             project_channels=project_channels,
             aspp_dilations=aspp_dilations,
             aspp_dropout=aspp_dropout,
-            decoder_channels=decoder_channels,
+            decoder_channels=[128, 128, 256],  # Instance head: [res2, res3, res5] = [128, 128, 256]
             common_stride=common_stride,
             norm=norm,
             train_size=train_size,

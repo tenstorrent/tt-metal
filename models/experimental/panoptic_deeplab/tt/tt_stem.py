@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import torch
 import ttnn
 from loguru import logger
 
@@ -28,8 +27,8 @@ class TtStem(nn.Module):
 
     def __init__(
         self,
+        parameters,
         device: ttnn.MeshDevice,
-        state_dict: dict[str, torch.Tensor],
         dtype: ttnn.DataType = ttnn.bfloat16,
         channel_slice_factor: int = 4,
     ):
@@ -37,137 +36,82 @@ class TtStem(nn.Module):
         self.device = device
         self.channel_slice_factor = channel_slice_factor
 
-        logger.debug(f"Initializing TtStem with channel_slice_factor: {channel_slice_factor}")
+        logger.debug(f"Initializing TtStem with unified parameters, channel_slice_factor: {channel_slice_factor}")
 
-        # Extract weights for conv1, conv2, conv3
-        conv1_state = {k.replace("conv1.", ""): v for k, v in state_dict.items() if k.startswith("conv1.")}
-        conv2_state = {k.replace("conv2.", ""): v for k, v in state_dict.items() if k.startswith("conv2.")}
-        conv3_state = {k.replace("conv3.", ""): v for k, v in state_dict.items() if k.startswith("conv3.")}
+        # Parameters are now organized as parameters["conv1"], parameters["conv2"], parameters["conv3"]
+        conv1_params = parameters["conv1"]
+        conv2_params = parameters["conv2"]
+        conv3_params = parameters["conv3"]
 
         # Initialize conv layers with width slicing (4 slices)
         width_slice_config = SliceConfig(mode=SliceMode.WIDTH, num_slices=4)
 
         self.conv1 = TtConv2d(
-            TtConv2dParameters.from_torch(conv1_state, device=device, dtype=dtype, slice_config=width_slice_config),
+            TtConv2dParameters.from_preprocessed_parameters(
+                conv1_params, device=device, dtype=dtype, slice_config=width_slice_config
+            ),
             stride=(2, 2),
             padding=(1, 1),
         )
 
         self.conv2 = TtConv2d(
-            TtConv2dParameters.from_torch(conv2_state, device=device, dtype=dtype, slice_config=width_slice_config),
+            TtConv2dParameters.from_preprocessed_parameters(
+                conv2_params, device=device, dtype=dtype, slice_config=width_slice_config
+            ),
             stride=(1, 1),
             padding=(1, 1),
         )
 
         self.conv3 = TtConv2d(
-            TtConv2dParameters.from_torch(conv3_state, device=device, dtype=dtype, slice_config=width_slice_config),
+            TtConv2dParameters.from_preprocessed_parameters(
+                conv3_params, device=device, dtype=dtype, slice_config=width_slice_config
+            ),
             stride=(1, 1),
             padding=(1, 1),
         )
 
-        # Extract normalization parameters
-        conv1_norm_state = {
-            k.replace("conv1.norm.", ""): v for k, v in state_dict.items() if k.startswith("conv1.norm.")
-        }
-        conv2_norm_state = {
-            k.replace("conv2.norm.", ""): v for k, v in state_dict.items() if k.startswith("conv2.norm.")
-        }
-        conv3_norm_state = {
-            k.replace("conv3.norm.", ""): v for k, v in state_dict.items() if k.startswith("conv3.norm.")
-        }
+        # Extract normalization parameters from preprocessed structure
+        conv1_norm_params = conv1_params.get("norm", None)
+        conv2_norm_params = conv2_params.get("norm", None)
+        conv3_norm_params = conv3_params.get("norm", None)
 
-        # Convert normalization parameters to TTNN tensors
-        mesh_mapper = ttnn.ReplicateTensorToMesh(device) if isinstance(device, ttnn.MeshDevice) else None
-
+        # Normalization parameters are already TTNN tensors from preprocessing
         # Conv1 normalization (64 channels)
-        self.conv1_norm_weight = ttnn.from_torch(
-            conv1_norm_state["weight"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self.conv1_norm_bias = ttnn.from_torch(
-            conv1_norm_state["bias"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self.conv1_norm_running_mean = ttnn.from_torch(
-            conv1_norm_state["running_mean"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self.conv1_norm_running_var = ttnn.from_torch(
-            conv1_norm_state["running_var"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
+        if conv1_norm_params:
+            self.conv1_norm_weight = conv1_norm_params["weight"]
+            self.conv1_norm_bias = conv1_norm_params["bias"]
+            self.conv1_norm_running_mean = conv1_norm_params["running_mean"]
+            self.conv1_norm_running_var = conv1_norm_params["running_var"]
+        else:
+            # Default normalization if not available
+            self.conv1_norm_weight = None
+            self.conv1_norm_bias = None
+            self.conv1_norm_running_mean = None
+            self.conv1_norm_running_var = None
 
         # Conv2 normalization (64 channels)
-        self.conv2_norm_weight = ttnn.from_torch(
-            conv2_norm_state["weight"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self.conv2_norm_bias = ttnn.from_torch(
-            conv2_norm_state["bias"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self.conv2_norm_running_mean = ttnn.from_torch(
-            conv2_norm_state["running_mean"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self.conv2_norm_running_var = ttnn.from_torch(
-            conv2_norm_state["running_var"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
+        if conv2_norm_params:
+            self.conv2_norm_weight = conv2_norm_params["weight"]
+            self.conv2_norm_bias = conv2_norm_params["bias"]
+            self.conv2_norm_running_mean = conv2_norm_params["running_mean"]
+            self.conv2_norm_running_var = conv2_norm_params["running_var"]
+        else:
+            self.conv2_norm_weight = None
+            self.conv2_norm_bias = None
+            self.conv2_norm_running_mean = None
+            self.conv2_norm_running_var = None
 
         # Conv3 normalization (128 channels)
-        self.conv3_norm_weight = ttnn.from_torch(
-            conv3_norm_state["weight"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self.conv3_norm_bias = ttnn.from_torch(
-            conv3_norm_state["bias"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self.conv3_norm_running_mean = ttnn.from_torch(
-            conv3_norm_state["running_mean"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self.conv3_norm_running_var = ttnn.from_torch(
-            conv3_norm_state["running_var"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
+        if conv3_norm_params:
+            self.conv3_norm_weight = conv3_norm_params["weight"]
+            self.conv3_norm_bias = conv3_norm_params["bias"]
+            self.conv3_norm_running_mean = conv3_norm_params["running_mean"]
+            self.conv3_norm_running_var = conv3_norm_params["running_var"]
+        else:
+            self.conv3_norm_weight = None
+            self.conv3_norm_bias = None
+            self.conv3_norm_running_mean = None
+            self.conv3_norm_running_var = None
 
         # Initialize maxpool with channel slicing
         self.maxpool = TtMaxPool2d.create_with_channel_slicing(
