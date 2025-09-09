@@ -223,7 +223,6 @@ jobs:
             --security-opt seccomp=unconfined
             --ulimit nproc=65536:65536
             --ulimit nofile=65536:65536
-            ${{ matrix.test-group.name == 'sdxl' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
           install_wheel: true
           forward_civ2_proxy_env_vars: ${{ matrix.test-group.civ2-compatible }}
           run_args: |
