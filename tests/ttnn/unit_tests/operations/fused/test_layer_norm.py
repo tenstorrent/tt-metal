@@ -122,10 +122,11 @@ def test_layer_norm_with_tile_layout(device, h, w):
 
 @pytest.mark.parametrize("h", [1024, 2080])
 @pytest.mark.parametrize("w", [3200, 4128])
-def test_large_layer_norm(device, h, w):
+@pytest.mark.parametrize("d_type", [torch.bfloat16, torch.float32])
+def test_large_layer_norm(device, h, w, d_type):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((h, w), dtype=torch.float32)
+    torch_input_tensor = torch.rand((h, w), dtype=d_type)
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
