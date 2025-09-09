@@ -479,6 +479,25 @@ ALWI void eqz_tile_int32(uint32_t idst) { MATH(SFPU_ZERO_KERNEL_TYPE(int, equal_
 // clang-format on
 ALWI void eqz_tile_uint16(uint32_t idst) { MATH(SFPU_ZERO_KERNEL_TYPE(uint16, equal_zero, RC, APPROX, idst)); }
 
+// clang-format off
+
+/**
+ * Will store in the output of the compute core True if each element of a tile is equal to zero.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void eqz_tile_uint32(uint32_t idst) {
+    MATH((SFPU_TWO_PARAM_KERNEL(calculate_eqz_uint32, APPROX, 8, idst, (int)VectorMode::RC)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
@@ -531,6 +550,24 @@ ALWI void lez_tile_int32(uint32_t idst) { MATH(SFPU_ZERO_KERNEL_TYPE(int, less_t
  */
 // clang-format on
 ALWI void nez_tile_uint16(uint32_t idst) { MATH(SFPU_ZERO_KERNEL_TYPE(uint16, not_equal_zero, RC, APPROX, idst)); }
+
+// clang-format off
+/**
+ * Will store in the output of the compute core True if each element is not equal to zero.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void nez_tile_uint32(uint32_t idst) {
+    MATH((SFPU_TWO_PARAM_KERNEL(calculate_nez_uint32, APPROX, 8, idst, (int)VectorMode::RC)));
+}
 
 /**
  * Please refer to documentation for any_init.

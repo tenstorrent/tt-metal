@@ -35,6 +35,9 @@
 #include "device_fixture.hpp"
 #include "umd/device/types/xy_pair.h"
 
+// Access to internal API: ProgramImpl::num_kernel, get_kernel
+#include "impl/program/program_impl.hpp"
+
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -236,8 +239,8 @@ void verify_results(
     auto& program = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        const auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
+    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
+        const auto kernel = program.impl().get_kernel(kernel_id);
         auto rt_args_base_addr = get_runtime_arg_addr(
             device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
             kernel->get_kernel_processor_class(),
@@ -250,7 +253,8 @@ void verify_results(
             auto rt_args = kernel->runtime_args(logical_core);
             EXPECT_EQ(rt_args, expected_rt_args) << "(unique rta)";
 
-            verify_core_rt_args(mesh_device, false, logical_core, rt_args_base_addr, expected_rt_args, unique_arg_incr_val);
+            verify_core_rt_args(
+                mesh_device, false, logical_core, rt_args_base_addr, expected_rt_args, unique_arg_incr_val);
         }
 
         // Verify common RT Args (same for all cores) if they exist.
@@ -300,7 +304,7 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         auto& program = workload.get_programs().at(device_range);
-        ASSERT_TRUE(program.num_kernels() == 1);
+        ASSERT_TRUE(program.impl().num_kernels() == 1);
         std::vector<uint32_t> initial_runtime_args = {0xfeadbeef, 0xabababab};
         SetRuntimeArgs(program, 0, core_range_set, initial_runtime_args);
 
@@ -513,7 +517,6 @@ TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
 TEST_F(MeshDeviceFixture, TensixIllegalTooManyRuntimeArgs) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh_device = this->devices_.at(id);
-        auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         CoreRange first_core_range(CoreCoord(1, 1), CoreCoord(2, 2));
@@ -549,7 +552,7 @@ TEST_F(MeshDeviceFixture, TensixIllegallyModifyRTArgs) {
         CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
         auto workload = unit_tests::runtime_args::initialize_program_data_movement_rta(mesh_device, core_range_set, 2);
         auto& program = workload.get_programs().at(device_range);
-        ASSERT_TRUE(program.num_kernels() == 1);
+        ASSERT_TRUE(program.impl().num_kernels() == 1);
         std::vector<uint32_t> initial_runtime_args = {101, 202};
         SetRuntimeArgs(program, 0, core_range_set, initial_runtime_args);
 
@@ -610,4 +613,4 @@ TEST_F(MeshDeviceFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
     }
 }
 
-}  // namespace unit_tests::runtime_args
+}  // namespace tt::tt_metal

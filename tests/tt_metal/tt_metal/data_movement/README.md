@@ -33,6 +33,7 @@ Some test suites use slow dispatch mode for reliable program execution. These te
 | Deinterleave                | 200-201              | Tests deinterleaving. **(Slow Dispatch)**                                               |
 | All to all                  | 300-308              | Write transactions from multiple cores to multiple cores.                               |
 | All from all                | 310-318              | Read transactions from multiple cores to multiple cores.                                |
+| I2S Hardcoded               | 400-405              | Tests interleaved to sharded data movement operations for different memory layouts.     |
 
 ## Running Tests
 ### C++ Gtests

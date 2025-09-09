@@ -295,15 +295,17 @@ class TtnnADown:
         )
 
     def __call__(self, x):
-        x = ttnn.avg_pool2d(
+        input_h = int(math.sqrt(x.shape[-2]))
+        input_w = int(math.sqrt(x.shape[-2]))
+        output_h = input_h - 1
+        output_w = input_w - 1
+        x = ttnn.adaptive_avg_pool2d(
             input_tensor=x,
             batch_size=x.shape[0],
-            input_h=int(math.sqrt(x.shape[-2])),
-            input_w=int(math.sqrt(x.shape[-2])),
+            input_h=input_h,
+            input_w=input_w,
             channels=x.shape[-1],
-            kernel_size=(2, 2),
-            stride=(1, 1),
-            padding=(0, 0),
+            output_size=[output_h, output_w],
         )
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
