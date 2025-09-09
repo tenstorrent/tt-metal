@@ -31,18 +31,60 @@ uint16_t fp32_to_bf16_bits_round_to_nearest_even(float val) {
 
 }  // namespace
 
-bfloat16::bfloat16(float float_num) : uint16_data(fp32_to_bf16_bits_round_to_nearest_even(float_num)) {}
+constexpr bfloat16::bfloat16(raw_bits_t, std::uint16_t bits) noexcept : uint16_data(bits) {}
 
 bfloat16 bfloat16::truncate(float float_num) {
     uint32_t U32 = std::bit_cast<uint32_t>(float_num);
-    return bfloat16(U32 >> 16);
+    return bfloat16(bfloat16::raw_bits, U32 >> 16);
 }
 
-bfloat16::bfloat16(uint32_t uint32_data) : uint16_data((uint16_t)uint32_data) {}
+bfloat16::operator float() const { return to_float(); }
 
-bfloat16::bfloat16(uint16_t uint16_data_) : uint16_data(uint16_data_) {}
+// -- Comparison Operators ---
+bool bfloat16::operator==(bfloat16 rhs) const { return static_cast<float>(*this) == static_cast<float>(rhs); }
 
-bfloat16::bfloat16(int int_data) : uint16_data((uint16_t)int_data) {}
+std::partial_ordering bfloat16::operator<=>(bfloat16 rhs) noexcept {
+    return static_cast<float>(*this) <=> static_cast<float>(rhs);
+}
+
+// -- Arithmetic Operators ---
+bfloat16& bfloat16::operator+=(bfloat16 rhs) noexcept {
+    *this = *this + rhs;
+    return *this;
+}
+
+bfloat16& bfloat16::operator-=(bfloat16 rhs) noexcept {
+    *this = *this - rhs;
+    return *this;
+}
+
+bfloat16& bfloat16::operator*=(bfloat16 rhs) noexcept {
+    *this = *this * rhs;
+    return *this;
+}
+
+bfloat16& bfloat16::operator/=(bfloat16 rhs) noexcept {
+    *this = *this / rhs;
+    return *this;
+}
+
+bfloat16 bfloat16::operator+(bfloat16 rhs) const {
+    return bfloat16(static_cast<float>(*this) + static_cast<float>(rhs));
+}
+
+bfloat16 bfloat16::operator-(bfloat16 rhs) const {
+    return bfloat16(static_cast<float>(*this) - static_cast<float>(rhs));
+}
+
+bfloat16 bfloat16::operator*(bfloat16 rhs) const {
+    return bfloat16(static_cast<float>(*this) * static_cast<float>(rhs));
+}
+
+bfloat16 bfloat16::operator/(bfloat16 rhs) const {
+    return bfloat16(static_cast<float>(*this) / static_cast<float>(rhs));
+}
+
+uint16_t bfloat16::from_float(float val) { return fp32_to_bf16_bits_round_to_nearest_even(val); }
 
 std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16) {
     os << bfp16.to_uint16();
@@ -66,8 +108,8 @@ uint32_t pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16> two_bfloats
 std::pair<bfloat16, bfloat16> unpack_two_bfloat16_from_uint32(uint32_t uint32_data) {
     std::pair<bfloat16, bfloat16> two_bfloats;
 
-    two_bfloats.first = bfloat16(uint32_data & 0xffff);  // lower 16
-    two_bfloats.second = bfloat16(uint32_data >> 16);    // upper 16
+    two_bfloats.first = bfloat16(bfloat16::raw_bits, uint32_data & 0xffff);  // lower 16
+    two_bfloats.second = bfloat16(bfloat16::raw_bits, uint32_data >> 16);    // upper 16
 
     return two_bfloats;
 }
@@ -201,8 +243,8 @@ std::vector<uint32_t> u32_from_u16_vector(const std::vector<uint16_t>& in) {
     std::vector<uint32_t> result(in.size() / 2);
     TT_ASSERT(in.size() % 2 == 0);
     for (size_t i = 0; i < in.size(); i += 2) {
-        auto val1 = bfloat16(in.at(i));
-        auto val2 = bfloat16(in.at(i + 1));
+        auto val1 = bfloat16(bfloat16::raw_bits, in.at(i));
+        auto val2 = bfloat16(bfloat16::raw_bits, in.at(i + 1));
         auto packed = pack_two_bfloat16_into_uint32(std::make_pair(val1, val2));
         result[i / 2] = packed;
     }
