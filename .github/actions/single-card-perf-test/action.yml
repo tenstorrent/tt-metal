@@ -1,6 +1,6 @@
 inputs:
   model_name:
-    required: true
+    required: ${{ env.PIPELINE == 'device-perf'}}
     description: "Model name"
   commands:
     required: true
@@ -19,7 +19,17 @@ runs:
         cat Models_Device_Perf_${{ inputs.model_name }}_$(date +%Y_%m_%d).csv > Models_Device_Perf_$(date +%Y_%m_%d).csv
         cat Models_Device_Perf_$(date +%Y_%m_%d).csv
         echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
-
+      if: ${{ env.PIPELINE == 'device-perf'}}
       shell: bash
       env:
         TRACY_NO_INVARIANT_CHECK: 1
+    - uses: ./.github/actions/docker-run
+      if: ${{ env.PIPELINE == 'model-perf'}}
+      with:
+        docker_image: ${{ env.DOCKER_IMAGE }}
+        docker_password: ${{ env.DOCKER_PASSWORD }}
+        docker_opts: ${{ env.DOCKER_OPTS }}
+        install_wheel: true
+        run_args: |
+          ${{ inputs.commands }}
+          env python3 models/perf/merge_perf_results.py REPORT
