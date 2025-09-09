@@ -140,7 +140,6 @@ class Generator:
                 output_logits[idx] = self.model[model_id].process_output_prefill(
                     out, last_token_idx=(last_token_idx % 32)
                 )
-                del outs
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
