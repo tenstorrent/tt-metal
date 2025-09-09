@@ -287,7 +287,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
         sub_device_id,
         std::nullopt,
         std::nullopt,
-        std::nullopt,
+        1,
         std::nullopt);
 
     std::vector<ttnn::Tensor> full_output = tt::tt_metal::operation::run(
