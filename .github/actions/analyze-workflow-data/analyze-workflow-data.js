@@ -8,6 +8,7 @@
 const core = require('@actions/core');
 const github = require('@actions/github');
 const fs = require('fs');
+const path = require('path');
 
 // Constants
 const DEFAULT_LOOKBACK_DAYS = 15;
@@ -327,6 +328,7 @@ async function run() {
   try {
     // Get inputs
     const cachePath = core.getInput('cache-path', { required: true });
+    const previousCachePath = core.getInput('previous-cache-path', { required: false });
     const workflowConfigs = JSON.parse(core.getInput('workflow_configs', { required: true }));
     const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10);
 
@@ -343,12 +345,15 @@ async function run() {
 
     // Load cached data
     const grouped = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    const hasPrevious = previousCachePath && fs.existsSync(previousCachePath);
+    const previousGrouped = hasPrevious ? JSON.parse(fs.readFileSync(previousCachePath, 'utf8')) : null;
 
     // Track failed workflows
     const failedWorkflows = [];
 
     // Filter and process each workflow configuration
     const filteredGrouped = new Map();
+    const filteredPreviousGrouped = new Map();
     for (const config of workflowConfigs) {
       core.info(`Processing config: ${JSON.stringify(config)}`);
       for (const [name, runs] of grouped) {
@@ -371,6 +376,18 @@ async function run() {
           }
         }
       }
+
+      if (hasPrevious && Array.isArray(previousGrouped)) {
+        for (const [name, runs] of previousGrouped) {
+          if ((config.wkflw_name && name === config.wkflw_name) ||
+              (config.wkflw_prefix && name.startsWith(config.wkflw_prefix))) {
+            const filteredRuns = filterRunsByDate(runs, days);
+            if (filteredRuns.length > 0) {
+              filteredPreviousGrouped.set(name, filteredRuns);
+            }
+          }
+        }
+      }
     }
 
     // Create authenticated Octokit client for PR info
@@ -382,6 +399,46 @@ async function run() {
     // Set outputs
     core.setOutput('failed_workflows', JSON.stringify(failedWorkflows));
     core.setOutput('report', report);
+
+    // Compute status changes vs previous and write JSON
+    const computeLatestConclusion = (runs) => {
+      const mainBranchRuns = runs
+        .filter(r => r.head_branch === 'main')
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      const latest = mainBranchRuns[0];
+      if (!latest) return null;
+      return latest.conclusion === 'success' ? 'success' : 'failure';
+    };
+
+    const allNames = new Set([
+      ...Array.from(filteredGrouped.keys()),
+      ...Array.from(filteredPreviousGrouped.keys())
+    ]);
+
+    const changes = [];
+    for (const name of allNames) {
+      const currentRuns = filteredGrouped.get(name);
+      const previousRuns = filteredPreviousGrouped.get(name);
+      if (!currentRuns || !previousRuns) continue; // require data on both sides
+      const current = computeLatestConclusion(currentRuns);
+      const previous = computeLatestConclusion(previousRuns);
+      if (!current || !previous) continue;
+
+      let change;
+      if (previous === 'success' && current === 'success') change = 'stayed_succeeding';
+      else if (previous !== 'success' && current !== 'success') change = 'stayed_failing';
+      else if (previous !== 'success' && current === 'success') change = 'fail_to_success';
+      else if (previous === 'success' && current !== 'success') change = 'success_to_fail';
+
+      if (change) {
+        changes.push({ name, previous, current, change });
+      }
+    }
+
+    const outputDir = process.env.GITHUB_WORKSPACE || process.cwd();
+    const statusChangesPath = path.join(outputDir, 'workflow-status-changes.json');
+    fs.writeFileSync(statusChangesPath, JSON.stringify(changes));
+    core.setOutput('status_changes_path', statusChangesPath);
 
     await core.summary.addRaw(report).write();
 

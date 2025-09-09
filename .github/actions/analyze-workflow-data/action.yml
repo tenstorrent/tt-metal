@@ -5,6 +5,9 @@ inputs:
   cache-path:
     description: 'Path to the cached workflow data file'
     required: true
+  previous-cache-path:
+    description: "Path to the previous run's workflow data file (optional)"
+    required: false
   GITHUB_TOKEN:
     description: 'GitHub token for API access. Used to fetch PR information and workflow details.'
     required: true
