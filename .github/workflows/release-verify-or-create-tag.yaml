@@ -67,7 +67,7 @@ jobs:
       - name: Echo GITHUB_TOKEN permissions
         run: |
           echo "GITHUB_TOKEN Permissions:"
-          echo "${{ toJson(github.token) }}"
+          echo "${{ toJson(github) }}"
 
       - name: Create tag
         if: ${{ !inputs.dry-run }}
