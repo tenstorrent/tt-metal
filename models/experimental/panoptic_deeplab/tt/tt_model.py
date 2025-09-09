@@ -40,6 +40,7 @@ class TtPanopticDeepLab:
 
     def __init__(
         self,
+        parameters,
         device: ttnn.MeshDevice,
         *,
         # Model configuration
@@ -61,26 +62,6 @@ class TtPanopticDeepLab:
         # Weight initialization
         weights_path: Optional[str] = None,
         # Shared weight tensors for heads
-        shared_weight_tensor_kernel1: Optional[torch.Tensor] = None,
-        shared_weight_tensor_kernel3: Optional[torch.Tensor] = None,
-        shared_weight_tensor_kernel1_output5: Optional[torch.Tensor] = None,
-        # Semantic head weights
-        sem_project_conv_weights: Optional[Dict[str, torch.Tensor]] = None,
-        sem_fuse_conv_0_weights: Optional[Dict[str, torch.Tensor]] = None,
-        sem_fuse_conv_1_weights: Optional[Dict[str, torch.Tensor]] = None,
-        sem_head_0_weight: Optional[torch.Tensor] = None,
-        sem_head_1_weight: Optional[torch.Tensor] = None,
-        sem_predictor_weight: Optional[torch.Tensor] = None,
-        # Instance head weights
-        ins_project_conv_weights: Optional[Dict[str, torch.Tensor]] = None,
-        ins_fuse_conv_0_weights: Optional[Dict[str, torch.Tensor]] = None,
-        ins_fuse_conv_1_weights: Optional[Dict[str, torch.Tensor]] = None,
-        center_head_0_weight: Optional[torch.Tensor] = None,
-        center_head_1_weight: Optional[torch.Tensor] = None,
-        center_predictor_weight: Optional[torch.Tensor] = None,
-        offset_head_0_weight: Optional[torch.Tensor] = None,
-        offset_head_1_weight: Optional[torch.Tensor] = None,
-        offset_predictor_weight: Optional[torch.Tensor] = None,
     ):
         """
         Initialize the Panoptic-DeepLab model.
@@ -115,48 +96,20 @@ class TtPanopticDeepLab:
         # Define feature map specifications based on ResNet output
         self.input_shape = self._create_input_shape_spec()
 
-        # Initialize or create shared weights
-        if shared_weight_tensor_kernel1 is None:
-            shared_weight_tensor_kernel1 = torch.randn(256, 2048, 1, 1, dtype=torch.bfloat16)
-        if shared_weight_tensor_kernel3 is None:
-            shared_weight_tensor_kernel3 = torch.randn(256, 2048, 3, 3, dtype=torch.bfloat16)
-        if shared_weight_tensor_kernel1_output5 is None:
-            shared_weight_tensor_kernel1_output5 = torch.randn(256, 1280, 1, 1, dtype=torch.bfloat16)
+        # # Initialize or create shared weights
+        # if shared_weight_tensor_kernel1 is None:
+        #     shared_weight_tensor_kernel1 = torch.randn(256, 2048, 1, 1, dtype=torch.bfloat16)
+        # if shared_weight_tensor_kernel3 is None:
+        #     shared_weight_tensor_kernel3 = torch.randn(256, 2048, 3, 3, dtype=torch.bfloat16)
+        # if shared_weight_tensor_kernel1_output5 is None:
+        #     shared_weight_tensor_kernel1_output5 = torch.randn(256, 1280, 1, 1, dtype=torch.bfloat16)
 
         # Create default weights if not provided
-        sem_weights = self._create_semantic_weights(
-            sem_project_conv_weights,
-            sem_fuse_conv_0_weights,
-            sem_fuse_conv_1_weights,
-            sem_head_0_weight,
-            sem_head_1_weight,
-            sem_predictor_weight,
-            project_channels,
-            decoder_channels,
-            sem_seg_head_channels,
-            num_classes,
-        )
-
-        ins_weights = self._create_instance_weights(
-            ins_project_conv_weights,
-            ins_fuse_conv_0_weights,
-            ins_fuse_conv_1_weights,
-            center_head_0_weight,
-            center_head_1_weight,
-            center_predictor_weight,
-            offset_head_0_weight,
-            offset_head_1_weight,
-            offset_predictor_weight,
-            project_channels,
-            decoder_channels,
-            ins_embed_head_channels,
-        )
-
-        # Initialize semantic segmentation head
-        logger.debug("Initializing semantic segmentation head")
         self.semantic_head = TtPanopticDeepLabSemSegHead(
-            input_shape=self.input_shape,
+            parameters=parameters.semantic_head,
             device=device,
+            # Prosljeđujemo sve potrebne konfiguracione parametre
+            input_shape=self.input_shape,
             head_channels=sem_seg_head_channels,
             num_classes=num_classes,
             norm=norm,
@@ -166,19 +119,16 @@ class TtPanopticDeepLab:
             decoder_channels=decoder_channels,
             common_stride=common_stride,
             train_size=train_size,
-            shared_weight_tensor_kernel1=shared_weight_tensor_kernel1,
-            shared_weight_tensor_kernel3=shared_weight_tensor_kernel3,
-            shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
-            **sem_weights,
         )
-
         logger.debug("Semantic segmentation head initialization complete")
 
-        # Initialize instance embedding head
-        logger.debug("Initializing instance embedding head")
+        # 3. Inicijalizacija Instance Head-a sa 'parameters' objektom
+        logger.debug("Initializing instance embedding head from parameters")
         self.instance_head = TtPanopticDeepLabInsEmbedHead(
-            input_shape=self.input_shape,
+            parameters=parameters.instance_head,
             device=device,
+            # Prosljeđujemo sve potrebne konfiguracione parametre
+            input_shape=self.input_shape,
             head_channels=ins_embed_head_channels,
             project_channels=project_channels,
             aspp_dilations=aspp_dilations,
@@ -187,10 +137,6 @@ class TtPanopticDeepLab:
             common_stride=common_stride,
             norm=norm,
             train_size=train_size,
-            shared_weight_tensor_kernel1=shared_weight_tensor_kernel1,
-            shared_weight_tensor_kernel3=shared_weight_tensor_kernel3,
-            shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
-            **ins_weights,
         )
         logger.debug("Instance embedding head initialization complete")
         logger.debug("TtPanopticDeepLab model initialization complete")
@@ -214,135 +160,135 @@ class TtPanopticDeepLab:
 
         return input_shape
 
-    def _create_semantic_weights(
-        self,
-        project_conv_weights,
-        fuse_conv_0_weights,
-        fuse_conv_1_weights,
-        head_0_weight,
-        head_1_weight,
-        predictor_weight,
-        project_channels,
-        decoder_channels,
-        head_channels,
-        num_classes,
-    ) -> Dict[str, Any]:
-        """Create or use provided semantic head weights."""
-        weights = {}
+    # def _create_semantic_weights(
+    #     self,
+    #     project_conv_weights,
+    #     fuse_conv_0_weights,
+    #     fuse_conv_1_weights,
+    #     head_0_weight,
+    #     head_1_weight,
+    #     predictor_weight,
+    #     project_channels,
+    #     decoder_channels,
+    #     head_channels,
+    #     num_classes,
+    # ) -> Dict[str, Any]:
+    #     """Create or use provided semantic head weights."""
+    #     weights = {}
 
-        # Project conv weights
-        if project_conv_weights is None:
-            project_conv_weights = {
-                "res2": torch.randn(project_channels[0], 256, 1, 1, dtype=torch.bfloat16),
-                "res3": torch.randn(project_channels[1], 512, 1, 1, dtype=torch.bfloat16),
-            }
-        weights["project_conv_weights"] = project_conv_weights
+    #     # Project conv weights
+    #     if project_conv_weights is None:
+    #         project_conv_weights = {
+    #             "res2": torch.randn(project_channels[0], 256, 1, 1, dtype=torch.bfloat16),
+    #             "res3": torch.randn(project_channels[1], 512, 1, 1, dtype=torch.bfloat16),
+    #         }
+    #     weights["project_conv_weights"] = project_conv_weights
 
-        # Fuse conv weights
-        if fuse_conv_0_weights is None:
-            fuse_conv_0_weights = {
-                "res2": torch.randn(
-                    decoder_channels[0], project_channels[0] + decoder_channels[1], 3, 3, dtype=torch.bfloat16
-                ),
-                "res3": torch.randn(
-                    decoder_channels[1], project_channels[1] + decoder_channels[2], 3, 3, dtype=torch.bfloat16
-                ),
-            }
-        weights["fuse_conv_0_weights"] = fuse_conv_0_weights
+    #     # Fuse conv weights
+    #     if fuse_conv_0_weights is None:
+    #         fuse_conv_0_weights = {
+    #             "res2": torch.randn(
+    #                 decoder_channels[0], project_channels[0] + decoder_channels[1], 3, 3, dtype=torch.bfloat16
+    #             ),
+    #             "res3": torch.randn(
+    #                 decoder_channels[1], project_channels[1] + decoder_channels[2], 3, 3, dtype=torch.bfloat16
+    #             ),
+    #         }
+    #     weights["fuse_conv_0_weights"] = fuse_conv_0_weights
 
-        if fuse_conv_1_weights is None:
-            fuse_conv_1_weights = {
-                "res2": torch.randn(decoder_channels[0], decoder_channels[0], 3, 3, dtype=torch.bfloat16),
-                "res3": torch.randn(decoder_channels[1], decoder_channels[1], 3, 3, dtype=torch.bfloat16),
-            }
-        weights["fuse_conv_1_weights"] = fuse_conv_1_weights
+    #     if fuse_conv_1_weights is None:
+    #         fuse_conv_1_weights = {
+    #             "res2": torch.randn(decoder_channels[0], decoder_channels[0], 3, 3, dtype=torch.bfloat16),
+    #             "res3": torch.randn(decoder_channels[1], decoder_channels[1], 3, 3, dtype=torch.bfloat16),
+    #         }
+    #     weights["fuse_conv_1_weights"] = fuse_conv_1_weights
 
-        # Head weights
-        if head_0_weight is None:
-            head_0_weight = torch.randn(decoder_channels[0], decoder_channels[0], 3, 3, dtype=torch.bfloat16)
-        weights["panoptic_head_0_weight"] = head_0_weight
+    #     # Head weights
+    #     if head_0_weight is None:
+    #         head_0_weight = torch.randn(decoder_channels[0], decoder_channels[0], 3, 3, dtype=torch.bfloat16)
+    #     weights["panoptic_head_0_weight"] = head_0_weight
 
-        if head_1_weight is None:
-            head_1_weight = torch.randn(head_channels, decoder_channels[0], 3, 3, dtype=torch.bfloat16)
-        weights["panoptic_head_1_weight"] = head_1_weight
+    #     if head_1_weight is None:
+    #         head_1_weight = torch.randn(head_channels, decoder_channels[0], 3, 3, dtype=torch.bfloat16)
+    #     weights["panoptic_head_1_weight"] = head_1_weight
 
-        if predictor_weight is None:
-            predictor_weight = torch.randn(num_classes, head_channels, 1, 1, dtype=torch.bfloat16)
-        weights["panoptic_predictor_weight"] = predictor_weight
+    #     if predictor_weight is None:
+    #         predictor_weight = torch.randn(num_classes, head_channels, 1, 1, dtype=torch.bfloat16)
+    #     weights["panoptic_predictor_weight"] = predictor_weight
 
-        return weights
+    #     return weights
 
-    def _create_instance_weights(
-        self,
-        project_conv_weights,
-        fuse_conv_0_weights,
-        fuse_conv_1_weights,
-        center_head_0_weight,
-        center_head_1_weight,
-        center_predictor_weight,
-        offset_head_0_weight,
-        offset_head_1_weight,
-        offset_predictor_weight,
-        project_channels,
-        decoder_channels,
-        head_channels,
-    ) -> Dict[str, Any]:
-        """Create or use provided instance head weights."""
-        weights = {}
+    # def _create_instance_weights(
+    #     self,
+    #     project_conv_weights,
+    #     fuse_conv_0_weights,
+    #     fuse_conv_1_weights,
+    #     center_head_0_weight,
+    #     center_head_1_weight,
+    #     center_predictor_weight,
+    #     offset_head_0_weight,
+    #     offset_head_1_weight,
+    #     offset_predictor_weight,
+    #     project_channels,
+    #     decoder_channels,
+    #     head_channels,
+    # ) -> Dict[str, Any]:
+    #     """Create or use provided instance head weights."""
+    #     weights = {}
 
-        # Use the same decoder weights as semantic head (shared decoder)
-        if project_conv_weights is None:
-            project_conv_weights = {
-                "res2": torch.randn(project_channels[0], 256, 1, 1, dtype=torch.bfloat16),
-                "res3": torch.randn(project_channels[1], 512, 1, 1, dtype=torch.bfloat16),
-            }
-        weights["project_conv_weights"] = project_conv_weights
+    #     # Use the same decoder weights as semantic head (shared decoder)
+    #     if project_conv_weights is None:
+    #         project_conv_weights = {
+    #             "res2": torch.randn(project_channels[0], 256, 1, 1, dtype=torch.bfloat16),
+    #             "res3": torch.randn(project_channels[1], 512, 1, 1, dtype=torch.bfloat16),
+    #         }
+    #     weights["project_conv_weights"] = project_conv_weights
 
-        if fuse_conv_0_weights is None:
-            fuse_conv_0_weights = {
-                "res2": torch.randn(
-                    decoder_channels[0], project_channels[0] + decoder_channels[1], 3, 3, dtype=torch.bfloat16
-                ),
-                "res3": torch.randn(
-                    decoder_channels[1], project_channels[1] + decoder_channels[2], 3, 3, dtype=torch.bfloat16
-                ),
-            }
-        weights["fuse_conv_0_weights"] = fuse_conv_0_weights
+    #     if fuse_conv_0_weights is None:
+    #         fuse_conv_0_weights = {
+    #             "res2": torch.randn(
+    #                 decoder_channels[0], project_channels[0] + decoder_channels[1], 3, 3, dtype=torch.bfloat16
+    #             ),
+    #             "res3": torch.randn(
+    #                 decoder_channels[1], project_channels[1] + decoder_channels[2], 3, 3, dtype=torch.bfloat16
+    #             ),
+    #         }
+    #     weights["fuse_conv_0_weights"] = fuse_conv_0_weights
 
-        if fuse_conv_1_weights is None:
-            fuse_conv_1_weights = {
-                "res2": torch.randn(decoder_channels[0], decoder_channels[0], 3, 3, dtype=torch.bfloat16),
-                "res3": torch.randn(decoder_channels[1], decoder_channels[1], 3, 3, dtype=torch.bfloat16),
-            }
-        weights["fuse_conv_1_weights"] = fuse_conv_1_weights
+    #     if fuse_conv_1_weights is None:
+    #         fuse_conv_1_weights = {
+    #             "res2": torch.randn(decoder_channels[0], decoder_channels[0], 3, 3, dtype=torch.bfloat16),
+    #             "res3": torch.randn(decoder_channels[1], decoder_channels[1], 3, 3, dtype=torch.bfloat16),
+    #         }
+    #     weights["fuse_conv_1_weights"] = fuse_conv_1_weights
 
-        # Center head weights
-        if center_head_0_weight is None:
-            center_head_0_weight = torch.randn(decoder_channels[0], decoder_channels[0], 3, 3, dtype=torch.bfloat16)
-        weights["center_head_0_weight"] = center_head_0_weight
+    #     # Center head weights
+    #     if center_head_0_weight is None:
+    #         center_head_0_weight = torch.randn(decoder_channels[0], decoder_channels[0], 3, 3, dtype=torch.bfloat16)
+    #     weights["center_head_0_weight"] = center_head_0_weight
 
-        if center_head_1_weight is None:
-            center_head_1_weight = torch.randn(head_channels, decoder_channels[0], 3, 3, dtype=torch.bfloat16)
-        weights["center_head_1_weight"] = center_head_1_weight
+    #     if center_head_1_weight is None:
+    #         center_head_1_weight = torch.randn(head_channels, decoder_channels[0], 3, 3, dtype=torch.bfloat16)
+    #     weights["center_head_1_weight"] = center_head_1_weight
 
-        if center_predictor_weight is None:
-            center_predictor_weight = torch.randn(1, head_channels, 1, 1, dtype=torch.bfloat16)
-        weights["center_predictor_weight"] = center_predictor_weight
+    #     if center_predictor_weight is None:
+    #         center_predictor_weight = torch.randn(1, head_channels, 1, 1, dtype=torch.bfloat16)
+    #     weights["center_predictor_weight"] = center_predictor_weight
 
-        # Offset head weights
-        if offset_head_0_weight is None:
-            offset_head_0_weight = torch.randn(decoder_channels[0], decoder_channels[0], 3, 3, dtype=torch.bfloat16)
-        weights["offset_head_0_weight"] = offset_head_0_weight
+    #     # Offset head weights
+    #     if offset_head_0_weight is None:
+    #         offset_head_0_weight = torch.randn(decoder_channels[0], decoder_channels[0], 3, 3, dtype=torch.bfloat16)
+    #     weights["offset_head_0_weight"] = offset_head_0_weight
 
-        if offset_head_1_weight is None:
-            offset_head_1_weight = torch.randn(head_channels, decoder_channels[0], 3, 3, dtype=torch.bfloat16)
-        weights["offset_head_1_weight"] = offset_head_1_weight
+    #     if offset_head_1_weight is None:
+    #         offset_head_1_weight = torch.randn(head_channels, decoder_channels[0], 3, 3, dtype=torch.bfloat16)
+    #     weights["offset_head_1_weight"] = offset_head_1_weight
 
-        if offset_predictor_weight is None:
-            offset_predictor_weight = torch.randn(2, head_channels, 1, 1, dtype=torch.bfloat16)
-        weights["offset_predictor_weight"] = offset_predictor_weight
+    #     if offset_predictor_weight is None:
+    #         offset_predictor_weight = torch.randn(2, head_channels, 1, 1, dtype=torch.bfloat16)
+    #     weights["offset_predictor_weight"] = offset_predictor_weight
 
-        return weights
+    #     return weights
 
     def forward(
         self, x: ttnn.Tensor, return_features: bool = False
@@ -368,6 +314,9 @@ class TtPanopticDeepLab:
         logger.debug(
             f"Backbone features extracted - res2: {features['res2'].shape}, res3: {features['res3'].shape}, res4: {features['res4'].shape}, res5: {features['res5'].shape}"
         )
+
+        # Here we can maybe drop res4 because it's not used in any of the modules?
+        # del features["res4"]
 
         # Get semantic segmentation predictions
         semantic_logits, _ = self.semantic_head(features)
@@ -485,4 +434,8 @@ def create_panoptic_deeplab_model(device: ttnn.MeshDevice, num_classes: int = 19
     Returns:
         Configured TtPanopticDeepLab model (uses weights from R-52.pkl)
     """
-    return TtPanopticDeepLab(device=device, num_classes=num_classes, **kwargs)
+    # DEPRICATED; USING "PARAMETERS" NOW, NO SHARED WEIGHTS!
+    return NotImplementedError(
+        "This function is deprecated. Please use the TtPanopticDeepLab constructor directly with 'parameters' argument."
+    )
+    # return TtPanopticDeepLab(device=device, num_classes=num_classes, **kwargs)

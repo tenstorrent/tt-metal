@@ -8,8 +8,10 @@ PCC test for the complete TtPanopticDeepLab model.
 import pytest
 import torch
 import ttnn
+import os
 from loguru import logger
 
+from models.experimental.panoptic_deeplab.tt.model_preprocessing import create_panoptic_deeplab_parameters
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -18,11 +20,15 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
 def test_panoptic_deeplab(device):
     """Test PCC comparison between PyTorch and TTNN implementations."""
-    compute_grid = device.compute_with_storage_grid_size()
-    if compute_grid.x != 5 or compute_grid.y != 4:
-        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+    # compute_grid = device.compute_with_storage_grid_size()
+    # if compute_grid.x != 5 or compute_grid.y != 4:
+    #     pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
 
     torch.manual_seed(0)
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+
+    backbone_weights_path = os.path.join(current_dir, "..", "weights", "R-52.pkl")
+    heads_weights_path = os.path.join(current_dir, "..", "weights", "model_final_bd324a.pkl")
 
     batch_size = 1
     num_classes = 19
@@ -32,36 +38,6 @@ def test_panoptic_deeplab(device):
     ins_embed_head_channels = 32
     common_stride = 4
     train_size = (512, 1024)
-
-    shared_weight_tensor_kernel1 = torch.randn(256, 2048, 1, 1, dtype=torch.bfloat16)
-    shared_weight_tensor_kernel3 = torch.randn(256, 2048, 3, 3, dtype=torch.bfloat16)
-    shared_weight_tensor_kernel1_output5 = torch.randn(256, 1280, 1, 1, dtype=torch.bfloat16)
-
-    sem_project_conv_weights = {
-        "res2": torch.randn(project_channels[0], 256, 1, 1, dtype=torch.bfloat16),
-        "res3": torch.randn(project_channels[1], 512, 1, 1, dtype=torch.bfloat16),
-    }
-    sem_fuse_conv_0_weights = {
-        "res2": torch.randn(decoder_channels[0], project_channels[0] + decoder_channels[1], 3, 3, dtype=torch.bfloat16),
-        "res3": torch.randn(decoder_channels[1], project_channels[1] + decoder_channels[2], 3, 3, dtype=torch.bfloat16),
-    }
-    sem_fuse_conv_1_weights = {
-        "res2": torch.randn(decoder_channels[0], decoder_channels[0], 3, 3, dtype=torch.bfloat16),
-        "res3": torch.randn(decoder_channels[1], decoder_channels[1], 3, 3, dtype=torch.bfloat16),
-    }
-    sem_head_0_weight = torch.randn(decoder_channels[0], decoder_channels[0], 3, 3, dtype=torch.bfloat16)
-    sem_head_1_weight = torch.randn(sem_seg_head_channels, decoder_channels[0], 3, 3, dtype=torch.bfloat16)
-    sem_predictor_weight = torch.randn(num_classes, sem_seg_head_channels, 1, 1, dtype=torch.bfloat16)
-
-    ins_project_conv_weights = sem_project_conv_weights
-    ins_fuse_conv_0_weights = sem_fuse_conv_0_weights
-    ins_fuse_conv_1_weights = sem_fuse_conv_1_weights
-    center_head_0_weight = torch.randn(decoder_channels[0], decoder_channels[0], 3, 3, dtype=torch.bfloat16)
-    center_head_1_weight = torch.randn(ins_embed_head_channels, decoder_channels[0], 3, 3, dtype=torch.bfloat16)
-    center_predictor_weight = torch.randn(1, ins_embed_head_channels, 1, 1, dtype=torch.bfloat16)
-    offset_head_0_weight = torch.randn(decoder_channels[0], decoder_channels[0], 3, 3, dtype=torch.bfloat16)
-    offset_head_1_weight = torch.randn(ins_embed_head_channels, decoder_channels[0], 3, 3, dtype=torch.bfloat16)
-    offset_predictor_weight = torch.randn(2, ins_embed_head_channels, 1, 1, dtype=torch.bfloat16)
 
     input_height, input_width = train_size[0], train_size[1]
     input_channels = 3
@@ -80,59 +56,31 @@ def test_panoptic_deeplab(device):
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            norm="SyncBN",
+            norm="",
             train_size=train_size,
-            shared_weight_tensor_kernel1=shared_weight_tensor_kernel1,
-            shared_weight_tensor_kernel3=shared_weight_tensor_kernel3,
-            shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
-            sem_project_conv_weights=sem_project_conv_weights,
-            sem_fuse_conv_0_weights=sem_fuse_conv_0_weights,
-            sem_fuse_conv_1_weights=sem_fuse_conv_1_weights,
-            sem_head_0_weight=sem_head_0_weight,
-            sem_head_1_weight=sem_head_1_weight,
-            sem_predictor_weight=sem_predictor_weight,
-            ins_project_conv_weights=ins_project_conv_weights,
-            ins_fuse_conv_0_weights=ins_fuse_conv_0_weights,
-            ins_fuse_conv_1_weights=ins_fuse_conv_1_weights,
-            center_head_0_weight=center_head_0_weight,
-            center_head_1_weight=center_head_1_weight,
-            center_predictor_weight=center_predictor_weight,
-            offset_head_0_weight=offset_head_0_weight,
-            offset_head_1_weight=offset_head_1_weight,
-            offset_predictor_weight=offset_predictor_weight,
         )
         pytorch_model = pytorch_model.to(dtype=torch.bfloat16)
         pytorch_model.eval()
 
+        backbone_state_dict = {
+            k.replace("backbone.", ""): v for k, v in pytorch_model.state_dict().items() if k.startswith("backbone.")
+        }
+
+        # b) Korišćenje preprocessor-a za glave na VEĆ UČITANOM PyTorch modelu
+        head_parameters = create_panoptic_deeplab_parameters(pytorch_model, device)
+
         # 6. Create TTNN model with same weights
         ttnn_model = TtPanopticDeepLab(
             device=device,
+            parameters=head_parameters,
             num_classes=num_classes,
             common_stride=common_stride,
             project_channels=project_channels,
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            norm="SyncBN",
+            norm="",
             train_size=train_size,
-            shared_weight_tensor_kernel1=shared_weight_tensor_kernel1,
-            shared_weight_tensor_kernel3=shared_weight_tensor_kernel3,
-            shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
-            sem_project_conv_weights=sem_project_conv_weights,
-            sem_fuse_conv_0_weights=sem_fuse_conv_0_weights,
-            sem_fuse_conv_1_weights=sem_fuse_conv_1_weights,
-            sem_head_0_weight=sem_head_0_weight,
-            sem_head_1_weight=sem_head_1_weight,
-            sem_predictor_weight=sem_predictor_weight,
-            ins_project_conv_weights=ins_project_conv_weights,
-            ins_fuse_conv_0_weights=ins_fuse_conv_0_weights,
-            ins_fuse_conv_1_weights=ins_fuse_conv_1_weights,
-            center_head_0_weight=center_head_0_weight,
-            center_head_1_weight=center_head_1_weight,
-            center_predictor_weight=center_predictor_weight,
-            offset_head_0_weight=offset_head_0_weight,
-            offset_head_1_weight=offset_head_1_weight,
-            offset_predictor_weight=offset_predictor_weight,
         )
     except FileNotFoundError:
         pytest.fail("R-52.pkl file not found. Please place the weights file in the weights folder.")
