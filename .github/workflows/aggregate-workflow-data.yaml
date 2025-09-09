@@ -62,7 +62,7 @@ jobs:
         run: ls -l ${{ github.workspace }}/workflow-data.json || echo "File not found"
 
   analyze-data:
-    # needs: fetch-data
+    needs: fetch-data
     runs-on: ubuntu-latest
     outputs:
       failed_workflows: ${{ steps.analyze.outputs.failed_workflows }}
