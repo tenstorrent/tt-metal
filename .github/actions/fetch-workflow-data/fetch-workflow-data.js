@@ -50,6 +50,9 @@ function getLatestCachedDate(runs) {
 async function fetchAllWorkflowRuns(github, context, days, sinceDate) {
   const allRuns = [];
   const cutoffDate = getCutoffDate(days);
+  const createdDateFilter = `>=${cutoffDate.toISOString()}`;
+
+  core.info(`createdDateFilter: ${createdDateFilter}`);
   core.info(`days ${days}, sinceDate: ${sinceDate}`);
   for (let page = 1; page <= MAX_PAGES; page++) {
     const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
@@ -57,7 +60,8 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate) {
       repo: context.repo.repo,
       per_page: RUNS_PER_PAGE,
       page,
-      event: 'schedule'
+      event: 'schedule',
+      created: createdDateFilter
     });
     if (!runs.workflow_runs.length) {
       break;
