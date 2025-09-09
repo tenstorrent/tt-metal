@@ -11,6 +11,8 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+
 #define DEBUG_PRINT 0
 
 #if DEBUG_PRINT == 1
@@ -154,13 +156,16 @@ void MAIN {
 
                     cb_pop_front(curr_in_idx_cb_id, 1);
                 } else {
-                    unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                        curr_in_cb_id,
-                        curr_scalar_cb_id,
-                        tiles_to_reduce,
-                        0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
-                        num_faces_in_input_tile,
-                        face_r_dim);
+                    {
+                        DeviceZoneScopedN("Unpack tilize");
+                        unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                            curr_in_cb_id,
+                            curr_scalar_cb_id,
+                            tiles_to_reduce,
+                            0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
+                            num_faces_in_input_tile,
+                            face_r_dim);
+                    }
                     for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                         reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
                     }

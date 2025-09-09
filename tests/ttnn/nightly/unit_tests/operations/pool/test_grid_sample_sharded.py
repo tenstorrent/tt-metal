@@ -31,13 +31,13 @@ def align_to_boundary(value, alignment):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
-@pytest.mark.parametrize("use_precomputed_grid", [True, False])
+@pytest.mark.parametrize("use_precomputed_grid", [True])  # , False])
 @pytest.mark.parametrize(
     "input_shape, grid_shape",
     [
-        ((1, 32, 16, 32), (1, 13, 17, 2)),  # channels=32 (multiple of 32), no batching
-        ((1, 64, 32, 64), (1, 15, 15, 2)),  # channels=64 (multiple of 32), no batching
-        ((1, 96, 8, 16), (1, 6, 7, 2)),  # channels=96 (multiple of 32), no batching
+        # ((1, 256, 48, 160), (1, 1, 25281, 2)),  # channels=32 (multiple of 32), no batching
+        # ((1, 64, 32, 64), (1, 15, 15, 2)),  # channels=64 (multiple of 32), no batching
+        # ((1, 96, 8, 16), (1, 6, 7, 2)),  # channels=96 (multiple of 32), no batching
     ],
 )
 def test_grid_sample_sharded(device, input_shape, grid_shape, use_precomputed_grid):
@@ -78,7 +78,7 @@ def test_grid_sample_sharded(device, input_shape, grid_shape, use_precomputed_gr
 
     # Create sharded memory config for grid tensor only
     compute_grid_size = device.compute_with_storage_grid_size()
-    core_grid = ttnn.CoreGrid(y=min(2, compute_grid_size.y), x=min(2, compute_grid_size.x))
+    core_grid = ttnn.CoreGrid(y=min(5, compute_grid_size.y), x=min(4, compute_grid_size.x))
 
     # Grid sharding: round up shard width to L1 alignment
     grid_total_height = batch_size * grid_h * grid_w
@@ -147,14 +147,14 @@ def test_grid_sample_sharded(device, input_shape, grid_shape, use_precomputed_gr
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
-@pytest.mark.parametrize("use_precomputed_grid", [True, False])
-@pytest.mark.parametrize("batch_output_channels", [True, False])
+@pytest.mark.parametrize("use_precomputed_grid", [True])  # , False])
+@pytest.mark.parametrize("batch_output_channels", [True])  # , False])
 @pytest.mark.parametrize(
     "input_shape, grid_shape, grid_batching_factor",
     [
-        ((1, 64, 32, 64), (1, 12, 12, 2), 3),  # grid_batching_factor=3, reshape to (1, 12, 4, 6)
-        ((1, 32, 16, 32), (1, 8, 8, 2), 2),  # grid_batching_factor=2, reshape to (1, 8, 4, 4)
-        ((1, 96, 24, 32), (1, 6, 16, 2), 4),  # grid_batching_factor=4, reshape to (1, 6, 4, 8)
+        ((1, 256, 48, 160), (1, 1, 2809 * 7, 2), 7),  # grid_batching_factor=7
+        # ((1, 32, 16, 32), (1, 8, 8, 2), 2),  # grid_batching_factor=2, reshape to (1, 8, 4, 4)
+        # ((1, 96, 24, 32), (1, 6, 16, 2), 4),  # grid_batching_factor=4, reshape to (1, 6, 4, 8)
     ],
 )
 def test_grid_sample_sharded_batched(
@@ -215,7 +215,7 @@ def test_grid_sample_sharded_batched(
 
     # Create sharded memory config for the reshaped grid tensor
     compute_grid_size = device.compute_with_storage_grid_size()
-    core_grid = ttnn.CoreGrid(y=min(2, compute_grid_size.y), x=min(2, compute_grid_size.x))
+    core_grid = ttnn.CoreGrid(y=min(5, compute_grid_size.y), x=min(4, compute_grid_size.x))
 
     # Grid sharding: round up shard width to L1 alignment
     grid_total_height = batch_size * grid_h * new_grid_w

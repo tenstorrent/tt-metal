@@ -188,7 +188,10 @@ void kernel_main() {
 #endif
 
             // Reserve CB space for 4 corner input sticks for this grid
-            cb_reserve_back(input_cb_index, 1);
+            {
+                DeviceZoneScopedN("Wait for CB space");
+                cb_reserve_back(input_cb_index, 1);
+            }
             uint32_t l1_write_input_addr = get_write_ptr(input_cb_index);
 
             // Read 4 corner input sticks

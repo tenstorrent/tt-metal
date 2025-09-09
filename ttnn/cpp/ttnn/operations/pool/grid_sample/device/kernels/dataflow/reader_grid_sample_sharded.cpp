@@ -7,6 +7,7 @@
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/height_sharded_reader_common.hpp"
 #include "debug/dprint.h"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 #define ALWI inline __attribute__((always_inline))
 
@@ -164,40 +165,48 @@ void kernel_main() {
 #endif
 
         // Reserve CB space for 4 corner input sticks for this grid point
-
-        cb_reserve_back(input_cb_index, 1);
+        {
+            DeviceZoneScopedN("CB reserve");
+            cb_reserve_back(input_cb_index, 1);
+        }
 
         uint32_t l1_write_input_addr = get_write_ptr(input_cb_index);
 
-        // Read 4 corner input sticks via NOC from remote input tensor shards
-        if (h0_valid && w0_valid) {
-            const uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
-            const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(north_west_stick_index);
-            noc_async_read(remote_noc_addr, l1_write_input_addr, input_stick_nbytes);
-        }
-        l1_write_input_addr += input_stick_nbytes;
+        {
+            DeviceZoneScopedN("NOC reads");
+            // Read 4 corner input sticks via NOC from remote input tensor shards
+            if (h0_valid && w0_valid) {
+                const uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
+                const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(north_west_stick_index);
+                noc_async_read(remote_noc_addr, l1_write_input_addr, input_stick_nbytes);
+            }
+            l1_write_input_addr += input_stick_nbytes;
 
-        if (h0_valid && w1_valid) {
-            const uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
-            const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(north_east_stick_index);
-            noc_async_read(remote_noc_addr, l1_write_input_addr, input_stick_nbytes);
-        }
-        l1_write_input_addr += input_stick_nbytes;
+            if (h0_valid && w1_valid) {
+                const uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
+                const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(north_east_stick_index);
+                noc_async_read(remote_noc_addr, l1_write_input_addr, input_stick_nbytes);
+            }
+            l1_write_input_addr += input_stick_nbytes;
 
-        if (h1_valid && w0_valid) {
-            const uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
-            const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(south_west_stick_index);
-            noc_async_read(remote_noc_addr, l1_write_input_addr, input_stick_nbytes);
-        }
-        l1_write_input_addr += input_stick_nbytes;
+            if (h1_valid && w0_valid) {
+                const uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
+                const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(south_west_stick_index);
+                noc_async_read(remote_noc_addr, l1_write_input_addr, input_stick_nbytes);
+            }
+            l1_write_input_addr += input_stick_nbytes;
 
-        if (h1_valid && w1_valid) {
-            const uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
-            const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(south_east_stick_index);
-            noc_async_read(remote_noc_addr, l1_write_input_addr, input_stick_nbytes);
+            if (h1_valid && w1_valid) {
+                const uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
+                const uint64_t remote_noc_addr = input_tensor_accessor.get_noc_addr(south_east_stick_index);
+                noc_async_read(remote_noc_addr, l1_write_input_addr, input_stick_nbytes);
+            }
         }
 
-        noc_async_read_barrier();
+        {
+            DeviceZoneScopedN("Read barrier");
+            noc_async_read_barrier();
+        }
         cb_push_back(input_cb_index, 1);
 
         // Write scalar weights to scalar CB
