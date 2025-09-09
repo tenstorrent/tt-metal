@@ -6,6 +6,7 @@
 const core = require('@actions/core');
 const github = require('@actions/github');
 const fs = require('fs');
+const path = require('path');
 
 // Constants for pagination and filtering
 const MAX_PAGES = 100; // Maximum number of pages to fetch from GitHub API (tune for rate limits/performance)
@@ -101,15 +102,18 @@ async function run() {
     // Get inputs
     const branch = core.getInput('branch') || 'main';
     const days = parseInt(core.getInput('days') || DEFAULT_DAYS);
-    const cachePath = core.getInput('cache-path', { required: false });
+    const rawCachePath = core.getInput('cache-path', { required: false });
+    const defaultOutputPath = path.join(process.env.GITHUB_WORKSPACE || process.cwd(), 'workflow-data.json');
+    const outputPath = rawCachePath && rawCachePath.trim() ? rawCachePath : defaultOutputPath;
     // Create authenticated Octokit client
     const octokit = github.getOctokit(core.getInput('GITHUB_TOKEN', { required: true }));
     // Load previous cache if it exists
     let previousRuns = [];
     let latestCachedDate = null;
-    if (cachePath && fs.existsSync(cachePath)) {
+    // Only consider reading a previous cache when an explicit cache path was provided
+    if (rawCachePath && fs.existsSync(rawCachePath)) {
       try {
-        const rawCache = fs.readFileSync(cachePath, 'utf8');
+        const rawCache = fs.readFileSync(rawCachePath, 'utf8');
         const prev = JSON.parse(rawCache);
         if (Array.isArray(prev)) {
           if (prev.length && Array.isArray(prev[0])) {
@@ -150,16 +154,17 @@ async function run() {
     );
     // Group runs by workflow name
     const grouped = groupRunsByName(mergedRuns);
-    // Ensure cache directory exists
-    const cacheDir = require('path').dirname(cachePath);
-    if (!fs.existsSync(cacheDir)) {
-      fs.mkdirSync(cacheDir, { recursive: true });
+    // Ensure output directory exists
+    const outputDir = path.dirname(outputPath);
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
     }
-    // Save grouped runs to cache file
-    fs.writeFileSync(cachePath, JSON.stringify(Array.from(grouped.entries())));
+    // Save grouped runs to artifact file
+    fs.writeFileSync(outputPath, JSON.stringify(Array.from(grouped.entries())));
     // Set output
     core.setOutput('total-runs', mergedRuns.length);
     core.setOutput('workflow-count', grouped.size);
+    core.setOutput('cache-path', outputPath);
     // Log remaining GitHub API rate limit
     const rateLimit = await octokit.rest.rateLimit.get();
     const remaining = rateLimit.data.resources.core.remaining;
