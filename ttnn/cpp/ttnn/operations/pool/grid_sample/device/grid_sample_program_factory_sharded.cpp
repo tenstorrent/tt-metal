@@ -144,8 +144,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory_sharde
         (std::uint32_t)use_precomputed_grid ? 1 : 0,  // 9: precomputed grid flag
         (std::uint32_t)split_reader ? 1 : 0,          // 10: split reader flag
         (std::uint32_t)0,                             // 11: reader_id (will be set per reader)
-        (std::uint32_t)input_cb_index_1,              // 12: input CB 1 index
-        (std::uint32_t)scalar_cb_index_1,             // 13: scalar CB 1 index
     };
 
     // Add input tensor accessor args for remote NOC reads
