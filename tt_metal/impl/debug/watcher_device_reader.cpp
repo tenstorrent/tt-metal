@@ -16,6 +16,7 @@
 #include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
 #include <core_coord.hpp>
 #include <fmt/base.h>
+#include <fmt/ranges.h>
 #include <metal_soc_descriptor.h>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -601,7 +602,7 @@ void WatcherDeviceReader::Core::Dump() const {
     if (!is_eth_core && rtoptions.get_watcher_text_start()) {
         uint32_t kernel_config_base = kernel_config.kernel_config_base()[0];
         fprintf(reader_.f, " text_start:");
-        for (size_t i = 0; i < NUM_PROCESSORS_PER_CORE_TYPE; i++) {
+        for (size_t i = 0; i < num_processors; i++) {
             const char* separator = (i > 0) ? "|" : "";
             fprintf(reader_.f, "%s0x%x", separator, kernel_config_base + kernel_config.kernel_text_offset()[i]);
         }
@@ -644,7 +645,7 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
     string error_reason;
 
     switch (san.return_code()) {
-        case DebugSanitizeNocOK:
+        case dev_msgs::DebugSanitizeNocOK:
             if (san.noc_addr() != DEBUG_SANITIZE_NOC_SENTINEL_OK_64 ||
                 san.l1_addr() != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 || san.len() != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 ||
                 san.which_risc() != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
@@ -660,47 +661,47 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
                 error_msg += " (corrupted noc sanitization state - sanitization memory overwritten)";
             }
             break;
-        case DebugSanitizeNocAddrUnderflow:
+        case dev_msgs::DebugSanitizeNocAddrUnderflow:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += string(san.is_target() ? " (NOC target" : " (Local L1") + " address underflow).";
             break;
-        case DebugSanitizeNocAddrOverflow:
+        case dev_msgs::DebugSanitizeNocAddrOverflow:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += string(san.is_target() ? " (NOC target" : " (Local L1") + " address overflow).";
             break;
-        case DebugSanitizeNocAddrZeroLength:
+        case dev_msgs::DebugSanitizeNocAddrZeroLength:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (zero length transaction).";
             break;
-        case DebugSanitizeNocTargetInvalidXY:
+        case dev_msgs::DebugSanitizeNocTargetInvalidXY:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (NOC target address did not map to any known Tensix/Ethernet/DRAM/PCIE core).";
             break;
-        case DebugSanitizeNocMulticastNonWorker:
+        case dev_msgs::DebugSanitizeNocMulticastNonWorker:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (multicast to non-worker core).";
             break;
-        case DebugSanitizeNocMulticastInvalidRange:
+        case dev_msgs::DebugSanitizeNocMulticastInvalidRange:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (multicast invalid range).";
             break;
-        case DebugSanitizeNocAlignment:
+        case dev_msgs::DebugSanitizeNocAlignment:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (invalid address alignment in NOC transaction).";
             break;
-        case DebugSanitizeNocMixedVirtualandPhysical:
+        case dev_msgs::DebugSanitizeNocMixedVirtualandPhysical:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (mixing virtual and virtual coordinates in Mcast).";
             break;
-        case DebugSanitizeInlineWriteDramUnsupported:
+        case dev_msgs::DebugSanitizeInlineWriteDramUnsupported:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (inline dw writes do not support DRAM destination addresses).";
             break;
-        case DebugSanitizeNocAddrMailbox:
+        case dev_msgs::DebugSanitizeNocAddrMailbox:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += string(san.is_target() ? " (NOC target" : " (Local L1") + " overwrites mailboxes).";
             break;
-        case DebugSanitizeNocLinkedTransactionViolation:
+        case dev_msgs::DebugSanitizeNocLinkedTransactionViolation:
             error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += fmt::format(" (submitting a non-mcast transaction when there's a linked transaction).");
             break;
@@ -727,7 +728,7 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
 
 void WatcherDeviceReader::Core::DumpAssertStatus() const {
     auto assert_status = mbox_data_.watcher().assert_status();
-    if (assert_status.tripped() == DebugAssertOK) {
+    if (assert_status.tripped() == dev_msgs::DebugAssertOK) {
         if (assert_status.line_num() != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
             assert_status.which() != DEBUG_SANITIZE_NOC_SENTINEL_OK_8) {
             TT_THROW(
@@ -741,7 +742,7 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     std::string error_msg =
         fmt::format("{}: {} ", core_str_, get_riscv_name(programmable_core_type_, assert_status.which()));
     switch (assert_status.tripped()) {
-        case DebugAssertTripped: {
+        case dev_msgs::DebugAssertTripped: {
             error_msg += fmt::format("tripped an assert on line {}.", assert_status.line_num());
             // TODO: Get rid of this once #6098 is implemented.
             error_msg +=
@@ -749,25 +750,25 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
                 "may be from a different file.";
             break;
         }
-        case DebugAssertNCriscNOCReadsFlushedTripped: {
+        case dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped: {
             error_msg +=
                 "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
                 "NOC reads flushed barrier).";
             break;
         }
-        case DebugAssertNCriscNOCNonpostedWritesSentTripped: {
+        case dev_msgs::DebugAssertNCriscNOCNonpostedWritesSentTripped: {
             error_msg +=
                 "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
                 "NOC non-posted writes sent barrier).";
             break;
         }
-        case DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped: {
+        case dev_msgs::DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped: {
             error_msg +=
                 "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
                 "NOC non-posted atomics flushed barrier).";
             break;
         }
-        case DebugAssertNCriscNOCPostedWritesSentTripped: {
+        case dev_msgs::DebugAssertNCriscNOCPostedWritesSentTripped: {
             error_msg +=
                 "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
                 "NOC posted writes sent barrier).";
@@ -911,9 +912,9 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
     auto subordinate_sync = mbox_data_.subordinate_sync();
     const auto& hal = MetalContext::instance().hal();
     fprintf(reader_.f, "rmsg:");
-    if (launch_msg_.kernel_config().mode() == DISPATCH_MODE_DEV) {
+    if (launch_msg_.kernel_config().mode() == dev_msgs::DISPATCH_MODE_DEV) {
         fprintf(reader_.f, "D");
-    } else if (launch_msg_.kernel_config().mode() == DISPATCH_MODE_HOST) {
+    } else if (launch_msg_.kernel_config().mode() == dev_msgs::DISPATCH_MODE_HOST) {
         fprintf(reader_.f, "H");
     } else {
         LogRunningKernels();
@@ -921,8 +922,8 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
             "Watcher data corruption, unexpected launch mode on core {}: {} (expected {} or {})",
             virtual_coord_.str(),
             launch_msg_.kernel_config().mode(),
-            DISPATCH_MODE_DEV,
-            DISPATCH_MODE_HOST);
+            dev_msgs::DISPATCH_MODE_DEV,
+            dev_msgs::DISPATCH_MODE_HOST);
     }
 
     if (launch_msg_.kernel_config().brisc_noc_id() == 0 || launch_msg_.kernel_config().brisc_noc_id() == 1) {
@@ -994,17 +995,16 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
 
 void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
     auto debug_waypoint = mbox_data_.watcher().debug_waypoint();
-    string out;
+    std::vector<std::string> risc_status;
 
-    for (int cpu = 0; cpu < MAX_RISCV_PER_CORE; cpu++) {
-        string risc_status;
-        for (int byte = 0; byte < num_waypoint_bytes_per_riscv; byte++) {
-            char v = debug_waypoint[cpu].waypoint()[byte];
+    for (auto cpu : debug_waypoint) {
+        auto& status = risc_status.emplace_back();
+        for (char v : cpu.waypoint()) {
             if (v == 0) {
                 break;
             }
             if (isprint(v)) {
-                risc_status += v;
+                status += v;
             } else {
                 LogRunningKernels();
                 TT_THROW(
@@ -1013,22 +1013,12 @@ void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
                     (int)v);
             }
         }
-        // Pad risc status to 4 chars for alignment
-        string pad(4 - risc_status.length(), ' ');
-        out += (pad + risc_status);
-        if (cpu != MAX_RISCV_PER_CORE - 1) {
-            out += ',';
-        }
     }
-
-    out += " ";
-
-    // This function can either log the waypoint to the log or stdout.
+    // Pad riscv status to 4 chars for alignment
     if (to_stdout) {
-        out = string("Last waypoint: ") + out;
-        log_info(tt::LogMetal, "{}", out);
+        log_info(tt::LogMetal, "Last waypoint: {:>4}", fmt::join(risc_status, ","));
     } else {
-        fprintf(reader_.f, "%s ", out.c_str());
+        fmt::print(reader_.f, "{:>4}  ", fmt::join(risc_status, ","));
     }
 }
 
@@ -1102,7 +1092,7 @@ void WatcherDeviceReader::Core::LogRunningKernels() const {
 }
 
 const std::string& WatcherDeviceReader::Core::GetKernelName(uint32_t processor_index) const {
-    TT_FATAL(processor_index < NUM_PROCESSORS_PER_CORE_TYPE, "processor_index out of range");
+    TT_FATAL(processor_index < launch_msg_.kernel_config().watcher_kernel_ids().size(), "processor_index out of range");
     return reader_.kernel_names[launch_msg_.kernel_config().watcher_kernel_ids()[processor_index]];
 }
 
