@@ -88,8 +88,8 @@ jobs:
             benchmark-timeout: 10,
             runner-label: topology-6u,
             mesh-device: TG,
-            tt-llama-text-ver: llama3_70b_galaxy,
-            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 95693824}",
+            tt-llama-text-ver: tt_transformers,
+            # override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 95693824}",
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
@@ -198,6 +198,7 @@ jobs:
           export VLLM_RPC_TIMEOUT=300000
 
           python3 vllm/examples/server_example_tt.py \
+            --num_scheduler_steps 1 \
             --model ${{ matrix.test-group.model }} \
             "${OVERRIDE_TT_CONFIG[@]}" \
             > "${FILE_SERVER_LOG}" 2>&1 &
@@ -229,14 +230,10 @@ jobs:
       - name: 📐 Run benchmark
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         run: |
-          python3 vllm/benchmarks/benchmark_serving.py \
+          python3 vllm/benchmarks/benchmark_serving_structured_output.py \
             --backend vllm \
             --model ${{ matrix.test-group.model }} \
-            --dataset-name random \
             --num-prompts 32 \
-            --random-input-len 100 \
-            --random-output-len 100 \
-            --ignore-eos \
             --percentile-metrics ttft,tpot,itl,e2el \
             --save-result \
             --result-filename output/vllm_result.json \
