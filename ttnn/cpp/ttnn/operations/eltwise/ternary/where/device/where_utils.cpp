@@ -230,6 +230,10 @@ WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const 
         return WhereBroadcastType::OUTER_BCAST;
     }
 
+    if (!same_height && !same_width) {
+        return WhereBroadcastType::INVALID_BCAST;
+    }
+
     // Get dimension sizes
     auto pred_w = predicate_shape[-1];
     auto tensor_w = tensor_shape[-1];
@@ -294,6 +298,10 @@ WhereBroadcastType get_broadcast_type(
     // Check for outer broadcast: same height and width
     if (same_height && same_width) {
         return WhereBroadcastType::OUTER_BCAST;
+    }
+
+    if (!same_height && !same_width) {
+        return WhereBroadcastType::INVALID_BCAST;
     }
 
     // Get last dimension sizes

@@ -159,9 +159,7 @@ void set_or_update_runtime_arguments(
 
             // Initialize dimensions for TTS
             const auto out_rank = output.logical_shape().rank();
-            aND = extract_nD_dims(predicate_tensor, out_rank);           // predicate nD
             bND = extract_nD_dims(value_true_tensor.value(), out_rank);  // value_true nD
-            cND = extract_nD_dims(output, out_rank);                     // output nD
 
             // Extract shape dimensions for value_true (b) - TTS specific
             const auto value_true_shape = value_true_tensor.value().padded_shape();
