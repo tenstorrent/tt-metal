@@ -33,9 +33,9 @@ def run_demo_inference(
     evaluation_range,
     capture_trace,
     guidance_scale,
-    use_tp,
+    use_cfg_parallel,
 ):
-    batch_size = list(ttnn_device.shape)[1] if use_tp else ttnn_device.get_num_devices()
+    batch_size = list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
 
     start_from, _ = evaluation_range
     torch.manual_seed(0)
@@ -75,7 +75,7 @@ def run_demo_inference(
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
             is_galaxy=is_galaxy(),
-            use_tp=use_tp,
+            use_cfg_parallel=use_cfg_parallel,
         ),
     )
 
@@ -153,8 +153,8 @@ def run_demo_inference(
     return images
 
 
-def prepare_device(mesh_device, use_tp):
-    if use_tp:
+def prepare_device(mesh_device, use_cfg_parallel):
+    if use_cfg_parallel:
         assert mesh_device.get_num_devices() % 2 == 0, "Mesh device must have even number of devices"
         mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
 
@@ -211,12 +211,12 @@ def prepare_device(mesh_device, use_tp):
     ids=("with_trace", "no_trace"),
 )
 @pytest.mark.parametrize(
-    "use_tp",
+    "use_cfg_parallel",
     [
         (True),
         (False),
     ],
-    ids=("use_tp", "no_tp"),
+    ids=("use_cfg_parallel", "no_cfg_parallel"),
 )
 def test_demo(
     mesh_device,
@@ -229,9 +229,9 @@ def test_demo(
     capture_trace,
     evaluation_range,
     guidance_scale,
-    use_tp,
+    use_cfg_parallel,
 ):
-    prepare_device(mesh_device, use_tp)
+    prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
         mesh_device,
         is_ci_env,
@@ -243,5 +243,5 @@ def test_demo(
         evaluation_range,
         capture_trace,
         guidance_scale,
-        use_tp,
+        use_cfg_parallel,
     )
