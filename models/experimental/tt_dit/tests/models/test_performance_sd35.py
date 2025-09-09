@@ -13,6 +13,7 @@ from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large i
 )
 
 
+@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "model_name, image_w, image_h, guidance_scale, num_inference_steps",
     [
@@ -37,6 +38,7 @@ from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large i
     indirect=True,
 )
 @pytest.mark.parametrize("use_cache", [True, False], ids=["yes_use_cache", "no_use_cache"])
+@pytest.mark.models_performance_bare_metal
 def test_sd35_new_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -52,8 +54,12 @@ def test_sd35_new_pipeline_performance(
     num_links,
     model_location_generator,
     use_cache,
+    request,
 ) -> None:
     """Performance test for new SD35 pipeline with detailed timing analysis."""
+
+    if request.config.getoption("-m") == "models_performance_bare_metal" and use_cache:
+        pytest.skip("use_cache not valid for bare metal performance")
 
     logger.info(f"  Image size: {image_w}x{image_h}")
     logger.info(f"  Guidance scale: {guidance_scale}")
@@ -257,6 +263,47 @@ def test_sd35_new_pipeline_performance(
 
     # Clean up
     pipeline.timing_collector = None
+
+    # Validate performance
+    measurements = {
+        "clip_encoding_time": statistics.mean(clip_times),
+        "t5_encoding_time": statistics.mean(t5_times),
+        "total_encoding_time": statistics.mean(total_encoding_times),
+        "denoising_steps_time": total_denoising_time,
+        "vae_decoding_time": statistics.mean(vae_times),
+        "total_time": statistics.mean(total_times),
+    }
+    if tuple(mesh_device.shape) == (2, 4):
+        expected_metrics = {
+            "clip_encoding_time": 0.09,
+            "t5_encoding_time": 0.1,
+            "total_encoding_time": 0.2,
+            "denoising_steps_time": 11,
+            "vae_decoding_time": 1.6,
+            "total_time": 12.6,
+        }
+    elif tuple(mesh_device.shape) == (4, 8):
+        expected_metrics = {
+            "clip_encoding_time": 0.17,
+            "t5_encoding_time": 0.13,
+            "total_encoding_time": 0.6,
+            "denoising_steps_time": 4,
+            "vae_decoding_time": 1.65,
+            "total_time": 6.2,
+        }
+    else:
+        assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
+
+    pass_perf_check = True
+    assert_msgs = []
+    for k in expected_metrics.keys():
+        if measurements[k] > expected_metrics[k]:
+            assert_msgs.append(
+                f"Warning: {k} is outside of the tolerance range. Expected: {expected_metrics[k]}, Actual: {measurements[k]}"
+            )
+            pass_perf_check = False
+
+    assert pass_perf_check, "\n".join(assert_msgs)
 
     # Synchronize all devices
     for submesh_device in pipeline.submesh_devices:

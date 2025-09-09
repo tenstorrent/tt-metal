@@ -427,7 +427,6 @@ def test_sd35_vae_up_decoder_block(
     ("batch", "in_channels", "height", "width", "num_groups", "num_heads"),
     [
         (1, 512, 128, 128, 32, 4),  # slice 128, output blocks 32. Need to parametize
-        # (1, 512, 128, 128, 32, 4, False),  # slice 128, output blocks 32. Need to parametize
     ],
 )
 def test_sd35_vae_attention(
