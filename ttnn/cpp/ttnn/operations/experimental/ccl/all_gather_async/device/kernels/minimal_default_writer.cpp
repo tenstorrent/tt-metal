@@ -160,6 +160,7 @@ void kernel_main() {
     }
 
     if (use_barrier_sem) {
+        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_sem_inc, barrier_multicast_route_info);
         fabric_multicast_noc_unicast_atomic_inc_set_state<
             UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
             pkt_hdr_sem_inc,
@@ -243,6 +244,9 @@ void kernel_main() {
             0,                         // ignore
             static_cast<uint16_t>(1),  // increment 1
             32});
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
     // 2. unicast output ready semaphore
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
