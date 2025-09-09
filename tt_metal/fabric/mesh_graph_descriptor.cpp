@@ -1005,7 +1005,7 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
         TT_ASSERT(nodes.size() >= 2, "Graph descriptor connections must have at least two nodes");
 
         // Add the connection in every direction of the connection
-        for (unsigned int i = 0; i < connection.nodes_size(); ++i) {
+        for (std::size_t i = 0; i < connection.nodes_size(); ++i) {
             const auto src_device_id = nodes[i];
 
             // Create a copy of the nodes vector and swap the first and i-th elements so source is always first
