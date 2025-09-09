@@ -13,7 +13,6 @@
 #include "tt-metalium/command_queue.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
-#include "tt-metalium/kernel.hpp"        // Kernel
 #include "tt-metalium/kernel_types.hpp"  // KernelHandle
 #include "tt-metalium/program.hpp"       // KernelGroup
 #include "program_device_map.hpp"        // ProgramTransferInfo

@@ -25,7 +25,6 @@
 #include "hlk_desc.hpp"
 #include "jit_build_options.hpp"
 #include "jit_build_settings.hpp"
-#include "kernel.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel_impl.hpp"
