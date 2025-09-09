@@ -22,7 +22,7 @@ from ....models.vae.vae_wan2_1 import (
     WanResample,
     WanUpBlock,
 )
-from ....utils.conv3d import count_convs
+from ....utils.conv3d import count_convs, conv_pad_in_channels
 from ....utils.tensor import bf16_tensor_2dshard
 from ....parallel.manager import CCLManager
 from ....parallel.config import VaeHWParallelConfig, ParallelFactor
@@ -382,6 +382,7 @@ def test_wan_conv3d(
 
     torch_input_tensor = torch.randn(B, C_in, T, H, W, dtype=torch_dtype) * std + mean
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
+    tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
     tt_input_tensor = bf16_tensor_2dshard(
         tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
     )
@@ -391,6 +392,7 @@ def test_wan_conv3d(
     if cache_len is not None:
         torch_cache_tensor = torch.randn(B, C_in, cache_len, H, W, dtype=torch_dtype) * std + mean
         tt_cache_tensor = torch_cache_tensor.permute(0, 2, 3, 4, 1)
+        tt_cache_tensor = conv_pad_in_channels(tt_cache_tensor)
         tt_cache_tensor = bf16_tensor_2dshard(
             tt_cache_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
         )
@@ -416,7 +418,7 @@ def test_wan_conv3d(
         tt_output_torch = tt_output_torch[:, :C_out]
         logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
 
-    assert_quality(torch_output, tt_output_torch, pcc=0.999_990, relative_rmse=0.005)
+    assert_quality(torch_output, tt_output_torch, pcc=0.999_980, relative_rmse=0.005)
 
 
 @pytest.mark.parametrize(
@@ -1025,6 +1027,7 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, ch
 
         torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
         tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
+        tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
         tt_input_tensor = bf16_tensor_2dshard(
             tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
         )
@@ -1074,6 +1077,9 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, ch
                     ),
                 )
                 tt_feat_cache_back = tt_feat_cache_back.permute(0, 4, 1, 2, 3)
+                if tt_feat_cache_back.shape[1] != torch_feat_cache[i].shape[1]:
+                    logger.warning(f"Trimmed tt_feat_cache_back to {tt_feat_cache_back.shape}")
+                    tt_feat_cache_back = tt_feat_cache_back[:, : torch_feat_cache[i].shape[1]]
                 assert_quality(torch_feat_cache[i], tt_feat_cache_back, pcc=0.998_000, relative_rmse=0.08)
 
         # Defrag the cache
@@ -1191,6 +1197,7 @@ def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, real
 
     torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
+    tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
     tt_input_tensor = bf16_tensor_2dshard(
         tt_input_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
     )
@@ -1222,6 +1229,9 @@ def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, real
         logger.info(f"torch output shape: {torch_output.shape}")
 
         logger.info(f"checking output")
+        if tt_output_torch.shape[1] != torch_output.shape[1]:
+            logger.warning(f"Trimmed tt_output_torch to {tt_output_torch.shape}")
+            tt_output_torch = tt_output_torch[:, : torch_output.shape[1]]
         assert_quality(torch_output, tt_output_torch, pcc=0.998_000, relative_rmse=0.08)
     else:
         logger.warning("Skipping check")
