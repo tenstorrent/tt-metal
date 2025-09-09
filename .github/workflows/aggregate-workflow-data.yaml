@@ -99,6 +99,13 @@ jobs:
               {"display": "APC nightly debug run", "wkflw_name": "apc nightly debug run"}
             ]
 
+      - name: Upload run data artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-data
+          path: ${{ github.workspace }}/workflow-data.json
+          retention-days: 1
+
   handle-failures:
     needs: analyze-data
     if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
