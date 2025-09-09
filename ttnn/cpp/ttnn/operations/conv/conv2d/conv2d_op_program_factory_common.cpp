@@ -578,6 +578,7 @@ bool is_split_reader_viable(
     const float empirical_clock = arch == tt::ARCH::BLACKHOLE ? 1.35f : 1.0f;
     // Calculate activation transfer cost
     const uint32_t input_bytes_per_element = (input_datatype == DataType::FLOAT32) ? 4 : 2;
+    const DataType halo_datatype = input_datatype == DataType::FLOAT32 ? DataType::FLOAT32 : DataType::BFLOAT16;
     // For dilated convs the kernel_width number of channels isn't sequential in the L1, so we transfer 1 channel at a
     // time
     const uint32_t coallesced_read_channels = (dilation_w == 1 ? kernel_width : 1);
@@ -598,7 +599,7 @@ bool is_split_reader_viable(
         empirical_clock * static_cast<float>(weights_tile_size * weights_block_ntiles) *
         (1.0f / noc_all_dram_transfer_rate_gbps + 1.0f / noc_mcast_many_l1_linked_transfer_rate_gbps);
 
-    const float tilize_cost = get_tilize_cycles(arch, input_datatype, output_datatype, fp32_dest_acc) *
+    const float tilize_cost = get_tilize_cycles(arch, halo_datatype, output_datatype, fp32_dest_acc) *
                               act_block_w_ntiles * act_block_h_ntiles;
 
     const bool is_viable =
