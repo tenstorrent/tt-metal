@@ -28,6 +28,6 @@ uint32_t FabricLiteMemoryMap::get_service_channel_func_addr() {
     return get_address() + offsetof(lite_fabric::FabricLiteMemoryMap, service_lite_fabric_addr);
 }
 
-template class HostToFabricLiteInterface<lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0], lite_fabric::CHANNEL_BUFFER_SIZE>;
+template struct HostToFabricLiteInterface<lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0], lite_fabric::CHANNEL_BUFFER_SIZE>;
 
 }  // namespace lite_fabric
