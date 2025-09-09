@@ -61,6 +61,61 @@ std::string get_validation_report(const std::vector<std::string>& error_messages
 
     return report.str();
 }
+
+constexpr inline MeshGraphDescriptor::LocalNodeId get_device_id(const MeshCoordinate& mesh_coord, const MeshShape& mesh_shape) {
+    // Check that mesh_coord is within mesh_shape
+    TT_FATAL(mesh_coord[0] < mesh_shape[0] && mesh_coord[1] < mesh_shape[1], "Mesh coordinate {} is out of bounds for mesh shape {}", mesh_coord, mesh_shape);
+    return mesh_coord[0] * mesh_shape[1] + mesh_coord[1];
+}
+
+std::unordered_map<MeshGraphDescriptor::GlobalNodeId, std::vector<MeshGraphDescriptor::ConnectionData>> get_valid_connections(
+        const MeshCoordinate& src_mesh_coord,
+        const MeshCoordinateRange& mesh_coord_range,
+        const MeshGraphDescriptor::InstanceData& instance) {
+
+    std::unordered_map<MeshGraphDescriptor::GlobalNodeId, std::vector<MeshGraphDescriptor::ConnectionData>> connections;
+
+    const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+    const auto& topology_types = mesh_desc->device_topology().dim_types();
+    const auto& channels_count = mesh_desc->channels().count();
+    const auto& policy = mesh_desc->channels().policy();
+
+    MeshShape mesh_shape = mesh_coord_range.shape();
+    MeshCoordinate N(src_mesh_coord[0] - 1, src_mesh_coord[1]);
+    MeshCoordinate E(src_mesh_coord[0], src_mesh_coord[1] + 1);
+    MeshCoordinate S(src_mesh_coord[0] + 1, src_mesh_coord[1]);
+    MeshCoordinate W(src_mesh_coord[0], src_mesh_coord[1] - 1);
+
+    if (topology_types[0] == proto::TorusTopology::RING) {
+        E = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] + 1) % mesh_shape[1]);
+        W = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] - 1 + mesh_shape[1]) % mesh_shape[1]);
+    }
+    if (topology_types[1] == proto::TorusTopology::RING) {
+        N = MeshCoordinate((src_mesh_coord[0] - 1 + mesh_shape[0]) % mesh_shape[0], src_mesh_coord[1]);
+        S = MeshCoordinate((src_mesh_coord[0] + 1) % mesh_shape[0], src_mesh_coord[1]);
+    }
+
+    for (const auto& coord : {N, E, S, W}) {
+        if (mesh_coord_range.contains(coord)) {
+            const auto src_device_id = instance.sub_instances_local_id_to_global_id.at(get_device_id(src_mesh_coord, mesh_shape));
+            const auto dst_device_id = instance.sub_instances_local_id_to_global_id.at(get_device_id(coord, mesh_shape));
+
+            MeshGraphDescriptor::ConnectionData data{
+                .nodes = {src_device_id, dst_device_id},
+                .count = channels_count,
+                .policy = policy,
+                .directional = false,
+                .parent_instance_id = instance.global_id,
+            };
+
+            connections[src_device_id].push_back(data);
+        }
+    }
+
+    return connections;
+}
+
+
 }  // namespace
 
 MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) : top_level_id_(static_cast<GlobalNodeId>(-1)), backwards_compatible_(backwards_compatible) {
@@ -745,63 +800,6 @@ void MeshGraphDescriptor::add_connection_to_fast_lookups(const MeshGraphDescript
     if (!connection.nodes.empty()) {
         connections_by_source_device_id_[connection.nodes[0]].push_back(connection.connection_id);
     }
-}
-
-namespace {
-    constexpr inline MeshGraphDescriptor::LocalNodeId get_device_id(const MeshCoordinate& mesh_coord, const MeshShape& mesh_shape) {
-        // Check that mesh_coord is within mesh_shape
-        TT_FATAL(mesh_coord[0] < mesh_shape[0] && mesh_coord[1] < mesh_shape[1], "Mesh coordinate {} is out of bounds for mesh shape {}", mesh_coord, mesh_shape);
-        return mesh_coord[0] * mesh_shape[1] + mesh_coord[1];
-    }
-
-    std::unordered_map<MeshGraphDescriptor::GlobalNodeId, std::vector<MeshGraphDescriptor::ConnectionData>> get_valid_connections(
-            const MeshCoordinate& src_mesh_coord,
-            const MeshCoordinateRange& mesh_coord_range,
-            const MeshGraphDescriptor::InstanceData& instance) {
-
-        std::unordered_map<MeshGraphDescriptor::GlobalNodeId, std::vector<MeshGraphDescriptor::ConnectionData>> connections;
-
-        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
-        const auto& topology_types = mesh_desc->device_topology().dim_types();
-        const auto& channels_count = mesh_desc->channels().count();
-        const auto& policy = mesh_desc->channels().policy();
-
-        MeshShape mesh_shape = mesh_coord_range.shape();
-        MeshCoordinate N(src_mesh_coord[0] - 1, src_mesh_coord[1]);
-        MeshCoordinate E(src_mesh_coord[0], src_mesh_coord[1] + 1);
-        MeshCoordinate S(src_mesh_coord[0] + 1, src_mesh_coord[1]);
-        MeshCoordinate W(src_mesh_coord[0], src_mesh_coord[1] - 1);
-
-        if (topology_types[0] == proto::TorusTopology::RING) {
-            E = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] + 1) % mesh_shape[1]);
-            W = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] - 1 + mesh_shape[1]) % mesh_shape[1]);
-        }
-        if (topology_types[1] == proto::TorusTopology::RING) {
-            N = MeshCoordinate((src_mesh_coord[0] - 1 + mesh_shape[0]) % mesh_shape[0], src_mesh_coord[1]);
-            S = MeshCoordinate((src_mesh_coord[0] + 1) % mesh_shape[0], src_mesh_coord[1]);
-        }
-
-        for (const auto& coord : {N, E, S, W}) {
-            if (mesh_coord_range.contains(coord)) {
-                const auto src_device_id = instance.sub_instances_local_id_to_global_id.at(get_device_id(src_mesh_coord, mesh_shape));
-                const auto dst_device_id = instance.sub_instances_local_id_to_global_id.at(get_device_id(coord, mesh_shape));
-
-                MeshGraphDescriptor::ConnectionData data{
-                    .nodes = {src_device_id, dst_device_id},
-                    .count = channels_count,
-                    .policy = policy,
-                    .directional = false,
-                    .parent_instance_id = instance.global_id,
-                };
-
-                connections[src_device_id].push_back(data);
-            }
-        }
-
-        return connections;
-    }
-
-
 }
 
 void MeshGraphDescriptor::populate_intra_mesh_connections(GlobalNodeId mesh_id) {
