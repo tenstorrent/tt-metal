@@ -5,9 +5,7 @@ Vector addition using custom SFPU
 
 The SFPU (Special Function Processing Unit) is a programmable vector engine designed for efficient computation of mathematical operations. Many functions in the compute API library, such as ``sin``, ``cos``, ``exp``, ``relu``, and ``tanh``, are implemented using the SFPU. By programming the SFPU directly, users can implement custom mathematical functions that are not available in the standard library, which is useful for specialized HPC workloads.
 
-This example demonstrates how to program the vector engine to perform vector addition. This example serves as a starting point for users looking to implement custom SFPU operations.
-
-We'll go through this code section by section. The full source code for this example is available under the ``tt_metal/programming_examples/custom_sfpu_kernel_add`` directory.
+This example demonstrates how to program the vector engine to perform the simplest operation - vector addition. This example serves as a starting point for users looking to implement custom SFPU operations. We'll go through this code section by section. The full source code for this example is available under the ``tt_metal/programming_examples/custom_sfpu_kernel_add`` directory.
 
 Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``metal_example_custom_sfpu_kernel_add`` executable in the ``build/programming_examples`` directory. For example:
 
@@ -17,6 +15,10 @@ Building the example can be done by adding a ``--build-programming-examples`` fl
     ./build_metal.sh --build-programming-examples
     # To run the example
     ./build/programming_examples/metal_example_custom_sfpu_kernel_add
+
+.. warning::
+
+    Tenstorrent does not guarantee backward compatibility for user-implemented SFPU functions. Keep your implementations up to date with the latest Metalium releases. APIs that call low-level SFPU functions may change without notice, and SFPU specifications may also change in future hardware versions.
 
 Program setup
 -------------
@@ -131,7 +133,7 @@ SFPU Compute Kernel
 
 The compute kernel is where the custom SFPU logic resides. It waits for tiles from the input CBs, performs the addition using the SFPU, and pushes the result to the output CB.
 
-The overall flow is:
+The overall flow follows the same pattern as other compute kernels:
 
 1. Wait for input tiles to be available in ``cb_in0`` and ``cb_in1``.
 2. Acquire destination registers. These registers will be used as a scratchpad for the computation.
@@ -163,7 +165,7 @@ The overall flow is:
             copy_tile(cb_in0, 0, 0);
             copy_tile(cb_in1, 0, 1);
 
-            my_add_tiles(0, 1, 0);
+            my_add_tiles(0, 1, 0); // <-- Call to custom SFPU addition function
 
             tile_regs_commit();
 
@@ -181,7 +183,7 @@ The overall flow is:
 Custom SFPU Implementation
 --------------------------
 
-The core of this example is the custom SFPU function ``my_add_tiles``. It's implemented in a layered way, which is a common pattern for SFPU programming.
+The core of this example is the custom SFPU function ``my_add_tiles``. It's implemented in a layered way, which is a common pattern for SFPU programming to enable easy consumption and maintainability.
 
 .. code-block:: cpp
 
@@ -221,21 +223,39 @@ The core of this example is the custom SFPU function ``my_add_tiles``. It's impl
     }
 
 
-Here's a breakdown of the layers. Note that ``add_tile_face`` and ``my_add_tile_internal`` must be inside a ``#ifdef TRISC_MATH`` block, as they contain code that is specific to the math thread and will not compile for other RISC-V cores.
+Here's a breakdown of the layers. The functions ``add_tile_face`` and ``my_add_tile_internal`` must be inside a ``#ifdef TRISC_MATH`` block, since they use math-thread-specific code that will not compile for other RISC-V cores.
 
-1.  **`my_add_tiles`**: This is the high-level, user-facing function that the main compute kernel calls. It wraps the internal function with the ``MATH()`` macro, which ensures the code is only compiled and executed on the math thread of the Tensix core.
+1.  **`my_add_tiles`**: This is the main function called by the compute kernel. It wraps the internal function with the ``MATH()`` macro, which ensures the code only runs on the math thread of the Tensix core.
 
-2.  **`my_add_tile_internal`**: This function acts as a wrapper. ``_llk_math_eltwise_binary_sfpu_params_`` is an internal API of the Metalium kernel libraries. This helper automatically handles setting up SFPU for operation, iterating over all the faces of a tile, calling our ``add_tile_face`` function for each one then teardown the operation in prepration for the next one. This abstracts away the complexity of manual setup and state managment.
+2.  **`my_add_tile_internal`**: This function is a wrapper around the low-level kernel API. ``_llk_math_eltwise_binary_sfpu_params_`` is an internal helper that sets up the SFPU, iterates over all faces of a tile, calls ``add_tile_face`` for each face, and then cleans up. This avoids manual setup and state management.
 
-3.  **`add_tile_face`**: This is the lowest-level function and where the actual computation happens. It operates on a single *face* of a tile. A 32x32 tile is composed of four 16x16 faces. The SFPU processes data one face at a time. This function loads SIMD vectors (``vFloat``) from the destination registers, performs the addition, and stores the result back. The ``dst_reg`` is an array representing the SFPU's view of the destination registers.
+3.  **`add_tile_face`**: This is the most basic function, performing the actual addition on a single tile face. A 32x32 tile is divided into four 16x16 faces, and this function is called for each face. It uses the ``dst_reg`` array, which represents the SFPU's destination registers.
 
-    The function calculates base indices (``in0_base_idx``, ``in1_base_idx``, ``out_base_idx``) to map logical tile indices to physical SFPU register addresses. Since each tile occupies 32 consecutive registers, these base indices are computed by multiplying the tile index by 32. For example, if we're processing tiles at indices 0, 1, and 0 (for input0, input1, and output respectively), the base indices would be 0, 32, and 0, meaning the first input tile starts at ``dst_reg[0]``, the second input tile starts at ``dst_reg[32]``, and the output overwrites the first input tile starting at ``dst_reg[0]``.
+    The function calculates base indices (``in0_base_idx``, ``in1_base_idx``, ``out_base_idx``) to map tile indices to register addresses within ``dst_reg``. Since each tile occupies 32 registers, the base index is calculated by multiplying the tile index by 32. For instance, processing tiles at indices 0, 1, and 0 would result in base indices of 0, 32, and 0, respectively. This means the first input tile starts at ``dst_reg[0]``, the second at ``dst_reg[32]``, and the output overwrites the first input tile at ``dst_reg[0]``.
 
-This layered approach separates the high-level logic from the low-level, hardware-specific details, making the code cleaner and more maintainable.
+    Within each face, the function loads SIMD vectors (``vFloat``) from the input registers, adds them, and writes the result back to the output registers.
+
+    Each time the SFPU function is called, the helper automatically offsets ``dst_reg`` to point to the start of the current face. So, on the first call, ``dst_reg`` has an offset of 0; on the second, the offset is 8, and so on. The programmer does not need to manage this offset manually.
+
+    For a deeper understanding of tile structure, refer to :ref:`Internal structure of a Tile<internal_structure_of_a_tile>`. And the number of available ``dst_reg`` registers can be found in the :ref:`Compute Engines and Data Flow within Tensix<compute_engines_and_dataflow_within_tensix>` documentation.
+
+This layered structure keeps high-level logic separate from hardware-specific details, making the code easier to read and maintain.
 
 .. warning::
 
-    ``_llk_math_eltwise_binary_sfpu_params_`` and similar LLK helpers are internal APIs and may change in future releases. Tenstorrent does not guarantee backward compatibility for these internal functions. Users must keep them up to date with the latest Metalium releases.
+    The value of ``n_vector_in_face`` is architecture dependent. The example above assumes a Tensix architecture where each vector is 32 wide. Which is true for currently shipping Tensix Processors (Wormhole and Blackhole). But may change in future versions. Users should verify this value against their target architecture specifications when adapting this example.
+
+.. note::
+
+    There are 3 internal APIs to invoke custom SFPU functions, depending on the number of input tiles. Please view the header file for the most up-to-date information.
+
+    *  ``_llk_math_eltwise_unary_sfpu_params_``: For functions with one input tile (e.g., ``sin``, ``exp``).
+    *  ``_llk_math_eltwise_binary_sfpu_params_``: For functions with two input tiles (e.g., ``add``, ``sub``, ``mul``, ``div``).
+    *  ``_llk_math_eltwise_ternary_sfpu_params_``: For functions with three input tiles (e.g., ``where``).
+
+.. warning::
+
+    ``_llk_math_eltwise_binary_sfpu_params_`` and similar LLK helpers are internal APIs and may change in future releases. Tenstorrent does not guarantee backward compatibility for these internal functions. Users should keep their use up to date with the latest Metalium releases.
 
 Runtime Arguments and Execution
 -------------------------------
