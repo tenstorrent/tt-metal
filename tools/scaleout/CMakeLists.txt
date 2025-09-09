@@ -1,7 +1,8 @@
 project(scaleout_tools)
 
-# Make .clang-tidy available in the fabric binary directory for generated files
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/.clang-tidy ${CMAKE_CURRENT_BINARY_DIR}/.clang-tidy COPYONLY)
+# Library target
+add_library(scaleout_tools OBJECT)
+add_library(TT::ScaleoutTools ALIAS scaleout_tools)
 
 include(protobuf)
 set(PROTO_SCHEMAS
@@ -16,10 +17,6 @@ foreach(PROTO_FILE ${PROTO_SCHEMAS})
     GENERATE_PROTO_FILES(${PROTO_FILE} OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
     list(APPEND GENERATED_PROTO_SRCS ${PROTO_SRCS})
 endforeach()
-
-# Library target
-add_library(scaleout_tools OBJECT)
-add_library(TT::ScaleoutTools ALIAS scaleout_tools)
 
 target_sources(
     scaleout_tools
@@ -40,12 +37,8 @@ target_sources(
         ${GENERATED_PROTO_SRCS}
 )
 
-target_include_directories(
-    scaleout_tools
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_BINARY_DIR} # Protobuf headers
-)
+target_include_directories(scaleout_tools PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(scaleout_tools SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(
     scaleout_tools

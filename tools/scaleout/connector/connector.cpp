@@ -13,7 +13,9 @@ namespace connection_mappers {
 
 std::vector<AsicChannelConnection> linear_mapping(
     const std::vector<AsicChannel>& start_channels, const std::vector<AsicChannel>& end_channels) {
-    assert(start_channels.size() == end_channels.size());
+    if (start_channels.size() != end_channels.size()) {
+        throw std::runtime_error("Start and end channels must have the same size for linear mapping");
+    }
     std::vector<AsicChannelConnection> port_mapping;
     port_mapping.reserve(start_channels.size());
     for (size_t i = 0; i < start_channels.size(); i++) {
@@ -24,8 +26,12 @@ std::vector<AsicChannelConnection> linear_mapping(
 
 std::vector<AsicChannelConnection> cross_connect_mapping(
     const std::vector<AsicChannel>& start_channels, const std::vector<AsicChannel>& end_channels) {
-    assert(start_channels.size() == end_channels.size());
-    assert(start_channels.size() % 2 == 0);
+    if (start_channels.size() != end_channels.size()) {
+        throw std::runtime_error("Start and end channels must have the same size for cross connect mapping");
+    }
+    if (start_channels.size() % 2 != 0) {
+        throw std::runtime_error("Cross connect mapping must have an even number of channels");
+    }
     std::vector<AsicChannelConnection> port_mapping;
     port_mapping.reserve(start_channels.size());
 
@@ -46,15 +52,15 @@ std::vector<AsicChannelConnection> get_asic_channel_connections(
     // Validate and dispatch based on port type
     switch (port_type) {
         case PortType::WARP100:
-            assert(
-                start_channels.size() == 2 && end_channels.size() == 2 &&
-                "WARP100 connections must have exactly 2 channels");
+            if (start_channels.size() != 2 || end_channels.size() != 2) {
+                throw std::runtime_error("WARP100 connections must have exactly 2 channels");
+            }
             return connection_mappers::linear_mapping(start_channels, end_channels);
 
         case PortType::WARP400:
-            assert(
-                start_channels.size() == 4 && end_channels.size() == 4 &&
-                "WARP400 connections must have exactly 4 channels");
+            if (start_channels.size() != 4 || end_channels.size() != 4) {
+                throw std::runtime_error("WARP400 connections must have exactly 4 channels");
+            }
             return connection_mappers::cross_connect_mapping(start_channels, end_channels);
 
         case PortType::QSFP:
