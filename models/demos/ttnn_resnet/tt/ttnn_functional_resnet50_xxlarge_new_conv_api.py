@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.utility_functions import is_wormhole_b0, pad_and_fold_conv_activation_for_unity_stride
+from models.utility_functions import is_wormhole_b0
 
 hardcoded_matmul_config_linear = {
     1: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -462,7 +462,6 @@ class resnet50:
         self.conv1_bias_tensor = parameters.conv1.bias
         self.conv1_input_channels = self.conv1_weight_tensor.shape[1]
         self.conv1_output_channels = self.conv1_weight_tensor.shape[0]
-        assert self.conv1_weight_tensor.shape[2] == 4
 
         self.layer1 = self._make_layer(
             parameters=parameters.layer1,
@@ -558,16 +557,7 @@ class resnet50:
         return layers
 
     def preprocessing(self, torch_input_tensor):
-        resnet50_first_conv_kernel_size = 3
-        resnet50_first_conv_stride = 2
-        input_tensor = pad_and_fold_conv_activation_for_unity_stride(
-            torch_input_tensor,
-            resnet50_first_conv_kernel_size,
-            resnet50_first_conv_kernel_size,
-            resnet50_first_conv_stride,
-            resnet50_first_conv_stride,
-        )
-        input_tensor = torch.permute(input_tensor, (0, 2, 3, 1))
+        input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
         input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
         return input_tensor
 
@@ -595,11 +585,11 @@ class resnet50:
             "in_channels": self.conv1_input_channels,
             "out_channels": self.conv1_output_channels,
             "batch_size": self.batch_size,
-            "input_height": 515,
-            "input_width": 515,
-            "kernel_size": (4, 4),
-            "stride": (1, 1),
-            "padding": (0, 0),
+            "input_height": 1024,
+            "input_width": 1024,
+            "kernel_size": (7, 7),
+            "stride": (2, 2),
+            "padding": (3, 3),
             "dilation": (1, 1),
             "groups": 1,
             "device": device,
@@ -932,11 +922,11 @@ class resnet50:
             "in_channels": self.conv1_input_channels,
             "out_channels": self.conv1_output_channels,
             "batch_size": self.batch_size,
-            "input_height": 515,
-            "input_width": 515,
-            "kernel_size": (4, 4),
-            "stride": (1, 1),
-            "padding": (0, 0),
+            "input_height": 1024,
+            "input_width": 1024,
+            "kernel_size": (7, 7),
+            "stride": (2, 2),
+            "padding": (3, 3),
             "dilation": (1, 1),
             "groups": 1,
             "device": device,
