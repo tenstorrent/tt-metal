@@ -846,6 +846,10 @@ void MeshGraphDescriptor::add_to_fast_lookups(const InstanceData& instance) {
             device_instances_.push_back(instance.global_id);
             break;
     }
+
+    connections_by_type_[instance.type].reserve(instance.sub_instances.size());
+    connections_by_instance_id_[instance.global_id].reserve(instance.sub_instances.size());
+    connections_by_source_device_id_[instance.global_id].reserve(instance.sub_instances.size());
 }
 
 void MeshGraphDescriptor::add_connection_to_fast_lookups(const ConnectionData& connection, const std::string& type) {
