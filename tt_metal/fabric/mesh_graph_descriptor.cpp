@@ -88,12 +88,12 @@ std::unordered_map<MeshGraphDescriptor::GlobalNodeId, std::vector<MeshGraphDescr
     MeshCoordinate W(src_mesh_coord[0], src_mesh_coord[1] - 1);
 
     if (topology_types[0] == proto::TorusTopology::RING) {
-        N = MeshCoordinate((src_mesh_coord[0] - 1 + mesh_shape[0]) % mesh_shape[0], src_mesh_coord[1]);
-        S = MeshCoordinate((src_mesh_coord[0] + 1) % mesh_shape[0], src_mesh_coord[1]);
-    }
-    if (topology_types[1] == proto::TorusTopology::RING) {
         E = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] + 1) % mesh_shape[1]);
         W = MeshCoordinate(src_mesh_coord[0], (src_mesh_coord[1] - 1 + mesh_shape[1]) % mesh_shape[1]);
+    }
+    if (topology_types[1] == proto::TorusTopology::RING) {
+        N = MeshCoordinate((src_mesh_coord[0] - 1 + mesh_shape[0]) % mesh_shape[0], src_mesh_coord[1]);
+        S = MeshCoordinate((src_mesh_coord[0] + 1) % mesh_shape[0], src_mesh_coord[1]);
     }
 
     for (const auto& [coord, direction] :
