@@ -49,6 +49,6 @@ bool is_ethernet_endpoint_up(
         return link_up_value == 1;
     }
 
-    TT_ASSERT(false, "Unsupported architecture for chip {}", ep.chip);
+    TT_ASSERT(false, "Unsupported architecture for chip {}", endpoint.chip);
     return false;
 }
