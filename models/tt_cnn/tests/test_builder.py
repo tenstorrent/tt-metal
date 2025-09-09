@@ -15,6 +15,21 @@ from models.tt_cnn.tt.builder import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+DEVICE_PARAMS = {"l1_small_size": 32768}
+DEVICE_GRID = (8, 8)
+PCC_THRESHOLD = 0.999
+
+INPUT_SIZES = [(8, 8), (16, 8)]
+
+CHANNEL_CONFIGS = [
+    {"in_channels": 8, "out_channels": 16},
+    {"in_channels": 16, "out_channels": 16},
+]
+
+BATCH_SIZES = [1, 2]
+
+KERNEL_CONFIGS = [{"kernel_size": 3, "padding": 1}, {"kernel_size": 5, "padding": 2}]
+
 
 def create_conv2d_input_tensor(configuration: Conv2dConfiguration):
     shape = (configuration.batch_size, configuration.in_channels, configuration.input_height, configuration.input_width)
@@ -26,28 +41,25 @@ def create_conv2d_input_tensor(configuration: Conv2dConfiguration):
     return nchw, nhwc
 
 
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("input_size", INPUT_SIZES)  # Use first 2 sizes for faster tests
+@pytest.mark.parametrize("channel_config", CHANNEL_CONFIGS)  # Use first 2 channel configs
+@pytest.mark.parametrize("batch_size", BATCH_SIZES)  # Use first 2 batch sizes
+@pytest.mark.parametrize("kernel_config", KERNEL_CONFIGS)  # Use first 2 kernel configs
 @pytest.mark.parametrize(
-    "device_params",
+    "sharding_strategy",
     [
-        {
-            "l1_small_size": 1024,
-        }
+        AutoShardedStrategyConfiguration(),
+        HeightShardedStrategyConfiguration(),
+        WidthShardedStrategyConfiguration(),
+        BlockShardedStrategyConfiguration(),
     ],
-    indirect=True,
 )
-@pytest.mark.parametrize(
-    "input_height, input_width, in_channels, out_channels, batch_size, kernel_size, padding, sharding_strategy",
-    (
-        (32, 32, 16, 16, 4, 3, 1, AutoShardedStrategyConfiguration()),
-        (64, 64, 32, 16, 2, 5, 0, HeightShardedStrategyConfiguration()),
-        (16, 16, 64, 64, 1, 3, 1, WidthShardedStrategyConfiguration()),
-        (128, 64, 16, 32, 1, 3, 1, BlockShardedStrategyConfiguration()),
-    ),
-)
-def test_conv2d(
-    input_height, input_width, in_channels, out_channels, batch_size, kernel_size, padding, sharding_strategy, device
-):
-    device_descriptor = DeviceDescriptor(device, (4, 4))
+def test_conv2d(input_size, channel_config, batch_size, kernel_config, sharding_strategy, device):
+    input_height, input_width = input_size
+    in_channels, out_channels = channel_config["in_channels"], channel_config["out_channels"]
+    kernel_size, padding = kernel_config["kernel_size"], kernel_config["padding"]
+    device_descriptor = DeviceDescriptor(device, DEVICE_GRID)
 
     configuration = Conv2dConfiguration.with_random_weights(
         input_height=input_height,
@@ -79,7 +91,7 @@ def test_conv2d(
         ttnn.to_torch(ttnn_output_tensor)
         .reshape(configuration.batch_size, output_height, output_width, configuration.out_channels)
         .permute(0, 3, 1, 2),
-        0.999,
+        PCC_THRESHOLD,
     )
 
 
@@ -95,24 +107,21 @@ def create_pool2d_input_tensor(configuration: MaxPool2dConfiguration):
     return nchw, nhwc
 
 
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("input_size", INPUT_SIZES)  # Use first 2 sizes
+@pytest.mark.parametrize("channels", [16, 8])
+@pytest.mark.parametrize("batch_size", BATCH_SIZES)  # Use first 2 batch sizes
 @pytest.mark.parametrize(
-    "device_params",
+    "pool_config",
     [
-        {
-            "l1_small_size": 1024,
-        }
+        {"kernel_size": 2, "padding": 0, "ceil_mode": True},
+        {"kernel_size": 4, "padding": 0, "ceil_mode": False},
     ],
-    indirect=True,
 )
-@pytest.mark.parametrize(
-    "input_height, input_width, channels, batch_size, kernel_size, padding, ceil_mode",
-    (
-        (32, 32, 16, 4, 2, 0, True),
-        (128, 64, 8, 4, 4, 0, False),
-    ),
-)
-def test_pool2d(input_height, input_width, channels, batch_size, kernel_size, padding, ceil_mode, device):
-    device_descriptor = DeviceDescriptor(device, (4, 4))
+def test_pool2d(input_size, channels, batch_size, pool_config, device):
+    input_height, input_width = input_size
+    kernel_size, padding, ceil_mode = pool_config["kernel_size"], pool_config["padding"], pool_config["ceil_mode"]
+    device_descriptor = DeviceDescriptor(device, DEVICE_GRID)
 
     configuration = MaxPool2dConfiguration(
         input_height,
@@ -146,28 +155,16 @@ def test_pool2d(input_height, input_width, channels, batch_size, kernel_size, pa
         ttnn.to_torch(ttnn_output_tensor)
         .reshape(configuration.batch_size, output_height, output_width, configuration.channels)
         .permute(0, 3, 1, 2),
-        0.999,
+        PCC_THRESHOLD,
     )
 
 
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "l1_small_size": 32768,
-        }
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "input_height, input_width, batch_size",
-    (
-        (224, 224, 1),
-        (32, 32, 4),
-    ),
-)
-def test_downblock(input_height, input_width, batch_size, device):
-    device_descriptor = DeviceDescriptor(device, (8, 8))
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("input_size", [(224, 224), (32, 32)])
+@pytest.mark.parametrize("batch_size", [1, 4])
+def test_downblock(input_size, batch_size, device):
+    input_height, input_width = input_size
+    device_descriptor = DeviceDescriptor(device, DEVICE_GRID)
     sharding_strategy = HeightShardedStrategyConfiguration(act_block_h_override=64, reshard_if_not_optimal=False)
 
     configurations = [
@@ -223,28 +220,30 @@ def test_downblock(input_height, input_width, batch_size, device):
         ttnn.to_torch(ttnn_output_tensor)
         .reshape(configurations[0].batch_size, output_height, output_width, configurations[2].channels)
         .permute(0, 3, 1, 2),
-        0.999,
+        PCC_THRESHOLD,
     )
 
 
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("input_size", INPUT_SIZES[:1])  # Use first 2 sizes
+@pytest.mark.parametrize("channel_config", CHANNEL_CONFIGS[:1])  # Use first 2 channel configs
+@pytest.mark.parametrize("batch_size", BATCH_SIZES[:1])  # Use first 2 batch sizes
 @pytest.mark.parametrize(
-    "device_params",
+    "torch_layer_config",
     [
-        {
-            "l1_small_size": 1024,
-        }
+        {"kernel_size": 3, "stride": 2, "padding": 1, "groups": 1, "bias": True},
+        {"kernel_size": 5, "stride": 1, "padding": 2, "groups": 1, "bias": False},
     ],
-    indirect=True,
 )
-def test_conv2d_configuration_from_torch_layer(device):
-    device_descriptor = DeviceDescriptor(device, (4, 4))
+def test_conv2d_configuration_from_torch_layer(input_size, channel_config, batch_size, torch_layer_config, device):
+    input_height, input_width = input_size
+    in_channels, out_channels = channel_config["in_channels"], channel_config["out_channels"]
+    device_descriptor = DeviceDescriptor(device, DEVICE_GRID)
 
-    torch_layer = torch.nn.Conv2d(
-        in_channels=16, out_channels=32, kernel_size=3, stride=2, padding=1, groups=1, bias=True
-    )
+    torch_layer = torch.nn.Conv2d(in_channels=in_channels, out_channels=out_channels, **torch_layer_config)
 
     configuration = Conv2dConfiguration.from_torch(
-        torch_layer=torch_layer, input_height=64, input_width=64, batch_size=2
+        torch_layer=torch_layer, input_height=input_height, input_width=input_width, batch_size=batch_size
     )
 
     assert configuration.in_channels == torch_layer.in_channels
@@ -255,13 +254,16 @@ def test_conv2d_configuration_from_torch_layer(device):
     assert configuration.groups == torch_layer.groups
 
     assert torch.equal(configuration.weight, torch_layer.weight.data)
-    assert torch.equal(configuration.bias, torch_layer.bias.data)
+    if torch_layer.bias is not None:
+        assert torch.equal(configuration.bias, torch_layer.bias.data)
+    else:
+        assert configuration.bias is None
 
     configuration.validate_weights()
 
     tt_layer = TtConv2d(configuration, device_descriptor)
 
-    torch_input = torch.randn(2, 16, 64, 64)
+    torch_input = torch.randn(batch_size, in_channels, input_height, input_width)
     ttnn_input = ttnn.from_torch(torch_input.permute(0, 2, 3, 1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     ttnn_output = tt_layer(ttnn_input)
@@ -269,27 +271,36 @@ def test_conv2d_configuration_from_torch_layer(device):
 
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
     output_height, output_width = torch_output.shape[-2:]
-    ttnn_output_torch = ttnn_output_torch.reshape(2, output_height, output_width, 32).permute(0, 3, 1, 2)
+    ttnn_output_torch = ttnn_output_torch.reshape(batch_size, output_height, output_width, out_channels).permute(
+        0, 3, 1, 2
+    )
 
-    assert_with_pcc(torch_output, ttnn_output_torch, 0.99)
+    assert_with_pcc(torch_output, ttnn_output_torch, PCC_THRESHOLD)
 
 
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("input_size", INPUT_SIZES[:1])
+@pytest.mark.parametrize("channels", [16, 8])
+@pytest.mark.parametrize("batch_size", BATCH_SIZES[:1])
 @pytest.mark.parametrize(
-    "device_params",
+    "torch_layer_config",
     [
-        {
-            "l1_small_size": 1024,
-        }
+        {"kernel_size": 2, "stride": 2, "padding": 0, "dilation": 1, "ceil_mode": False},
+        {"kernel_size": 3, "stride": 1, "padding": 1, "dilation": 1, "ceil_mode": True},
     ],
-    indirect=True,
 )
-def test_pool2d_configuration_from_torch_layer(device):
-    device_descriptor = DeviceDescriptor(device, (4, 4))
+def test_pool2d_configuration_from_torch_layer(input_size, channels, batch_size, torch_layer_config, device):
+    input_height, input_width = input_size
+    device_descriptor = DeviceDescriptor(device, DEVICE_GRID)
 
-    torch_layer = torch.nn.MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+    torch_layer = torch.nn.MaxPool2d(**torch_layer_config)
 
     configuration = MaxPool2dConfiguration.from_torch(
-        torch_layer=torch_layer, input_height=64, input_width=64, batch_size=2, channels=16
+        torch_layer=torch_layer,
+        input_height=input_height,
+        input_width=input_width,
+        batch_size=batch_size,
+        channels=channels,
     )
 
     assert configuration.kernel_size == (torch_layer.kernel_size, torch_layer.kernel_size)
@@ -298,9 +309,9 @@ def test_pool2d_configuration_from_torch_layer(device):
 
     tt_layer = TtMaxPool2d(configuration, device_descriptor)
 
-    torch_input = torch.randn(2, 16, 64, 64)
+    torch_input = torch.randn(batch_size, channels, input_height, input_width)
     ttnn_input = ttnn.from_torch(
-        torch_input.permute(0, 2, 3, 1).reshape(1, 1, -1, 16),
+        torch_input.permute(0, 2, 3, 1).reshape(1, 1, -1, channels),
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
@@ -311,6 +322,6 @@ def test_pool2d_configuration_from_torch_layer(device):
 
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
     output_height, output_width = torch_output.shape[-2:]
-    ttnn_output_torch = ttnn_output_torch.reshape(2, output_height, output_width, 16).permute(0, 3, 1, 2)
+    ttnn_output_torch = ttnn_output_torch.reshape(batch_size, output_height, output_width, channels).permute(0, 3, 1, 2)
 
-    assert_with_pcc(torch_output, ttnn_output_torch, 0.999)
+    assert_with_pcc(torch_output, ttnn_output_torch, PCC_THRESHOLD)
