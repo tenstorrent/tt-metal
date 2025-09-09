@@ -4,6 +4,14 @@
 import ttnn
 import torch
 
+parameters = {
+    "suite_1": {
+        "predictions_shape": [
+            (3, 5),
+        ],
+    }
+}
+
 
 def cross_entropy_loss_ttnn(predictions, labels, reduction_constant):
     reduction_const_reshaped = ttnn.reshape(reduction_constant, (1, 1))
@@ -16,9 +24,9 @@ def cross_entropy_loss_ttnn(predictions, labels, reduction_constant):
     return final_loss
 
 
-def test_cross_entropy_loss(device):
+def run(predictions_shape, device):
     torch.manual_seed(0)
-    predictions = torch.randn(3, 5)
+    predictions = torch.randn(predictions_shape)
     target_indices = torch.empty(3, dtype=torch.long).random_(5)
     target_onehot = torch.nn.functional.one_hot(target_indices, num_classes=5).float()
 
