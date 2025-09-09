@@ -3,7 +3,7 @@ import ttnn
 from loguru import logger
 from ...layers.normalization import RMSNorm
 from ...layers.linear import Linear
-from ...utils.conv3d import _ntuple, get_conv3d_config, prepare_conv3d_weights, count_convs
+from ...utils.conv3d import _ntuple, get_conv3d_config, prepare_conv3d_weights, count_convs, aligned_channels
 from ...utils.substate import substate, indexed_substates
 
 CACHE_T = 2
@@ -181,9 +181,12 @@ class WanCausalConv3d:
         ccl_manager=None,
         parallel_config=None,
     ):
-        self.in_channels = in_channels
+        self.unpadded_in_channels = in_channels
         self.unpadded_out_channels = out_channels
         self.TILE_WIDTH = 32
+        self.in_channels = aligned_channels(in_channels)
+        if self.in_channels != self.unpadded_in_channels:
+            logger.warning(f"Padding in_channels from {self.unpadded_in_channels} to {self.in_channels}")
         self.out_channels = self.TILE_WIDTH if out_channels < self.TILE_WIDTH else out_channels
         if self.out_channels != self.unpadded_out_channels:
             logger.warning(f"Padding out_channels from {self.unpadded_out_channels} to {self.out_channels}")
@@ -1063,8 +1066,8 @@ class WanDecoder:
 
         # Linear for post_quant_conv
         self.post_quant_conv = Linear(
-            in_features=z_dim,
-            out_features=z_dim,
+            in_features=aligned_channels(z_dim),
+            out_features=aligned_channels(z_dim),
             mesh_device=mesh_device,
         )
 
@@ -1090,7 +1093,13 @@ class WanDecoder:
             out_c, in_c, kt, kh, kw = weight.shape
             assert kt == kh == kw == 1
             weight = weight.reshape(out_c, in_c)
+            padded_out_c = aligned_channels(out_c)
+            padded_in_c = aligned_channels(in_c)
+            weight = torch.nn.functional.pad(weight, (0, padded_in_c - in_c, 0, padded_out_c - out_c))
+            bias = state["bias"]
+            bias = torch.nn.functional.pad(bias, (0, padded_out_c - out_c))
             state["weight"] = weight
+            state["bias"] = bias
             return state
 
         self.post_quant_conv.load_state_dict(conv3d_to_linear_weight(substate(state_dict, "post_quant_conv")))
