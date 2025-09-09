@@ -14,7 +14,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "fabric_fixture.hpp"
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
-#include "tests/tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
+#include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
 #include <tt-metalium/global_semaphore.hpp>
 using tt::DevicePool;
 
