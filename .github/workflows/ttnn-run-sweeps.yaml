@@ -15,9 +15,6 @@ on:
           - tilize_with_val_padding
           - untilize
           - untilize_with_unpadding
-          - ccl.line_all_gather
-          - ccl.all_gather_n300
-          - ccl.all_gather_n300_focused
           - creation.zeros.zeros
           - creation.empty.empty
           - creation.zeros_like.zeros_like
@@ -547,8 +544,19 @@ on:
           - data_movement.view.view_pytorch2
           - data_movement.view.view_tt_torch
           - data_movement.interleaved_to_sharded.interleaved_to_sharded_e2e
-  schedule:
-    - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
+      suite_name:
+        description: "Which sweep suite to run?"
+        type: string
+      upload_results:
+        description: "Upload sweep results to SFTP server?"
+        type: boolean
+        default: false
+  # schedule:
+  #   - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
+
+concurrency:
+  group: ttnn-sweeps-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-artifact:
@@ -560,6 +568,7 @@ jobs:
       build-wheel: true
       version: "22.04"
   ttnn-generate-sweeps:
+    name: Generate sweeps vectors
     needs: build-artifact
     strategy:
       matrix:
@@ -593,15 +602,53 @@ jobs:
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Run ttnn sweeps generation (single sweep)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
-        run: python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --dump-file --tag ci-main
+        run: python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --dump-file --tag ci-main --explicit
       - name: Run ttnn sweeps generation (all sweeps)
         if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
-        run: python3 tests/sweep_framework/sweeps_parameter_generator.py --dump-file --tag ci-main
+        run: python3 tests/sweep_framework/sweeps_parameter_generator.py --dump-file --tag ci-main --explicit
+      - name: Upload sweep vectors
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweeps-vectors
+          path: /work/tests/sweep_framework/vectors_export/
+          retention-days: 1
 
-  ttnn-run-sweeps:
+  ttnn-compute-module-matrix:
+    name: Compute module matrix
+    needs: ttnn-generate-sweeps
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Show run identifiers
+        run: |
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Run Number: ${{ github.run_number }}"
+          echo "Run Attempt: ${{ github.run_attempt }}"
+      - uses: actions/download-artifact@v4
+        with:
+          name: sweeps-vectors
+          path: /tmp/vectors
+      - id: set-matrix
+        shell: bash
+        run: |
+          python - <<'PY' > /tmp/matrix.json
+          import os, json, math
+          d = '/tmp/vectors'
+          modules = sorted([f[:-5] for f in os.listdir(d) if f.endswith('.json')])
+          BATCH_SIZE = 10
+          batches = [",".join(modules[i:i+BATCH_SIZE]) for i in range(0, len(modules), BATCH_SIZE)]
+          print(json.dumps({"module": modules, "batches": batches}))
+          PY
+          echo "matrix=$(cat /tmp/matrix.json)" >> "$GITHUB_OUTPUT"
+
+  ttnn-run-single-sweep:
+    name: Run single sweep
     needs:
       - ttnn-generate-sweeps
       - build-artifact
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -613,14 +660,14 @@ jobs:
               name: "Wormhole N150 Sweeps",
               arch: wormhole_b0,
               runs-on: ["cloud-virtual-machine", "N150", "in-service"],
-              tt-smi-cmd: "tt-smi-metal -r 0"
+              tt-smi-cmd: "tt-smi -r"
             },
-            {
-              name: "Wormhole N300 Sweeps",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-              tt-smi-cmd: "tt-smi-metal -r 0"
-            }
+            # {
+            #   name: "Wormhole N300 Sweeps",
+            #   arch: wormhole_b0,
+            #   runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+            #   tt-smi-cmd: "tt-smi-metal -r 0"
+            # }
           ]
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -628,7 +675,7 @@ jobs:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ matrix.arch }}
+        ARCH_NAME: ${{ matrix.test-group.arch }}
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
         ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
@@ -652,9 +699,189 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Download sweep vectors
+        uses: actions/download-artifact@v4
+        with:
+          name: sweeps-vectors
+          path: /work/tests/sweep_framework/vectors_export/
       - name: Run ttnn sweeps (single sweep)
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
         run: python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary
-      - name: Run ttnn sweeps (all sweeps, nightly)
-        if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
-        run: python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary
+      - name: Upload sweep results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweeps-results
+          path: /work/tests/sweep_framework/results_export/
+          retention-days: 1
+
+  ttnn-run-sweeps-parallel:
+    name: Run sweeps in parallel (${{ matrix.test-group.name }}, ${{ matrix.batch }})
+    needs:
+      - ttnn-generate-sweeps
+      - build-artifact
+      - ttnn-compute-module-matrix
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        test-group:
+          [
+            {
+              name: "Wormhole N150 Sweeps",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+              tt-smi-cmd: "tt-smi -r"
+            },
+            # {
+            #   name: "Wormhole N300 Sweeps",
+            #   arch: wormhole_b0,
+            #   runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+            #   tt-smi-cmd: "tt-smi-metal -r 0"
+            # }
+          ]
+        batch: ${{ fromJSON(needs.ttnn-compute-module-matrix.outputs.matrix).batches }}
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
+        ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
+        TT_SMI_RESET_COMMAND: ${{ matrix.test-group.tt-smi-cmd }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    timeout-minutes: 720
+    runs-on: ${{ matrix.test-group.runs-on }}
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Download sweep vectors
+        uses: actions/download-artifact@v4
+        with:
+          name: sweeps-vectors
+          path: /work/tests/sweep_framework/vectors_export/
+      - name: Run ttnn sweeps (batch)
+        run: python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ matrix.batch }} --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout
+      - name: Compute artifact suffix
+        shell: bash
+        run: |
+          echo "BATCH_SUFFIX=$(echo -n '${{ matrix.batch }}' | sha256sum | cut -d' ' -f1 | cut -c1-12)" >> $GITHUB_ENV
+      - name: Upload sweep results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweeps-results-${{ matrix.test-group.name }}-batch-${{ env.BATCH_SUFFIX }}
+          path: /work/tests/sweep_framework/results_export/
+          retention-days: 1
+
+  ttnn-homogenize-and-publish-run-result:
+    name: Homogenize and publish run result
+    needs:
+      - build-artifact
+      - ttnn-run-single-sweep
+      - ttnn-run-sweeps-parallel
+    if: ${{ always() && (needs.ttnn-run-single-sweep.result == 'success' || needs.ttnn-run-sweeps-parallel.result == 'success') }}
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    runs-on: tt-ubuntu-2204-large-stable
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Download all sweep results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sweeps-results*
+          path: /work/tests/sweep_framework/results_export
+          merge-multiple: true
+      - name: Homogenize sweep results
+        run: |
+          python3 tests/sweep_framework/run_collective_update.py
+      - name: Upload runs
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweeps-run-result
+          path: /work/tests/sweep_framework/results_export/oprun_*.json
+          retention-days: 7
+
+  ttnn-upload-results:
+    name: Upload sweep results to SFTP server
+    needs:
+      - ttnn-homogenize-and-publish-run-result
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs.upload_results }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository (actions only)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/actions
+      - name: Download homogenized results
+        uses: actions/download-artifact@v4
+        with:
+          name: sweeps-run-result
+          path: tests/sweep_framework/results_export
+      - name: List all downloaded files
+        run: |
+          ls -hal tests/sweep_framework/results_export
+      - name: Generate dynamic SFTP batchfile
+        run: |
+          # Create a dynamic batchfile with individual put commands
+          echo "# Dynamic batchfile for uploading oprun files" > dynamic_batchfile.txt
+          echo "# Generated at runtime to avoid wildcard limitations" >> dynamic_batchfile.txt
+          echo "" >> dynamic_batchfile.txt
+
+          # Add individual put commands for each file
+          for file in tests/sweep_framework/results_export/oprun_*.json; do
+            if [ -f "$file" ]; then
+              echo "put $file" >> dynamic_batchfile.txt
+            fi
+          done
+
+          echo "" >> dynamic_batchfile.txt
+          echo "# List files to verify upload" >> dynamic_batchfile.txt
+          echo "ls -hal" >> dynamic_batchfile.txt
+
+          echo "Generated batchfile contents:"
+          cat dynamic_batchfile.txt
+      - name: Upload via SFTP
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/optest_batchfile.txt
+          username: ml-kernel-op-test-writer
+          hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
+          path: ${{ github.workspace }}

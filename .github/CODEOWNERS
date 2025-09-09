@@ -8,8 +8,8 @@ METALIUM_GUIDE.md @davorchap
 # CI/CD
 .github/ @tenstorrent/metalium-developers-infra
 .github/workflows/ttnn-run-sweeps.yaml @stevendae
-.github/workflows/tg-deepseek-tests.yaml @yieldthought @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra
-.github/workflows/tg-deepseek-tests-impl.yaml @yieldthought @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra
+.github/workflows/galaxy-deepseek-tests.yaml @yieldthought @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra
+.github/workflows/galaxy-deepseek-tests-impl.yaml @yieldthought @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra
 .github/workflows/vllm-nightly-tests.yaml @ppetrovicTT @skhorasganiTT @rdraskicTT @tenstorrent/metalium-developers-infra
 .github/workflows/vllm-nightly-tests-impl.yaml @ppetrovicTT @skhorasganiTT @rdraskicTT @tenstorrent/metalium-developers-infra
 
@@ -58,7 +58,7 @@ tt_metal/impl/allocator/ @abhullar-tt @tt-aho
 tt_metal/impl/buffers/ @abhullar-tt @jbaumanTT @cfjchu @omilyutin-tt @sminakov-tt @TT-BrianLiu
 tt_metal/impl/context/ @jbaumanTT @aliuTT @cfjchu @omilyutin-tt
 tt_metal/impl/data_format/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT
-tt_metal/impl/debug/ @pgkeller
+tt_metal/impl/debug/ @pgkeller @abhullar-tt @ruizhangTT @tt-vjovanovic
 tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @cfjchu @omilyutin-tt
 tt_metal/impl/dispatch/ @pgkeller @jbaumanTT @nhuang-tt @mpiseTT @tt-asaigal @tt-aho
 tt_metal/impl/event @jbaumanTT @nhuang-tt @mpiseTT @tt-asaigal @tt-aho
@@ -100,12 +100,13 @@ tt_metal/third_party/tt_llk @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT
 tt_metal/third_party/umd @broskoTT @pjanevskiTT
 
 # metal tests
+tests/tt_metal/test_utils/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @nhuang-tt @tt-aho @cfjchu @omilyutin-tt
 tests/tt_metal/distributed/ @cfjchu @tt-asaigal @omilyutin-tt
 tests/tt_metal/distributed/**/CMakeLists.txt @cfjchu @tt-asaigal @omilyutin-tt @tenstorrent/metalium-developers-infra
 tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT
 tests/tt_metal/tt_metal/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @nhuang-tt @tt-aho @cfjchu @omilyutin-tt
 tests/tt_metal/tt_metal/**/CMakeLists.txt @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @nhuang-tt @tt-aho @cfjchu @omilyutin-tt @tenstorrent/metalium-developers-infra
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema @aagarwalTT
+tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema @aagarwalTT @SeanNijjar
 tests/tt_metal/tt_metal/sfpi/ @nathan-TT @pgkeller
 tests/tt_metal/tt_metal/test_kernels/sfpi/ @nathan-TT @pgkeller
 tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT
@@ -132,8 +133,8 @@ ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @ayerofieiev-tt @razorback3 @dongjin-na
 
 ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @nmauriceTT @jbbieniekTT @aczajkowskiTT
 ttnn/cpp/ttnn/operations/moreh*/**/CMakeLists.txt @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/metalium-developers-infra
-ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu @omilyutin-tt @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
-ttnn/cpp/ttnn/operations/ccl/**/CMakeLists.txt @SeanNijjar @cfjchu @omilyutin-tt @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/ccl/ @cfjchu @omilyutin-tt @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
+ttnn/cpp/ttnn/operations/ccl/**/CMakeLists.txt @cfjchu @omilyutin-tt @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/pool/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/conv/ @tenstorrent/metalium-developers-convolutions
@@ -148,8 +149,8 @@ ttnn/cpp/ttnn/operations/data_movement/gather/ @aczajkowskiTT @sjameelTT @bbrade
 ttnn/cpp/ttnn/operations/data_movement/scatter/ @aczajkowskiTT @sjameelTT @bbradelTT @jbbieniekTT @nsorabaTT
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT @rmillerTT
 ttnn/cpp/ttnn/operations/matmul/**/CMakeLists.txt @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT @rmillerTT @tenstorrent/metalium-developers-infra
-ttnn/cpp/ttnn/operations/experimental/ccl/ @SeanNijjar @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
-ttnn/cpp/ttnn/operations/experimental/ccl/**/CMakeLists.txt @SeanNijjar @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/ccl/ @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
+ttnn/cpp/ttnn/operations/experimental/ccl/**/CMakeLists.txt @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/conv3d/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/experimental/conv3d/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/cnn/ @tenstorrent/metalium-developers-convolutions @esmalTT
@@ -175,6 +176,7 @@ ttnn/cpp/ttnn/operations/embedding_backward/ @ntarafdar @TT-BrianLiu @yugi957 @s
 ttnn/cpp/ttnn/operations/embedding_backward/**/CMakeLists.txt @ntarafdar @TT-BrianLiu @yugi957 @sjameelTT @jaykru-tt @llongTT @nardoTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/transformer/sdpa/ @tenstorrent/metallium-maintainers-llama-models
 ttnn/cpp/ttnn/operations/transformer/sdpa_decode/ @tenstorrent/metallium-maintainers-llama-models
+ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/ @gwangTT
 ttnn/cpp/ttnn/operations/experimental/paged_cache/ @tenstorrent/metallium-maintainers-llama-models
 ttnn/cpp/ttnn/operations/experimental/paged_cache/**/CMakeLists.txt @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/ @tenstorrent/metallium-maintainers-llama-models
@@ -185,13 +187,13 @@ ttnn/tracy/ @mo-tenstorrent @sagarwalTT
 ttnn/api/tools/profiler/ @mo-tenstorrent
 tests/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/multidevice_perf_tests/ @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @yugi957 @jvegaTT
-tests/ttnn/unit_tests/gtests/ccl/ @SeanNijjar @jvegaTT @cfjchu @omilyutin-tt @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
+tests/ttnn/unit_tests/gtests/ccl/ @jvegaTT @cfjchu @omilyutin-tt @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
 tests/ttnn/unit_tests/operations/test_sort.py @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nmauriceTT @nsorabaTT
 tests/ttnn/unit_tests/operations/test_tosa_gather.py @mgajewskiTT @aczajkowskiTT @bbradelTT
 tests/ttnn/unit_tests/operations/test_tosa_scatter.py @jbbieniekTT @aczajkowskiTT @bbradelTT
 tests/ttnn/unit_tests/operations/test_scatter.py @aczajkowskiTT @sjameelTT @bbradelTT @jbbieniekTT
 tests/ttnn/unit_tests/operations/test_gather.py @aczajkowskiTT @mgajewskiTT @bbradelTT
-tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT @cfjchu @omilyutin-tt @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
+tests/ttnn/unit_tests/operations/ccl/ @jvegaTT @cfjchu @omilyutin-tt @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
 tests/ttnn/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
@@ -264,10 +266,11 @@ models/demos/vanilla_unet @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/demos/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn
 models/experimental/grok @yieldthought @uaydonat
 models/experimental/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT
+models/demos/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT
 models/demos/wormhole/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat
 models/demos/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat
 models/experimental/*yolo*/ @tenstorrent/cse-developer-ttnn @uaydonat
-models/experimental/yolo_eval @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-developers-convolutions
+models/demos/yolo_eval @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-developers-convolutions
 models/demos/segformer @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/metalium-developers-convolutions
 models/perf/ @yieldthought @uaydonat
 models/perf/benchmarking_utils.py @skhorasganiTT @williamlyTT @uaydonat
@@ -283,9 +286,9 @@ models/experimental/stable_diffusion_35_large/ @jonathansuTT @cglagovichTT @tens
 models/experimental/tt_dit/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn
 models/experimental/swin_s @arginugaTT @tenstorrent/cse-developer-ttnn
 models/demos/yolov7 @ssinghalTT @tenstorrent/cse-developer-ttnn
-models/experimental/classification_eval @tenstorrent/cse-developer-ttnn
+models/demos/classification_eval @tenstorrent/cse-developer-ttnn
 models/demos/yolov11 @ssinghalTT @tenstorrent/cse-developer-ttnn
-models/experimental/segmentation_evaluation @tenstorrent/cse-developer-ttnn
+models/demos/segmentation_evaluation @tenstorrent/cse-developer-ttnn
 models/demos/yolov6l @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/demos/yolov12x @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn
@@ -303,3 +306,9 @@ dockerfile/upstream_test_images/ @tenstorrent/metalium-developers-infra
 
 # tt-train
 tt-train/** @dmakoviichuk-tt @rfurko-tt @ayerofieiev-tt
+
+# tt-telemetry
+tt_telemetry/** @btrzynadlowski-tt
+
+# .clang-tidy files - Metalium infra team owns all clang-tidy configuration files
+**/.clang-tidy @tenstorrent/metalium-developers-infra

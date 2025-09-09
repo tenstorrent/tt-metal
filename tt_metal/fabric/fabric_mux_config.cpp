@@ -174,9 +174,8 @@ FabricMuxConfig::FabricMuxConfig(
         l1_end_address);
 }
 
-std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args() const {
-    const auto& fabric_router_config =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_router_config();
+std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(
+    const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const {
     return std::vector<uint32_t>{
         num_full_size_channels_,
         num_buffers_full_size_channel_,
@@ -195,6 +194,12 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args() c
         num_full_size_channel_iters_,
         num_iters_between_teardown_checks_,
         core_type_index_};
+}
+
+std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args() const {
+    const auto& fabric_router_config =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_router_config();
+    return get_fabric_mux_compile_time_main_args(fabric_router_config);
 }
 
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const {

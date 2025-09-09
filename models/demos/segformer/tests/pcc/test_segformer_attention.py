@@ -15,8 +15,8 @@ from models.demos.segformer.tests.pcc.test_segformer_efficient_selfattention imp
 from models.demos.segformer.tests.pcc.test_segformer_selfoutput import (
     create_custom_mesh_preprocessor as create_customer_preprocessor_selfoutput,
 )
-from models.demos.segformer.tt.common import get_mesh_mappers
 from models.demos.segformer.tt.ttnn_segformer_attention import TtSegformerAttention
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 

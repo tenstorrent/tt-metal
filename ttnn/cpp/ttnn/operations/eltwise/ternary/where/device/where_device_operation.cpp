@@ -62,7 +62,8 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(
         broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST,
-        "Invalid broadcast type for Where device operation. Supported bcast dims: -5, -4, -3, -1");
+        "Invalid broadcast type for Where device operation. Supported bcast dims for TTT: -5, -4, -3, -1, for TTS/TST: "
+        "-5, -4, -3");
 
     // Validate tensor shapes based on variant
     if (args.where_variant == WhereVariant::TTT) {
@@ -81,10 +82,11 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
                 true_shape,
                 false_shape);
         }
-        // If broadcast_type is not NONE, then shapes are broadcast-compatible, validation passes
+
     } else if (args.where_variant == WhereVariant::TTS) {
         TT_FATAL(
-            predicate_tensor.logical_shape() == value_true_tensor.value().logical_shape(),
+            (predicate_tensor.logical_shape() == value_true_tensor.value().logical_shape() ||
+             broadcast_type == ttnn::operations::ternary::WhereBroadcastType::OUTER_BCAST),
             "Where TTS operation requires predicate and value_true to have same shape. Predicate: {}, Value true: {}",
             predicate_tensor.logical_shape(),
             value_true_tensor.value().logical_shape());
@@ -93,7 +95,8 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
             "Where TTS operation requires value_false_scalar to be set in operation attributes");
     } else if (args.where_variant == WhereVariant::TST) {
         TT_FATAL(
-            predicate_tensor.logical_shape() == value_false_tensor.value().logical_shape(),
+            (predicate_tensor.logical_shape() == value_false_tensor.value().logical_shape() ||
+             broadcast_type == ttnn::operations::ternary::WhereBroadcastType::OUTER_BCAST),
             "Where TST operation requires predicate and value_false to have same shape. Predicate: {}, Value false: {}",
             predicate_tensor.logical_shape(),
             value_false_tensor.value().logical_shape());
@@ -149,21 +152,17 @@ TensorSpec WhereDeviceOperation::compute_output_specs(
     // For TST/TTS variants, one of the values is a scalar, so we need to handle that case
 
     auto broadcast_type = args.broadcast_type;
-    auto where_variant = args.where_variant;
 
     auto output_shape = tensor_args.predicate.logical_shape();
 
-    // TST & TTS support only equal shapes
-    if (broadcast_type == WhereBroadcastType::NONE && where_variant != WhereVariant::TTT) {
+    if (broadcast_type == WhereBroadcastType::NONE) {
         return TensorSpec(
             output_shape, tt::tt_metal::TensorLayout(args.dtype.value(), output_layout, args.memory_config));
     }
 
-    const auto compute_broadcasted_output_ternary = [&]() {
-        auto pred_shape = tensor_args.predicate.logical_shape();
-        auto true_shape = tensor_args.value_true.value().logical_shape();
-        auto false_shape = tensor_args.value_false.value().logical_shape();
-
+    const auto compute_broadcasted_output_ternary = [&](const auto& pred_shape,
+                                                        const auto& true_shape,
+                                                        const auto& false_shape) {
         const int rank_a = pred_shape.rank();
         const int rank_b = true_shape.rank();
         const int rank_c = false_shape.rank();
@@ -225,9 +224,55 @@ TensorSpec WhereDeviceOperation::compute_output_specs(
         return ttnn::Shape(output_shape);
     };
 
+    const auto compute_broadcasted_output_binary = [&](const auto& pred_shape, const auto& b_shape) {
+        const int rank_a = pred_shape.rank();
+        const int rank_b = b_shape.rank();
+        const int largest_rank = std::max(rank_a, rank_b);
+        SmallVector<uint32_t> output_shape(largest_rank, 1);
+
+        for (int i = -1; i >= -largest_rank; --i) {
+            auto a_dim = (i >= -rank_a) ? pred_shape[i] : 1;
+            auto b_dim = (i >= -rank_b) ? b_shape[i] : 1;
+
+            TT_FATAL(
+                a_dim == b_dim || a_dim == 1 || b_dim == 1,
+                "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}",
+                i,
+                a_dim,
+                b_dim);
+
+            if (i <= -6) {
+                TT_FATAL(
+                    a_dim == b_dim,
+                    "Broadcasting rule violation for rank >= 6 : dim {}, Broadcast is supported up to rank 5, dim a: "
+                    "{}, "
+                    "dim b: {}",
+                    i,
+                    a_dim,
+                    b_dim);
+            }
+
+            // Determine the resulting dimension for this axis
+            uint32_t out_dim = std::max<uint32_t>(a_dim, b_dim);
+            output_shape[i + largest_rank] = out_dim;
+        }
+        return ttnn::Shape(output_shape);
+    };
+
     if (args.where_variant == WhereVariant::TTT) {
-        output_shape = compute_broadcasted_output_ternary();
+        auto pred_shape = tensor_args.predicate.logical_shape();
+        auto true_shape = tensor_args.value_true.value().logical_shape();
+        auto false_shape = tensor_args.value_false.value().logical_shape();
+
+        output_shape = compute_broadcasted_output_ternary(pred_shape, true_shape, false_shape);
+    } else if (args.where_variant == WhereVariant::TTS) {
+        output_shape = compute_broadcasted_output_binary(
+            tensor_args.predicate.logical_shape(), tensor_args.value_true.value().logical_shape());
+    } else if (args.where_variant == WhereVariant::TST) {
+        output_shape = compute_broadcasted_output_binary(
+            tensor_args.predicate.logical_shape(), tensor_args.value_false.value().logical_shape());
     }
+
     return TensorSpec(output_shape, tt::tt_metal::TensorLayout(args.dtype.value(), output_layout, args.memory_config));
 }
 
@@ -314,7 +359,7 @@ WhereDeviceOperation::invoke(
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TTT,
         .broadcast_type = broadcast_type,
-        .memory_config = memory_config.value_or(predicate.memory_config()),
+        .memory_config = memory_config.value_or(value_true.memory_config()),
         .input_dtype = predicate.dtype(),
         .dtype = output_dtype.value_or(value_true.dtype()),
         .compute_kernel_config = std::nullopt,
@@ -337,10 +382,12 @@ WhereDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    WhereBroadcastType broadcast_type = get_broadcast_type(predicate.logical_shape(), value_true.logical_shape());
+
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TTS,
-        .broadcast_type = WhereBroadcastType::NONE,  // should use get_broadcast_type when support is added
-        .memory_config = memory_config.value_or(predicate.memory_config()),
+        .broadcast_type = broadcast_type,
+        .memory_config = memory_config.value_or(value_true.memory_config()),
         .input_dtype = predicate.dtype(),
         .dtype = output_dtype.value_or(value_true.dtype()),
         .compute_kernel_config = std::nullopt,
@@ -364,10 +411,12 @@ WhereDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    WhereBroadcastType broadcast_type = get_broadcast_type(predicate.logical_shape(), value_false.logical_shape());
+
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TST,
-        .broadcast_type = WhereBroadcastType::NONE,  // should use get_broadcast_type when support is added
-        .memory_config = memory_config.value_or(predicate.memory_config()),
+        .broadcast_type = broadcast_type,
+        .memory_config = memory_config.value_or(value_false.memory_config()),
         .input_dtype = predicate.dtype(),
         .dtype = output_dtype.value_or(value_false.dtype()),
         .compute_kernel_config = std::nullopt,

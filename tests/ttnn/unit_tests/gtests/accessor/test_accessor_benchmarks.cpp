@@ -70,11 +70,20 @@ using namespace tt::tt_metal;
 
 class AccessorBenchmarks : public GenericMeshDeviceFixture, public ::testing::WithParamInterface<InputBufferParams> {};
 
-void benchmark_all_args_combinations_single_core(
+std::vector<tensor_accessor::ArgsConfig> get_all_static_args_config() {
+    // Return only the all-static configuration (0000001 = only Sharded bit set)
+    using tensor_accessor::ArgConfig;
+    using tensor_accessor::ArgsConfig;
+    ArgsConfig static_config{ArgConfig::Sharded};
+    return {static_config};
+}
+
+void benchmark_args_combinations_single_core(
     const InputBufferParams& params,
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_,
     const std::string& res_path,
-    const std::string& kernel_path) {
+    const std::string& kernel_path,
+    const std::vector<tensor_accessor::ArgsConfig>& args_combinations) {
     // Create input and output replicated mesh buffers across generic mesh device; tests will only use first device
     const auto input_mesh_buffer = create_replicated_input_mesh_buffer_from_inputs(params, mesh_device_.get());
 
@@ -83,10 +92,11 @@ void benchmark_all_args_combinations_single_core(
     const auto input_shard_view = input_mesh_buffer->get_device_buffer(mesh_coordinate);
     const auto local_device = input_shard_view->device();
 
-    tt::tt_metal::detail::SetDeviceProfilerDir(res_path + "/" + params.test_name);
+    auto profiler_dir = res_path + "/" + params.test_name;
+    tt::tt_metal::detail::SetDeviceProfilerDir(profiler_dir);
+    log_info(tt::LogTest, "Setting profiler dir to: {}", profiler_dir);
     tt::tt_metal::detail::FreshProfilerDeviceLog();
-    auto all_args_combinations = get_all_sharded_args_configs();
-    for (const auto& arg_config : all_args_combinations) {
+    for (const auto& arg_config : args_combinations) {
         auto args_bitmask = arg_config.raw();
 
         std::string crta_config_str = fmt::format("\"SHARDED_ACCESSOR_{:07b}\"", args_bitmask);
@@ -130,6 +140,15 @@ void benchmark_all_args_combinations_single_core(
     tt::tt_metal::detail::ReadDeviceProfilerResults(local_device);
 }
 
+void benchmark_all_args_combinations_single_core(
+    const InputBufferParams& params,
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_,
+    const std::string& res_path,
+    const std::string& kernel_path) {
+    auto all_args_combinations = get_all_sharded_args_configs();
+    benchmark_args_combinations_single_core(params, mesh_device_, res_path, kernel_path, all_args_combinations);
+}
+
 TEST_P(AccessorBenchmarks, GetNocAddr) {
     benchmark_all_args_combinations_single_core(
         GetParam(),
@@ -152,6 +171,26 @@ TEST_P(AccessorBenchmarks, Constructor) {
         mesh_device_,
         "accessor_constructor_benchmarks",
         "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_constructor_benchmark.cpp");
+}
+
+TEST_P(AccessorBenchmarks, ManualPagesIteration) {
+    auto static_args_combinations = get_all_static_args_config();
+    benchmark_args_combinations_single_core(
+        GetParam(),
+        mesh_device_,
+        "accessor_manual_pages_iteration_benchmarks",
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_manual_pages_iteration_benchmark.cpp",
+        static_args_combinations);
+}
+
+TEST_P(AccessorBenchmarks, PagesIterator) {
+    auto static_args_combinations = get_all_static_args_config();
+    benchmark_args_combinations_single_core(
+        GetParam(),
+        mesh_device_,
+        "accessor_pages_iterator_benchmarks",
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_pages_iterator_benchmark.cpp",
+        static_args_combinations);
 }
 
 INSTANTIATE_TEST_SUITE_P(

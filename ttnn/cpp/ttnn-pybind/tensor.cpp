@@ -403,19 +403,6 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def(py::self == py::self)
         .def(py::self != py::self);
 
-    m_tensor.def(
-        "dump_memory_config",
-        py::overload_cast<const std::string&, const MemoryConfig&>(&dump_memory_config),
-        R"doc(
-            Dump memory config to file
-        )doc");
-    m_tensor.def(
-        "load_memory_config",
-        py::overload_cast<const std::string&>(&load_memory_config),
-        R"doc(
-            Load memory config to file
-        )doc");
-
     auto pyCoreRange = static_cast<py::class_<CoreRange>>(m_tensor.attr("CoreRange"));
     pyCoreRange.def(py::init<>([](const CoreCoord& start, const CoreCoord& end) { return CoreRange{start, end}; }))
         .def_readonly("start", &CoreRange::start_coord)
@@ -489,24 +476,6 @@ void tensor_mem_config_module(py::module& m_tensor) {
             "num_cores", [](const NdShardSpec& self) { return self.grid.num_cores(); }, "Number of cores")
         .def(py::self == py::self)
         .def(py::self != py::self);
-
-    // TODO: #16067 - Remove the legacy format.
-    m_tensor.def(
-        "dump_tensor",
-        &dump_tensor,
-        py::arg("filename"),
-        py::arg("tensor"),
-        R"doc(
-            Dump tensor to file
-        )doc");
-
-    // TODO: #16067 - Remove the legacy format.
-    m_tensor.def(
-        "load_tensor",
-        py::overload_cast<const std::string&, MeshDevice*>(&load_tensor),
-        py::arg("file_name"),
-        py::arg("device") = nullptr,
-        R"doc(Load tensor to file)doc");
 
     m_tensor
         .def(

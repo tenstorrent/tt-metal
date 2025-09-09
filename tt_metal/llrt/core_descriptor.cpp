@@ -60,7 +60,7 @@ inline std::string get_core_descriptor_file(
                     "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
             case tt::ARCH::WORMHOLE_B0: return core_desc_dir + "wormhole_b0_versim_1x1_arch.yaml";
             case tt::ARCH::BLACKHOLE: return core_desc_dir + "blackhole_simulation_1x2_arch.yaml";
-            case tt::ARCH::QUASAR: TT_THROW("No core descriptor for Quasar"); break;
+            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_1x3_arch.yaml";
         };
     } else {
         // Check if fabric tensix is enabled based on fabric tensix config
@@ -88,7 +88,7 @@ inline std::string get_core_descriptor_file(
                 } else {
                     return core_desc_dir + "blackhole_140_arch.yaml";
                 }
-            case tt::ARCH::QUASAR: TT_THROW("No core descriptor for Quasar"); break;
+            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_1x3_arch.yaml";
         };
     }
     return "";

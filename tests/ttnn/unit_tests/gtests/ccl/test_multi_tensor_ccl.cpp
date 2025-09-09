@@ -4,7 +4,7 @@
 
 #include "gtest/gtest.h"
 
-#include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_command_processor_async/all_gather_command_processor_async.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
@@ -57,7 +57,7 @@ protected:
     }
 };
 
-TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherAsync) {
+TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherCommandProcessorAsync) {
     auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices_as_idevice(mesh_devices);
 
@@ -72,8 +72,16 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherAsync) {
     std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {semaphore};
     tt::tt_metal::distributed::Synchronize(mesh_device_.get(), std::nullopt, std::vector<SubDeviceId>());
 
-    auto all_gathered = ttnn::experimental::all_gather_async(
-        tensors, 0, multi_dev_semaphore, 1, std::nullopt, ttnn::ccl::Topology::Linear, SubDeviceId(0));
+    auto all_gathered = ttnn::experimental::all_gather_command_processor_async(
+        tensors,
+        /* dim */ 0,
+        multi_dev_semaphore,
+        /* persistent_output_buffer */ std::nullopt,
+        /* num_links */ 1,
+        /* memory_config */ std::nullopt,
+        ttnn::ccl::Topology::Linear,
+        /* cluster_axis */ std::nullopt,
+        SubDeviceId(0));
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = all_gathered[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
@@ -111,42 +119,6 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, ReduceScatterAsync) {
 
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = reduced[dev_idx].to_vector<bfloat16>();
-        for (int i = 0; i < data.size(); i++) {
-            float expected = static_cast<float>(mesh_devices.size());
-            EXPECT_EQ(data[i].to_float(), expected);
-        }
-    }
-}
-
-TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllReduceAsync) {
-    auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
-    auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices_as_idevice(mesh_devices);
-
-    std::vector<ttnn::Tensor> tensors;
-    TensorSpec tensor_spec(
-        ttnn::Shape({1, 8, 1024, 768}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
-    for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
-        std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(1)));
-        tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
-    }
-
-    auto from_remote_multi_device_global_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
-    auto to_remote_multi_device_global_semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
-    auto semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
-    tt::tt_metal::distributed::Synchronize(mesh_device_.get(), std::nullopt, std::vector<SubDeviceId>());
-
-    auto all_reduced = ttnn::experimental::all_reduce_async(
-        tensors,
-        from_remote_multi_device_global_semaphore,
-        to_remote_multi_device_global_semaphore,
-        semaphore,
-        ttnn::operations::reduction::ReduceType::Sum,
-        std::nullopt,
-        ttnn::ccl::Topology::Linear,
-        1,
-        SubDeviceId(0));
-    for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
-        auto data = all_reduced[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
             float expected = static_cast<float>(mesh_devices.size());
             EXPECT_EQ(data[i].to_float(), expected);

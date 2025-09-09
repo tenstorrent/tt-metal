@@ -12,8 +12,9 @@ from models.demos.segformer.reference.segformer_mixffn import SegformerMixFFN
 from models.demos.segformer.tests.pcc.test_segformer_dwconv import (
     create_custom_mesh_preprocessor as create_custom_preprocessor_dwconv,
 )
-from models.demos.segformer.tt.common import get_mesh_mappers, preprocess_linear_bias, preprocess_linear_weight
+from models.demos.segformer.tt.common import preprocess_linear_bias, preprocess_linear_weight
 from models.demos.segformer.tt.ttnn_segformer_mix_ffn import TtSegformerMixFFN
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 

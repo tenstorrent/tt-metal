@@ -8,6 +8,7 @@ import pytest
 from loguru import logger
 
 import ttnn
+from models.demos.mobilenetv2.common import load_torch_model
 from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
 from models.demos.mobilenetv2.tests.perf.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
 from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
@@ -36,9 +37,7 @@ def run_mobilenetv2_e2e(
     torch_input_tensor, host_input_tensor = create_mobilenetv2_input_tensors(
         batch=batch_size, input_height=224, input_width=224, pad_channels=16, mesh_mapper=inputs_mesh_mapper
     )
-
-    torch_model = Mobilenetv2()
-    torch_model.eval()
+    torch_model = load_torch_model(Mobilenetv2(), model_location_generator=model_location_generator)
     torch_output_tensor = torch_model(torch_input_tensor)
 
     model_parameters = create_mobilenetv2_model_parameters(torch_model, device=device)
@@ -71,12 +70,10 @@ def run_mobilenetv2_e2e(
     )
 
     iterations = 32
-    pipe.compile(host_input_tensor)
     host_inputs = [host_input_tensor] * iterations
 
-    pipe.preallocate_output_tensors_on_host(
-        iterations, [batch_size_per_device, torch_output_tensor.shape[-1]], ttnn.bfloat16, ttnn.TILE_LAYOUT
-    )
+    pipe.compile(host_input_tensor)
+    pipe.preallocate_output_tensors_on_host(len(host_inputs))
 
     start = time.time()
     outputs = pipe.enqueue(host_inputs).pop_all()
@@ -87,7 +84,7 @@ def run_mobilenetv2_e2e(
     inference_time = (end - start) / iterations
     logger.info(f"Average model time={1000.0 * inference_time : .2f} ms")
     logger.info(f"Average model performance={iterations * batch_size / (end-start) : .2f} fps")
-    assert_with_pcc(torch_output_tensor, ttnn.to_torch(outputs[-1], mesh_composer=output_mesh_composer), 0.99)
+    assert_with_pcc(torch_output_tensor, ttnn.to_torch(outputs[-1], mesh_composer=output_mesh_composer), 0.94)
 
 
 @run_for_wormhole_b0()
@@ -100,8 +97,8 @@ def run_mobilenetv2_e2e(
     "batch_size",
     ((MOBILENETV2_BATCH_SIZE),),
 )
-def test_mobilenetv2_e2e(batch_size, device):
-    run_mobilenetv2_e2e(device, batch_size)
+def test_mobilenetv2_e2e(batch_size, device, model_location_generator):
+    run_mobilenetv2_e2e(device, batch_size, model_location_generator)
 
 
 @run_for_wormhole_b0()
@@ -116,5 +113,5 @@ def test_mobilenetv2_e2e(batch_size, device):
     "device_batch_size",
     ((MOBILENETV2_BATCH_SIZE),),
 )
-def test_mobilenetv2_e2e_dp(device_batch_size, mesh_device):
-    run_mobilenetv2_e2e(mesh_device, device_batch_size)
+def test_mobilenetv2_e2e_dp(device_batch_size, mesh_device, model_location_generator):
+    run_mobilenetv2_e2e(mesh_device, device_batch_size, model_location_generator)

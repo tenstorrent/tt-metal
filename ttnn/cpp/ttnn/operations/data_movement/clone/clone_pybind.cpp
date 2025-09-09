@@ -13,6 +13,7 @@ void bind_clone_operation(py::module& module) {
 
     Clones the input, creating a copy with the specified `memory_config` and converting its data type to `dtype`.
     This operation does not alter the tensor's layout.
+
     - ROW_MAJOR_LAYOUT: Returns the tensor unpadded in the last two dimensions.
 
     - TILE_LAYOUT: Pads the tensor to ensure its width and height are multiples of 32.

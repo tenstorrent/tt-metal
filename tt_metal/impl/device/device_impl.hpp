@@ -20,8 +20,8 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 
-class go_msg_t;
-class launch_msg_t;
+struct go_msg_t;
+struct launch_msg_t;
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
 
@@ -125,9 +125,6 @@ public:
     uint32_t get_trace_buffers_size() const override { return trace_buffers_size_; }
     void set_trace_buffers_size(uint32_t size) override { trace_buffers_size_ = size; }
 
-    bool using_slow_dispatch() const override;
-    bool using_fast_dispatch() const override;
-
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
     bool initialize(
@@ -215,6 +212,7 @@ private:
 
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;
+
     // TODO #20966: Remove this member
     std::weak_ptr<distributed::MeshDevice> mesh_device;
 

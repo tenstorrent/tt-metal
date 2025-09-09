@@ -262,14 +262,17 @@ def run_avg_pool2d(
     # test for equivalence
     pcc_thresh = 0.985
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
-    # TTNN only supports scalars in Bfloat16, so we cannot support rtol lower than 0.01
-    # for instance, a 3x3 kernel uses scalar 1/9 = 0.111, which in Bfloat16 is 0.11084
-    # so if we fill the tensor with 1s, Torch gets 9 * 0.111 = 0.999 which converted back
-    # to Bfloat16 rounds to 1.0 but TTNN gets 9 * 0.11084 = 0.99756 which converted back
-    # to Bfloat16 rounds to 0.9961, so the rdiff in this case is 0.0039
-    # since the atol default is 0.016 we don't see this issue for low magnitude values, but
-    # when using small divisor overrides with large kernels we see much large values which
-    # overwhelm the atol and the rtol becomes significant
+    # TTNN supports scalars only in Bfloat16 and from recently it uses
+    # tie-to-even rounding for fp32->bf16 scalar conversion, which improves accuracy
+    # compared to the previous truncation method. For a 3x3 kernel using scalar 1/9:
+    # the new rounding converts 1/9 → 0.111328125 in bf16, and 9 × 0.111328125 = 1.001953125,
+    # which rounds back to 1.0 in bf16. This is much better than the old truncation method
+    # which gave 1/9 → 0.11084 → 9 × 0.11084 = 0.99756 → 0.99609375 in bf16.
+    # However, numerical differences still occur in complex operations due to:
+    # different rounding at intermediate computation steps
+    # and accumulation order differences in pooling operations
+    # These factors compound, especially with small divisor overrides and large kernels,
+    # requiring relaxed rtol thresholds for robust comparisons.
     rtol = 0.01
     if dtype == ttnn.bfloat8_b:
         atol = 0.35

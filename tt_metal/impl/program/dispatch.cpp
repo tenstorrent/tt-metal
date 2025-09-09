@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sub_device_types.hpp>
 #include <tracy/Tracy.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt_align.hpp>
@@ -83,6 +84,21 @@ std::shared_ptr<Kernel> GetKernel(const ProgramImpl& program, KernelHandle kerne
 namespace program_dispatch {
 
 namespace {
+
+struct CommandConstants {
+    CoreType dispatch_core_type;
+    NOC noc_index;
+    uint32_t max_prefetch_command_size;
+    uint32_t packed_write_max_unicast_sub_cmds;
+};
+
+enum DispatchWriteOffsets {
+    DISPATCH_WRITE_OFFSET_ZERO = 0,
+    DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE = 1,
+    DISPATCH_WRITE_OFFSET_TENSIX_BINARY_L1_CONFIG_BASE = 2,
+    DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE = 3,
+};
+
 CoreCoord get_sub_device_worker_origin(
     const tt::tt_metal::IDevice* device,
     tt::tt_metal::SubDeviceId sub_device_id,
@@ -94,61 +110,53 @@ CoreCoord get_sub_device_worker_origin(
     return grid.bounding_box().start_coord;
 }
 
-struct CommandConstants {
-    CoreType dispatch_core_type;
-    NOC noc_index;
-    uint32_t max_prefetch_command_size;
-    uint32_t packed_write_max_unicast_sub_cmds;
-};
-};  // namespace
+DispatchWriteOffsets get_dispatch_write_offset(HalProgrammableCoreType core_type, bool prefer_zero = false) {
+    switch (core_type) {
+        case HalProgrammableCoreType::ACTIVE_ETH:
+        case HalProgrammableCoreType::IDLE_ETH: return DispatchWriteOffsets::DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE;
+        case HalProgrammableCoreType::TENSIX:
+            return prefer_zero ? DispatchWriteOffsets::DISPATCH_WRITE_OFFSET_ZERO
+                               : DispatchWriteOffsets::DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE;
+        default: TT_THROW("Invalid core type get_dispatch_write_offset {}", enchantum::to_string(core_type));
+    }
+}
 
-enum DispatchWriteOffsets {
-    DISPATCH_WRITE_OFFSET_ZERO = 0,
-    DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE = 1,
-    DISPATCH_WRITE_OFFSET_TENSIX_BINARY_L1_CONFIG_BASE = 2,
-    DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE = 3,
-};
+};  // namespace
 
 uint32_t configure_rta_offsets_for_kernel_groups(
     uint32_t programmable_core_type_index,
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset) {
-    uint32_t processor_classes =
-        MetalContext::instance().hal().get_processor_classes_count(programmable_core_type_index);
-    std::vector<uint32_t> max_rtas(processor_classes);
+    // Note: it's wrong to use HAL processor class here, because HAL will be fixed to have only DM/COMPUTE classes,
+    // whereas the RTA allocation is separate for DM0/DM1/COMPUTE.
+    std::vector<uint32_t> max_rtas(DISPATCH_CLASS_MAX);
     uint32_t max_unique_rta_size = 0;
     uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     for (auto& kg : kernel_groups) {
-        for (std::size_t dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-            max_rtas[dispatch_class] = 0;
-            auto& optional_id = kg->kernel_ids[dispatch_class];
-            if (optional_id) {
-                const auto& kernel = kernels.at(optional_id.value());
-                for (const CoreRange& core_range : kg->core_ranges.ranges()) {
-                    for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-                        for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                            CoreCoord core_coord(x, y);
-                            max_rtas[dispatch_class] =
-                                std::max(max_rtas[dispatch_class], (uint32_t)kernel->runtime_args(core_coord).size());
-                        }
+        std::ranges::fill(max_rtas, 0);
+        for (auto kernel_id : kg->kernel_ids) {
+            const auto& kernel = kernels.at(kernel_id);
+            auto dispatch_class = kernel->dispatch_class();
+            for (const CoreRange& core_range : kg->core_ranges.ranges()) {
+                for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                    for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                        CoreCoord core_coord(x, y);
+                        max_rtas[dispatch_class] =
+                            std::max(max_rtas[dispatch_class], (uint32_t)kernel->runtime_args(core_coord).size());
                     }
                 }
             }
         }
         uint32_t offset = 0;
-        for (std::size_t dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-            auto& optional_id = kg->kernel_ids[dispatch_class];
+        for (auto kernel_id : kg->kernel_ids) {
+            const auto& kernel = kernels.at(kernel_id);
+            auto dispatch_class = kernel->dispatch_class();
             kg->rta_sizes[dispatch_class] = max_rtas[dispatch_class] * sizeof(uint32_t);
-            if (optional_id) {
-                const auto& kernel = kernels.at(optional_id.value());
-                kernel->set_runtime_args_count(kg->core_ranges, max_rtas[dispatch_class]);
-                kg->launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset = base_offset + offset;
-                offset += max_rtas[dispatch_class] * sizeof(uint32_t);
-            } else {
-                kg->launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset = 0;
-            }
+            kernel->set_runtime_args_count(kg->core_ranges, max_rtas[dispatch_class]);
+            kg->launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset = base_offset + offset;
+            offset += max_rtas[dispatch_class] * sizeof(uint32_t);
         }
         kg->total_rta_size = offset;
         offset = tt::align(offset, l1_alignment);
@@ -290,64 +298,56 @@ uint32_t finalize_kernel_bins(
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
     uint32_t max_offset = 0;
+    uint32_t num_processors = hal.get_num_risc_processors(hal.get_programmable_core_type(programmable_core_type_index));
     for (auto& kg : kernel_groups) {
         uint32_t offset = base_offset;
 
-        for (int class_id = 0; class_id < DISPATCH_CLASS_MAX; class_id++) {
-            auto& optional_id = kg->kernel_ids[class_id];
-            if (optional_id) {
-                const auto& kernel = kernels.at(optional_id.value());
-                const auto& kernel_impl = KernelImpl::from(*kernel);
-                const std::vector<const ll_api::memory*>& binaries = kernel_impl.binaries(
-                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
-                // TODO: this is really ugly, save me future-HAL!
-                if (programmable_core_type_index ==
-                    hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
-                    uint32_t binary_packed_size = kernel_impl.get_binary_packed_size(device, 0);
+        kg->kernel_text_offsets.resize(num_processors);
+        std::ranges::fill(kg->kernel_text_offsets, 0);
+        for (auto kernel_id : kg->kernel_ids) {
+            const auto& kernel = kernels.at(kernel_id);
+            const auto& kernel_impl = KernelImpl::from(*kernel);
+            auto class_id = kernel->dispatch_class();
+            const std::vector<const ll_api::memory*>& binaries = kernel_impl.binaries(
+                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
+            // TODO: this is really ugly, save me future-HAL!
+            if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
+                const auto binary_packed_size = kernel_impl.get_binary_packed_size(device, 0);
 
-                    if (class_id == DISPATCH_CLASS_TENSIX_DM0) {
-                        kg->kernel_bin_sizes[0] = binary_packed_size;
-                        kg->kernel_text_offsets[0] = offset;
-                        kg->launch_msg.kernel_config.kernel_text_offset[0] = offset;
+                if (class_id == DISPATCH_CLASS_TENSIX_COMPUTE) {
+                    constexpr uint32_t k_MaxMathProcessorsCount = 3;
+                    for (uint32_t proc_type_index = 0; proc_type_index < k_MaxMathProcessorsCount; proc_type_index++) {
+                        uint32_t binary_packed_size = kernel_impl.get_binary_packed_size(device, proc_type_index);
+                        kg->kernel_text_offsets[2 + proc_type_index] = offset;
+                        kg->launch_msg.kernel_config.kernel_text_offset[2 + proc_type_index] = offset;
                         offset += binary_packed_size;
                         offset = tt::align(offset, l1_alignment);
-                    } else if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
-                        kg->kernel_bin_sizes[1] = binary_packed_size;
-                        kg->kernel_text_offsets[1] = offset;
-                        kg->launch_msg.kernel_config.kernel_text_offset[1] = offset;
-                        offset += binary_packed_size;
-                        offset = tt::align(offset, l1_alignment);
-
-                        uint32_t binary_text_size = kernel_impl.get_binary_text_size(device, 0);
-                        TT_ASSERT(binary_text_size >> 4 <= std::numeric_limits<uint16_t>::max());
-                        kg->launch_msg.kernel_config.ncrisc_kernel_size16 = (binary_text_size + 15) >> 4;
-                    } else {
-                        constexpr uint32_t max_math_processors_count = 3;
-                        for (uint32_t proc_type_index = 0; proc_type_index < max_math_processors_count;
-                             proc_type_index++) {
-                            uint32_t binary_packed_size = kernel_impl.get_binary_packed_size(device, proc_type_index);
-                            kg->kernel_bin_sizes[2 + proc_type_index] = binary_packed_size;
-                            kg->kernel_text_offsets[2 + proc_type_index] = offset;
-                            kg->launch_msg.kernel_config.kernel_text_offset[2 + proc_type_index] = offset;
-                            offset += binary_packed_size;
-                            offset = tt::align(offset, l1_alignment);
-                        }
                     }
                 } else {
-                    uint32_t binary_packed_size = kernel_impl.get_binary_packed_size(device, 0);
-                    kg->kernel_bin_sizes[class_id] = binary_packed_size;
+                    kg->kernel_text_offsets[class_id] = offset;
+                    kg->launch_msg.kernel_config.kernel_text_offset[class_id] = offset;
+                    offset += binary_packed_size;
+                    offset = tt::align(offset, l1_alignment);
 
-                    // No kernel config buffer on active eth yet
-                    if (hal.get_programmable_core_type(kg->programmable_core_type_index) ==
-                        HalProgrammableCoreType::IDLE_ETH) {
-                        kg->kernel_text_offsets[class_id] = offset;
-                        kg->launch_msg.kernel_config.kernel_text_offset[class_id] = offset;
-                        offset += binary_packed_size;
-                        offset = tt::align(offset, l1_alignment);
-                    } else {
-                        kg->kernel_text_offsets[class_id] = binaries[0]->get_text_addr();
-                        kg->launch_msg.kernel_config.kernel_text_offset[class_id] = binaries[0]->get_text_addr();
+                    // Provide text size for copying to NCRISC IRAM
+                    if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
+                        const auto binary_text_size = kernel_impl.get_binary_text_size(device, 0);
+                        TT_ASSERT(binary_text_size >> 4 <= std::numeric_limits<uint16_t>::max());
+                        kg->launch_msg.kernel_config.ncrisc_kernel_size16 = (binary_text_size + 15) >> 4;
                     }
+                }
+            } else {
+                // All other core types
+                const auto binary_packed_size = kernel_impl.get_binary_packed_size(device, 0);
+                if (hal.get_core_kernel_stored_in_config_buffer(
+                        hal.get_programmable_core_type(programmable_core_type_index))) {
+                    kg->kernel_text_offsets[class_id] = offset;
+                    kg->launch_msg.kernel_config.kernel_text_offset[class_id] = offset;
+                    offset += binary_packed_size;
+                    offset = tt::align(offset, l1_alignment);
+                } else {
+                    kg->kernel_text_offsets[class_id] = binaries[0]->get_text_addr();
+                    kg->launch_msg.kernel_config.kernel_text_offset[class_id] = binaries[0]->get_text_addr();
                 }
             }
         }
@@ -592,7 +592,7 @@ BatchedTransfers assemble_runtime_args_commands(
     uint32_t per_kernel_crta_multicast_count = 0;
     for (size_t kernel_index = 0; kernel_index < program.num_kernels(); kernel_index++) {
         auto kernel_id = get_device_local_kernel_handle(kernel_index);
-        auto kernel = detail::GetKernel(program, kernel_id);
+        auto kernel = program.get_kernel(kernel_id);
         if (kernel->get_kernel_core_type() != CoreType::WORKER) {
             continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
         }
@@ -612,13 +612,11 @@ BatchedTransfers assemble_runtime_args_commands(
         for (auto& kg : program.get_kernel_groups(index)) {
             bool has_crtas = false;
             for (auto kernel_id : kg->kernel_ids) {
-                if (kernel_id) {
-                    auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id.value());
-                    auto kernel = detail::GetKernel(program, device_local_kernel_handle);
-                    if (!kernel->common_runtime_args().empty()) {
-                        has_crtas = true;
-                        break;
-                    }
+                auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id);
+                auto kernel = program.get_kernel(device_local_kernel_handle);
+                if (!kernel->common_runtime_args().empty()) {
+                    has_crtas = true;
+                    break;
                 }
             }
             if (has_crtas) {
@@ -631,7 +629,7 @@ BatchedTransfers assemble_runtime_args_commands(
     bool use_kernel_group_crta_multicast = kernel_group_crta_multicast_count <= per_kernel_crta_multicast_count;
 
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        auto kernel = detail::GetKernel(program, kernel_id);
+        auto kernel = program.get_kernel(kernel_id);
         auto programmable_core_type = kernel->get_kernel_programmable_core_type();
         if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
             // Fast dispatch not supported on IDLE_ETH yet
@@ -678,36 +676,34 @@ BatchedTransfers assemble_runtime_args_commands(
         uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         for (auto& kg : program.get_kernel_groups(index)) {
             for (auto kernel_id : kg->kernel_ids) {
-                if (kernel_id) {
-                    auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id.value());
-                    auto kernel = detail::GetKernel(program, device_local_kernel_handle);
-                    if (kernel->common_runtime_args().empty()) {
-                        continue;
-                    }
-                    uint32_t dispatch_class = kernel->dispatch_class();
-                    const uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
-                    for (auto& transfer_info :
-                         extract_dst_noc_multicast_info(device, kg->core_ranges.ranges(), CoreType::WORKER)) {
-                        auto noc_xy_addr = device->get_noc_multicast_encoding(
-                            constants.noc_index, std::get<CoreRange>(transfer_info.cores));
-                        size_t size =
-                            kernel->common_runtime_args().size() * sizeof(*kernel->common_runtime_args().data());
-                        RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, size);
-                        transfers[std::make_pair(noc_xy_addr, transfer_info.num_dests)][crta_offset] =
-                            std::vector<Transfer>{Transfer{
-                                .start = crta_offset,
-                                .data = tt::stl::Span<const uint8_t>(
-                                    reinterpret_cast<uint8_t*>(kernel->common_runtime_args().data()), size),
-                                .cbs = {},
-                                .rta_data = &kernel->common_runtime_args_data()}};
-                    }
+                auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id);
+                auto kernel = program.get_kernel(device_local_kernel_handle);
+                if (kernel->common_runtime_args().empty()) {
+                    continue;
+                }
+                uint32_t dispatch_class = kernel->dispatch_class();
+                const uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
+                for (auto& transfer_info :
+                     extract_dst_noc_multicast_info(device, kg->core_ranges.ranges(), CoreType::WORKER)) {
+                    auto noc_xy_addr = device->get_noc_multicast_encoding(
+                        constants.noc_index, std::get<CoreRange>(transfer_info.cores));
+                    size_t size = kernel->common_runtime_args().size() * sizeof(*kernel->common_runtime_args().data());
+                    RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, size);
+                    transfers[std::make_pair(noc_xy_addr, transfer_info.num_dests)][crta_offset] =
+                        std::vector<Transfer>{Transfer{
+                            .start = crta_offset,
+                            .data = tt::stl::Span<const uint8_t>(
+                                reinterpret_cast<uint8_t*>(kernel->common_runtime_args().data()), size),
+                            .cbs = {},
+                            .rta_data = &kernel->common_runtime_args_data()}};
                 }
             }
         }
     }
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        if (hal.get_programmable_core_type(index) == HalProgrammableCoreType::IDLE_ETH) {
+        auto programmable_core_type = hal.get_programmable_core_type(index);
+        if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
             // Fast dispatch not supported on IDLE_ETH yet
             // TODO: can't just loop here as code below confuses ACTIVE/IDLE
             continue;
@@ -726,24 +722,20 @@ BatchedTransfers assemble_runtime_args_commands(
 
                             unique_rt_args_data.resize(unique_rt_args_data.size() + 1);
                             unique_rt_data_and_sizes.resize(unique_rt_data_and_sizes.size() + 1);
-                            for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-                                auto& optional_id = kg->kernel_ids[dispatch_class];
-                                if (optional_id) {
-                                    auto device_local_kernel_handle =
-                                        get_device_local_kernel_handle(optional_id.value());
-                                    auto kernel = detail::GetKernel(program, device_local_kernel_handle);
-                                    if (!kernel->cores_with_runtime_args().empty()) {
-                                        const auto& runtime_args_data = kernel->runtime_args(core_coord);
-                                        unique_rt_args_data.back().emplace_back(
-                                            RtaDataPair(kernel->runtime_args_data(core_coord), runtime_args_data));
-                                        TT_ASSERT(
-                                            runtime_args_data.size() * sizeof(uint32_t) <=
-                                            kg->rta_sizes[dispatch_class]);
-                                        unique_rt_data_and_sizes.back().emplace_back(
-                                            kernel->runtime_args_data(core_coord).rt_args_data,
-                                            runtime_args_data.size() * sizeof(uint32_t),
-                                            kg->rta_sizes[dispatch_class]);
-                                    }
+                            for (auto kernel_id : kg->kernel_ids) {
+                                auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id);
+                                auto kernel = program.get_kernel(device_local_kernel_handle);
+                                if (!kernel->cores_with_runtime_args().empty()) {
+                                    auto dispatch_class = kernel->dispatch_class();
+                                    const auto& runtime_args_data = kernel->runtime_args(core_coord);
+                                    unique_rt_args_data.back().emplace_back(
+                                        RtaDataPair(kernel->runtime_args_data(core_coord), runtime_args_data));
+                                    TT_ASSERT(
+                                        runtime_args_data.size() * sizeof(uint32_t) <= kg->rta_sizes[dispatch_class]);
+                                    unique_rt_data_and_sizes.back().emplace_back(
+                                        kernel->runtime_args_data(core_coord).rt_args_data,
+                                        runtime_args_data.size() * sizeof(uint32_t),
+                                        kg->rta_sizes[dispatch_class]);
                                 }
                             }
                             CoreCoord virtual_core = device->virtual_core_from_logical_core(core_coord, core_type);
@@ -763,8 +755,7 @@ BatchedTransfers assemble_runtime_args_commands(
                     unique_rt_args_data,
                     constants,
                     false,
-                    core_type == CoreType::WORKER ? DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE
-                                                  : DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
+                    get_dispatch_write_offset(programmable_core_type));
                 for (auto& data_per_kernel : unique_rt_data_and_sizes) {
                     for (auto& data_and_sizes : data_per_kernel) {
                         RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, std::get<1>(data_and_sizes));
@@ -790,7 +781,7 @@ BatchedTransfers assemble_runtime_args_commands(
 
                 for (size_t kernel_index = 0; kernel_index < program.num_kernels(); kernel_index++) {
                     auto kernel_id = get_device_local_kernel_handle(kernel_index);
-                    auto kernel = detail::GetKernel(program, kernel_id);
+                    auto kernel = program.get_kernel(kernel_id);
                     if (kernel->get_kernel_core_type() != core_type) {
                         continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
                     }
@@ -861,8 +852,7 @@ BatchedTransfers assemble_runtime_args_commands(
                                 common_rt_args_data,
                                 constants,
                                 true,
-                                core_type == CoreType::WORKER ? DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE
-                                                              : DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
+                                get_dispatch_write_offset(programmable_core_type));
                             sub_cmds.clear();
                         },
                         common_sub_cmds);
@@ -1103,11 +1093,19 @@ public:
                     kernel_bins_unicast_cmds.emplace_back(2 * hal.get_alignment(HalMemType::HOST));
                     constexpr bool flush_prefetch = false;
                     calculator.add_dispatch_write_linear<flush_prefetch>(0);
+
+                    // Set write offset if required
+                    auto write_offset = DISPATCH_WRITE_OFFSET_ZERO;
+                    if (hal.get_core_kernel_stored_in_config_buffer(kg_transfer_info.core_type)) {
+                        write_offset = get_dispatch_write_offset(kg_transfer_info.core_type, true);
+                    }
                     kernel_bins_unicast_cmds.back().add_dispatch_write_linear<flush_prefetch>(
                         num_mcast_dests,  // num_mcast_dests
                         noc_encoding,     // noc_xy_addr
                         kg_transfer_info.dst_base_addrs[kernel_idx],
-                        kg_transfer_info.lengths[kernel_idx]);
+                        kg_transfer_info.lengths[kernel_idx],
+                        nullptr,
+                        write_offset);
                     RecordDispatchData(
                         program.get_id(),
                         DISPATCH_DATA_BINARY,
@@ -1796,8 +1794,12 @@ void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, 
     // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
     // previous launch message.
     config_buffer_mgr.init_add_buffer(0, launch_msg_buffer_num_entries - 1);
-    // There's no ring buffer for active ethernet binaries, so keep track of them separately.
-    config_buffer_mgr.init_add_buffer(0, 1);
+    if (hal.get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType::ACTIVE_ETH)) {
+        // Keeping it the same
+        config_buffer_mgr.init_add_buffer(0, 1);
+    } else {
+        config_buffer_mgr.init_add_buffer(0, 1);
+    }
 }
 
 void reserve_space_in_kernel_config_buffer(

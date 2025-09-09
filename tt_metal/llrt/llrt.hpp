@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "core_coord.hpp"
+#include "tt_target_device.hpp"
 #include <tt_stl/span.hpp>
 // clang-format off
 #include "hal.hpp"
@@ -60,7 +61,7 @@ using WorkerCores = std::vector<WorkerCore>;
 // Return a reference to a potentially shared binary image.
 // The images are cached by path name only.
 const ll_api::memory& get_risc_binary(
-    std::string_view path,
+    const std::string& path,
     ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE,
     std::function<void(ll_api::memory&)> update_callback = nullptr);
 
@@ -94,9 +95,14 @@ void send_msg_to_eth_mailbox(
     chip_id_t device_id,
     const CoreCoord& virtual_core,
     tt_metal::FWMailboxMsg msg_type,
+    int mailbox_index,
     std::vector<uint32_t> args,
     bool wait_for_ack = true,
-    int timeout_ms = 30000);
+    int timeout_ms = 10000);
+
+// Wait for a heartbeat from the active ethernet core, if supported
+// Used to check if the base firmware is running and ready to service the eth mailbox
+void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms = 10000);
 
 }  // namespace internal_
 

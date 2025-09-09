@@ -7,6 +7,7 @@ from typing import List, Dict, Optional, Any
 import pathlib
 import json
 import datetime as dt
+import hashlib
 import os
 from elasticsearch import Elasticsearch
 from framework.database import (
@@ -255,10 +256,14 @@ class FileResultDestination(ResultDestination):
         # Generate a simple deterministic run id based on host and start timestamp
         try:
             host = str(run_metadata.get("host", "unknown"))
+            # Use a short digest of run_contents to prevent overly long filenames
             run_contents = str(run_metadata.get("run_contents", "unknown"))
+            digest = hashlib.sha256(run_contents.encode("utf-8")).hexdigest()[:12]
             start_ts = run_metadata.get("start_time_ts") or run_metadata.get("run_start_ts") or dt.datetime.now()
             ts_str = start_ts.strftime("%Y%m%d_%H%M%S")
-            self._run_id = f"{host}_{run_contents}_{ts_str}"
+            # Sanitize host to avoid path issues and keep the filename short
+            safe_host = host.replace("/", "_")[:32]
+            self._run_id = f"{safe_host}_{digest}_{ts_str}"
         except Exception:
             self._run_id = None
 
@@ -273,7 +278,16 @@ class FileResultDestination(ResultDestination):
             return "success"
 
         sweep_name = header_info[0]["sweep_name"]
-        export_path = self.export_dir / f"{sweep_name}.json"
+        run_start_time = run_context.get("test_start_time")
+        if run_start_time:
+            timestamp = run_start_time.strftime("%Y%m%d_%H%M%S")
+        else:
+            # Fallback to current time if run_start_time is not available
+            timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Keep filenames short and safe: use sweep short name + digest
+        short_sweep = str(sweep_name).split(".")[0] if sweep_name else "sweep"
+        name_digest = hashlib.sha256(str(sweep_name).encode("utf-8")).hexdigest()[:12] if sweep_name else "na"
+        export_path = self.export_dir / f"{short_sweep}_{name_digest}_{timestamp}.json"
 
         git_hash = run_context.get("git_hash", "unknown")
 
@@ -366,9 +380,6 @@ class FileResultDestination(ResultDestination):
                     # fallback to string representation for unsupported types
                     coerced_value = str(v)
 
-                if i == 0:
-                    logger.info(f"k: {k}, v:  {coerced_value}")
-
                 # Map value into appropriate OpParam field
                 if isinstance(coerced_value, (int, float)):
                     op_param_list.append(OpParam(param_name=k, param_value_numeric=float(coerced_value)))
@@ -428,30 +439,6 @@ class FileResultDestination(ResultDestination):
             record_dict = record.model_dump(mode="json")
             record_dict = _flatten_serialized(record_dict)
             validated_records.append(record_dict)
-
-        # Append to existing file or create new one
-        if export_path.exists():
-            try:
-                with open(export_path, "r") as file:
-                    old_data = json.load(file)
-                if isinstance(old_data, list):
-                    validated_records = old_data + validated_records
-                else:
-                    logger.warning(
-                        f"Existing export file {export_path} is not a JSON list. Overwriting with validated records."
-                    )
-            except json.JSONDecodeError:
-                # Corrupt or non-JSON file: back it up and proceed with fresh records
-                try:
-                    backup_path = export_path.with_suffix(export_path.suffix + ".bak")
-                    export_path.rename(backup_path)
-                    logger.warning(
-                        f"Existing export file {export_path} contained invalid JSON. Backed up to {backup_path}."
-                    )
-                except Exception:
-                    logger.warning(
-                        f"Existing export file {export_path} contained invalid JSON and could not be backed up. Overwriting."
-                    )
 
         # Atomic write to avoid truncated/invalid JSON on interruptions
         tmp_path = export_path.with_suffix(export_path.suffix + ".tmp")

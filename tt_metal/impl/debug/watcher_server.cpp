@@ -247,8 +247,8 @@ void WatcherServer::Impl::register_kernel_elf_paths(int id, std::vector<std::str
 void WatcherServer::Impl::read_kernel_ids_from_file() {
     std::filesystem::path output_dir(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + LOG_FILE_PATH);
     std::string fname = output_dir.string() + KERNEL_FILE_NAME;
-    FILE* f;
-    if ((f = fopen(fname.c_str(), "r")) == nullptr) {
+    FILE* f = fopen(fname.c_str(), "r");
+    if (!f) {
         TT_THROW("Watcher failed to open kernel name file: {}\n", fname);
     }
 
@@ -279,8 +279,6 @@ double WatcherServer::Impl::get_elapsed_secs() {
 }
 
 void WatcherServer::Impl::create_log_file() {
-    FILE* f;
-
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
     std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
@@ -289,7 +287,8 @@ void WatcherServer::Impl::create_log_file() {
     if (rtoptions.get_watcher_skip_logging()) {
         fname = "/dev/null";
     }
-    if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
+    FILE* f = fopen(fname.c_str(), fmode);
+    if (!f) {
         TT_THROW("Watcher failed to create log file\n");
     }
     log_info(LogLLRuntime, "Watcher log file: {}", fname);
@@ -319,13 +318,13 @@ void WatcherServer::Impl::create_log_file() {
 }
 
 void WatcherServer::Impl::create_kernel_file() {
-    FILE* f;
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
     std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
     std::filesystem::create_directories(output_dir);
     std::string fname = output_dir.string() + KERNEL_FILE_NAME;
-    if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
+    FILE* f = fopen(fname.c_str(), fmode);
+    if (!f) {
         TT_THROW("Watcher failed to create kernel name file\n");
     }
     kernel_names_.clear();
@@ -337,12 +336,12 @@ void WatcherServer::Impl::create_kernel_file() {
 }
 
 void WatcherServer::Impl::create_kernel_elf_file() {
-    FILE* f;
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
     std::filesystem::create_directories(output_dir);
     std::string fname = output_dir.string() + KERNEL_ELF_FILE_NAME;
-    if ((f = fopen(fname.c_str(), "w")) == nullptr) {
+    FILE* f = fopen(fname.c_str(), "w");
+    if (!f) {
         TT_THROW("Watcher failed to create kernel ELF file\n");
     }
     kernel_elf_file_ = f;
@@ -384,14 +383,9 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
     data->assert_status.which = DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
 
     // Initialize pause flags to 0
-    for (int idx = 0; idx < DebugNumUniqueRiscs; idx++) {
-        data->pause_status.flags[idx] = 0;
-    }
-
+    memset(&data->pause_status, 0, sizeof data->pause_status);
     // Initialize stack usage data to unset
-    for (int idx = 0; idx < DebugNumUniqueRiscs; idx++) {
-        data->stack_usage.cpu[idx].min_free = 0;
-    }
+    memset(&data->stack_usage, 0, sizeof data->stack_usage);
 
     // Initialize debug ring buffer to a known init val, we'll check against this to see if any
     // data has been written.

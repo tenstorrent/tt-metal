@@ -29,7 +29,7 @@ namespace tt {
 namespace tt_metal {
 
 namespace program_cache::detail {
-class ProgramCache;
+struct ProgramCache;
 }
 /*
 MemoryBlockTable is a list of memory blocks in the following format:
@@ -46,7 +46,7 @@ class SubDevice;
 
 class CommandQueue;
 class SystemMemoryManager;
-class TraceBuffer;
+struct TraceBuffer;
 struct TraceDescriptor;
 
 namespace distributed {
@@ -152,10 +152,6 @@ public:
 
     virtual uint32_t get_trace_buffers_size() const = 0;
     virtual void set_trace_buffers_size(uint32_t size) = 0;
-
-    // Light Metal
-    virtual bool using_slow_dispatch() const = 0;
-    virtual bool using_fast_dispatch() const = 0;
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset

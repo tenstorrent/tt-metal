@@ -7,7 +7,6 @@
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 #include "fabric/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric.h" // zero_l1_buf
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"

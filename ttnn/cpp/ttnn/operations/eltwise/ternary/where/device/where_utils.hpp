@@ -20,10 +20,10 @@ enum class KernelName {
     ReaderNoBcastTSS,
     ReaderColBcastTTT,
     ReaderOuterBcastTTT,
-    WriterNoBcastTTT,
-    WriterNoBcastTST,
-    WriterNoBcastTTS,
-    WriterNoBcastTSS,
+    ReaderOuterBcastTTS,
+    ReaderOuterBcastTST,
+    WriterNoBcast,
+    ReaderRowBcastTTT,
     WriterColBcastTTT,
     ComputeNoBcastTTT,
     ComputeNoBcastTST,
@@ -50,5 +50,6 @@ std::map<std::string, std::string> make_dataflow_defines(
 
 WhereBroadcastType get_broadcast_type(
     const ttnn::Shape& predicate_shape, const ttnn::Shape& value_true_shape, const ttnn::Shape& value_false_shape);
+WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const ttnn::Shape& b_shape);
 
 }  // namespace ttnn::operations::ternary

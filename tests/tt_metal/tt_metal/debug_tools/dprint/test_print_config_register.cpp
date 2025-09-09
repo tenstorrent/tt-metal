@@ -13,6 +13,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
@@ -330,9 +331,12 @@ static std::string int_to_hex(int value) {
 }
 
 // Prepares the compute kernel with the specified program and test configuration
-static KernelHandle prepare_writer(tt_metal::Program& program, const ConfigRegPrintTestConfig& config) {
+static KernelHandle prepare_writer(distributed::MeshWorkload& workload, const ConfigRegPrintTestConfig& config) {
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    auto& program_ = workload.get_programs().at(device_range);
     return tt_metal::CreateKernel(
-        program, config.write_kernel, config.core, tt_metal::ComputeConfig{.compile_args = {config.register_name}});
+        program_, config.write_kernel, config.core, tt_metal::ComputeConfig{.compile_args = {config.register_name}});
 }
 
 static std::string generate_golden_output(
@@ -375,25 +379,31 @@ static std::string generate_golden_output(
 }
 
 static void print_config_reg(
-    DPrintFixture* fixture, tt_metal::IDevice* device, const ConfigRegPrintTestConfig& config) {
+    DPrintMeshFixture* fixture,
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const ConfigRegPrintTestConfig& config) {
     // Create program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
 
     // Prepare write kernel
-    [[maybe_unused]] auto write_kernel = prepare_writer(program, config);
+    [[maybe_unused]] auto write_kernel = prepare_writer(workload, config);
 
     // Generate golden output
     std::string golden_output =
         generate_golden_output(config.field_names, config.field_values, config.num_of_registers, config.register_name);
 
     // Run the program
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(mesh_device, workload);
 
     // Check the print log against golden output.
-    EXPECT_TRUE(FilesMatchesString(DPrintFixture::dprint_file_name, golden_output));
+    EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, golden_output));
 }
 
-TEST_F(DPrintFixture, ConfigRegAluTestPrint) {
+TEST_F(DPrintMeshFixture, ConfigRegAluTestPrint) {
     std::vector<std::string> field_names_alu_config = field_names_alu_config_all;
     std::vector<uint32_t> field_values_alu_config = field_values_alu_config_all;
 
@@ -412,11 +422,13 @@ TEST_F(DPrintFixture, ConfigRegAluTestPrint) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintFixture* fixture, IDevice* device) { print_config_reg(fixture, device, test_config); },
+        [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            print_config_reg(fixture, mesh_device, test_config);
+        },
         this->devices_[0]);
 }
 
-TEST_F(DPrintFixture, ConfigRegTileDescriptorTestPrint) {
+TEST_F(DPrintMeshFixture, ConfigRegTileDescriptorTestPrint) {
     // Setup test configuration
 
     std::vector<std::string> field_names_unpack_tile_descriptor;
@@ -440,11 +452,13 @@ TEST_F(DPrintFixture, ConfigRegTileDescriptorTestPrint) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintFixture* fixture, IDevice* device) { print_config_reg(fixture, device, test_config); },
+        [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            print_config_reg(fixture, mesh_device, test_config);
+        },
         this->devices_[0]);
 }
 
-TEST_F(DPrintFixture, ConfigRegUnpackTestPrint) {
+TEST_F(DPrintMeshFixture, ConfigRegUnpackTestPrint) {
     std::vector<std::string> field_names_unpack_config;
     std::vector<uint32_t> field_values_unpack_config;
 
@@ -467,11 +481,13 @@ TEST_F(DPrintFixture, ConfigRegUnpackTestPrint) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintFixture* fixture, IDevice* device) { print_config_reg(fixture, device, test_config); },
+        [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            print_config_reg(fixture, mesh_device, test_config);
+        },
         this->devices_[0]);
 }
 
-TEST_F(DPrintFixture, ConfigRegPackTestPrint) {
+TEST_F(DPrintMeshFixture, ConfigRegPackTestPrint) {
     std::vector<std::string> field_names_pack_config;
     std::vector<uint32_t> field_values_pack_config;
 
@@ -504,11 +520,13 @@ TEST_F(DPrintFixture, ConfigRegPackTestPrint) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintFixture* fixture, IDevice* device) { print_config_reg(fixture, device, test_config); },
+        [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            print_config_reg(fixture, mesh_device, test_config);
+        },
         this->devices_[0]);
 }
 
-TEST_F(DPrintFixture, ConfigRegReluTestPrint) {
+TEST_F(DPrintMeshFixture, ConfigRegReluTestPrint) {
     std::vector<std::string> field_names_relu_config = field_names_relu_config_all;
     std::vector<uint32_t> field_values_relu_config = field_values_relu_config_all;
 
@@ -527,11 +545,13 @@ TEST_F(DPrintFixture, ConfigRegReluTestPrint) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintFixture* fixture, IDevice* device) { print_config_reg(fixture, device, test_config); },
+        [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            print_config_reg(fixture, mesh_device, test_config);
+        },
         this->devices_[0]);
 }
 
-TEST_F(DPrintFixture, ConfigRegDestRdCtrlTestPrint) {
+TEST_F(DPrintMeshFixture, ConfigRegDestRdCtrlTestPrint) {
     std::vector<std::string> field_names_dest_rd_ctrl = field_names_dest_rd_ctrl_all;
     std::vector<uint32_t> field_values_dest_rd_ctrl = field_values_dest_rd_ctrl_all;
 
@@ -550,11 +570,13 @@ TEST_F(DPrintFixture, ConfigRegDestRdCtrlTestPrint) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintFixture* fixture, IDevice* device) { print_config_reg(fixture, device, test_config); },
+        [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            print_config_reg(fixture, mesh_device, test_config);
+        },
         this->devices_[0]);
 }
 
-TEST_F(DPrintFixture, ConfigRegPackEdgeOffsetTestPrint) {
+TEST_F(DPrintMeshFixture, ConfigRegPackEdgeOffsetTestPrint) {
     std::vector<std::string> field_names_pack_edge_offset = field_names_pack_edge_offset_all;
     std::vector<uint32_t> field_values_pack_edge_offset = field_values_pack_edge_offset_all;
 
@@ -576,11 +598,13 @@ TEST_F(DPrintFixture, ConfigRegPackEdgeOffsetTestPrint) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintFixture* fixture, IDevice* device) { print_config_reg(fixture, device, test_config); },
+        [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            print_config_reg(fixture, mesh_device, test_config);
+        },
         this->devices_[0]);
 }
 
-TEST_F(DPrintFixture, ConfigRegPackCountersTestPrint) {
+TEST_F(DPrintMeshFixture, ConfigRegPackCountersTestPrint) {
     std::vector<std::string> field_names_pack_counters = field_names_pack_counters_all;
     std::vector<uint32_t> field_values_pack_counters = field_values_pack_counters_all;
 
@@ -602,6 +626,8 @@ TEST_F(DPrintFixture, ConfigRegPackCountersTestPrint) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintFixture* fixture, IDevice* device) { print_config_reg(fixture, device, test_config); },
+        [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            print_config_reg(fixture, mesh_device, test_config);
+        },
         this->devices_[0]);
 }
