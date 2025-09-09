@@ -28,8 +28,8 @@ jobs:
       matrix:
         test-group:
           - name: fabric 1D unit tests
-            cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
-            timeout: 15
+            cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*:NightlyFabric1DFixture.*"
+            timeout: 25
           - name: fabric 1D performance microbenchmarks
             cmd: pytest tests/tt_metal/microbenchmarks/ethernet/test_fabric_edm_bandwidth.py
             timeout: 15
