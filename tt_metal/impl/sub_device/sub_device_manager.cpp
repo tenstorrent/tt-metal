@@ -16,7 +16,7 @@
 
 #include "allocator_types.hpp"
 #include "core_coord.hpp"
-#include "dev_msgs.h"
+#include "llrt/hal.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_manager.hpp"
@@ -363,7 +363,7 @@ void SubDeviceManager::populate_noc_data() {
     CoreRangeSet all_core_set{device_worker_cores};
     CoreRangeSet unused_cores = all_core_set.subtract(used_cores);
     if (!unused_cores.empty()) {
-        constexpr uint32_t unused_go_message_index = go_message_num_entries - 1;
+        constexpr uint32_t unused_go_message_index = dev_msgs::go_message_num_entries - 1;
         core_go_message_mapping_.emplace_back(unused_cores, unused_go_message_index);
     }
 }
