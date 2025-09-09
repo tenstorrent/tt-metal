@@ -5,6 +5,7 @@
 #include "autograd.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
 #include <nanobind/stl/function.h>
 #include <nanobind/stl/vector.h>
 
@@ -20,6 +21,10 @@ void py_module_types(nb::module_& m) {
     nb::enum_<GradMode>(m, "GradMode")
         .value("ENABLED", GradMode::ENABLED)
         .value("DISABLED", GradMode::DISABLED)
+        .export_values();
+    nb::enum_<PreferredPrecision>(m, "PreferredPrecision")
+        .value("HALF", PreferredPrecision::HALF)
+        .value("FULL", PreferredPrecision::FULL)
         .export_values();
     nb::enum_<RunMode>(m, "RunMode").value("TRAIN", RunMode::TRAIN).value("EVAL", RunMode::EVAL).export_values();
 
@@ -55,7 +60,7 @@ void py_module(nb::module_& m) {
     auto py_tensor = static_cast<nb::class_<Tensor>>(m.attr("Tensor"));
     py_tensor.def(nb::init<const Tensor&>());
     py_tensor.def(nb::init<Tensor&&>());
-    py_tensor.def(nb::init<const tt::tt_metal::Tensor&, bool>());
+    // py_tensor.def(nb::init<const tt::tt_metal::Tensor&, bool>());
     py_tensor.def("set_value", &Tensor::set_value);
     py_tensor.def("set_grad", &Tensor::set_grad);
     py_tensor.def("set_node", &Tensor::set_node);
@@ -74,11 +79,23 @@ void py_module(nb::module_& m) {
 
     auto py_autocast_tensor = static_cast<nb::class_<AutocastTensor>>(m.attr("AutocastTensor"));
     py_autocast_tensor.def(nb::init<>());
-    py_autocast_tensor.def(nb::init<const tt::tt_metal::Tensor&>());
+    // py_autocast_tensor.def(nb::init<const tt::tt_metal::Tensor&>());
     py_autocast_tensor.def(nb::init<const AutocastTensor&>());
     py_autocast_tensor.def(nb::init<AutocastTensor&&>());
-    py_autocast_tensor.def("set_tensor", &AutocastTensor::set_tensor);
-    py_autocast_tensor.def("get_tensor", &AutocastTensor::get_tensor);
+    // py_autocast_tensor.def("set_tensor", &AutocastTensor::set_tensor);
+    // py_autocast_tensor.def("get_tensor", &AutocastTensor::get_tensor);
+    py_autocast_tensor.def("from_numpy", [](AutocastTensor& autocast_tensor, const nb::ndarray<>& data) {
+        // TODO
+        throw std::runtime_error("no impl");
+    });
+    py_autocast_tensor.def("to_numpy", [](const AutocastTensor& autocast_tensor) {
+        // TODO
+        throw std::runtime_error("no impl");
+        // auto const & tensor = autocast_tensor.get_tensor(PreferredPrecision::FULL);
+
+        // return nb::ndarray(
+        //     tensor.buffer(),
+    });
 
     auto py_auto_context = static_cast<nb::class_<AutoContext>>(m.attr("AutoContext"));
     py_auto_context.def_static("get_instance", &AutoContext::get_instance);
