@@ -125,7 +125,7 @@ void __attribute__((noinline)) Application(void) {
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
             if (enables & (1u << static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0))) {
                 WAYPOINT("R");
-                firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+                firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, PROCESSOR_INDEX);
 #if defined(ARCH_WORMHOLE) && defined(ENABLE_IRAM)
                 iram_setup();
 #endif
