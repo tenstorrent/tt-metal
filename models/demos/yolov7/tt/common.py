@@ -119,7 +119,7 @@ class TtYOLOv7Matmul:
         self,
         input_params,
         parameters,
-        activation="silu",
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         input_dtype=ttnn.bfloat8_b,
         weight_dtype=ttnn.bfloat8_b,
         bias_dtype=ttnn.bfloat8_b,
@@ -252,7 +252,7 @@ class TtYOLOv7Matmul:
 
     def _create_matmul_config(self):
         """Create matmul program configuration based on matmul type."""
-        fused_activation = self._get_activation_function()
+        fused_activation = self.activation
 
         if self.matmul_type == "1d":
             return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(

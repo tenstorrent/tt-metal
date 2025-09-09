@@ -176,8 +176,6 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
 
     const auto& weights_shape = input_tensor_b.padded_shape();
 
-    std::optional<unary::UnaryWithParam> fused_activation = activation;
-
     // Factory selection logic - choose the appropriate implementation based on memory layout
     tt::tt_metal::operation::ProgramWithCallbacks program_with_cbs;
 
@@ -209,7 +207,7 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             groups,
             untilize_out,
             has_bias,
-            fused_activation,
+            activation,
             parallelization_config,
             block_config,
             output_tensor,
@@ -244,7 +242,7 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             groups,
             untilize_out,
             has_bias,
-            fused_activation,
+            activation,
             parallelization_config,
             block_config,
             input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR,
