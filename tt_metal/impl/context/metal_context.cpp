@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <filesystem>
 
 #include <enchantum/enchantum.hpp>
@@ -634,8 +635,10 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             // subordinates we could hang waiting for subordinates to finish
             CoreCoord virtual_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-            tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, false);
-            llrt::internal_::wait_for_heartbeat(device_id, virtual_core);
+            if (std::getenv("TT_METAL_EXP_2_ERISC")) {
+                tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, false);
+                llrt::internal_::wait_for_heartbeat(device_id, virtual_core);
+            }
 
             // Only send reset to subordinate cores
             TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
@@ -722,10 +725,13 @@ void MetalContext::assert_cores(chip_id_t device_id) {
         const auto assert_eth_core = [&](const CoreCoord& logical_eth_core) {
             CoreCoord virtual_eth_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_eth_core, CoreType::ETH);
-            // Return primary to base FW
-            tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_eth_core, false);
-            // Ensure that the core has returned to base fw
-            llrt::internal_::wait_for_heartbeat(device_id, virtual_eth_core);
+            // This step only required if running primary on risc0 to ensure we are in base firmware
+            if (std::getenv("TT_METAL_EXP_2_ERISC")) {
+                // Return primary to base FW
+                tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_eth_core, false);
+                // Ensure that the core has returned to base fw
+                llrt::internal_::wait_for_heartbeat(device_id, virtual_eth_core);
+            }
             // Stop subordinate
             TensixSoftResetOptions reset_val =
                 TENSIX_ASSERT_SOFT_RESET &
@@ -984,7 +990,7 @@ void MetalContext::initialize_firmware(
                                 .get_target_out_path("");
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         uint32_t fw_size = binary_mem.get_text_size();
-                        log_debug(
+                        log_info(
                             tt::LogMetal,
                             "{} ERISC {} DM{} fw {} binary size: {} in bytes",
                             is_active_eth ? "Active" : "Idle",
@@ -1007,8 +1013,9 @@ void MetalContext::initialize_firmware(
             write_initial_go_launch_msg();
 
             // Write firmware main to primary erisc (DM0)
-            if (hal_->get_eth_fw_is_cooperative() || core_type != HalProgrammableCoreType::ACTIVE_ETH) {
+            if (hal_->get_eth_fw_is_cooperative() || core_type != HalProgrammableCoreType::ACTIVE_ETH || !std::getenv("TT_METAL_EXP_2_ERISC")) {
                 // PC
+                log_info(tt::LogMetal, "Initialize DM0 using PC {:#x} at {:#x}", jit_build_config.fw_launch_addr_value, jit_build_config.fw_launch_addr);
                 tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                     &jit_build_config.fw_launch_addr_value,
                     sizeof(uint32_t),
@@ -1228,7 +1235,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     }
 
     // Load erisc app base FW to eth cores on WH and active_erisc FW on second risc of BH active eth cores
-    log_debug(tt::LogMetal, "Initializing active ethernet cores");
+    log_info(tt::LogMetal, "Initializing active ethernet cores with {} eriscs", hal_->get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH));
     std::unordered_set<CoreCoord> active_eth_cores;
     for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
@@ -1247,7 +1254,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
         }
     }
 
-    log_debug(tt::LogMetal, "Initializing idle ethernet cores");
+    log_info(tt::LogMetal, "Initializing idle ethernet cores");
     for (const auto& eth_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
@@ -1267,7 +1274,13 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
 
     // Deassert worker cores
     for (const auto& worker_core : not_done_cores) {
-        if (active_eth_cores.contains(worker_core)) {
+        // Special handling for active ethernet cores on Blackhole when running 2 eriscs
+        // The base firmware risc0 is always running. so we only need to deassert if running on risc1.
+        if (active_eth_cores.contains(worker_core) || !std::getenv("TT_METAL_EXP_2_ERISC")) {
+            TensixSoftResetOptions reset_val = TENSIX_DEASSERT_SOFT_RESET &
+                        static_cast<TensixSoftResetOptions>(
+                            ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::TRISC0));
+            cluster_->deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
             continue;
         }
         TensixSoftResetOptions reset_val = TENSIX_DEASSERT_SOFT_RESET;
@@ -1276,7 +1289,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
 
     // Wait until fw init is done, ensures the next launch msg doesn't get
     // written while fw is still in init
-    log_debug(LogDevice, "Waiting for firmware init complete");
+    log_info(LogDevice, "Waiting for firmware init complete");
     const int timeout_ms = 10000;  // 10 seconds for now
     try {
         llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_INIT, not_done_cores, timeout_ms);

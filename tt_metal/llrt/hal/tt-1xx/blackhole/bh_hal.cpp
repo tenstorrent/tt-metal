@@ -65,7 +65,10 @@ class HalJitBuildQueryBlackHole : public hal_1xx::HalJitBuildQueryBase {
 public:
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
-        if (params.is_fw && !(params.core_type == HalProgrammableCoreType::ACTIVE_ETH && params.processor_id == 0)) {
+        // Special case for primary erisc fw
+        // 1) If running by itself (on risc1) -> need tmu-crt0
+        // 2) If running shared with base fw (on risc0), base fw has already setup gp and other things -> don't need tmu-crt0
+        if (params.is_fw && !(params.core_type == HalProgrammableCoreType::ACTIVE_ETH && params.processor_id == 0 && std::getenv("TT_METAL_EXP_2_ERISC"))) {
             // active eth0 being shared with base fw has it's own crt0
             objs.push_back("runtime/hw/lib/blackhole/tmu-crt0.o");
         }
@@ -128,7 +131,10 @@ public:
             case 0:
                 if (params.is_fw) {
                     srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc");
-                    srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc-crt0.cc");
+                    if (std::getenv("TT_METAL_EXP_2_ERISC")) {
+                        // When running on risc1 we already have tmu-crt0. this one is not needed
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc-crt0.cc");
+                    }
                 } else {
                     srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
                 }
@@ -176,8 +182,14 @@ public:
             case HalProgrammableCoreType::ACTIVE_ETH:
                 switch (params.processor_id) {
                     case 0:
-                        return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_aerisc.ld"
-                                            : "runtime/hw/toolchain/blackhole/kernel_aerisc.ld";
+                        if (std::getenv("TT_METAL_EXP_2_ERISC")) {
+                            // Linker script with no stack because stack is shared with base fw
+                            return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_aerisc.ld"
+                                                : "runtime/hw/toolchain/blackhole/kernel_aerisc.ld";
+                        } else {
+                            return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_aerisc_single_erisc.ld"
+                                                : "runtime/hw/toolchain/blackhole/kernel_aerisc_single_erisc.ld";
+                        }
                     case 1:
                         return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_subordinate_aerisc.ld"
                                             : "runtime/hw/toolchain/blackhole/kernel_subordinate_aerisc.ld";

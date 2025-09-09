@@ -4,7 +4,7 @@
 
 #if (defined(COMPILE_FOR_BRISC) + defined(COMPILE_FOR_NCRISC) +         \
      defined(COMPILE_FOR_IERISC) + defined(COMPILE_FOR_SUBORDINATE_IERISC) +  \
-     defined(COMPILE_FOR_TRISC) + defined(COMPILE_FOR_AERISC) + defined(COMPILE_FOR_SUBORDINATE_AERISC)) != 1
+     defined(COMPILE_FOR_TRISC) + defined(COMPILE_FOR_AERISC) + defined(COMPILE_FOR_SUBORDINATE_AERISC) + defined(COMPILE_FOR_AERISC_SINGLE_ERISC)) != 1
 #error "Exactly one COMPILE_FOR_${PROC}RISC must be defined"
 #endif
 
@@ -96,6 +96,20 @@ OUTPUT_ARCH(riscv)
 #define TEXT_SIZE MEM_AERISC_KERNEL_SIZE
 #endif
 
+#elif defined(COMPILE_FOR_AERISC_SINGLE_ERISC)
+
+/* AERISC Running on RISC1. This one has a stack.  */
+#define DATA_START MEM_LOCAL_BASE
+#define DATA_SIZE MEM_IERISC_LOCAL_SIZE
+#define STACK_MIN_SIZE MEM_AERISC_STACK_MIN_SIZE
+#define TEXT_START MEM_AERISC_FIRMWARE_BASE
+#if defined(TYPE_FIRMWARE)
+#define TEXT_SIZE MEM_AERISC_FIRMWARE_SIZE
+#else
+#define TEXT_SIZE MEM_AERISC_KERNEL_SIZE
+
+#endif
+
 #else
 #error "compiling for unknown"
 #endif
@@ -141,7 +155,7 @@ SECTIONS
 /* Need separation beteen end of firmware and start of kernel, so that
    they don't share unflushable i$ cache lines.  */
 #if defined(COMPILE_FOR_IERISC) || defined(COMPILE_FOR_SUBORDINATE_IERISC) \
-    || defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_SUBORDINATE_AERISC)
+    || defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_SUBORDINATE_AERISC) || defined(COMPILE_FOR_AERISC_SINGLE_ERISC)
 #define MEM_PAD MEM_IERISC_KERNEL_PAD
 #else
 #define MEM_PAD 0

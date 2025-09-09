@@ -12,6 +12,7 @@ set(PROCS
     trisc=1
     trisc=2
     aerisc
+    aerisc_single_erisc
     subordinate_aerisc
 )
 set(TYPES

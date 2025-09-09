@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-logger/tt-logger.hpp>
 #include "llrt_common/mailbox.hpp"
 #define COMPILE_FOR_ERISC
 
@@ -30,6 +29,72 @@ namespace tt::tt_metal::blackhole {
 // This file is intended to be wrapped inside arch/core-specific namespace.
 namespace active_eth_dev_msgs {
 #include "hal/generated/dev_msgs_impl.hpp"
+}
+
+constexpr ll_api::memory::Loading memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP;
+
+// Setup runtime for running on single erisc (base fw on risc0 + primary metal firmware on risc1)
+std::vector<std::vector<HalJitBuildConfig>> getProcessorClassesSingleErisc() {
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes(1);
+    std::vector<HalJitBuildConfig> processor_types(1);
+
+    for (std::size_t processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
+        // BH active ethernet runs idle erisc FW on the second ethernet
+        processor_types[0] = HalJitBuildConfig{
+            .fw_base_addr = MEM_AERISC_FIRMWARE_BASE,
+            .local_init_addr = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
+            .fw_launch_addr = SUBORDINATE_IERISC_RESET_PC, // Primary metal firmware is running on risc1
+            .fw_launch_addr_value = MEM_AERISC_FIRMWARE_BASE,
+            .memory_load = memory_load,
+        };
+        processor_classes[processor_class_idx] = processor_types;
+    }
+
+    return processor_classes;
+}
+
+// Setup runtime for running on dual erisc (primary metal firmware risc0 shared with base fw + risc1 subordinate)
+std::vector<std::vector<HalJitBuildConfig>> getProcessorClassesDualErisc() {
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses);
+    std::vector<HalJitBuildConfig> processor_types(1);
+
+    for (int processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
+        DeviceAddr fw_base{}, local_init{}, fw_launch{};
+        uint32_t fw_launch_value{};
+
+        switch (static_cast<EthProcessorTypes>(processor_class_idx)) {
+            case EthProcessorTypes::DM0: {
+                fw_base = MEM_AERISC_FIRMWARE_BASE;
+                local_init = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH;
+                // This is not used for launching DM0. The ETH FW API will be used instead.
+                // Dummy value to prevent writing to L1[0]
+                fw_launch = MEM_AERISC_VOID_LAUNCH_FLAG;
+                fw_launch_value = fw_base;
+                break;
+            }
+            case EthProcessorTypes::DM1: {
+                fw_base = MEM_SUBORDINATE_AERISC_FIRMWARE_BASE;
+                local_init = MEM_SUBORDINATE_AERISC_INIT_LOCAL_L1_BASE_SCRATCH;
+                fw_launch = SUBORDINATE_AERISC_RESET_PC;
+                fw_launch_value = fw_base;
+                break;
+            }
+            default: {
+                TT_THROW("Unexpected processor type {} for Blackhole Active Ethernet", processor_class_idx);
+            }
+        }
+
+        processor_types[0] = HalJitBuildConfig{
+            .fw_base_addr = fw_base,
+            .local_init_addr = local_init,
+            .fw_launch_addr = fw_launch,
+            .fw_launch_addr_value = fw_launch_value,
+            .memory_load = memory_load,
+        };
+        processor_classes[processor_class_idx] = processor_types;
+    }
+
+    return processor_classes;
 }
 
 HalCoreInfoType create_active_eth_mem_map() {
@@ -108,44 +173,11 @@ HalCoreInfoType create_active_eth_mem_map() {
         MEM_SYSENG_ETH_MSG_RELEASE_CORE;
     fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::HEARTBEAT)] = MEM_SYSENG_ETH_HEARTBEAT;
 
-    std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses);
-    std::vector<HalJitBuildConfig> processor_types(1);
-
-    for (int processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
-        DeviceAddr fw_base{}, local_init{}, fw_launch{};
-        uint32_t fw_launch_value{};
-
-        switch (static_cast<EthProcessorTypes>(processor_class_idx)) {
-            case EthProcessorTypes::DM0: {
-                fw_base = MEM_AERISC_FIRMWARE_BASE;
-                local_init = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH;
-                // This is not used for launching DM0. The ETH FW API will be used instead.
-                // Dummy value to prevent writing to L1[0]
-                fw_launch = MEM_AERISC_VOID_LAUNCH_FLAG;
-                fw_launch_value = fw_base;
-                break;
-            }
-            case EthProcessorTypes::DM1: {
-                fw_base = MEM_SUBORDINATE_AERISC_FIRMWARE_BASE;
-                local_init = MEM_SUBORDINATE_AERISC_INIT_LOCAL_L1_BASE_SCRATCH;
-                fw_launch = SUBORDINATE_AERISC_RESET_PC;
-                fw_launch_value = fw_base;
-                break;
-            }
-            default: {
-                TT_THROW("Unexpected processor type {} for Blackhole Active Ethernet", processor_class_idx);
-            }
-        }
-
-        constexpr ll_api::memory::Loading memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP;
-        processor_types[0] = HalJitBuildConfig{
-            .fw_base_addr = fw_base,
-            .local_init_addr = local_init,
-            .fw_launch_addr = fw_launch,
-            .fw_launch_addr_value = fw_launch_value,
-            .memory_load = memory_load,
-        };
-        processor_classes[processor_class_idx] = processor_types;
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes;
+    if (std::getenv("TT_METAL_EXP_2_ERISC")) {
+        processor_classes = getProcessorClassesDualErisc();
+    } else {
+        processor_classes = getProcessorClassesSingleErisc();
     }
 
     static_assert(llrt_common::k_SingleProcessorMailboxSize<EthProcessorTypes> <= MEM_AERISC_MAILBOX_SIZE);

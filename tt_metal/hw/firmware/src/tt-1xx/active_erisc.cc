@@ -66,19 +66,6 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 
-void set_deassert_addresses() {
-#ifdef ARCH_BLACKHOLE
-    WRITE_REG(SUBORDINATE_AERISC_RESET_PC, MEM_SUBORDINATE_AERISC_FIRMWARE_BASE);
-#endif
-}
-
-inline void run_subordinate_eriscs(uint32_t enables) {
-    // List of subordinate eriscs to run
-    if (enables & (1u << static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM1))) {
-        mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
-    }
-}
-
 inline void apply_tweaks() {
     // #18384: This register was left dirty by eth training.
     // It is not used in dataflow api, so it can be set to 0
@@ -86,21 +73,40 @@ inline void apply_tweaks() {
     NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
 }
 
+void set_deassert_addresses() {
+#if defined(DUAL_ERISC_ENABLED)
+    WRITE_REG(SUBORDINATE_AERISC_RESET_PC, MEM_SUBORDINATE_AERISC_FIRMWARE_BASE);
+#endif
+}
+
+inline void run_subordinate_eriscs(uint32_t enables) {
+#if defined(DUAL_ERISC_ENABLED)
+    // List of subordinate eriscs to run
+    if (enables & (1u << static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM1))) {
+        mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
+    }
+#endif
+}
+
 inline void service_base_fw() {
+#if defined(DUAL_ERISC_ENABLED)
     // Base fw only uses noc0
     ncrisc_noc_full_sync<0>();
     reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
     ncrisc_noc_counters_init<0>();
     apply_tweaks();
+#endif
 }
 
 inline void wait_subordinate_eriscs() {
+#if defined(DUAL_ERISC_ENABLED)
     WAYPOINT("SEW");
     do {
         invalidate_l1_cache();
         __asm__ volatile("fence");
     } while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
     WAYPOINT("SED");
+#endif
 }
 
 // Copy from init scratch space to local memory
@@ -113,7 +119,11 @@ inline void initialize_local_memory() {
     l1_to_local_mem_copy(__ldm_data_start, data_image, ldm_data_size);
 }
 
-void __attribute__((noinline)) Application(void) {
+#if defined(DUAL_ERISC_ENABLED)
+int __attribute__((noinline)) Application(void) {
+#else
+int main() {
+#endif
     WAYPOINT("I");
     configure_csr();
     initialize_local_memory();
@@ -126,9 +136,11 @@ void __attribute__((noinline)) Application(void) {
     risc_init();
 
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+#if defined(DUAL_ERISC_ENABLED)
     mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
 
     set_deassert_addresses();
+#endif
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
@@ -142,9 +154,11 @@ void __attribute__((noinline)) Application(void) {
     // one time here instead of setting it everytime in dataflow_api.
     NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
 
+#if defined(DUAL_ERISC_ENABLED)
     deassert_all_reset();
     wait_subordinate_eriscs();
-    gEnableFwFlag[0] = 1;
+#endif
+    flag_disable[0] = 1;
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
@@ -157,8 +171,8 @@ void __attribute__((noinline)) Application(void) {
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
-            if (gEnableFwFlag[0] != 1) {
-                return;
+            if (flag_disable[0] != 1) {
+                return 0;
             } else if (
                 go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
                 // Set the rd_ptr on workers to specified value

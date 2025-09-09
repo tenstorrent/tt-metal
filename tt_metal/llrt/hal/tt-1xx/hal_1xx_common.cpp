@@ -70,6 +70,9 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
             defines.push_back("ERISC");
             defines.push_back("RISC_B0_HW");
             defines.push_back(fmt::format("COMPILE_FOR_AERISC={}", params.processor_id));
+            if (std::getenv("TT_METAL_EXP_2_ERISC")) {
+                defines.push_back("DUAL_ERISC_ENABLED");
+            }
             break;
         }
         case HalProgrammableCoreType::IDLE_ETH: {

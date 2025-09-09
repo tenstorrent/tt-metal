@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <csetjmp>
 
-void __attribute__((noinline)) Application();
+int __attribute__((noinline)) Application();
 
 static std::jmp_buf gJumpBuf;
 
