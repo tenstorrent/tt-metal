@@ -118,16 +118,28 @@ class Generator:
                 model_id=model_id,
                 **local_kwargs,
             )
-            out_list.append(logits)
+            # if data parallel is greater than 1, we need to add logits to out_list and do the processing after all the prefill are done
+            # otherwise, we can process the logits after prefill immediately
+            if self.data_parallel > 1:
+                out_list.append(logits)
+            else:
+                output_logits[idx] = self.model[model_id].process_output_prefill(
+                    logits, last_token_idx=(last_token_idx % 32)
+                )
+                del logits
 
-        for idx, out in enumerate(out_list):
-            seq_len = int(prompt_lens[idx])
-            last_token_idx = seq_len - 1
-            user_id = empty_slots[idx]
-            model_id = user_id // max_batch_size_per_model
+        # Process the logits after all the prefill are done in data parallel mode
+        if self.data_parallel > 1:
+            for idx, out in enumerate(out_list):
+                seq_len = int(prompt_lens[idx])
+                last_token_idx = seq_len - 1
+                user_id = empty_slots[idx]
+                model_id = user_id // max_batch_size_per_model
 
-            # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=(last_token_idx % 32))
+                # Since we give unpadded_seq_len, only the tile containing the last token is returned
+                output_logits[idx] = self.model[model_id].process_output_prefill(
+                    out, last_token_idx=(last_token_idx % 32)
+                )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
