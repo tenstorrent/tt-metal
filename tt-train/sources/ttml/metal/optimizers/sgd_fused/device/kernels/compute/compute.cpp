@@ -14,8 +14,6 @@ constexpr auto kParamInCbIndex = tt::CBIndex::c_0;
 constexpr auto kGradCbIndex = tt::CBIndex::c_1;
 constexpr auto kLrCbIndex = tt::CBIndex::c_2;
 
-constexpr auto kComputeCbIndex = tt::CBIndex::c_8;
-
 constexpr auto kOutputCbIndex = tt::CBIndex::c_16;
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
