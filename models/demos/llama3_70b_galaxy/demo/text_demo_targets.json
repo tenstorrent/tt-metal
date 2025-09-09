@@ -9,7 +9,7 @@
         },
         "6U": {
             "prefill_pcc": 0.9130302621110833,
-            "decode_pcc": 0.0.9526383708858326,
+            "decode_pcc": 0.9526383708858326,
             "throughput": 61.55,
             "absolute_margin": 10.0,
             "token_pos": 127
