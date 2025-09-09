@@ -205,7 +205,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         compute_kernel_defines["DECODE_MODE"] = "1";
     }
 
-    const uint16_t bfloat16_scalar = bfloat16(-1.0f).to_bits();
+    const uint16_t bfloat16_scalar = bfloat16_to_bits(bfloat16(-1.0f));
 
     auto src_buffer = input.buffer();
     auto cos_buffer = cos.buffer();

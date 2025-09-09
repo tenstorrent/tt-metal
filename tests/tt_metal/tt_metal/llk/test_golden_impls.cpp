@@ -172,7 +172,7 @@ std::vector<uint16_t> gold_reduce_h(
                     }
                 }
                 auto dest_offs = addr_dst.offs(n, c, 0, w);
-                reduced[dest_offs] = bfloat16(sum * scaler).to_bits();
+                reduced[dest_offs] = bfloat16_to_bits(bfloat16(sum * scaler));
             }
         }
     }
@@ -205,7 +205,7 @@ std::vector<uint16_t> gold_reduce_w(
                     }
                 }
                 auto dest_offs = addr_dst.offs(n, c, h, 0);
-                reduced[dest_offs] = bfloat16(sum * scaler).to_bits();
+                reduced[dest_offs] = bfloat16_to_bits(bfloat16(sum * scaler));
             }
         }
     }
@@ -243,7 +243,7 @@ std::vector<uint16_t> gold_reduce_hw(
                 }
             }
             auto dest_offs = addr_dst.offs(n, c, 0, 0);
-            reduced[dest_offs] = bfloat16(sum * scaler).to_bits();
+            reduced[dest_offs] = bfloat16_to_bits(bfloat16(sum * scaler));
         }
     }
 

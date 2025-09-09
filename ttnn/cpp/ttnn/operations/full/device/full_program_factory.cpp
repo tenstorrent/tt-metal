@@ -56,7 +56,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     } else if (std::holds_alternative<float>(fill_value)) {
         auto float_fill_value = std::get<float>(fill_value);
         if (dtype == DataType::BFLOAT16) {
-            u.u32 = static_cast<uint32_t>(bfloat16(float_fill_value).to_bits()) << 16;
+            u.u32 = static_cast<uint32_t>(bfloat16_to_bits(bfloat16(float_fill_value))) << 16;
         } else {
             u.f32 = float_fill_value;
         }

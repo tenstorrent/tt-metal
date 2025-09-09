@@ -31,13 +31,6 @@ public:
         uint16_data = from_float(f);
     }
 
-    // create from raw bits
-    static constexpr bfloat16 from_bits(std::uint16_t raw) noexcept {
-        bfloat16 x;
-        x.uint16_data = raw;
-        return x;
-    }
-
     // create from float: truncate rounding
     static bfloat16 truncate(float float_num);
 
@@ -61,7 +54,6 @@ public:
     bfloat16 operator*(bfloat16 rhs) const;
     bfloat16 operator/(bfloat16 rhs) const;
 
-    // TODO: Replave all usages of user code with static_cast<float>(bfloat16)
     constexpr float to_float() const {
         // move lower 16 to upper 16 (of 32) and convert to float
         uint32_t uint32_data = (uint32_t)uint16_data << 16;
@@ -69,8 +61,18 @@ public:
     }
     uint16_t from_float(float val);
     constexpr uint16_t to_packed() const { return uint16_data; }
-    constexpr uint16_t to_bits() const { return uint16_data; }
+
+    friend constexpr bfloat16 bfloat16_from_bits(std::uint16_t raw) noexcept;
+    friend constexpr std::uint16_t bfloat16_to_bits(const bfloat16& bf) noexcept;
 };
+
+constexpr bfloat16 bfloat16_from_bits(std::uint16_t raw) noexcept {
+    bfloat16 x;
+    x.uint16_data = raw;
+    return x;
+}
+
+constexpr std::uint16_t bfloat16_to_bits(const bfloat16& bf) noexcept { return bf.uint16_data; }
 
 std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16);
 
