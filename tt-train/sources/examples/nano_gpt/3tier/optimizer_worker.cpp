@@ -71,10 +71,6 @@ int main(int argc, char **argv) {
     three_tier_arch::TrainingConfig config = three_tier_arch::parse_config(yaml_config);
     three_tier_arch::DeviceConfig device_config = three_tier_arch::parse_device_config(yaml_config);
 
-    if (device_config.enable_tp) {
-        throw std::runtime_error("Tensor parallel is not supported in the optimizer worker.");
-    }
-
     if (config.socket_type == ttnn::distributed::SocketType::FABRIC) {
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
         if (device_config.mesh_shape != tt::tt_metal::distributed::MeshShape(1, 8)) {
@@ -100,16 +96,37 @@ int main(int argc, char **argv) {
     auto num_devices = static_cast<uint32_t>(device->num_devices());
     auto should_be_divisible_by = (device_config.enable_tp ? num_devices : 1U) * 32U;
     vocab_size = round_up_to_tile(vocab_size, should_be_divisible_by);
-    config.transformer_config.vocab_size = vocab_size;
+    std::visit(
+        [&](auto &&arg) {
+            if constexpr (requires { arg.vocab_size; }) {
+                arg.vocab_size = vocab_size;
+            } else {
+                throw std::runtime_error(
+                    "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
+            }
+        },
+        config.transformer_config);
 
-    auto create_model =
-        [enable_tp = device_config.enable_tp](const auto &config) -> std::shared_ptr<ttml::autograd::ModuleBase> {
-        if (enable_tp) {
-            return ttml::models::distributed::gpt2::create(config);
-        }
-        return ttml::models::gpt2::create(config);
-    };
-    auto model = create_model(config.transformer_config);
+    auto model = std::visit(
+        [&device_config](auto &&arg) -> std::shared_ptr<ttml::autograd::ModuleBase> {
+            if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
+                if (device_config.enable_tp) {
+                    return ttml::models::distributed::llama::create(arg);
+                } else {
+                    return ttml::models::llama::create(arg);
+                }
+            } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>) {
+                if (device_config.enable_tp) {
+                    return ttml::models::distributed::gpt2::create(arg);
+                } else {
+                    return ttml::models::gpt2::create(arg);
+                }
+            } else {
+                throw std::runtime_error(
+                    "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
+            }
+        },
+        config.transformer_config);
 
     auto model_parameters = model->parameters();
     auto sorted_model_parameters = SortedParameters(model_parameters.begin(), model_parameters.end());

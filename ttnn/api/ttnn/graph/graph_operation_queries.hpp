@@ -16,7 +16,7 @@ template <class Callable>
 auto query_trace(Callable&& callable) {
     GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
     {
-        auto output = callable();
+        [[maybe_unused]] auto output = callable();
     }
     auto json_trace = GraphProcessor::end_graph_capture();
     return json_trace;
