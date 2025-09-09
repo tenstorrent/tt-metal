@@ -2,7 +2,6 @@ from typing import Dict, Optional, Tuple
 import ttnn
 from loguru import logger
 
-from models.experimental.panoptic_deeplab.tt.tt_aspp import get_ttnn_norm
 from models.experimental.panoptic_deeplab.tt.tt_conv2d_wrapper import TtConv2d, TtConv2dParameters
 from models.experimental.panoptic_deeplab.tt.tt_upsample_wrapper import TtUpsample
 from models.experimental.panoptic_deeplab.tt.tt_semseg import TtDeepLabV3PlusHead
@@ -31,8 +30,10 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         norm: str,
         train_size: Optional[Tuple],
     ):
+        # Handle both dict and object parameter formats
+        decoder_params = parameters["decoder"] if isinstance(parameters, dict) else parameters.decoder
         super().__init__(
-            parameters=parameters.decoder,
+            parameters=decoder_params,
             device=device,
             input_shape=input_shape,
             norm=norm,
@@ -53,7 +54,9 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
 
         # --- Center Prediction Grana ---
         # center_head_0
-        center_head0_path = parameters.center_head[0]
+        # Handle both dict and object parameter formats
+        center_head_params = parameters["center_head"] if isinstance(parameters, dict) else parameters.center_head
+        center_head0_path = center_head_params[0]
         ch0_bias = center_head0_path.bias if "bias" in center_head0_path else None
         ch0_params = TtConv2dParameters(
             weight=center_head0_path.weight,
@@ -63,12 +66,10 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         self.center_head_0 = TtConv2d.create_with_height_slicing(
             ch0_params, num_slices=2, stride=(1, 1), padding=(1, 1)
         )
-
-        ch0_norm_params = center_head0_path.norm if "norm" in center_head0_path else None
-        self.center_head_norm_0 = get_ttnn_norm(norm, decoder_out_ch, device, norm_params=ch0_norm_params)
+        # BatchNorm is now fused into center_head_0 weights
 
         # center_head_1
-        center_head1_path = parameters.center_head[1]
+        center_head1_path = center_head_params[1]
         ch1_bias = center_head1_path.bias if "bias" in center_head1_path else None
         ch1_params = TtConv2dParameters(
             weight=center_head1_path.weight,
@@ -78,12 +79,13 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         self.center_head_1 = TtConv2d.create_with_height_slicing(
             ch1_params, num_slices=2, stride=(1, 1), padding=(1, 1)
         )
-
-        ch1_norm_params = center_head1_path.norm if "norm" in center_head1_path else None
-        self.center_head_norm_1 = get_ttnn_norm(norm, head_channels, device, norm_params=ch1_norm_params)
+        # BatchNorm is now fused into center_head_1 weights
 
         # center_predictor
-        center_predictor_path = parameters.center_predictor
+        center_predictor_params = (
+            parameters["center_predictor"] if isinstance(parameters, dict) else parameters.center_predictor
+        )
+        center_predictor_path = center_predictor_params
         cp_bias = center_predictor_path.bias if "bias" in center_predictor_path else None
         cp_params = TtConv2dParameters(
             weight=center_predictor_path.weight,
@@ -94,7 +96,8 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
 
         # --- Offset Prediction Grana ---
         # offset_head_0
-        offset_head0_path = parameters.offset_head[0]
+        offset_head_params = parameters["offset_head"] if isinstance(parameters, dict) else parameters.offset_head
+        offset_head0_path = offset_head_params[0]
         oh0_bias = offset_head0_path.bias if "bias" in offset_head0_path else None
         oh0_params = TtConv2dParameters(
             weight=offset_head0_path.weight,
@@ -104,12 +107,10 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         self.offset_head_0 = TtConv2d.create_with_height_slicing(
             oh0_params, num_slices=2, stride=(1, 1), padding=(1, 1)
         )
-
-        oh0_norm_params = offset_head0_path.norm if "norm" in offset_head0_path else None
-        self.offset_head_norm_0 = get_ttnn_norm(norm, decoder_out_ch, device, norm_params=oh0_norm_params)
+        # BatchNorm is now fused into offset_head_0 weights
 
         # offset_head_1
-        offset_head1_path = parameters.offset_head[1]
+        offset_head1_path = offset_head_params[1]
         oh1_bias = offset_head1_path.bias if "bias" in offset_head1_path else None
         oh1_params = TtConv2dParameters(
             weight=offset_head1_path.weight,
@@ -119,12 +120,13 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         self.offset_head_1 = TtConv2d.create_with_height_slicing(
             oh1_params, num_slices=2, stride=(1, 1), padding=(1, 1)
         )
-
-        oh1_norm_params = offset_head1_path.norm if "norm" in offset_head1_path else None
-        self.offset_head_norm_1 = get_ttnn_norm(norm, head_channels, device, norm_params=oh1_norm_params)
+        # BatchNorm is now fused into offset_head_1 weights
 
         # offset_predictor
-        offset_predictor_path = parameters.offset_predictor
+        offset_predictor_params = (
+            parameters["offset_predictor"] if isinstance(parameters, dict) else parameters.offset_predictor
+        )
+        offset_predictor_path = offset_predictor_params
         op_bias = offset_predictor_path.bias if "bias" in offset_predictor_path else None
         op_params = TtConv2dParameters(
             weight=offset_predictor_path.weight,
@@ -160,19 +162,19 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
 
         # --- 2. Center Prediction Branch ---
         center_y = self.center_head_0(y)
-        center_y = self.center_head_norm_0(center_y)
+        # BatchNorm is now fused into center_head_0 weights
         center_y = self.activation(center_y)
         center_y = self.center_head_1(center_y)
-        center_y = self.center_head_norm_1(center_y)
+        # BatchNorm is now fused into center_head_1 weights
         center_y = self.activation(center_y)
         center_logits = self.center_predictor(center_y)
 
         # --- 3. Offset Prediction Branch ---
         offset_y = self.offset_head_0(y)
-        offset_y = self.offset_head_norm_0(offset_y)
+        # BatchNorm is now fused into offset_head_0 weights
         offset_y = self.activation(offset_y)
         offset_y = self.offset_head_1(offset_y)
-        offset_y = self.offset_head_norm_1(offset_y)
+        # BatchNorm is now fused into offset_head_1 weights
         offset_y = self.activation(offset_y)
         offset_logits = self.offset_predictor(offset_y)
 
