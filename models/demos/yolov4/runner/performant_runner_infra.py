@@ -22,6 +22,7 @@ class YOLOv4PerformanceRunnerInfra:
         act_dtype,
         weight_dtype,
         model_location_generator=None,
+        model_path=None,
         resolution=(320, 320),
         mesh_mapper=None,
         mesh_composer=None,
@@ -35,11 +36,12 @@ class YOLOv4PerformanceRunnerInfra:
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype
         self.model_location_generator = model_location_generator
+        self.model_path = model_path
         self.num_devices = device.get_num_devices()
         self.inputs_mesh_mapper = mesh_mapper
         self.output_mesh_composer = mesh_composer
 
-        self.torch_model = load_torch_model(self.model_location_generator)
+        self.torch_model = load_torch_model(self.model_location_generator, model_path=self.model_path)
 
         input_shape = (batch_size * self.num_devices, *resolution, 3)
         torch_input_shape = (batch_size, *resolution, 3)
