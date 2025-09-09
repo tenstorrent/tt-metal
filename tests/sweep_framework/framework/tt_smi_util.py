@@ -8,6 +8,8 @@ import subprocess
 from time import sleep
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 
+LEGACY_WORMHOLE_ARGS = ["-wr", "all"]
+
 
 class ResetUtil:
     SUPPORTED_ARCHS = {"wormhole_b0", "blackhole"}
@@ -20,29 +22,6 @@ class ResetUtil:
         self.command, self.args = self._find_command()
         self.reset()
 
-        self.smi_options = ["tt-smi"]
-        for smi_option in self.smi_options:
-            executable = shutil.which(smi_option)
-            logger.info(f"tt-smi executable: {executable}")
-            if executable is not None:
-                args = []
-                # Corner case for newer version of tt-smi, -tr and -wr are removed on this version (tt-smi-metal).
-                # Default device 0, if needed use TT_SMI_RESET_COMMAND override.
-                if smi_option == "tt-smi-metal":
-                    args = ["-r", "0"]
-                elif arch == "wormhole_b0":
-                    smi_process = subprocess.run([executable, "-v"], capture_output=True, text=True)
-                    smi_version = smi_process.stdout.strip()
-                    if not smi_version.startswith("3.0"):
-                        args = LEGACY_WORMHOLE_ARGS
-                    else:
-                        args = ["-r"]
-
-                self.command = executable
-                self.args = args
-        self.reset()
-        return
-    
     def _find_command(self):
         custom_command = os.getenv("TT_SMI_RESET_COMMAND")
         if custom_command:
@@ -56,10 +35,6 @@ class ResetUtil:
         if not executable:
             raise FileNotFoundError("SWEEPS: Unable to locate tt-smi executable")
 
-        if self.command is None:
-            raise Exception(f"SWEEPS: Unable to locate tt-smi executable")
-            
-        
         logger.info(f"tt-smi executable: {executable}")
         return executable, ["-r"]
 
