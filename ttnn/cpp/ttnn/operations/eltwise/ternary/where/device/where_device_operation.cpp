@@ -173,8 +173,7 @@ TensorSpec WhereDeviceOperation::compute_output_specs(
 
     auto output_shape = tensor_args.predicate.logical_shape();
 
-    // TST & TTS support broadcast for compatible shapes
-    if (broadcast_type == WhereBroadcastType::NONE && where_variant != WhereVariant::TTT) {
+    if (broadcast_type == WhereBroadcastType::NONE) {
         return TensorSpec(
             output_shape, tt::tt_metal::TensorLayout(args.dtype.value(), output_layout, args.memory_config));
     }
