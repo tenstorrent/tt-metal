@@ -61,6 +61,8 @@ private:
 class IDevice;
 namespace detail {
 struct KernelMeta;
+// Collects the meta data of kernels in a program, and the metadata of the binaries within the kernel if device is non-null
+// Note: device is nullable
 std::vector<detail::KernelMeta> collect_kernel_meta(Program const& program, IDevice* device);
 }; //namespace detail
 
