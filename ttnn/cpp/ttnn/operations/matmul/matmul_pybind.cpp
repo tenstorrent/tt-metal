@@ -50,10 +50,11 @@ void py_module(py::module& module) {
     )doc");
     matmul_multi_core_reuse_program_config.def_readwrite(
         "in0_block_w", &MatmulMultiCoreReuseProgramConfig::in0_block_w, R"doc(
-        Block width for the first input tensor (input_tensor_a) along the K dimension.
+        Block width for both input tensors along the K dimension (shared inner dimension).
 
-        This parameter controls how the K dimension of input_tensor_a is divided into blocks.
-        Must be a divisor of the K dimension and affects memory usage and compute efficiency.
+        This parameter controls how the K dimension is divided into blocks for both input_tensor_a
+        and input_tensor_b, since they share this dimension in matrix multiplication. Must be a
+        divisor of the K dimension and affects memory usage and compute efficiency for both tensors.
         Typically set to multiples of 32 for optimal tile alignment.
     )doc");
     matmul_multi_core_reuse_program_config.def_readwrite(
@@ -148,11 +149,12 @@ void py_module(py::module& module) {
     )doc");
     matmul_multi_core_reuse_multicast_program_config.def_readwrite(
         "in0_block_w", &MatmulMultiCoreReuseMultiCastProgramConfig::in0_block_w, R"doc(
-        Block width for the first input tensor (input_tensor_a) along the K dimension.
+        Block width for both input tensors along the K dimension (shared inner dimension).
 
-        Controls how the K dimension of input_tensor_a is divided into blocks for multicast.
-        Must be a divisor of the K dimension. Smaller blocks can improve load balancing
-        but may increase communication overhead in multicast scenarios.
+        Controls how the K dimension is divided into blocks for both input_tensor_a and
+        input_tensor_b in multicast operations. Must be a divisor of the K dimension.
+        Smaller blocks can improve load balancing but may increase communication overhead
+        in multicast scenarios.
     )doc");
     matmul_multi_core_reuse_multicast_program_config.def_readwrite(
         "out_subblock_h", &MatmulMultiCoreReuseMultiCastProgramConfig::out_subblock_h, R"doc(
@@ -298,11 +300,12 @@ void py_module(py::module& module) {
             along one dimension while distributing computation.
         )doc")
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::in0_block_w, R"doc(
-            Block width for the first input tensor along the K dimension.
+            Block width for both input tensors along the K dimension (shared inner dimension).
 
-            Controls the blocking of input_tensor_a along the inner dimension. This parameter
-            is crucial for 1D multicast performance as it determines the granularity of
-            data that is broadcast across cores.
+            Controls the blocking of both input_tensor_a and input_tensor_b along the inner
+            dimension. This parameter is crucial for 1D multicast performance as it determines
+            the granularity of data that is broadcast across cores and affects memory access
+            patterns for both tensors.
         )doc")
         .def_readwrite("out_subblock_h", &MatmulMultiCoreReuseMultiCast1DProgramConfig::out_subblock_h, R"doc(
             Height of output subblocks in tiles.
@@ -367,26 +370,17 @@ void py_module(py::module& module) {
             certain matrix shapes and improve performance.
         )doc")
         .def_readwrite("gather_in0", &MatmulMultiCoreReuseMultiCast1DProgramConfig::gather_in0, R"doc(
-            Whether to use gather operation for the first input tensor.
-
-            When true, enables gather-based data movement for input_tensor_a, which can
-            be more efficient than traditional data movement in certain scenarios.
             Defaults to false.
+            Used by ops that call matmul internally. Should not be specified or left as the default value for all other uses.
         )doc")
         .def_readwrite("hop_cores", &MatmulMultiCoreReuseMultiCast1DProgramConfig::hop_cores, R"doc(
-            Set of core ranges for hopping operations.
-
-            Defines the cores that participate in data hopping operations during the
-            1D multicast. This advanced feature allows for optimized data movement
-            patterns in complex multi-core scenarios. Defaults to empty set.
+            Defaults to empty set.
+            Used by ops that call matmul internally. Should not be specified or left as the default value for all other uses.
         )doc")
         .def_readwrite(
             "num_global_cb_receivers", &MatmulMultiCoreReuseMultiCast1DProgramConfig::num_global_cb_receivers, R"doc(
-            Number of cores that receive data through global circular buffers.
-
-            Specifies how many cores participate as receivers in the global circular buffer
-            communication pattern. This parameter affects memory usage and communication
-            efficiency in 1D multicast operations. Defaults to 1.
+            Defaults to 1.
+            Used by ops that call matmul internally. Should not be specified or left as the default value for all other uses.
         )doc")
         .def_readwrite("untilize_out", &MatmulMultiCoreReuseMultiCast1DProgramConfig::untilize_out, R"doc(
             Whether to untilize the output tensor.
@@ -411,11 +405,12 @@ void py_module(py::module& module) {
             py::arg("per_core_N").noconvert(),
             py::arg("fused_activation"))
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::in0_block_w, R"doc(
-            Block width for the first input tensor along the K dimension.
+            Block width for both input tensors along the K dimension (shared inner dimension).
 
-            Controls the blocking of input_tensor_a along the inner dimension for DRAM-sharded
-            operations. This parameter must be carefully chosen to align with the DRAM sharding
-            strategy and optimize memory bandwidth utilization.
+            Controls the blocking of both input_tensor_a and input_tensor_b along the inner
+            dimension for DRAM-sharded operations. This parameter must be carefully chosen to
+            align with the DRAM sharding strategy and optimize memory bandwidth utilization
+            for both tensors.
         )doc")
         .def_readwrite("per_core_M", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::per_core_M, R"doc(
             Number of output tiles each core processes along the M dimension.
@@ -808,7 +803,7 @@ void py_module(py::module& module) {
             alpha (float): multiplier for mat1_tensor @ mat2_tensor
             beta (float): multiplier for input_tensor
             memory_config(ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using ttnn.DRAM_MEMORY_CONFIG.
-            dtype (ttnn.DataType): the data type of the output tensor. Supported types: `ttnn.bfloat16`, `ttnn.float32`, `ttnn.bfloat8_b`  Defaults to `None` which means it will default to highest precision of `input_tensor`, `mat1_tensor` or `mat2_tensor`.
+            dtype (ttnn.DataType): the data type of the output tensor. Supported types: `ttnn.bfloat16`, `ttnn.float32`, `ttnn.bfloat8_b`  Defaults to `None` which means it will default to the highest precision of `input_tensor`, `mat1_tensor` or `mat2_tensor`.
             program_config (ttnn.MatmulProgramConfig): the program configuration for the matmul operation. Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
