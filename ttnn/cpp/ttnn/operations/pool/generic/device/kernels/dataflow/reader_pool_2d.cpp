@@ -199,7 +199,7 @@ ALWI void read_window_with_top_left_index(
             if constexpr (return_indices) {
                 if (ind == 0) {
                     DPRINT << "IN IDX CB" << ENDL();
-                    tt::data_movement::common::print_bf16_pages(get_write_ptr(in_idx_cb_id), TILE_WIDTH, TILE_HEIGHT);
+                    tt::data_movement::common::print_u16_pages(get_write_ptr(in_idx_cb_id), TILE_WIDTH, TILE_HEIGHT);
                 }
                 cb_push_back(in_idx_cb_id, 1);
             }
@@ -294,6 +294,55 @@ void kernel_main() {
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
 
+    constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
+    if constexpr (last_tile_is_partial) {
+        clear_out_tiles<in_cb_id, clear_value_cb_id>();
+    }
+
+    constexpr uint32_t in_scalar_cb_id =
+        split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
+
+    uint32_t scalar_index = 0;
+    uint32_t scalar_start = 0;
+    uint32_t scalar_end = 1;
+    uint32_t scalar_value = 0;
+
+    constexpr uint32_t window_size_hw = window_h * window_w;
+    constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT && !return_indices ? window_size_hw : FACE_HEIGHT;
+    constexpr uint32_t num_faces_in_input_tile =
+        (max_sticks_for_reduction < TILE_WIDTH || window_size_hw <= FACE_HEIGHT) && !return_indices ? 2 : 4;
+    constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
+    constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
+    constexpr uint32_t interm_reduction_chunks =
+        remaining_elems ? window_size_hw / max_sticks_for_reduction + 1 : window_size_hw / max_sticks_for_reduction;
+    // we only need to initialize the in_cb if we will not fill each reduction chunk with valid data
+    constexpr bool need_to_initialize_in_cb =
+        return_indices ||
+        (remaining_elems && face_r_dim == FACE_HEIGHT && (num_faces_in_input_tile == 4 || last_tile_is_partial) &&
+         interm_reduction_chunks <= multi_buffering_factor);
+    constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
+
+    // fill the clear cb
+    if constexpr (is_avg_pool || need_to_initialize_in_cb) {
+        if constexpr (reader_id == 0) {
+            fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
+            cb_push_back(clear_value_cb_id, 1);
+        }
+        if constexpr (reader_id == 1) {
+            cb_wait_front(clear_value_cb_id, 1);
+        }
+        // for average pool clear out tiles runs in loop, no need to initialize here
+        // TODO do we really need to init the in CB for return indices?
+        if constexpr (!is_avg_pool || !is_large_kernel || return_indices) {
+            clear_out_tiles<in_cb_id, clear_value_cb_id>();
+            // TODO we don't need to init the idx CBs, but eases debugging for now
+            if constexpr (return_indices) {
+                clear_out_tiles<in_idx_cb_id, clear_value_cb_id>();
+                clear_out_tiles<tile_idx_tmp_cb_id, clear_value_cb_id>();
+            }
+        }
+    }
+
     // since kernels can start in padded regions we need to have "indexes" in these regions
     // we choose a paradigm where we padding indexes must satisfy the following conditions:
     //   1. they are 1 less than the index to the right (whether it's padding or not)
@@ -336,61 +385,22 @@ void kernel_main() {
             write_inc = FACE_WIDTH;
         }
 #endif
-        for (uint32_t hw = 0; hw < window_h * window_w; ++hw) {
-            for (uint32_t c = 0; c < write_inc; ++c) {
-                idx_ptr[hw * write_inc + c] = init_index + hw;
+        uint16_t kernel_idx = 0;
+        for (uint32_t h = 0; h < window_h; ++h) {
+            for (uint32_t w = 0; w < window_w; ++w) {
+                uint16_t hw = h * window_w + w;
+                const uint32_t fill_c = in_c <= TILE_WIDTH ? in_c : TILE_WIDTH;
+                for (uint32_t c = 0; c < fill_c; ++c) {
+                    uint16_t index = init_index + kernel_idx;
+                    idx_ptr[hw * write_inc + c] = index;
+                }
+                kernel_idx++;
             }
+            kernel_idx += in_w - window_w;
         }
         DPRINT << "TILE IDX CB" << ENDL();
-        tt::data_movement::common::print_bf16_pages(get_write_ptr(tile_idx_tmp_cb_id), TILE_WIDTH, TILE_HEIGHT);
+        tt::data_movement::common::print_u16_pages(get_write_ptr(tile_idx_tmp_cb_id), TILE_WIDTH, TILE_HEIGHT);
         cb_push_back(tile_idx_tmp_cb_id, 1);
-    }
-
-    constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
-    if constexpr (last_tile_is_partial) {
-        clear_out_tiles<in_cb_id, clear_value_cb_id>();
-    }
-
-    constexpr uint32_t in_scalar_cb_id =
-        split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
-
-    uint32_t scalar_index = 0;
-    uint32_t scalar_start = 0;
-    uint32_t scalar_end = 1;
-    uint32_t scalar_value = 0;
-
-    constexpr uint32_t window_size_hw = window_h * window_w;
-    constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT && !return_indices ? window_size_hw : FACE_HEIGHT;
-    constexpr uint32_t num_faces_in_input_tile =
-        (max_sticks_for_reduction < TILE_WIDTH || window_size_hw <= FACE_HEIGHT) && !return_indices ? 2 : 4;
-    constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
-    constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
-    constexpr uint32_t interm_reduction_chunks =
-        remaining_elems ? window_size_hw / max_sticks_for_reduction + 1 : window_size_hw / max_sticks_for_reduction;
-    // we only need to initialize the in_cb if we will not fill each reduction chunk with valid data
-    constexpr bool need_to_initialize_in_cb =
-        return_indices ||
-        (remaining_elems && face_r_dim == FACE_HEIGHT && (num_faces_in_input_tile == 4 || last_tile_is_partial) &&
-         interm_reduction_chunks <= multi_buffering_factor);
-    constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
-
-    // fill the clear cb
-    if constexpr (is_avg_pool || need_to_initialize_in_cb) {
-        if constexpr (reader_id == 0) {
-            fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-            cb_push_back(clear_value_cb_id, 1);
-        }
-        if constexpr (reader_id == 1) {
-            cb_wait_front(clear_value_cb_id, 1);
-        }
-        // for average pool clear out tiles runs in loop, no need to initialize here
-        if constexpr (!is_avg_pool || !is_large_kernel || return_indices) {
-            clear_out_tiles<in_cb_id, clear_value_cb_id>();
-            if constexpr (return_indices) {
-                clear_out_tiles<in_idx_cb_id, clear_value_cb_id>();
-            }
-        }
-        // we don't need to clear the idx CB since the data CB is the one being sorted
     }
 
     // initialize the scalar CB
