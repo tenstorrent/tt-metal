@@ -117,6 +117,8 @@ struct EthernetConfig {
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
 };
 
+namespace detail {
+
 // These are only used in op_profiler
 
 struct KernelBinaryMeta {
@@ -141,5 +143,7 @@ struct KernelMeta {
     // Binary metadata:
     std::vector<KernelBinaryMeta> binary_meta;
 };
+
+}  // namespace detail
 
 }  // namespace tt::tt_metal

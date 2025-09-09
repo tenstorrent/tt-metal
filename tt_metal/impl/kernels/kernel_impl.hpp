@@ -110,7 +110,7 @@ public:
 
     bool is_idle_eth() const;
 
-    KernelMeta meta(IDevice* device) const;
+    detail::KernelMeta meta(IDevice* device) const;
 
 protected:
     HalProgrammableCoreType programmable_core_type_;

@@ -400,12 +400,12 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
     return nullptr;
 }
 
-std::vector<KernelMeta> detail::collect_kernel_meta(Program const& program, IDevice* device) {
+std::vector<detail::KernelMeta> detail::collect_kernel_meta(Program const& program, IDevice* device) {
     return program.impl().collect_kernel_meta(device);
 }
 
-std::vector<KernelMeta> ProgramImpl::collect_kernel_meta(IDevice* device) const {
-    std::vector<KernelMeta> result;
+std::vector<detail::KernelMeta> ProgramImpl::collect_kernel_meta(IDevice* device) const {
+    std::vector<detail::KernelMeta> result;
     result.reserve(this->num_kernels());
     for (const auto& m : this->kernels_) {
         for (const auto& [id, kernel] : m) {
