@@ -73,6 +73,8 @@ jobs:
             const version = "${{ steps.get-tag-version.outputs.version }}";
             const sha = "${{ github.sha }}";
 
+            console.log(`Checking for existing tag ${version} in ${owner}/${repo} at sha ${sha}...`);
+
             async function getRefOrNull() {
               try {
                 const { data } = await github.rest.git.getRef({
