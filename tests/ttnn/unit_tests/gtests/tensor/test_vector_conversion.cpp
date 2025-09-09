@@ -70,11 +70,7 @@ std::vector<T> arange(int64_t start, int64_t end, int64_t step, std::optional<in
     std::vector<T> result;
     for (int el : xt::arange<int64_t>(start, end, step)) {
         int capped_el = cap ? el % *cap : el;
-        if constexpr (std::is_same_v<T, ::bfloat16>) {
-            result.push_back(T(static_cast<float>(capped_el)));
-        } else {
-            result.push_back(static_cast<T>(capped_el));
-        }
+        result.push_back(static_cast<T>(capped_el));
     }
     return result;
 }

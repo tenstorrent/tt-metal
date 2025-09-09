@@ -37,18 +37,21 @@ public:
         uint16_data = from_float(f);
     }
 
-    constexpr bfloat16(raw_bits_t, std::uint16_t bits) noexcept;
+    constexpr bfloat16(raw_bits_t, std::uint16_t bits) noexcept : uint16_data(bits) {}
 
     // create from float: truncate rounding
     static bfloat16 truncate(float float_num);
 
     // Widening conversion
-    operator float() const;
+    constexpr operator float() const { return to_float(); }
 
     // -- Comparison Operators ---
-    bool operator==(bfloat16 rhs) const;
+    constexpr bool operator==(bfloat16 rhs) const { return static_cast<float>(*this) == static_cast<float>(rhs); };
+    constexpr std::partial_ordering operator<=>(bfloat16 rhs) noexcept {
+        return static_cast<float>(*this) <=> static_cast<float>(rhs);
+    }
 
-    std::partial_ordering operator<=>(bfloat16 rhs) noexcept;
+    // std::partial_ordering operator<=>(bfloat16 rhs) noexcept;
 
     // -- Arithmetic Operators ---
     bfloat16& operator+=(bfloat16 rhs) noexcept;
@@ -62,16 +65,14 @@ public:
     bfloat16 operator/(bfloat16 rhs) const;
 
     // TODO: Replave all usages of user code with static_cast<float>(bfloat16)
-    float to_float() const {
+    constexpr float to_float() const {
         // move lower 16 to upper 16 (of 32) and convert to float
         uint32_t uint32_data = (uint32_t)uint16_data << 16;
-        float f;
-        std::memcpy(&f, &uint32_data, sizeof(f));
-        return f;
+        return std::bit_cast<float>(uint32_data);
     }
     uint16_t from_float(float val);
-    uint16_t to_packed() const { return uint16_data; }
-    uint16_t to_uint16() const { return uint16_data; }
+    constexpr uint16_t to_packed() const { return uint16_data; }
+    constexpr uint16_t to_uint16() const { return uint16_data; }
 };
 
 std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16);

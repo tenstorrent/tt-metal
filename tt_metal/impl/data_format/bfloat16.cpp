@@ -31,20 +31,9 @@ uint16_t fp32_to_bf16_bits_round_to_nearest_even(float val) {
 
 }  // namespace
 
-constexpr bfloat16::bfloat16(raw_bits_t, std::uint16_t bits) noexcept : uint16_data(bits) {}
-
 bfloat16 bfloat16::truncate(float float_num) {
     uint32_t U32 = std::bit_cast<uint32_t>(float_num);
     return bfloat16(bfloat16::raw_bits, U32 >> 16);
-}
-
-bfloat16::operator float() const { return to_float(); }
-
-// -- Comparison Operators ---
-bool bfloat16::operator==(bfloat16 rhs) const { return static_cast<float>(*this) == static_cast<float>(rhs); }
-
-std::partial_ordering bfloat16::operator<=>(bfloat16 rhs) noexcept {
-    return static_cast<float>(*this) <=> static_cast<float>(rhs);
 }
 
 // -- Arithmetic Operators ---
