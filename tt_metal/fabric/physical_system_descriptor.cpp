@@ -223,7 +223,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
         std::unordered_map<AsicID, size_t> visited_dst;
         for (const auto& [eth_chan, remote_info] : eth_link_info) {
             auto dst_unique_id = AsicID{std::get<0>(remote_info)};
-            auto dst_chan = std::get<1>(remote_info);
+            auto dst_chan = PhysicalSystemDescriptor::phys_to_log_eth_core_index(std::get<1>(remote_info));
             if (visited_dst.find(dst_unique_id) == visited_dst.end()) {
                 asic_graph[local_unique_id].push_back({dst_unique_id, {EthConnection(eth_chan, dst_chan, false)}});
                 visited_dst[dst_unique_id] = asic_graph[local_unique_id].size() - 1;
@@ -519,11 +519,6 @@ void PhysicalSystemDescriptor::validate_graphs() {
                     src_host != dst_host,
                     "Physical Discovery Error: Hostnames for connections marked as global should be different. "
                     "Please reset the system and try again.");
-                std::cout << "Ethernet Connections between " << src_host << " and " << dst_host << std::endl;
-                for (const auto& eth_conn : eth_conns) {
-                    std::cout << "Ethernet Connection: " << +eth_conn.src_chan << " -> " << +eth_conn.dst_chan
-                              << std::endl;
-                }
 
                 // Validate each global ethernet connection.
                 for (const auto& eth_conn : eth_conns) {
