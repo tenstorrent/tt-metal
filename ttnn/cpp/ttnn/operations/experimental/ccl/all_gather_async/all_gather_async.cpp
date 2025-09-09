@@ -16,7 +16,6 @@ namespace ttnn::operations::experimental::ccl {
 
 bool use_all_gather_async_llama_sharded(const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
     auto input_tensor_shape = input_tensor.padded_shape();
-    auto input_tensor_page_layout = input_tensor.layout();
     auto input_tensor_memory_config = input_tensor.memory_config();
     bool input_is_sharded = input_tensor_memory_config.shard_spec().has_value();
     bool output_is_sharded = output_mem_config.shard_spec().has_value();
@@ -211,13 +210,13 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
             input_tensor,
             dim,
             multi_device_global_semaphore,
-            barrier_semaphore.has_value(),
             num_links,
             memory_config,
             topology,
             subdevice_id,
             all_gather_async_llama_sharded_case,
-            use_optimal_ccl_for_llama);
+            use_optimal_ccl_for_llama,
+            barrier_semaphore);
     }
 }
 
@@ -247,7 +246,6 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
             persistent_output_buffer,
             dim,
             multi_device_global_semaphore,
-            barrier_semaphore.has_value(),
             num_links,
             memory_config,
             topology,
@@ -255,6 +253,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
             cluster_axis,
             all_gather_async_llama_sharded_case,
             use_optimal_ccl_for_llama,
+            barrier_semaphore,
             chunks_per_sync,
             num_workers_per_link,
             num_buffers_per_channel);
@@ -288,13 +287,13 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
             mesh_device,
             topology,
             multi_device_global_semaphore,
-            barrier_semaphore.has_value(),
             persistent_output_tensor,
             memory_config,
             num_preferred_links,
             subdevice_id,
             all_gather_async_llama_sharded_case,
-            use_optimal_ccl_for_llama);
+            use_optimal_ccl_for_llama,
+            barrier_semaphore);
     }
 }
 
