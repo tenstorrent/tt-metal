@@ -7,7 +7,6 @@
 #include <bit>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
-#include <map>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <vector>
@@ -125,11 +124,12 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     tt::tt_metal::Program program{};
 
     tt::DataFormat param_in_data_format = datatype_to_dataformat_converter(param_in.dtype());
-    TT_FATAL(param_in_data_format == tt::DataFormat::Float32, "Parameters input data format must be Float32");
+    TT_FATAL(param_in_data_format == tt::DataFormat::Float16_b, "Parameters input data format must be Float16_b");
 
     tt::DataFormat grad_data_format = datatype_to_dataformat_converter(grad.dtype());
     TT_FATAL(grad_data_format == tt::DataFormat::Float32, "Gradient input data format must be Float32");
 
+    uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
     uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
 
     auto padded_tensor_shape = param_in.padded_shape();
@@ -168,13 +168,13 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     const uint32_t num_output_tiles = twice_block_size;
 
     [[maybe_unused]] auto cb_param_in = create_circular_buffer(
-        program, all_cores, kParamInCbIndex, param_in_data_format, float32_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kParamInCbIndex, param_in_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_grad = create_circular_buffer(
         program, all_cores, kGradCbIndex, grad_data_format, float32_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_output = create_circular_buffer(
-        program, all_cores, kOutputCbIndex, param_in_data_format, float32_single_tile_size_bytes, num_output_tiles);
+        program, all_cores, kOutputCbIndex, param_in_data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
