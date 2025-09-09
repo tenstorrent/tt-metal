@@ -415,7 +415,7 @@ bool matmul_large_block(
     // If we're testing LoFi/HiFi2 we generate matching golden (trunc LSB).
     // Note that this will work only for multiplying with identity matrix
     for (auto i = 0; i < golden.size(); i++) {
-        golden[i] = bfloat16(golden[i].to_uint16() & math_fid_mask);
+        golden[i] = bfloat16::from_bits(golden[i].to_bits() & math_fid_mask);
     }
 
     if (output_rm) {

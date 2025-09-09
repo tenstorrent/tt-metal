@@ -336,7 +336,7 @@ void matmul_tile(
     uint16_t math_fid_mask = 0xFFFF;
     set_math_fid_masks(math_fid_mask, cfg.math_fidelity);
     for (auto i = 0; i < golden_tilized.size(); i++) {
-        golden_tilized_single[i] = bfloat16(golden_tilized_single[i].to_uint16() & math_fid_mask);
+        golden_tilized_single[i] = bfloat16::from_bits(golden_tilized_single[i].to_bits() & math_fid_mask);
         if (cfg.fp32_dest_acc_en) {
             golden_packed[i] = std::bit_cast<uint32_t>(golden_tilized_single[i].to_float());
         }

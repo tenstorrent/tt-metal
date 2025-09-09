@@ -192,7 +192,7 @@ int main() {
         src_N,
         dst_M,
         dst_N,
-        pad_value.to_uint16());
+        pad_value.to_bits());
     printf("Original tensor with shape (%d, %d):\n", src_M, src_N);
     for (uint32_t m = 0; m < src_M; m++) {
         for (uint32_t n = 0; n < num_packed_row_src; n++) {

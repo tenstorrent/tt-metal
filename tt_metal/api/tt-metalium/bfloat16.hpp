@@ -20,12 +20,6 @@ private:
 public:
     static constexpr size_t SIZEOF = 2;
 
-    // Tag for raw-bit construction
-    struct raw_bits_t {
-        explicit raw_bits_t() = default;
-    };
-    static inline constexpr raw_bits_t raw_bits{};
-
     // --- Constructors ---
     constexpr bfloat16() = default;
 
@@ -37,7 +31,12 @@ public:
         uint16_data = from_float(f);
     }
 
-    constexpr bfloat16(raw_bits_t, std::uint16_t bits) noexcept : uint16_data(bits) {}
+    // create from raw bits
+    static constexpr bfloat16 from_bits(std::uint16_t raw) noexcept {
+        bfloat16 x;
+        x.uint16_data = raw;
+        return x;
+    }
 
     // create from float: truncate rounding
     static bfloat16 truncate(float float_num);
@@ -50,8 +49,6 @@ public:
     constexpr std::partial_ordering operator<=>(bfloat16 rhs) noexcept {
         return static_cast<float>(*this) <=> static_cast<float>(rhs);
     }
-
-    // std::partial_ordering operator<=>(bfloat16 rhs) noexcept;
 
     // -- Arithmetic Operators ---
     bfloat16& operator+=(bfloat16 rhs) noexcept;
@@ -72,7 +69,7 @@ public:
     }
     uint16_t from_float(float val);
     constexpr uint16_t to_packed() const { return uint16_data; }
-    constexpr uint16_t to_uint16() const { return uint16_data; }
+    constexpr uint16_t to_bits() const { return uint16_data; }
 };
 
 std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16);
