@@ -14,7 +14,7 @@ on:
 
 jobs:
   fetch-data:
-    if: ${{ false }} # FIXME: Remove this once we have a proper artifact retrieval mechanism
+    # if: ${{ false }} # FIXME: Remove this once we have a proper artifact retrieval mechanism
     runs-on: ubuntu-latest
     outputs:
       cache-path: ${{ steps.fetch.outputs.cache-path }}
