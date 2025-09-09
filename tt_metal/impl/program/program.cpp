@@ -401,17 +401,16 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
     return nullptr;
 }
 
-std::vector<KernelMeta> Program::kernels() const {
-    // return internal_->kernels();
-    return {};
+std::vector<KernelMeta> detail::collect_kernel_meta(Program const& program, IDevice* device) {
+    return program.impl().collect_kernel_meta(device);
 }
 
-std::vector<std::shared_ptr<Kernel>> ProgramImpl::kernels() const {
-    std::vector<std::shared_ptr<Kernel>> result;
+std::vector<KernelMeta> ProgramImpl::collect_kernel_meta(IDevice* device) const {
+    std::vector<KernelMeta> result;
     result.reserve(this->num_kernels());
     for (const auto& m : this->kernels_) {
         for (const auto& [id, kernel] : m) {
-            result.push_back(kernel);
+            result.push_back(kernel->meta(device));
         }
     }
     return result;

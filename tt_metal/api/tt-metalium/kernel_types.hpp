@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <map>
+#include <string_view>
 #include <unordered_map>
 #include <string>
 #include <vector>
@@ -138,12 +139,13 @@ struct KernelSource {
 
 struct KernelBinaryMeta {
     // This maps to Kernel::get_kernel_processor_type
-    uint32_t processor_type;
-    uint32_t packed_size;
+    using ProcessorType = uint32_t;
+    ProcessorType processor_type;
+    std::size_t packed_size;
 };
 
 struct KernelMeta {
-    std::string name, source;
+    std::string_view name, source;
     HalProcessorClassType processor_class;
     HalProgrammableCoreType programmable_core_type;
     std::optional<MathFidelity> math_fidelity;
