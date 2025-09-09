@@ -677,8 +677,8 @@ class TtMotionTransformerDecoder:
                     if index % 2 == 0:
                         scene_level_offset_embedding = ttnn.linear(
                             scene_level_offset_embedding,
-                            scene_level_ego_embedding_layer[index]["weight"],
-                            bias=scene_level_ego_embedding_layer[index]["bias"],
+                            scene_level_offset_embedding_layer[index]["weight"],
+                            bias=scene_level_offset_embedding_layer[index]["bias"],
                             dtype=ttnn.bfloat16,
                         )
                     else:

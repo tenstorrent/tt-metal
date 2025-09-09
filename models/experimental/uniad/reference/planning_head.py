@@ -75,27 +75,6 @@ class PlanningHeadSingleMode(nn.Module):
             bev_adapter = [copy.deepcopy(bev_adapter_block) for _ in range(N_Blocks)]
             self.bev_adapter = nn.Sequential(*bev_adapter)
 
-    # def forward_train(
-    #     self,
-    #     bev_embed,
-    #     outs_motion={},
-    #     sdc_planning=None,
-    #     sdc_planning_mask=None,
-    #     command=None,
-    #     gt_future_boxes=None,
-    # ):
-    #     sdc_traj_query = outs_motion["sdc_traj_query"]
-    #     sdc_track_query = outs_motion["sdc_track_query"]
-    #     bev_pos = outs_motion["bev_pos"]
-
-    #     occ_mask = None
-
-    #     outs_planning = self(bev_embed, occ_mask, bev_pos, sdc_traj_query, sdc_track_query, command)
-    #     loss_inputs = [sdc_planning, sdc_planning_mask, outs_planning, gt_future_boxes]
-    #     losses = self.loss(*loss_inputs)
-    #     ret_dict = dict(losses=losses, outs_motion=outs_planning)
-    #     return ret_dict
-
     def forward_test(self, bev_embed, outs_motion={}, outs_occflow={}, command=None):
         sdc_traj_query = outs_motion["sdc_traj_query"]
         sdc_track_query = outs_motion["sdc_track_query"]

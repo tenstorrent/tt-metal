@@ -8,7 +8,6 @@ import torch
 from models.experimental.uniad.tt.ttnn_utils import bivariate_gaussian_activation_plan_head
 from models.experimental.uniad.reference.utils import CollisionNonlinearOptimizer
 import numpy as np
-import ttnn
 
 from models.experimental.uniad.tt.ttnn_transformer_decoder_layer import TtTransformerDecoderLayer
 
