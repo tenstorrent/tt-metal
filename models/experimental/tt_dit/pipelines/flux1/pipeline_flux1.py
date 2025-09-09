@@ -1076,7 +1076,7 @@ def _get_t5_prompt_embeds(
         tt_tokens = ttnn.from_torch(
             tokens,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.uint32,
             device=mesh_device,
             mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
