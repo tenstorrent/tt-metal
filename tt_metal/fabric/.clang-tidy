@@ -1,7 +1,0 @@
-InheritParentConfig: true
-Checks: >
-  -bugprone-reserved-identifier,
-  -readability-duplicate-include,
-  -cppcoreguidelines-pro-type-static-cast-downcast,
-  -readability-redundant-access-specifiers,
-  -cppcoreguidelines-avoid-goto
