@@ -139,5 +139,8 @@ inline WelfordStats<uint16_t> combine_welford_stats(T means, T vars) {
     result.variance = detail::float_to_bfloat16(overall.variance);
     result.count = overall.count;
 
+    DPRINT << "Combined mean(float): " << overall.mean << " (bf16): " << BF16(result.mean) << ENDL();
+    DPRINT << "Combined variance (float): " << overall.variance << " (bf16): " << BF16(result.variance) << ENDL();
+    DPRINT << "Combined count: " << overall.count << ENDL();
     return result;
 }

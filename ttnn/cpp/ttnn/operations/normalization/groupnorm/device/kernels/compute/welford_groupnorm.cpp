@@ -21,6 +21,7 @@
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/welford.h"
 #include "debug/dprint.h"
+#include "debug/dprint_pages.h"
 #include "debug/dprint_tensix.h"
 
 namespace NAMESPACE {
@@ -294,21 +295,17 @@ void MAIN {
                             transpose_wh_init_short(cb_in0);
                             transpose_wh_tile(cb_in0, index, 0);
 #endif
-
+                            // Print all args to welford
                             // Check if this is the first tile in the row and set tile_offset accordingly
                             auto this_tile_offset = (j + w) ? 0 : tile_offset;
-                            // Print all args to welford
                             DPRINT << "welford args: " << " " << curr_xy_coord << " " << curr_xy_limit << " "
-                                   << (uint32_t)false << " " << this_tile_offset << ENDL();
-
-                            welford_tile<0, 1, 2, false>(curr_xy_coord, curr_xy_limit, this_tile_offset);
+                                   << this_tile_offset << ENDL();
+                            welford_tile<0, 1, 2, false, false>(curr_xy_coord, curr_xy_limit, this_tile_offset, 0);
                             curr_xy_coord += std::min(32 - this_tile_offset, curr_xy_limit - curr_xy_coord);
-                            // // Print dst 1 and dst2
                             dprint_tensix_dest_reg(0);
                             dprint_tensix_dest_reg(1);
-                            // dprint_tensix_dest_reg(2);
+                            dprint_tensix_dest_reg(2);
                         }
-
                         index_subblock_w_offset += subblock_w;
                     }
                     index_h_offset += block_w;
@@ -318,10 +315,12 @@ void MAIN {
 #else
                 cb_pop_front(cb_in0, out_block_hw_normal);
 #endif
-                DPRINT << "welford done: out_block_index: " << out_block_index << ENDL();
             }
 
-            welford_final(curr_xy_limit);  // Convert M2 to variance
+            welford_M2_to_var<0, 1, 2>(curr_xy_limit, 0);  // Convert M2 to variance
+            DPRINT << "After M2 to var with args: " << curr_xy_limit << " " << ENDL();
+            dprint_tensix_dest_reg(1);
+            dprint_tensix_dest_reg(2);
 
             // Update for next group
             tile_offset = (tile_offset + num_channels_per_group) % TILE_WIDTH;
@@ -339,19 +338,47 @@ void MAIN {
             //  global reduce results
             cb_wait_front(cb_eps, 1);
             cb_wait_front(cb_ex_global, 2);
+            // Print cb_ex_global using dprint_row
+            DPRINT << (uint)0 << " mean:: "
+                   << TileSlice(
+                          cb_ex_global,
+                          0,
+                          SliceRange{
+                              .h0 = (uint8_t)0,
+                              .h1 = (uint8_t)(1),
+                              .hs = (uint8_t)1,
+                              .w0 = (uint8_t)0,
+                              .w1 = (uint8_t)32,
+                              .ws = (uint8_t)1},
+                          true,
+                          false);
+            DPRINT << (uint)0 << " var:: "
+                   << TileSlice(
+                          cb_ex_global,
+                          1,
+                          SliceRange{
+                              .h0 = (uint8_t)0,
+                              .h1 = (uint8_t)(1),
+                              .hs = (uint8_t)1,
+                              .w0 = (uint8_t)0,
+                              .w1 = (uint8_t)32,
+                              .ws = (uint8_t)1},
+                          true,
+                          false);
             cb_reserve_back(cb_ex2pe, 1);
             // (Var + eps)
             tile_regs_acquire();
             add_tiles_init(cb_ex_global, cb_eps);
             add_tiles(cb_ex_global, cb_eps, 1, 0, dst0);
-            tile_regs_wait();
+            dprint_tensix_dest_reg(dst0);
             // sqrt(Var + eps)
             sqrt_tile_init();
             sqrt_tile(dst0);
-            tile_regs_wait();
+            dprint_tensix_dest_reg(dst0);
             // 1/[sqrt(Var + eps)]
             recip_tile_init();
             recip_tile(dst0);
+            dprint_tensix_dest_reg(dst0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_ex2pe);
@@ -387,6 +414,7 @@ void MAIN {
                         for (uint32_t w = 0; w < subblock_w; w++) {
                             uint32_t index = w + index_subblock_w_offset;
                             sub_tiles_bcast_scalar(cb_in0, cb_ex_global, index, 0, w);
+                            dprint_tensix_dest_reg(w);
                         }
                         tile_regs_commit();
                         tile_regs_wait();
