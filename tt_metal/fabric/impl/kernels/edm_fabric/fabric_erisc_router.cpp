@@ -1815,8 +1815,9 @@ void run_receiver_channel_step_impl(
         } else if (packet_header->src_ch_id == 65) {
             ch_id = 2;
         } else {
-            // if (receiver_channel == 0)
-            ASSERT(false);
+            if (packet_header->src_ch_id == 255) {
+                ASSERT(false);
+            }
         }
 
         bool can_send_to_all_local_chip_receivers = false;
