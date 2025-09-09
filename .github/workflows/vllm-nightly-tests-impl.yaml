@@ -234,6 +234,7 @@ jobs:
             --backend vllm \
             --model ${{ matrix.test-group.model }} \
             --num-prompts 32 \
+            --output-len 100 \
             --percentile-metrics ttft,tpot,itl,e2el \
             --save-result \
             --result-filename output/vllm_result.json \
