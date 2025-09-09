@@ -6,6 +6,7 @@ import statistics
 import pytest
 import ttnn
 from loguru import logger
+from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 
 from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
     create_pipeline,
@@ -54,12 +55,32 @@ def test_sd35_new_pipeline_performance(
     num_links,
     model_location_generator,
     use_cache,
+    is_ci_env,
+    galaxy_type,
     request,
 ) -> None:
     """Performance test for new SD35 pipeline with detailed timing analysis."""
 
+    benchmark_profiler = BenchmarkProfiler()
+
+    # Process skips
     if request.config.getoption("-m") == "models_performance_bare_metal" and use_cache:
-        pytest.skip("use_cache not valid for bare metal performance")
+        pytest.skip("use_cache not necessary for bare metal performance")
+
+    # Skip 4U.
+    if galaxy_type == "4U":
+        # NOTE: Pipelines fail if a performance test is skipped without providing a benchmark output.
+        if is_ci_env:
+            with benchmark_profiler("run", iteration=0):
+                pass
+
+            benchmark_data = BenchmarkData()
+            benchmark_data.save_partial_run_json(
+                benchmark_profiler,
+                run_type="empty_run",
+                ml_model_name="empty_run",
+            )
+        pytest.skip("4U is not supported for this test")
 
     logger.info(f"  Image size: {image_w}x{image_h}")
     logger.info(f"  Guidance scale: {guidance_scale}")
@@ -138,17 +159,18 @@ def test_sd35_new_pipeline_performance(
 
             # Run pipeline with different prompt
             prompt_idx = (i + 1) % len(prompts)
-            images = pipeline(
-                prompt_1=[prompts[prompt_idx]],
-                prompt_2=[prompts[prompt_idx]],
-                prompt_3=[prompts[prompt_idx]],
-                negative_prompt_1=[negative_prompt],
-                negative_prompt_2=[negative_prompt],
-                negative_prompt_3=[negative_prompt],
-                num_inference_steps=num_inference_steps,
-                seed=0,  # Different seed for each run
-                traced=True,
-            )
+            with benchmark_profiler("run", iteration=i):
+                images = pipeline(
+                    prompt_1=[prompts[prompt_idx]],
+                    prompt_2=[prompts[prompt_idx]],
+                    prompt_3=[prompts[prompt_idx]],
+                    negative_prompt_1=[negative_prompt],
+                    negative_prompt_2=[negative_prompt],
+                    negative_prompt_3=[negative_prompt],
+                    num_inference_steps=num_inference_steps,
+                    seed=0,  # Different seed for each run
+                    traced=True,
+                )
             images[0].save(f"sd35_new_{image_w}_{image_h}_perf_run{i}.png")
 
             # Collect timing data
@@ -293,6 +315,18 @@ def test_sd35_new_pipeline_performance(
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
+
+    if is_ci_env:
+        # In CI, dump a performance report
+        profiler_model_name = (
+            f"sd35_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_cfg{cfg_factor}_sp{sp_factor}_tp{tp_factor}"
+        )
+        benchmark_data = BenchmarkData()
+        benchmark_data.save_partial_run_json(
+            benchmark_profiler,
+            run_type="sd35_traced",
+            ml_model_name=profiler_model_name,
+        )
 
     pass_perf_check = True
     assert_msgs = []
