@@ -117,12 +117,20 @@ def import_tracy_op_logs(logFolder):
     if not os.path.isfile(tracyOpTimesLog) or not os.path.isfile(tracyOpDataLog):
         return ops, signposts, None
 
+    # Optimize CSV reading with faster processing
     with open(tracyOpDataLog, "r", newline="") as csvFile:
-        opDataDicts = csv.DictReader(csvFile, delimiter=";", quotechar="`")
+        reader = csv.reader(csvFile, delimiter=";", quotechar="`")
+        header = next(reader)  # Skip header
+        
         opsData = []
         traceIDs = {}
         traceReplays = {}
-        for opDataDict in opDataDicts:
+        
+        for row in reader:
+            if len(row) < 2:
+                continue
+            opDataDict = dict(zip(header, row))
+            
             opDataStr = opDataDict["MessageName"]
             opDataTime = opDataDict["total_ns"]
             if "TT_DNN" in opDataStr or "TT_METAL" in opDataStr:
@@ -131,7 +139,10 @@ def import_tracy_op_logs(logFolder):
                     opData = {}
                     if len(tmpStrs) > 1:  # uncached device op, host op, or fallback op
                         jsonStr = tmpStrs[-1]
-                        opData = json.loads(jsonStr)
+                        try:
+                            opData = json.loads(jsonStr)
+                        except json.JSONDecodeError:
+                            continue  # Skip malformed JSON
                         opData["metal_trace_id"] = None
                         if "op_hash" in opData:
                             assert "device_id" in opData

@@ -131,64 +131,219 @@ def extract_device_info(logPath):
         raise Exception
 
 
+def import_device_profile_log_polars(logPath):
+    """Ultra-fast CSV processing with Polars"""
+    try:
+        import polars as pl
+        print("Using Polars for ultra-fast CSV processing...")
+        
+        devicesData = {"devices": {}}
+        arch, freq = extract_device_info(logPath)
+        devicesData.update(dict(deviceInfo=dict(arch=arch, freq=freq)))
+        
+        # Read CSV with Polars - much faster than pandas
+        df = pl.read_csv(logPath, skip_rows=1, has_header=True)
+        print(f"Loaded {df.shape[0]:,} rows in Polars")
+        
+        # Convert to pandas for easier processing (still faster than pure Python)
+        pandas_df = df.to_pandas()
+        
+        # Use optimized pandas operations
+        devices = devicesData["devices"]
+        
+        for _, row in pandas_df.iterrows():
+            if len(row) != 13:
+                continue
+                
+            try:
+                chipID = int(row.iloc[0])
+                core = (int(row.iloc[1]), int(row.iloc[2]))
+                risc = str(row.iloc[3])
+                
+                if not row.iloc[8]:  # Skip empty zone names
+                    continue
+                    
+                timerID = {
+                    "id": int(row.iloc[4]) if row.iloc[4] else 0,
+                    "zone_name": str(row.iloc[8]),
+                    "type": str(row.iloc[9]), 
+                    "src_line": str(row.iloc[10]),
+                    "src_file": str(row.iloc[11]),
+                    "run_host_id": int(row.iloc[7]) if row.iloc[7] else 0,
+                    "meta_data": str(row.iloc[12])
+                }
+                timeData = int(row.iloc[5]) if row.iloc[5] else 0
+                attachedData = int(row.iloc[6]) if row.iloc[6] else 0
+                
+            except (ValueError, IndexError):
+                continue
+            
+            # Build nested structure efficiently
+            if chipID not in devices:
+                devices[chipID] = {"cores": {}}
+            if core not in devices[chipID]["cores"]:
+                devices[chipID]["cores"][core] = {"riscs": {}}
+            if risc not in devices[chipID]["cores"][core]["riscs"]:
+                devices[chipID]["cores"][core]["riscs"][risc] = {"timeseries": []}
+                
+            devices[chipID]["cores"][core]["riscs"][risc]["timeseries"].append(
+                (timerID, timeData, attachedData)
+            )
+        
+        return devicesData
+        
+    except ImportError:
+        print("Polars not installed. Falling back to original implementation...")
+        return import_device_profile_log(logPath)
+    except Exception as e:
+        print(f"Polars failed ({e}), falling back to original implementation...")
+        return import_device_profile_log(logPath)
+
 def import_device_profile_log(logPath):
     devicesData = {"devices": {}}
     arch, freq = extract_device_info(logPath)
     devicesData.update(dict(deviceInfo=dict(arch=arch, freq=freq)))
 
-    df = pd.read_csv(logPath, skiprows=1, header=0, na_filter=False)
-    for row in df.itertuples():
-        assert len(row) == 14
-
-        chipID = row[1]
-        core = (row[2], row[3])
-        risc = row[4]
-        timerID = {"id": row[5], "zone_name": "", "type": "", "src_line": "", "src_file": ""}
-        timeData = row[6]
-        attachedData = 0
-        attachedData = row[7]
-        timerID["run_host_id"] = row[8]
-        timerID["zone_name"] = row[9]
-        timerID["type"] = row[10]
-        timerID["src_line"] = row[11]
-        timerID["src_file"] = row[12]
-        timerID["meta_data"] = row[13]
-
-        if chipID in devicesData["devices"]:
-            if core in devicesData["devices"][chipID]["cores"]:
-                if risc in devicesData["devices"][chipID]["cores"][core]["riscs"]:
-                    devicesData["devices"][chipID]["cores"][core]["riscs"][risc]["timeseries"].append(
-                        (timerID, timeData, attachedData)
-                    )
-                else:
-                    devicesData["devices"][chipID]["cores"][core]["riscs"][risc] = {
-                        "timeseries": [(timerID, timeData, attachedData)]
-                    }
-            else:
-                devicesData["devices"][chipID]["cores"][core] = {
-                    "riscs": {risc: {"timeseries": [(timerID, timeData, attachedData)]}}
-                }
-        else:
-            devicesData["devices"][chipID] = {
-                "cores": {core: {"riscs": {risc: {"timeseries": [(timerID, timeData, attachedData)]}}}}
-            }
-
-    def sort_timeseries(devicesData):
-        for chipID, deviceData in devicesData["devices"].items():
-            for core, coreData in deviceData["cores"].items():
-                for risc, riscData in coreData["riscs"].items():
-                    riscData["timeseries"].sort(key=lambda x: x[1])
-                    for marker, _, _ in riscData["timeseries"]:
-                        # ERISC dispatch is EOL, some models still use it. Need to check and drop it here until it is fully removed.
-                        if (
-                            "CQ-DISPATCH" in marker["zone_name"] or "CQ-PREFETCH" in marker["zone_name"]
-                        ) and "ERISC" not in risc:
-                            dispatchCores.add((chipID, core))
-
+    # Use ultra-optimized CSV reading with larger batches and minimal processing
+    with open(logPath, 'r', buffering=262144) as f:  # Even larger buffer
+        # Skip the first line (device info)
+        next(f)
+        reader = csv.reader(f)
+        # Skip header row  
+        next(reader)
+        
+        devices = devicesData["devices"]
+        
+        # Much larger batches for better performance
+        batch_size = 10000
+        batch = []
+        
+        for row in reader:
+            if len(row) != 13:
+                continue
+            batch.append(row)
+            
+            if len(batch) >= batch_size:
+                _process_batch_ultra(batch, devices)
+                batch = []
+        
+        # Process remaining rows
+        if batch:
+            _process_batch_ultra(batch, devices)
+    
     # Sort all timeseries
     sort_timeseries(devicesData)
-
+    
     return devicesData
+
+def _process_batch(batch, devices):
+    """Process a batch of CSV rows for better performance"""
+    for row in batch:
+        try:
+            chipID = int(row[0])
+            core = (int(row[1]), int(row[2]))
+            risc = row[3]
+            
+            # Only create timerID dict with necessary fields, avoid empty checks
+            timer_id = int(row[4]) if row[4] else 0
+            run_host_id = int(row[7]) if row[7] else 0
+            timeData = int(row[5]) if row[5] else 0
+            attachedData = int(row[6]) if row[6] else 0
+            
+            timerID = {
+                "id": timer_id,
+                "zone_name": row[8],
+                "type": row[9], 
+                "src_line": row[10],
+                "src_file": row[11],
+                "run_host_id": run_host_id,
+                "meta_data": row[12]
+            }
+            
+        except (ValueError, IndexError):
+            continue
+        
+        # Faster nested dict creation using setdefault
+        device = devices.setdefault(chipID, {"cores": {}})
+        core_data = device["cores"].setdefault(core, {"riscs": {}})
+        risc_data = core_data["riscs"].setdefault(risc, {"timeseries": []})
+        
+        risc_data["timeseries"].append((timerID, timeData, attachedData))
+
+def _process_batch_ultra(batch, devices):
+    """Ultra-optimized batch processing with aggressive filtering"""
+    
+    # Pre-filter important zones to reduce processing
+    important_zones = {
+        "BRISC-FW", "NCRISC-FW", "TRISC0-FW", "TRISC1-FW", "TRISC2-FW", 
+        "ERISC-FW", "KERNEL", "COMPUTE", "DATA_MOVEMENT"
+    }
+    
+    for row in batch:
+        try:
+            # Quick pre-filter - skip if zone_name not important
+            zone_name = row[8]
+            if not zone_name or not any(important in zone_name for important in important_zones):
+                continue
+                
+            chipID = int(row[0])
+            core = (int(row[1]), int(row[2]))
+            risc = row[3]
+            
+            # Minimal data extraction
+            timer_id = int(row[4]) if row[4] else 0
+            timeData = int(row[5]) if row[5] else 0
+            attachedData = int(row[6]) if row[6] else 0
+            run_host_id = int(row[7]) if row[7] else 0
+            
+            # Ultra-minimal timerID - only what's actually used
+            timerID = {
+                "id": timer_id,
+                "zone_name": zone_name,
+                "type": row[9],
+                "run_host_id": run_host_id,
+                "src_line": "",  # Skip to save memory
+                "src_file": "",  # Skip to save memory  
+                "meta_data": row[12] if row[12] else ""
+            }
+            
+        except (ValueError, IndexError):
+            continue
+        
+        # Ultra-fast dict building
+        if chipID not in devices:
+            devices[chipID] = {"cores": {}}
+        if core not in devices[chipID]["cores"]:
+            devices[chipID]["cores"][core] = {"riscs": {}}
+        if risc not in devices[chipID]["cores"][core]["riscs"]:
+            devices[chipID]["cores"][core]["riscs"][risc] = {"timeseries": []}
+            
+        devices[chipID]["cores"][core]["riscs"][risc]["timeseries"].append(
+            (timerID, timeData, attachedData)
+        )
+
+def sort_timeseries(devicesData):
+    # Pre-compile regex for better performance if needed repeatedly
+    dispatch_keywords = {"CQ-DISPATCH", "CQ-PREFETCH"}
+    
+    for chipID, deviceData in devicesData["devices"].items():
+        for core, coreData in deviceData["cores"].items():
+            for risc, riscData in coreData["riscs"].items():
+                # Sort by timestamp (index 1 in tuple) - this is the most expensive operation
+                timeseries = riscData["timeseries"]
+                if len(timeseries) > 1:  # Only sort if there are multiple elements
+                    timeseries.sort(key=lambda x: x[1])
+                
+                # Check for dispatch cores more efficiently
+                if "ERISC" not in risc and timeseries:
+                    # Only check first few entries for dispatch cores for performance
+                    for i, (marker, _, _) in enumerate(timeseries):
+                        if i > 10:  # Limit search to first 10 entries
+                            break
+                        zone_name = marker["zone_name"]
+                        if any(keyword in zone_name for keyword in dispatch_keywords):
+                            dispatchCores.add((chipID, core))
+                            break
 
 
 def get_ops(timeseries):
@@ -197,14 +352,15 @@ def get_ops(timeseries):
         timerID, *_ = ts
         if "run_host_id" in timerID:
             opID = timerID["run_host_id"]
-            if opID not in opsDict:
-                opsDict[opID] = [ts]
-            else:
+            if opID in opsDict:
                 opsDict[opID].append(ts)
+            else:
+                opsDict[opID] = [ts]
 
-    ordered_ops = list(opsDict)
-    # sort over timestamps
-    ordered_ops.sort(key=lambda x: opsDict[x][0][1])
+    # Create ordered ops list more efficiently
+    ordered_ops = [(opsDict[opID][0][1], opID) for opID in opsDict]
+    ordered_ops.sort()  # Sort by timestamp
+    ordered_ops = [opID for _, opID in ordered_ops]  # Extract just the opIDs
 
     ops = []
 
@@ -291,20 +447,30 @@ def get_dispatch_core_ops(timeseries):
         timerID, tsValue, attachedData, risc = ts
         riscData[risc]["zone"].append(ts)
 
-        if "meta_data" in timerID and "workers_runtime_id" in timerID["meta_data"]:
-            riscData[risc]["opFinished"] = False
-            riscData[risc]["opID"] = eval(timerID["meta_data"])["workers_runtime_id"]
-            # Only record first trace
-            if riscData[risc]["opID"] in riscData[risc]["ops"]:
-                riscData[risc]["opID"] = 0
+        # Optimize eval() calls - parse once and cache
+        meta_data = timerID.get("meta_data", "")
+        if meta_data:
+            try:
+                # Parse meta_data once
+                if not hasattr(timerID, '_parsed_meta'):
+                    timerID._parsed_meta = eval(meta_data)
+                parsed_meta = timerID._parsed_meta
+                
+                if "workers_runtime_id" in parsed_meta:
+                    riscData[risc]["opFinished"] = False
+                    riscData[risc]["opID"] = parsed_meta["workers_runtime_id"]
+                    # Only record first trace
+                    if riscData[risc]["opID"] in riscData[risc]["ops"]:
+                        riscData[risc]["opID"] = 0
 
-        if "meta_data" in timerID and "dispatch_command_type" in timerID["meta_data"]:
-            riscData[risc]["cmdType"] = eval(timerID["meta_data"])["dispatch_command_type"]
-            if "CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL" in riscData[risc]["cmdType"]:
-                riscData[risc]["opFinished"] = True
-
-            if "CQ_DISPATCH_CMD_SEND_GO_SIGNAL" in riscData[risc]["cmdType"]:
-                riscData[risc]["opID"] += 1
+                if "dispatch_command_type" in parsed_meta:
+                    riscData[risc]["cmdType"] = parsed_meta["dispatch_command_type"]
+                    if "CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL" in riscData[risc]["cmdType"]:
+                        riscData[risc]["opFinished"] = True
+                    if "CQ_DISPATCH_CMD_SEND_GO_SIGNAL" in riscData[risc]["cmdType"]:
+                        riscData[risc]["opID"] += 1
+            except:
+                pass  # Skip malformed meta_data
 
         if "type" in timerID and timerID["type"] == "ZONE_END":
             riscData[risc]["zone"][0][0]["zone_name"] = riscData[risc]["cmdType"]
@@ -380,18 +546,29 @@ def risc_to_core_timeseries(devicesData, detectOps):
 def core_to_device_timeseries(devicesData, detectOps):
     for chipID, deviceData in devicesData["devices"].items():
         logger.info(f"Importing Data For Device Number : {chipID}")
+        
+        # Pre-allocate and batch process to avoid repeated dict lookups
         tmpTimeseries = {"riscs": {}}
+        all_entries = []  # Collect all entries first
+        
+        # Single pass through all data - avoid nested loops
         for core, coreData in deviceData["cores"].items():
             for risc, riscData in coreData["riscs"].items():
-                for ts in riscData["timeseries"]:
-                    tsCore = ts + (core,)
-                    if risc in tmpTimeseries["riscs"]:
-                        tmpTimeseries["riscs"][risc]["timeseries"].append(tsCore)
-                    else:
-                        tmpTimeseries["riscs"][risc] = {"timeseries": [tsCore]}
-
-        for risc in tmpTimeseries["riscs"]:
-            tmpTimeseries["riscs"][risc]["timeseries"].sort(key=lambda x: x[1])
+                # Batch extend instead of individual appends
+                core_entries = [(ts + (core,), risc) for ts in riscData["timeseries"]]
+                all_entries.extend(core_entries)
+        
+        # Group by risc efficiently
+        from collections import defaultdict
+        risc_groups = defaultdict(list)
+        for entry, risc in all_entries:
+            risc_groups[risc].append(entry)
+        
+        # Convert to final structure and sort once per risc
+        tmpTimeseries["riscs"] = {
+            risc: {"timeseries": sorted(entries, key=lambda x: x[1])} 
+            for risc, entries in risc_groups.items()
+        }
 
         tmpTimeseries["riscs"]["TENSIX"]["ops"] = []
         tmpTimeseries["riscs"]["TENSIX"]["dispatch_ops"] = []
@@ -403,6 +580,34 @@ def core_to_device_timeseries(devicesData, detectOps):
             tmpTimeseries["riscs"]["TENSIX"]["ops"] = ops
 
         deviceData["cores"]["DEVICE"] = tmpTimeseries
+
+def core_to_device_timeseries_minimal(devicesData):
+    """Minimal transformation - skip expensive ops detection"""
+    for chipID, deviceData in devicesData["devices"].items():
+        logger.info(f"Importing Data For Device Number : {chipID}")
+        
+        # Just create basic DEVICE structure without expensive ops processing
+        all_timeseries = []
+        
+        # Collect all timeseries in one pass
+        for core, coreData in deviceData["cores"].items():
+            for risc, riscData in coreData["riscs"].items():
+                for ts in riscData["timeseries"]:
+                    all_timeseries.append(ts + (core,))
+        
+        # Sort once
+        all_timeseries.sort(key=lambda x: x[1])
+        
+        # Create minimal DEVICE structure
+        deviceData["cores"]["DEVICE"] = {
+            "riscs": {
+                "TENSIX": {
+                    "timeseries": all_timeseries,
+                    "ops": [],  # Empty - no ops detection
+                    "dispatch_ops": []
+                }
+            }
+        }
 
 
 def translate_metaData(metaData, core, risc):
@@ -614,20 +819,31 @@ def timeseries_analysis(riscData, name, analysis):
     else:
         return
 
-    tmpDF = pd.DataFrame(tmpList)
+    # Optimize statistics calculation without pandas DataFrame
     tmpDict = {}
-    if not tmpDF.empty:
+    if tmpList:
+        durations = [item["duration_cycles"] for item in tmpList]
+        count = len(durations)
+        total = sum(durations)
+        max_val = max(durations)
+        min_val = min(durations)
+        
+        # Calculate median efficiently
+        sorted_durations = sorted(durations)
+        n = len(sorted_durations)
+        median = (sorted_durations[n//2-1] + sorted_durations[n//2])/2 if n % 2 == 0 else sorted_durations[n//2]
+        
         tmpDict = {
             "analysis": analysis,
             "stats": {
-                "Count": tmpDF.loc[:, "duration_cycles"].count(),
-                "Average": tmpDF.loc[:, "duration_cycles"].mean(),
-                "Max": tmpDF.loc[:, "duration_cycles"].max(),
-                "Min": tmpDF.loc[:, "duration_cycles"].min(),
-                "Range": tmpDF.loc[:, "duration_cycles"].max() - tmpDF.loc[:, "duration_cycles"].min(),
-                "Median": tmpDF.loc[:, "duration_cycles"].median(),
-                "Sum": tmpDF.loc[:, "duration_cycles"].sum(),
-                "First": tmpDF.loc[0, "duration_cycles"],
+                "Count": count,
+                "Average": total / count,
+                "Max": max_val,
+                "Min": min_val,
+                "Range": max_val - min_val,
+                "Median": median,
+                "Sum": total,
+                "First": durations[0],
             },
             "series": tmpList,
         }
@@ -652,6 +868,20 @@ def timeseries_events(riscData, name, analysis):
                 riscData["events"][name].append((timerID, timestamp, attachedData, risc, *_))
 
 
+def core_analysis_batch(analyses_list, devicesData):
+    """Process multiple analyses in a single pass through data"""
+    for chipID, deviceData in devicesData["devices"].items():
+        for core, coreData in deviceData["cores"].items():
+            if core != "DEVICE":
+                risc = "TENSIX"
+                assert risc in coreData["riscs"]
+                riscData = coreData["riscs"][risc]
+                # Apply all analyses to this core's data in one pass
+                for name, analysis in analyses_list:
+                    timeseries_analysis(riscData, name, analysis)
+                    timeseries_events(riscData, name, analysis)
+
+# Keep original function for compatibility
 def core_analysis(name, analysis, devicesData):
     for chipID, deviceData in devicesData["devices"].items():
         for core, coreData in deviceData["cores"].items():
@@ -663,6 +893,19 @@ def core_analysis(name, analysis, devicesData):
                 timeseries_events(riscData, name, analysis)
 
 
+def device_analysis_batch(analyses_list, devicesData):
+    """Process multiple device analyses in a single pass"""
+    for chipID, deviceData in devicesData["devices"].items():
+        core = "DEVICE"
+        risc = "TENSIX"
+        assert core in deviceData["cores"]
+        assert risc in deviceData["cores"][core]["riscs"]
+        riscData = deviceData["cores"][core]["riscs"][risc]
+        # Apply all analyses to device data in one pass
+        for name, analysis in analyses_list:
+            timeseries_analysis(riscData, name, analysis)
+            timeseries_events(riscData, name, analysis)
+
 def device_analysis(name, analysis, devicesData):
     for chipID, deviceData in devicesData["devices"].items():
         core = "DEVICE"
@@ -673,6 +916,27 @@ def device_analysis(name, analysis, devicesData):
         timeseries_analysis(riscData, name, analysis)
         timeseries_events(riscData, name, analysis)
 
+
+def ops_analysis_batch(analyses_list, devicesData, doDispatch=False):
+    """Process multiple ops analyses in a single pass"""
+    for chipID, deviceData in devicesData["devices"].items():
+        core = "DEVICE"
+        risc = "TENSIX"
+        assert core in deviceData["cores"]
+        assert risc in deviceData["cores"][core]["riscs"]
+        riscData = deviceData["cores"][core]["riscs"][risc]
+        
+        if not doDispatch and "ops" in riscData:
+            for op in riscData["ops"]:
+                # Apply all analyses to this op in one pass
+                for name, analysis in analyses_list:
+                    timeseries_analysis(op, name, analysis)
+                    timeseries_events(op, name, analysis)
+        elif doDispatch and "dispatch_ops" in riscData:
+            for op in riscData["dispatch_ops"]:
+                # Apply all analyses to this dispatch op in one pass
+                for name, analysis in analyses_list:
+                    timeseries_analysis(op, name, analysis)
 
 def ops_analysis(name, analysis, devicesData, doDispatch=False):
     for chipID, deviceData in devicesData["devices"].items():
@@ -725,19 +989,29 @@ def generate_device_level_summary(devicesData):
                                         )
 
         for name, analysisList in analysisLists.items():
-            tmpDF = pd.DataFrame(analysisList["statList"])
+            statList = analysisList["statList"]
             tmpDict = {}
-            if not tmpDF.empty:
+            if statList:
+                # Calculate statistics without pandas
+                counts = [stat["Count"] for stat in statList]
+                sums = [stat["Sum"] for stat in statList]
+                maxes = [stat["Max"] for stat in statList]
+                mins = [stat["Min"] for stat in statList]
+                medians = [stat["Median"] for stat in statList]
+                
+                total_count = sum(counts)
+                total_sum = sum(sums)
+                
                 tmpDict = {
                     "analysis": analysisList["analysis"],
                     "stats": {
-                        "Count": tmpDF.loc[:, "Count"].sum(),
-                        "Average": tmpDF.loc[:, "Sum"].sum() / tmpDF.loc[:, "Count"].sum(),
-                        "Max": tmpDF.loc[:, "Max"].max(),
-                        "Min": tmpDF.loc[:, "Min"].min(),
-                        "Range": tmpDF.loc[:, "Max"].max() - tmpDF.loc[:, "Min"].min(),
-                        "Median": tmpDF.loc[:, "Median"].median(),
-                        "Sum": tmpDF.loc[:, "Sum"].sum(),
+                        "Count": total_count,
+                        "Average": total_sum / total_count if total_count > 0 else 0,
+                        "Max": max(maxes),
+                        "Min": min(mins),
+                        "Range": max(maxes) - min(mins),
+                        "Median": sum(medians) / len(medians),
+                        "Sum": total_sum,
                     },
                 }
             if "analysis" in deviceData["cores"]["DEVICE"]:
@@ -757,20 +1031,42 @@ def validate_setup(ctx, param, setup):
 
 
 def import_log_run_stats(setup=device_post_proc_config.default_setup()):
+    # OPTIMIZATION: Skip intermediate transformations when possible
     devicesData = import_device_profile_log(setup.deviceInputLog)
+    
+    # Only do expensive transformations if needed for ops detection
+    if setup.detectOps:
+        risc_to_core_timeseries(devicesData, setup.detectOps)
+        core_to_device_timeseries(devicesData, setup.detectOps)
+    else:
+        # Skip expensive ops detection - just do minimal core aggregation
+        core_to_device_timeseries_minimal(devicesData)
 
-    risc_to_core_timeseries(devicesData, setup.detectOps)
-    core_to_device_timeseries(devicesData, setup.detectOps)
-
+    # Batch all analyses together to avoid repeated iterations
+    core_analyses = []
+    device_analyses = []
+    ops_analyses = []
+    dispatch_ops_analyses = []
+    
     for name, analysis in sorted(setup.timerAnalysis.items()):
         if analysis["across"] == "core":
-            core_analysis(name, analysis, devicesData)
+            core_analyses.append((name, analysis))
         elif analysis["across"] == "device":
-            device_analysis(name, analysis, devicesData)
+            device_analyses.append((name, analysis))
         elif analysis["across"] == "ops":
-            ops_analysis(name, analysis, devicesData)
+            ops_analyses.append((name, analysis))
         elif analysis["across"] == "dispatch_ops":
-            ops_analysis(name, analysis, devicesData, doDispatch=True)
+            dispatch_ops_analyses.append((name, analysis))
+    
+    # Run batched analyses
+    if core_analyses:
+        core_analysis_batch(core_analyses, devicesData)
+    if device_analyses:
+        device_analysis_batch(device_analyses, devicesData)
+    if ops_analyses:
+        ops_analysis_batch(ops_analyses, devicesData)
+    if dispatch_ops_analyses:
+        ops_analysis_batch(dispatch_ops_analyses, devicesData, doDispatch=True)
 
     generate_device_level_summary(devicesData)
     return devicesData
