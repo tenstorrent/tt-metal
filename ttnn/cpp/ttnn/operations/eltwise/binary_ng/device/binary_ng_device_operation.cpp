@@ -504,7 +504,7 @@ BinaryNgDeviceOperation::invoke(
             subtile_broadcast_type,
             is_sfpu_op,
             is_quant_op},
-        tensor_args_t{input_tensor_a, input_tensor_b, std::move(output_tensor)}};
+        tensor_args_t{input_tensor_a, input_tensor_b, output_tensor}};
 }
 
 std::tuple<BinaryNgDeviceOperation::operation_attributes_t, BinaryNgDeviceOperation::tensor_args_t>
@@ -537,7 +537,7 @@ BinaryNgDeviceOperation::invoke(
             SubtileBroadcastType::NONE,
             is_sfpu_op,
             is_quant_op},
-        tensor_args_t{input_tensor_a, std::nullopt, std::move(output_tensor)}};
+        tensor_args_t{input_tensor_a, std::nullopt, output_tensor}};
 }
 
 }  // namespace ttnn::operations::binary_ng

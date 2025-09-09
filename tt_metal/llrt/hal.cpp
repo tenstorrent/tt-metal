@@ -83,7 +83,7 @@ HalCoreInfoType::HalCoreInfoType(
     eth_fw_mailbox_msgs_{eth_fw_mailbox_msgs},
     supports_cbs_(supports_cbs),
     supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
-    dev_msgs_factory_(std::move(dev_msgs_factory)) {}
+    dev_msgs_factory_(dev_msgs_factory) {}
 
 uint32_t HalCoreInfoType::get_processor_index(
     HalProcessorClassType processor_class, uint32_t processor_type_idx) const {
