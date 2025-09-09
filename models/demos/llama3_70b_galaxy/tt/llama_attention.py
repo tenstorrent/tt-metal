@@ -417,85 +417,47 @@ class TtLlamaAttention(LightweightModule):
             use_optimal_ccl_for_llama=True,
         )
 
-        if self.qk_norm:
-            rm_mem_cfg_q = q_heads_pre_rot_1BQD.memory_config()
-            rm_mem_cfg_k = k_heads_pre_rot_1BKD.memory_config()
+        # if self.qk_norm:
+        #     rm_mem_cfg_q = q_heads_pre_rot_1BQD.memory_config()
+        #     rm_mem_cfg_k = k_heads_pre_rot_1BKD.memory_config()
 
-            # Reshape and prepare tensors for QK norm
-            q_heads_pre_rot_1BQD = ttnn.to_memory_config(
-                q_heads_pre_rot_1BQD, memory_config=self.reshape_intermediate_q_mem_cfg
-            )
-            k_heads_pre_rot_1BKD = ttnn.to_memory_config(
-                k_heads_pre_rot_1BKD, memory_config=self.reshape_intermediate_k_mem_cfg
-            )
+        #     # Reshape and prepare tensors for QK norm
+        #     q_heads_pre_rot_1BQD = ttnn.to_memory_config(
+        #         q_heads_pre_rot_1BQD, memory_config=self.reshape_intermediate_q_mem_cfg
+        #     )
+        #     k_heads_pre_rot_1BKD = ttnn.to_memory_config(
+        #         k_heads_pre_rot_1BKD, memory_config=self.reshape_intermediate_k_mem_cfg
+        #     )
 
-            q_heads_pre_rot_1BQD = ttnn.reshape(
-                q_heads_pre_rot_1BQD, [1, 1, 64, 128]
-            )  # [1, 8, 8, 128] => [1, 1, 64, 128]
-            k_heads_pre_rot_1BKD = ttnn.reshape(
-                k_heads_pre_rot_1BKD, [1, 1, 64, 128]
-            )  # [1, 8, 1 (8), 128]] => [1, 1, 64, 128]
+        #     q_heads_pre_rot_1BQD = ttnn.reshape(
+        #         q_heads_pre_rot_1BQD, [1, 1, 64, 128]
+        #     )  # [1, 8, 8, 128] => [1, 1, 64, 128]
+        #     k_heads_pre_rot_1BKD = ttnn.reshape(
+        #         k_heads_pre_rot_1BKD, [1, 1, 64, 128]
+        #     )  # [1, 8, 1 (8), 128]] => [1, 1, 64, 128]
 
-            q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.TILE_LAYOUT)
-            k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.TILE_LAYOUT)
+        #     q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.TILE_LAYOUT)
+        #     k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.TILE_LAYOUT)
 
-            q_heads_pre_rot_1BQD = ttnn.to_memory_config(
-                q_heads_pre_rot_1BQD, memory_config=self.reshape_output_q_mem_cfg
-            )
-            k_heads_pre_rot_1BKD = ttnn.to_memory_config(
-                k_heads_pre_rot_1BKD, memory_config=self.reshape_output_k_mem_cfg
-            )
+        #     q_heads_pre_rot_1BQD = ttnn.to_memory_config(
+        #         q_heads_pre_rot_1BQD, memory_config=self.reshape_output_q_mem_cfg
+        #     )
+        #     k_heads_pre_rot_1BKD = ttnn.to_memory_config(
+        #         k_heads_pre_rot_1BKD, memory_config=self.reshape_output_k_mem_cfg
+        #     )
 
-            # Apply QK norm
-            q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode", in_sharded=True, out_sharded=True)
-            k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode", in_sharded=True, out_sharded=True)
+        #     # Apply QK norm
+        #     q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode", in_sharded=True, out_sharded=True)
+        #     k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode", in_sharded=True, out_sharded=True)
 
-            q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT)
-            k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
+        #     q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT)
+        #     k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
 
-            q_heads_pre_rot_1BQD = ttnn.reshape(q_heads_pre_rot_1BQD, [1, 8, 8, 128])
-            k_heads_pre_rot_1BKD = ttnn.reshape(k_heads_pre_rot_1BKD, [1, 8, 8, 128])  # ==> [1, 8, 1 (8), 128]
+        #     q_heads_pre_rot_1BQD = ttnn.reshape(q_heads_pre_rot_1BQD, [1, 8, 8, 128])
+        #     k_heads_pre_rot_1BKD = ttnn.reshape(k_heads_pre_rot_1BKD, [1, 8, 8, 128])  # ==> [1, 8, 1 (8), 128]
 
-            q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=rm_mem_cfg_q)
-            k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=rm_mem_cfg_k)
-
-            # inp_torch = ttnn.to_torch(
-            #     q_heads_pre_rot_1BQD,
-            #     mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 1), mesh_shape=(8, 4)),
-            # )
-            # q_heads_pre_rot_1BQD_torch = inp_torch * torch.rsqrt(inp_torch.pow(2).mean(-1, keepdim=True) + 1e-6)
-            # q_heads_pre_rot_1BQD_torch = q_heads_pre_rot_1BQD_torch * self.q_norm_weight
-            # q_heads_pre_rot_1BQD = ttnn.from_torch(
-            #     q_heads_pre_rot_1BQD_torch,
-            #     mesh_mapper=ttnn.ShardTensor2dMesh(
-            #         self.mesh_device,
-            #         dims=(2, 1),
-            #         mesh_shape=(8, 4),
-            #     ),
-            #     memory_config=rm_mem_cfg_q,
-            #     dtype=ttnn.bfloat16,
-            #     layout=ttnn.ROW_MAJOR_LAYOUT,
-            #     device=self.mesh_device,
-            # )
-
-            # inp_torch = ttnn.to_torch(
-            #     k_heads_pre_rot_1BKD,
-            #     mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 1), mesh_shape=(8, 4)),
-            # )
-            # k_heads_pre_rot_1BKD_torch = inp_torch * torch.rsqrt(inp_torch.pow(2).mean(-1, keepdim=True) + 1e-6)
-            # k_heads_pre_rot_1BKD_torch = k_heads_pre_rot_1BKD_torch * self.k_norm_weight
-            # k_heads_pre_rot_1BKD = ttnn.from_torch(
-            #     k_heads_pre_rot_1BKD_torch,
-            #     mesh_mapper=ttnn.ShardTensor2dMesh(
-            #         self.mesh_device,
-            #         dims=(2, 1),
-            #         mesh_shape=(8, 4),
-            #     ),
-            #     memory_config=rm_mem_cfg_k,
-            #     dtype=ttnn.bfloat16,
-            #     layout=ttnn.ROW_MAJOR_LAYOUT,
-            #     device=self.mesh_device,
-            # )
+        #     q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=rm_mem_cfg_q)
+        #     k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=rm_mem_cfg_k)
 
         # print("done create qkv heads")
         ttnn.deallocate(xqkv_fused_sharded)

@@ -120,78 +120,78 @@ class TtLlamaMLP(LightweightModule):
         pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
         pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
 
-        # Workaround for Qwen model for now, in the future hopefully all llama CCLs will be directly compatible
-        if not self.args.qk_norm:
-            w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
-                x,
-                self.w1,
-                self.w3,
-                cluster_axis=1,
-                num_links=self.model_config["GALAXY_NUM_LINKS"],
-                RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
-                compute_kernel_config=self.args.compute_kernel_config_lofi
-                if self.four_bit_mlp
-                else self.args.compute_kernel_config_hifi2,
-                dtype=ttnn.bfloat8_b,
-                program_config=pc_1_3,
-                memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
-                global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-                sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
-                use_noc1_only=False,
-            )
+        w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
+            x,
+            self.w1,
+            self.w3,
+            cluster_axis=1,
+            num_links=self.model_config["GALAXY_NUM_LINKS"],
+            RS_memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+            compute_kernel_config=self.args.compute_kernel_config_lofi
+            if self.four_bit_mlp
+            else self.args.compute_kernel_config_hifi2,
+            dtype=ttnn.bfloat8_b,
+            program_config=pc_1_3,
+            memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+            use_noc1_only=False,
+        )
 
-            ttnn.deallocate(x)
+        ttnn.deallocate(x)
 
-            w3_out_reduced = self.tt_ccl.line_reduce_scatter(
-                w3_out,
-                cluster_axis=1,
-                num_links=self.model_config["GALAXY_NUM_LINKS"],
-                memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
-                use_noc1_only=False,
-            )
-            ttnn.deallocate(w3_out)
+        w3_out_reduced = self.tt_ccl.line_reduce_scatter(
+            w3_out,
+            cluster_axis=1,
+            num_links=self.model_config["GALAXY_NUM_LINKS"],
+            memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
+            use_noc1_only=False,
+        )
+        ttnn.deallocate(w3_out)
 
-        else:
-            # If we're using Qwen, the fused double matmul line reduce CCL breaks so we have to do them sequentially
-            w1_out = ttnn.linear(
-                x,
-                self.w1,
-                compute_kernel_config=self.args.compute_kernel_config_lofi
-                if self.four_bit_mlp
-                else self.args.compute_kernel_config_hifi2,
-                dtype=ttnn.bfloat8_b,
-                program_config=pc_1_3,
-                memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
-                global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-                sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
-            )
+        # else:
+        #     # If we're using Qwen, the fused double matmul line reduce CCL breaks so we have to do them sequentially
+        #     w1_out = ttnn.linear(
+        #         x,
+        #         self.w1,
+        #         compute_kernel_config=self.args.compute_kernel_config_lofi
+        #         if self.four_bit_mlp
+        #         else self.args.compute_kernel_config_hifi2,
+        #         dtype=ttnn.bfloat8_b,
+        #         program_config=pc_1_3,
+        #         memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+        #         global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+        #         sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+        #     )
 
-            w1_out_reduced = self.tt_ccl.line_reduce_scatter(
-                w1_out, cluster_axis=1, num_links=1, memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"]
-            )
+        #     w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+        #         w1_out, cluster_axis=1, num_links=self.model_config["GALAXY_NUM_LINKS"], memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"]
+        #         # w1_out, cluster_axis=1, num_links=1, memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"]
+        #     )
 
-            ttnn.deallocate(w1_out)
+        #     ttnn.deallocate(w1_out)
 
-            w3_out = ttnn.linear(
-                x,
-                self.w3,
-                compute_kernel_config=self.args.compute_kernel_config_lofi
-                if self.four_bit_mlp
-                else self.args.compute_kernel_config_hifi2,
-                dtype=ttnn.bfloat8_b,
-                program_config=pc_1_3,
-                memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
-                global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-                sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
-            )
+        #     w3_out = ttnn.linear(
+        #         x,
+        #         self.w3,
+        #         compute_kernel_config=self.args.compute_kernel_config_lofi
+        #         if self.four_bit_mlp
+        #         else self.args.compute_kernel_config_hifi2,
+        #         dtype=ttnn.bfloat8_b,
+        #         program_config=pc_1_3,
+        #         memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+        #         global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+        #         sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+        #     )
 
-            # ttnn.deallocate(x)
+        #     # ttnn.deallocate(x)
 
-            w3_out_reduced = self.tt_ccl.line_reduce_scatter(
-                w3_out, cluster_axis=1, num_links=1, memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"]
-            )
+        #     w3_out_reduced = self.tt_ccl.line_reduce_scatter(
+        #         w3_out, cluster_axis=1, num_links=self.model_config["GALAXY_NUM_LINKS"], memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"]
+        #         # w3_out, cluster_axis=1, num_links=1, memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"]
+        #     )
 
-            ttnn.deallocate(w3_out)
+        #     ttnn.deallocate(w3_out)
 
         ff1ff3 = ttnn.mul(  # [1, 1, 32, 800]
             w1_out_reduced,

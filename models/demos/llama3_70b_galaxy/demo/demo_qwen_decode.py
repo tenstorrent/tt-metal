@@ -114,7 +114,7 @@ def run_qwen_demo(
     stress_test,
     start_pos,
     enable_prefetcher_performance_mode=True,
-    galaxy_type="4U",
+    galaxy_type="6U",
 ):
     # Create batch output file
     benchmark_data = BenchmarkData()
@@ -127,7 +127,7 @@ def run_qwen_demo(
 
     dtype = ttnn.bfloat8_b
     assert batch_size <= 32, "Max batch size currently supported is 32"
-    assert max_seq_len <= 128 * 1024, "Max sequence length must be less than 128k tokens"
+    assert max_seq_len <= 190190, "Max sequence length must be less than 128k tokens"
 
     top_k = sampling_params["top_k"]
     if isinstance(top_k, int):
@@ -169,7 +169,7 @@ def run_qwen_demo(
     model_args = TtQwenModelArgs(
         mesh_device,
         max_batch_size=32,
-        max_seq_len=2048,
+        max_seq_len=190190,
         dummy_weights=False,
     )
     model_args.n_layers = layers
@@ -436,9 +436,7 @@ def run_qwen_demo(
         if iteration == 0:  # First iteration also accounts for compile time
             profiler.start(f"compile_decode", iteration=iteration)
 
-        logger.info(f"Executing trace for iteration {iteration}")
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=block_host)
-        logger.info(f"Trace executed for iteration {iteration}")
 
         if prefill:
             current_iteration = iteration
@@ -596,13 +594,13 @@ def run_qwen_demo(
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
+            False,  # instruct mode
             1,  # repeat_batches
-            2048,  # max_seq_len
+            128 * 1024,  # max_seq_len
             32,  # batch_size
             2000,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 256},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
             {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params
             False,  # stress_test
             0,  # start_pos
@@ -711,7 +709,7 @@ def run_qwen_demo(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "trace_region_size": 12459136,
+            "trace_region_size": 12726272,
             # "trace_region_size": 10459136,
             "fabric_config": True,
         }

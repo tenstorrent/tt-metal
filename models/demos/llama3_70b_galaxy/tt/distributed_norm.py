@@ -4,9 +4,7 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llama3_70b_galaxy.tt.llama_ccl import (
-    tt_distributed_rmsnorm,
-)
+from models.demos.llama3_70b_galaxy.tt.llama_ccl import tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
 
 
 class DistributedNorm(LightweightModule):
@@ -42,12 +40,12 @@ class DistributedNorm(LightweightModule):
                 block_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
                 inplace=False,
             )
-            # self.ln_sharded_stats_memcfg = None
-            self.ln_sharded_stats_memcfg = ttnn.create_sharded_memory_config(
-                shape=[1, 1, 32, 32 * 4],
-                core_grid=ttnn.CoreGrid(y=1, x=1),
-                strategy=ttnn.ShardStrategy.WIDTH,
-            )
+            self.ln_sharded_stats_memcfg = None
+            # self.ln_sharded_stats_memcfg = ttnn.create_sharded_memory_config(
+            #     shape=[1, 1, 32, 32 * 4],
+            #     core_grid=ttnn.CoreGrid(y=1, x=1),
+            #     strategy=ttnn.ShardStrategy.WIDTH,
+            # )
             # ttnn.create_sharded_memory_config(
             #     shape=[1, 1, 32, 32 * 4],
             #     core_grid=ttnn.CoreGrid(y=1, x=1),
@@ -67,31 +65,31 @@ class DistributedNorm(LightweightModule):
             if mode == "decode":
                 if self.args.qk_norm:
                     x = ttnn.to_memory_config(x, self.gather_in_mem_cfg)
-                    # res = ttnn.to_memory_config(res, self.gather_in_mem_cfg) if res is not None else None
+                    res = ttnn.to_memory_config(res, self.gather_in_mem_cfg) if res is not None else None
 
-                # return tt_sharded_distributed_rmsnorm(
-                #     x,
-                #     res,
-                #     epsilon=self.norm.eps,
-                #     gamma=self.norm.weight_distributed,
-                #     mesh_device=self.args.mesh_device,
-                #     ln_sharded_input_memcfg=self.gather_in_mem_cfg,
-                #     ln_sharded_progcfg=self.ln_prg_cfg,
-                #     ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
-                #     tt_ccl=self.tt_ccl,
-                #     output_mem_config=self.norm.output_mem_config,
-                #     ccl_topology=self.ccl_topology,
-                # )
-                return tt_distributed_rmsnorm(
+                return tt_sharded_distributed_rmsnorm(
                     x,
+                    res,
                     epsilon=self.norm.eps,
                     gamma=self.norm.weight_distributed,
                     mesh_device=self.args.mesh_device,
-                    program_config=self.ln_prg_cfg,
-                    memory_config=self.ln_sharded_stats_memcfg,
-                    compute_kernel_config=self.ln_cfg,
+                    ln_sharded_input_memcfg=self.gather_in_mem_cfg,
+                    ln_sharded_progcfg=self.ln_prg_cfg,
+                    ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
                     tt_ccl=self.tt_ccl,
+                    output_mem_config=self.norm.output_mem_config,
+                    ccl_topology=self.ccl_topology,
                 )
+                # return tt_distributed_rmsnorm(
+                #     x,
+                #     epsilon=self.norm.eps,
+                #     gamma=self.norm.weight_distributed,
+                #     mesh_device=self.args.mesh_device,
+                #     program_config=self.ln_prg_cfg,
+                #     memory_config=self.ln_sharded_stats_memcfg,
+                #     compute_kernel_config=self.ln_cfg,
+                #     tt_ccl=self.tt_ccl,
+                # )
             else:
                 return tt_distributed_rmsnorm(
                     x,
