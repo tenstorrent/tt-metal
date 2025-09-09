@@ -119,7 +119,7 @@ public:
     const std::vector<GlobalNodeId>& all_graphs() const { return graph_instances_; }
 
     // Queries
-    const std::vector<GlobalNodeId>& instances_by_name(std::string name) const {
+    const std::vector<GlobalNodeId>& instances_by_name(const std::string& name) const {
         auto it = instances_by_name_.find(name);
         if (it == instances_by_name_.end()) {
             static const std::vector<GlobalNodeId> empty_vector;
@@ -127,7 +127,7 @@ public:
         }
         return it->second;
     }
-    const std::vector<GlobalNodeId>& instances_by_type(std::string type) const { // includes "MESH"
+    const std::vector<GlobalNodeId>& instances_by_type(const std::string& type) const { // includes "MESH"
         auto it = instances_by_type_.find(type);
         if (it == instances_by_type_.end()) {
             static const std::vector<GlobalNodeId> empty_vector;
@@ -143,7 +143,7 @@ public:
         }
         return it->second;
     }
-    const std::vector<ConnectionId>& connections_by_type(std::string type) const {
+    const std::vector<ConnectionId>& connections_by_type(const std::string& type) const {
         auto it = connections_by_type_.find(type);
         if (it == connections_by_type_.end()) {
             static const std::vector<ConnectionId> empty_vector;
@@ -166,7 +166,7 @@ public:
     uint32_t get_num_eth_ports_per_direction() const;
 
 private:
-    const bool backwards_compatible_;
+    bool backwards_compatible_;
 
     // Descriptor fast lookup
     std::unique_ptr<const proto::MeshGraphDescriptor> proto_;
@@ -213,6 +213,7 @@ private:
     void populate_descriptors();
 
     // Populate Instances
+    void populate_top_level_instance();
     const GlobalNodeId populate_instance(const proto::NodeRef& node_ref, std::vector<GlobalNodeId>& hierarchy);
     const GlobalNodeId populate_mesh_instance(const proto::MeshRef& mesh_ref, std::vector<GlobalNodeId>& hierarchy);
     const GlobalNodeId populate_graph_instance(const proto::GraphRef& graph_ref, std::vector<GlobalNodeId>& hierarchy);
