@@ -56,11 +56,11 @@ void kernel_main() {
     uint32_t max_idx = 0;
     uint16_t max_val = NEG_INF_BFLOAT16;
 
-    // Split Half Task to Write RISC-V
-    // Must be (outer_dim_units + 1) / 2 to ensure that the Read RISC-V Core has data and writes it to the DRAM.
+    /* Split Half Task to Write RISC-V */
+    //It must be (outer_dim_units + 1) / 2 to ensure that the Read RISC-V Core has data and writes it to the DRAM.
     // Reduce the number of data transmissions.
-    constexpr uint32_t start_outer_dim_units = 0;
-    constexpr uint32_t end_outer_dim_units = (outer_dim_units  +  1) / 2;
+    constexpr uint32_t start_outer_dim_units = (outer_dim_units  +  1)  / 2; 
+    constexpr uint32_t end_outer_dim_units = outer_dim_units;
 
     //-------------------------------------------------------------------------
     // Main loop - run by all cores
@@ -96,23 +96,20 @@ void kernel_main() {
     }
 
     // TODO: Generalize write for argmax for other dims
+    /* Read && Write Sync Results */  
+    // Reduce the number of data transmissions.
     if constexpr (reduce_all) {
-        /* Read && Write Sync Results */
-        if(end_outer_dim_units != outer_dim_units){
-            cb_wait_front(w2r_cb_idx, 1);
-            const uint32_t w2r_cb_addr = get_read_ptr(w2r_cb_idx);
+        // It cannot be combined with the above if constant expression. 
+        // The production expression will be determined at compile time and cannot be modified. This is to ensure the logical correctness of the execution.
+        if(start_outer_dim_units != end_outer_dim_units) {
+            cb_reserve_back(w2r_cb_idx, 1);
+            const uint32_t w2r_cb_addr = get_write_ptr(w2r_cb_idx);
             volatile tt_l1_ptr uint32_t* w2r_cb_data = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w2r_cb_addr);
-            if(bfloat16_greater(w2r_cb_data[1], max_val)){
-                max_idx = w2r_cb_data[0]; 
-                max_val = w2r_cb_data[1]; 
-            }
-            cb_pop_front(w2r_cb_idx, 1);  
+            w2r_cb_data[0] = max_idx;
+            w2r_cb_data[1] = (uint32_t)max_val;
+            cb_push_back(w2r_cb_idx, 1);
         }
-        /* Read && Write Sync Results */
 
-        out_idxs[0] = max_idx;
-        const uint64_t dst_noc_addr = get_noc_addr(0, s_dst);
-        noc_async_write(dst_cb_addr, dst_noc_addr, dst_page_size);
-        noc_async_write_barrier();
+        /* Read && Write Sync Results */
     }
 }

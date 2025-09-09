@@ -138,6 +138,30 @@ operation::ProgramWithCallbacks argmax_single_core(
     const auto inner_dim_units = output_last_dim;
     const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
 
+
+    /* Add Write RISC-V Core To produce Task */
+    const uint32_t src_cb_write_idx = tt::CBIndex::c_2;
+    const uint32_t src_page_write_size = round_up_to_mul32(red_dim_units * input_unit_size);
+    tt::tt_metal::CircularBufferConfig src_cb_write_config =
+        tt::tt_metal::CircularBufferConfig(src_page_write_size, {{src_cb_write_idx, input_cb_data_format}})
+            .set_page_size(src_cb_write_idx, src_page_write_size);
+    const auto src_cb_write = tt::tt_metal::CreateCircularBuffer(program, all_cores, src_cb_write_config);
+    
+    const uint32_t dst_cb_write_idx = tt::CBIndex::c_3;
+    const uint32_t dst_page_write_size = round_up_to_mul32(output_last_dim * output_unit_size);
+    const tt::tt_metal::CircularBufferConfig dst_db_write_config =
+        tt::tt_metal::CircularBufferConfig(dst_page_write_size, {{dst_cb_write_idx, output_cb_data_format}})
+            .set_page_size(dst_cb_write_idx, dst_page_write_size);
+    const auto dst_cb_write = tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_page_write_size);
+
+    const uint32_t w2r_cb_idx = tt::CBIndex::c_4;
+    const auto w2r_page_size = round_up_to_mul32(output_unit_size * 2) ;    // need 2 *  output_unit_size 
+    const auto w2r_db_config =
+        tt::tt_metal::CircularBufferConfig(w2r_page_size, {{w2r_cb_idx, output_cb_data_format}})
+            .set_page_size(w2r_cb_idx, w2r_page_size);
+    const auto idxs_vals_w2r_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, w2r_db_config);
+    /* Add Write RISC-V Core To produce Task */
+
     const std::vector<uint32_t> reader_compile_time_args = {
         src_cb_idx,
         dst_cb_idx,
@@ -149,6 +173,7 @@ operation::ProgramWithCallbacks argmax_single_core(
         inner_dim_units,
         red_dim_units,
         (uint32_t)(reduce_all),
+        w2r_cb_idx,  // Add to Readuce all Sync Results
     };
 
     const std::map<std::string, std::string> kernel_defines;
@@ -160,13 +185,43 @@ operation::ProgramWithCallbacks argmax_single_core(
 
     const auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
 
+
+    /* Add write compile time_args */
+    const std::vector<uint32_t> write_compile_time_args = {
+        src_cb_write_idx,
+        dst_cb_write_idx,
+        src_is_dram,
+        dst_is_dram,
+        src_page_write_size,
+        dst_page_write_size,
+        outer_dim_units,
+        inner_dim_units,
+        red_dim_units,
+        (uint32_t)(reduce_all),
+        w2r_cb_idx,  // Add to Readuce all Sync Results
+    };
+
+    const std::map<std::string, std::string> writer_kernel_defines;
+    const tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/writer_argmax_interleaved.cpp",
+        all_cores,
+        tt::tt_metal::WriterDataMovementConfig(write_compile_time_args, writer_kernel_defines));
+    /* Add write compile time_args */
+
+
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores.at(i);
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address(), dst_buffer->address()});
+
+        /* Add Write RISC-V Core SetRuntimeArgs */
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, {src_buffer->address(), dst_buffer->address()});
+        /* Add Write RISC-V Core SetRuntimeArgs */
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id, cores](
+    /* Add Write Kernel Prams callback */
+    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, cores](
                                               const void* operation,
                                               const Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -181,9 +236,15 @@ operation::ProgramWithCallbacks argmax_single_core(
                 auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = src_buffer->address();
                 runtime_args[1] = dst_buffer->address();
+
+                /* Add Write Core Runtime Args And Modify*/
+                auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                writer_runtime_args[0] = src_buffer->address();
+                writer_runtime_args[1] = dst_buffer->address();
             }
         }
     };
+    /* Add Write Kernel Prams callback */
 
     return {std::move(program), override_runtime_args_callback};
 }
@@ -348,6 +409,49 @@ operation::ProgramWithCallbacks argmax_multi_core(
             .set_page_size(red_vals_cb_idx, red_vals_page_size);
     const auto cb_red_vals = tt::tt_metal::CreateCircularBuffer(program, all_cores, red_vals_cb_config);
 
+    /* Add Write RISC-V CB Notice Reduce Buffer manage */
+    const uint32_t src_write_cb_idx = tt::CBIndex::c_4;  
+    const auto src_write_cb_page_size0 = round_up_to_mul32(red_dim_units0 * input_unit_size);
+    const auto src_write_cb_config0 =
+        tt::tt_metal::CircularBufferConfig(src_write_cb_page_size0, {{src_write_cb_idx, input_cb_data_format}})
+            .set_page_size(src_write_cb_idx, src_write_cb_page_size0);
+    const auto src_write_cb0 = tt::tt_metal::CreateCircularBuffer(program, cores0, src_write_cb_config0);
+
+    if (num_cores1 > 0) {
+        const auto src_write_cb_page_size1 = round_up_to_mul32(red_dim_units1 * input_unit_size);
+        const auto src_write_cb_config1 =
+            tt::tt_metal::CircularBufferConfig(src_write_cb_page_size1, {{src_write_cb_idx, input_cb_data_format}})
+                .set_page_size(src_write_cb_idx, src_write_cb_page_size1);
+        const auto src_write_cb1 = tt::tt_metal::CreateCircularBuffer(program, cores1, src_write_cb_config1);
+    }
+
+    const uint32_t dst_write_cb_idx = tt::CBIndex::c_5;
+    const auto dst_write_db_config = tt::tt_metal::CircularBufferConfig(dst_page_size, {{dst_write_cb_idx, output_cb_data_format}})
+                                   .set_page_size(dst_write_cb_idx, dst_page_size);
+    const auto dst_write_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_write_db_config);
+
+    const uint32_t red_idxs_write_cb_idx = tt::CBIndex::c_6;
+    const auto red_idxs_write_page_size = round_up_to_mul32(output_last_dim * output_unit_size) ;   
+    const auto red_idxs_write_db_config =
+        tt::tt_metal::CircularBufferConfig(red_idxs_write_page_size, {{red_idxs_write_cb_idx, output_cb_data_format}})
+            .set_page_size(red_idxs_write_cb_idx, red_idxs_write_page_size);
+    const auto red_idxs_write_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, red_idxs_write_db_config);
+
+    const uint32_t red_vals_write_cb_idx = tt::CBIndex::c_7;
+    const auto red_vals_write_page_size = round_up_to_mul32(output_last_dim * input_unit_size) * num_total_cores;
+    const auto red_vals_write_cb_config =
+        tt::tt_metal::CircularBufferConfig(red_vals_write_page_size, {{red_vals_write_cb_idx, input_cb_data_format}})
+            .set_page_size(red_vals_write_cb_idx, red_vals_write_page_size);
+    const auto cb_red_vals_write = tt::tt_metal::CreateCircularBuffer(program, all_cores, red_vals_write_cb_config);
+    /* Add Write RISC-V CB Notice Reduce Buffer manage */
+
+    const uint32_t w2r_cb_idx = tt::CBIndex::c_8;
+    const auto w2r_page_size = round_up_to_mul32(output_unit_size * 2) ;    // need 2 *  output_unit_size 
+    const auto w2r_db_config =
+        tt::tt_metal::CircularBufferConfig(w2r_page_size, {{w2r_cb_idx, output_cb_data_format}})
+            .set_page_size(w2r_cb_idx, w2r_page_size);
+    const auto idxs_vals_w2r_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, w2r_db_config);
+
     const auto inner_dim_units = output_last_dim;
     const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
 
@@ -371,6 +475,9 @@ operation::ProgramWithCallbacks argmax_multi_core(
     // Allocate two semaphores for synchronization (cores -> reducer core) and (reducer core -> cores)
     const auto start_sem_idx = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
     const auto done_sem_idx = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+
+    const auto start_sem_write_idx = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    const auto done_sem_write_idx = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
     // Byte size of the data to read from the input CB for each core
     const auto src_read_size0 = red_dim_units0 * input_unit_size;
@@ -430,9 +537,9 @@ operation::ProgramWithCallbacks argmax_multi_core(
         (uint32_t)num_cores_range1,
         start_sem_idx,
         done_sem_idx,
+        w2r_cb_idx,
     };
 
-    std::map<std::string, std::string> kernel_defines;
     tt::tt_metal::KernelHandle reader_kernel_id0 = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
@@ -450,6 +557,62 @@ operation::ProgramWithCallbacks argmax_multi_core(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = reader_compile_args});
+
+
+    /*Split Task to 2 RISC-V Core */
+    std::vector<uint32_t> writer_compile_args = {
+        src_write_cb_idx,
+        dst_write_cb_idx,
+        red_idxs_write_cb_idx,
+        red_vals_write_cb_idx,
+        src_is_dram,
+        dst_is_dram,
+        src_page_size,
+        dst_page_size,
+        red_idxs_write_page_size / num_total_cores,
+        red_vals_write_page_size / num_total_cores, 
+        outer_dim_units,
+        inner_dim_units,
+        red_dim_units,
+        (uint32_t)(reduce_all),
+        num_total_cores,
+        reduce_core_id,
+        (uint32_t)reduce_core.x,
+        (uint32_t)reduce_core.y,
+        // end comes before start for NOC1
+        (uint32_t)end_core0.x,
+        (uint32_t)end_core0.y,
+        (uint32_t)start_core0.x,
+        (uint32_t)start_core0.y,
+        (uint32_t)end_core1.x,
+        (uint32_t)end_core1.y,
+        (uint32_t)start_core1.x,
+        (uint32_t)start_core1.y,
+        (uint32_t)num_cores_range0,
+        (uint32_t)num_cores_range1,
+        start_sem_write_idx,
+        done_sem_write_idx,
+        w2r_cb_idx,
+    };
+
+    tt::tt_metal::KernelHandle writer_kernel_id0 = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/writer_argmax_interleaved_multicore.cpp",
+        cores0,
+    tt::tt_metal::DataMovementConfig{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+        .noc = tt::tt_metal::NOC::RISCV_0_default,
+        .compile_args = writer_compile_args});
+
+    tt::tt_metal::KernelHandle writer_kernel_id1 = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/writer_argmax_interleaved_multicore.cpp",
+        cores1,
+        tt::tt_metal::DataMovementConfig{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+        .noc = tt::tt_metal::NOC::RISCV_0_default,
+        .compile_args = writer_compile_args});
+    /*Split Task to 2 RISC-V Core */
 
     const auto cores_coords0 = corerange_to_cores(cores0, num_cores0, true);
     const auto cores_coords1 = corerange_to_cores(cores1, num_cores1, true);
@@ -469,6 +632,20 @@ operation::ProgramWithCallbacks argmax_multi_core(
              i * red_dim_units0,
              (i == num_cores0 - 1) ? src_read_size_last0 : src_read_size0,
              (i == num_cores0 - 1) ? red_dim_units_last0 : red_dim_units0});
+
+        /* Add Write RISC-V Core SetRuntimeArgs */
+        tt::tt_metal::SetRuntimeArgs(
+            program,
+            writer_kernel_id0,
+            core,
+            {src_buffer->address(),
+             dst_buffer->address(),
+             i,
+             i * src_read_size0,
+             i * red_dim_units0,
+             (i == num_cores0 - 1) ? src_read_size_last0 : src_read_size0,
+             (i == num_cores0 - 1) ? red_dim_units_last0 : red_dim_units0});
+        /* Add Write RISC-V Core SetRuntimeArgs */
     }
 
     const uint32_t src_offset1 = static_cast<uint32_t>(src_read_size0 * num_cores0);
@@ -487,9 +664,24 @@ operation::ProgramWithCallbacks argmax_multi_core(
              red_dim_offset1 + i * red_dim_units1,
              (i == num_cores1 - 1) ? src_read_size_last1 : src_read_size1,
              (i == num_cores1 - 1) ? red_dim_units_last1 : red_dim_units1});
+
+
+        /* Add Write RISC-V Core SetRuntimeArgs */
+        tt::tt_metal::SetRuntimeArgs(
+            program,
+            writer_kernel_id1,
+            core,
+            {src_buffer->address(),
+             dst_buffer->address(),
+             static_cast<uint32_t>(num_cores0 + i),
+             src_offset1 + i * src_read_size1,
+             red_dim_offset1 + i * red_dim_units1,
+             (i == num_cores1 - 1) ? src_read_size_last1 : src_read_size1,
+             (i == num_cores1 - 1) ? red_dim_units_last1 : red_dim_units1});
+        /* Add Write RISC-V Core SetRuntimeArgs */
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id0, reader_kernel_id1, cores_coords0, cores_coords1](
+    auto override_runtime_args_callback = [reader_kernel_id0, reader_kernel_id1, writer_kernel_id0, writer_kernel_id1, cores_coords0, cores_coords1](
                                               const void* operation,
                                               const Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -503,6 +695,12 @@ operation::ProgramWithCallbacks argmax_multi_core(
                 auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id0, core);
                 reader_runtime_args[0] = src_buffer->address();
                 reader_runtime_args[1] = dst_buffer->address();
+
+                /* Add Write Core Runtime Args And Modify*/               
+                auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id0, core);
+                writer_runtime_args[0] = src_buffer->address();
+                writer_runtime_args[1] = dst_buffer->address();
+                /* Add Write Core Runtime Args And Modify*/
             }
         }
         for (const auto& core : cores_coords1) {
@@ -510,6 +708,12 @@ operation::ProgramWithCallbacks argmax_multi_core(
                 auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id1, core);
                 reader_runtime_args[0] = src_buffer->address();
                 reader_runtime_args[1] = dst_buffer->address();
+
+                /* Add Write Core Runtime Args And Modify*/
+                auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id1, core);
+                writer_runtime_args[0] = src_buffer->address();
+                writer_runtime_args[1] = dst_buffer->address();
+                /* Add Write Core Runtime Args And Modify*/ 
             }
         }
     };
