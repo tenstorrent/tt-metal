@@ -131,7 +131,7 @@ class TtCustomMSDeformableAttention:
             value, spatial_shapes, None, sampling_locations, attention_weights, None, self.device
         )
 
-        output = output = ttnn.linear(output, params.output_proj.weight, bias=params.output_proj.bias)
+        output = ttnn.linear(output, params.output_proj.weight, bias=params.output_proj.bias)
         ttnn.deallocate(params.output_proj.weight)
         ttnn.deallocate(params.output_proj.bias)
         if not self.batch_first:

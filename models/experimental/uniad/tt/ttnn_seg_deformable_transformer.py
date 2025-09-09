@@ -175,15 +175,7 @@ class TtSegDeformableTransformer:
         )
 
         inter_references_out = inter_references
-        if self.as_two_stage:
-            return (
-                (memory, lvl_pos_embed_flatten, mask_flatten, query_pos),
-                inter_states,
-                init_reference_out,
-                inter_references_out,
-                enc_outputs_class,
-                enc_outputs_coord_unact,
-            )
+
         return (
             (memory, lvl_pos_embed_flatten, mask_flatten, query_pos),
             inter_states,

@@ -138,15 +138,9 @@ def multi_head_attention_forward(
         else:
             attn_output_weights = ttnn.matmul(q_scaled, ttnn.transpose(k, -2, -1))
 
-        attn_output_weights = ttnn.to_layout(attn_output_weights, layout=ttnn.ROW_MAJOR_LAYOUT)
+        attn_output_weights = ttnn.to_layout(attn_output_weights, layout=ttnn.TILE_LAYOUT)
 
-        # TODO Using ttnn softmax lowers pcc in planning head sub_module, https://github.com/tenstorrent/tt-metal/issues/26523
-        attn_output_weights = ttnn.to_torch(attn_output_weights)
-        attn_output_weights = torch.softmax(attn_output_weights, dim=-1)  # check
-        attn_output_weights = ttnn.from_torch(
-            attn_output_weights, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
-
+        attn_output_weights = ttnn.softmax(attn_output_weights, dim=-1)
         attn_output = ttnn.matmul(attn_output_weights, v)  # [B, N, D]
 
         attn_output = ttnn.transpose(attn_output, 0, 1)

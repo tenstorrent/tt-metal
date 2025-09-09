@@ -22,10 +22,10 @@ class TtRuntimeTrackerBase(object):
             ttnn.zeros_like(track_instances.disappear_time),
             track_instances.disappear_time,
         )
+        ## This below should not be called but due to ttnn pipeline it is called because of mismatch values, Hence keeping it here
         # track_instances.obj_idxes = ttnn.to_torch(track_instances.obj_idxes)
         # track_instances.disappear_time = ttnn.to_torch( track_instances.disappear_time)
 
-        ## This below should not be called but due to ttnn pipeline it is called because of mismatch values
         # for i in range(track_instances.disappear_time.shape[0]):
         #     if track_instances.obj_idxes[i] == -1 and track_instances.scores[i] >= self.score_thresh:
         #         # new track

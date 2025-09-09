@@ -51,14 +51,7 @@ class SegDeformableTransformer(Transformer):
 
     def init_layers(self):
         self.level_embeds = nn.Parameter(torch.Tensor(self.num_feature_levels, self.embed_dims))
-
-        if self.as_two_stage:
-            self.enc_output = nn.Linear(self.embed_dims, self.embed_dims)
-            self.enc_output_norm = nn.LayerNorm(self.embed_dims)
-            self.pos_trans = nn.Linear(self.embed_dims * 2, self.embed_dims * 2)
-            self.pos_trans_norm = nn.LayerNorm(self.embed_dims * 2)
-        else:
-            self.reference_points = nn.Linear(self.embed_dims, 2)
+        self.reference_points = nn.Linear(self.embed_dims, 2)
 
     def gen_encoder_output_proposals(self, memory, memory_padding_mask, spatial_shapes):
         N, S, C = memory.shape
@@ -189,26 +182,13 @@ class SegDeformableTransformer(Transformer):
 
         memory = memory.permute(1, 0, 2)
         bs, _, c = memory.shape
-        if self.as_two_stage:
-            output_memory, output_proposals = self.gen_encoder_output_proposals(memory, mask_flatten, spatial_shapes)
-            enc_outputs_class = cls_branches[self.decoder.num_layers](output_memory)
-            enc_outputs_coord_unact = reg_branches[self.decoder.num_layers](output_memory) + output_proposals
 
-            topk = self.two_stage_num_proposals
-            topk_proposals = torch.topk(enc_outputs_class[..., 0], topk, dim=1)[1]
-            topk_coords_unact = torch.gather(enc_outputs_coord_unact, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, 4))
-            topk_coords_unact = topk_coords_unact.detach()
-            reference_points = topk_coords_unact.sigmoid()
-            init_reference_out = reference_points
-            pos_trans_out = self.pos_trans_norm(self.pos_trans(self.get_proposal_pos_embed(topk_coords_unact)))
-            query_pos, query = torch.split(pos_trans_out, c, dim=2)
-        else:
-            # query_embed N *(2C)
-            query_pos, query = torch.split(query_embed, c, dim=1)
-            query_pos = query_pos.unsqueeze(0).expand(bs, -1, -1)
-            query = query.unsqueeze(0).expand(bs, -1, -1)
-            reference_points = self.reference_points(query_pos).sigmoid()
-            init_reference_out = reference_points
+        # query_embed N *(2C)
+        query_pos, query = torch.split(query_embed, c, dim=1)
+        query_pos = query_pos.unsqueeze(0).expand(bs, -1, -1)
+        query = query.unsqueeze(0).expand(bs, -1, -1)
+        reference_points = self.reference_points(query_pos).sigmoid()
+        init_reference_out = reference_points
 
         # decoder
         query = query.permute(1, 0, 2)
@@ -229,15 +209,7 @@ class SegDeformableTransformer(Transformer):
             **kwargs,
         )
         inter_references_out = inter_references
-        if self.as_two_stage:
-            return (
-                (memory, lvl_pos_embed_flatten, mask_flatten, query_pos),
-                inter_states,
-                init_reference_out,
-                inter_references_out,
-                enc_outputs_class,
-                enc_outputs_coord_unact,
-            )
+
         return (
             (memory, lvl_pos_embed_flatten, mask_flatten, query_pos),
             inter_states,
