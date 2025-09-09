@@ -59,7 +59,7 @@ private:
 
 // Only Used in op_profiler, we might want to expose this via a tooling interface instead of through here.
 class IDevice;
-class KernelMeta;
+struct KernelMeta;
 namespace detail {
 std::vector<KernelMeta> collect_kernel_meta(Program const& program, IDevice* device);
 }; //namespace detail
