@@ -59,17 +59,13 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_batch_group; ++i) {
         // wait for local data ready
         cb_reserve_back(cb_ex_global, 2);
-        DPRINT << "waiting for local data ready" << ENDL();
         cb_wait_front(cb_ex_partial, 2);
-        DPRINT << "local data ready" << ENDL();
 
         // Read mean and variance arrays from cb_ex_partial, then combine using Welford
         auto p_local_means = reinterpret_cast<volatile uint16_t*>(get_read_ptr(cb_ex_partial));
         auto p_local_vars = p_local_means + TILE_WIDTH * TILE_HEIGHT;
 
         auto local_result = combine_welford_stats<TILE_WIDTH, block_hw * TILE_WIDTH, 2>(p_local_means, p_local_vars);
-        DPRINT << "local mean: " << BF16(local_result.mean) << " local var: " << BF16(local_result.variance)
-               << " local count: " << local_result.count << ENDL();
 
         // Write this to cb_ex_global
         auto p_global_means = reinterpret_cast<volatile uint16_t*>(get_write_ptr(cb_ex_global));
