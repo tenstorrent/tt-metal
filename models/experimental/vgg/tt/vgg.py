@@ -10,8 +10,8 @@ from typing import List, Union, Dict, cast
 import ttnn
 
 from tt_lib.fallback_ops import fallback_ops
-from models.helper_funcs import Linear as TtLinear
-from models.utility_functions import (
+from models.common.helper_funcs import Linear as TtLinear
+from models.common.utility_functions import (
     is_conv_supported_on_device,
     run_conv_on_device_wrapper,
 )
