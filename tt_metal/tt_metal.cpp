@@ -6,7 +6,6 @@
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
 #include "assert.hpp"
-#include "dev_msgs.h"
 #include <cstdint>
 #include <device_pool.hpp>
 #include <global_circular_buffer.hpp>
@@ -735,7 +734,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
         if (wait_until_cores_done) {
             // Wait for all cores to be done
-            llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
+            llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
         }
     }  // Profiler scope end
     if (wait_until_cores_done) {
@@ -756,7 +755,7 @@ void WaitProgramDone(IDevice* device, Program& program, bool read_device_profile
             not_done_cores.insert(physical_core);
         }
     }
-    llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
+    llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
     if (read_device_profiler_results) {
         detail::ReadDeviceProfilerResults(device);
     }
