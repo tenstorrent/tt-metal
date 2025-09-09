@@ -298,7 +298,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         tt::tt_metal::TensorAccessorArgs(gather_config_storage1.get_buffer()).append_to(core_1_reader_ct_args);
     }
     const uint32_t EMPTY_PADDING_CONFIG_BUFFER_SIZE = 4;
-    const bool enable_padding = padding_config_buffer0->page_size() != EMPTY_PADDING_CONFIG_BUFFER_SIZE ||
+    const bool enable_padding = config_tensors_in_dram ||
+                                padding_config_buffer0->page_size() != EMPTY_PADDING_CONFIG_BUFFER_SIZE ||
                                 padding_config_buffer1->page_size() != EMPTY_PADDING_CONFIG_BUFFER_SIZE;
 
     core_0_reader_ct_args[0] = enable_padding ? cb_indices.padding_config0 : 0;
