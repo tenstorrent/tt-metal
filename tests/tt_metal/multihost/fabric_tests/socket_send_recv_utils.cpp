@@ -28,6 +28,7 @@ std::string get_system_config_name(SystemConfig system_config) {
         case SystemConfig::SPLIT_T3K: return "SplitT3K";
         case SystemConfig::DUAL_T3K: return "DualT3K";
         case SystemConfig::NANO_EXABOX: return "NanoExabox";
+        case SystemConfig::EXABOX: return "Exabox";
         default: return "Unknown";
     }
 }
