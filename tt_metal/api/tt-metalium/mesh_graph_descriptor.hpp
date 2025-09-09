@@ -198,13 +198,14 @@ private:
     void populate_descriptors();
 
     // Populate Instances
-    void populate_top_level_instance();
+    void populate_instances_from_top_level();
     const GlobalNodeId populate_instance(const proto::NodeRef& node_ref, std::vector<GlobalNodeId>& hierarchy);
     const GlobalNodeId populate_mesh_instance(const proto::MeshRef& mesh_ref, std::vector<GlobalNodeId>& hierarchy);
     const GlobalNodeId populate_graph_instance(const proto::GraphRef& graph_ref, std::vector<GlobalNodeId>& hierarchy);
     const GlobalNodeId populate_device_instance(const LocalNodeId local_id, std::vector<GlobalNodeId>& hierarchy);
 
     // Populate Connections
+    void pre_populate_connections_lookups();
     void populate_connections();
 
     void populate_intra_mesh_connections(GlobalNodeId mesh_id);

@@ -228,12 +228,13 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshG
 void MeshGraphDescriptor::populate() {
     populate_descriptors();
 
-    populate_top_level_instance();
+    populate_instances_from_top_level();
 
+    pre_populate_connections_lookups();
     populate_connections();
 }
 
-void MeshGraphDescriptor::populate_top_level_instance() {
+void MeshGraphDescriptor::populate_instances_from_top_level() {
     std::vector<GlobalNodeId> hierarchy;
     top_level_id_ = populate_instance(proto_->top_level_instance(), hierarchy);
 }
@@ -846,10 +847,26 @@ void MeshGraphDescriptor::add_to_fast_lookups(const InstanceData& instance) {
             device_instances_.push_back(instance.global_id);
             break;
     }
+}
 
-    connections_by_type_[instance.type].reserve(instance.sub_instances.size());
-    connections_by_instance_id_[instance.global_id].reserve(instance.sub_instances.size());
-    connections_by_source_device_id_[instance.global_id].reserve(instance.sub_instances.size());
+void MeshGraphDescriptor::pre_populate_connections_lookups() {
+    for (const auto& [instance_id, instance] : instances_) {
+    // Add empty vectors for the instance's type, instance id, and source device id
+    if (connections_by_type_.find(instance.type) == connections_by_type_.end()) {
+            connections_by_type_.emplace(instance.type, std::vector<ConnectionId>());
+        }
+        if (connections_by_instance_id_.find(instance_id) == connections_by_instance_id_.end()) {
+            connections_by_instance_id_.emplace(instance.global_id, std::vector<ConnectionId>());
+        }
+        if (connections_by_source_device_id_.find(instance_id) == connections_by_source_device_id_.end()) {
+            connections_by_source_device_id_.emplace(instance.global_id, std::vector<ConnectionId>());
+        }
+    }
+
+    // TODO: Remove this after MGD 1.0 is deprecated
+    if (connections_by_type_.find("FABRIC") == connections_by_type_.end()) {
+        connections_by_type_.emplace("FABRIC", std::vector<ConnectionId>());
+    }
 }
 
 void MeshGraphDescriptor::add_connection_to_fast_lookups(const ConnectionData& connection, const std::string& type) {
