@@ -551,7 +551,6 @@ class resnet50:
         self.layer4_module2 = self.layer4[1]
         self.layer4_module3 = self.layer4[2]
 
-        # Global average pooling - will use avg_pool2d with kernel_size = input spatial dimensions
         self.fc = ResnetLinear(
             in_features=512 * resnet50Bottleneck.expansion,
             out_features=1024,
@@ -1105,8 +1104,7 @@ class resnet50:
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
-        # Global average pooling: use avg_pool2d with kernel_size = input spatial dimensions
-        N, C, H, W = x.shape
+        N, H, W, C = x.shape
         x = ttnn.avg_pool2d(
             x,
             batch_size=N,
