@@ -290,7 +290,6 @@ void kernel_main() {
     constexpr bool return_indices = (bool)get_compile_time_arg_val(36);
     constexpr uint32_t pad_t = get_compile_time_arg_val(37);
     constexpr uint32_t pad_l = get_compile_time_arg_val(38);
-    constexpr uint32_t in_h_padded = get_compile_time_arg_val(39);
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
 
@@ -355,10 +354,8 @@ void kernel_main() {
     // and since all negative values correspond to padding indexes which will never be a max
     uint16_t init_index = 0;
     if constexpr (reader_id == 0 && return_indices) {
-        const uint16_t start_index = (uint16_t)get_arg_val<uint32_t>(0);
-        const uint16_t start_mod_batch = start_index % (in_w_padded * in_h_padded);
-        const uint16_t start_row = start_mod_batch / in_w_padded;
-        const uint16_t start_col = start_mod_batch % in_w_padded;
+        const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(0);
+        const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(1);
         if (start_row <= pad_t) {
             // top left is in top padding, we increment from the padding index in the top left
             // of the padded tensor

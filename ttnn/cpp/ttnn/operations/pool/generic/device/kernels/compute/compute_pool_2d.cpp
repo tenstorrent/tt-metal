@@ -50,6 +50,10 @@ void MAIN {
     constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(16);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(17);
     constexpr bool return_indices = (bool)get_compile_time_arg_val(18);
+    constexpr uint32_t right_inc = get_compile_time_arg_val(19);
+    constexpr uint32_t down_left_wrap_inc = get_compile_time_arg_val(20);
+    constexpr uint32_t in_w_padded = get_compile_time_arg_val(21);
+    constexpr uint32_t kernel_w = get_compile_time_arg_val(22);
 
     constexpr uint32_t topk_output_tiles = 1;
     constexpr uint32_t topk_cb_tile_idx = 0;
@@ -111,6 +115,18 @@ void MAIN {
     if constexpr (one_scalar_per_core) {
         cb_wait_front(in_scalar_cb_id_0, 1);
     }
+    uint32_t current_idx_col;
+    if constexpr (return_indices) {
+        const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(0);
+        const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(1);
+        current_idx_col = start_col;
+
+        cb_wait_front(tile_idx_tmp_cb_id, 1);
+
+        // tilize_init_short_with_dt_no_pack(in_cb_id_0, tile_idx_tmp_cb_id, topk_output_tiles);
+        // tilize_block_no_pack(tile_idx_tmp_cb_id, topk_output_tiles, idx_dst_idx, topk_cb_tile_idx);
+        // tilize_uninit_with_dt_no_pack(tile_idx_tmp_cb_id, in_cb_id_0);
+    }
 
     for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; ++n) {
         const bool reader0 = !(split_reader && (n & 0x1));
@@ -153,6 +169,20 @@ void MAIN {
                     max_reduce_with_indices<window_size_hw>(data_dst_idx, index_dst_idx);
 
                     cb_pop_front(curr_in_idx_cb_id, 1);
+
+                    // update the current index column
+                    uint32_t inc;
+                    if (current_idx_col + right_inc + kernel_w > in_w_padded) {
+                        // we reached the edge, wrap down and to the left
+                        current_idx_col += down_left_wrap_inc;
+                        inc = down_left_wrap_inc;
+                    } else {
+                        // we are still in the same row, move to the right
+                        current_idx_col += right_inc;
+                        inc = right_inc;
+                    }
+                    // update the index tile with the new indices for the next top left position
+
                 } else {
                     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         curr_in_cb_id,

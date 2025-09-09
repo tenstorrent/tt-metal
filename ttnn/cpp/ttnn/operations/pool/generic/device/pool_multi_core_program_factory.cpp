@@ -256,6 +256,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t pad_h = pad_t + pad_b;
     const uint32_t pad_w = pad_l + pad_r;
     const uint32_t in_h_padded = in_h + pad_h + ceil_pad_h;
+    const uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     const bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
 
@@ -391,6 +392,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t in_idx_cb_id_1 = 32;
     uint32_t tile_tmp_cb_id = 32;
     uint32_t tile_idx_tmp_cb_id = 32;
+    uint32_t right_inc = 0;
+    uint32_t down_left_wrap_inc = 0;
     if (return_indices) {
         const uint32_t in_idx_cb_pagesize = params.index_nbytes * in_cb_page_padded;
         const uint32_t in_idx_cb_npages = params.multi_buffering_factor;
@@ -416,9 +419,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", tile_idx_tmp_cb_id, params.index_nbytes * tile_elems, 1);
 
         // compute increments for index tile population
-        uint32_t right_inc = stride_w;
-        uint32_t down_left_wrap_inc = in_w * stride_h + (1 - out_w) * stride_w;
-        uint32_t init_top_left_idx = -pad_l - pad_t * in_w;
+        right_inc = stride_w;
+        down_left_wrap_inc = in_w * stride_h + (1 - out_w) * stride_w;
     }
 
     // output of reduce == writer to write
@@ -549,8 +551,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         dilation_w,                     // 35
         (uint32_t)return_indices,       // 36
         pad_t,                          // 37
-        pad_l,                          // 38
-        in_h_padded};                   // 39
+        pad_l};                         // 38
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
@@ -570,21 +571,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         .compile_args = reader1_ct_args};
     auto reader1_kernel =
         params.split_reader ? CreateKernel(program, reader_kernel_fname, all_cores, reader1_config) : 0;
-
-    // set the starting indices for each core as runtime args
-    if (return_indices) {
-        printf("ncores: %d\n", ncores);
-        printf("core_starting_indices size: %zu\n", core_starting_indices.size());
-        TT_FATAL(core_starting_indices.size() == ncores, "core starting indices size should match number of cores");
-        for (uint32_t core_i = 0; core_i < ncores; core_i++) {
-            uint32_t core_x_i = core_i % rectangular_x;
-            uint32_t core_y_i = core_i / rectangular_x;
-            CoreRange core(CoreCoord(core_x_i, core_y_i), CoreCoord(core_x_i, core_y_i));
-
-            std::vector<uint32_t> reader_rt_args0 = {(uint32_t)(core_starting_indices[core_i])};
-            SetRuntimeArgs(program, reader0_kernel, core, reader_rt_args0);
-        }
-    }
 
     /**
      * Compute Kernel: input cb -> tilize_block -> input tiles -> reduce_h max -> output tiles -> untilize_block ->
@@ -610,7 +596,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         out_cb_id,                      // 15
         out_idx_cb_id,                  // 16
         one_scalar_per_core,            // 17
-        (uint32_t)return_indices};      // 18
+        (uint32_t)return_indices,       // 18
+        right_inc,                      // 19
+        down_left_wrap_inc,             // 20
+        in_w_padded,                    // 21
+        kernel_w};                      // 22
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
@@ -625,6 +615,27 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp";
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
+
+    // set the starting indices for each core as runtime args
+    if (return_indices) {
+        printf("ncores: %d\n", ncores);
+        printf("core_starting_indices size: %zu\n", core_starting_indices.size());
+        TT_FATAL(core_starting_indices.size() == ncores, "core starting indices size should match number of cores");
+        for (uint32_t core_i = 0; core_i < ncores; core_i++) {
+            const uint32_t core_x_i = core_i % rectangular_x;
+            const uint32_t core_y_i = core_i / rectangular_x;
+            const CoreRange core(CoreCoord(core_x_i, core_y_i), CoreCoord(core_x_i, core_y_i));
+
+            const uint32_t start_index = core_starting_indices[core_i];
+            const uint32_t start_mod_batch = start_index % (in_w_padded * in_h_padded);
+            const uint32_t start_row = start_mod_batch / in_w_padded;
+            const uint32_t start_col = start_mod_batch % in_w_padded;
+
+            std::vector<uint32_t> args = {(uint32_t)(start_row), (uint32_t)(start_col)};
+            SetRuntimeArgs(program, reader0_kernel, core, args);
+            SetRuntimeArgs(program, compute_kernel, core, args);
+        }
+    }
 
     auto temporary_size = calculate_total_cb_size(program);
 
