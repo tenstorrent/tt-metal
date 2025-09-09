@@ -85,7 +85,6 @@ Tensor all_gather(const Tensor& tensor) {
 
         // Only broadcast if at least one host is missing the shard.
         if (any_host_missing_shard) {
-            std::cout << "any_host_missing_shard true: " << shard_idx << std::endl;
             if (local_shard.has_value() && *lowest_rank_with_shard == this_rank) {
                 ctx->broadcast(
                     local_shard->view_bytes(), tt::tt_metal::distributed::multihost::Rank(*lowest_rank_with_shard));
@@ -97,7 +96,6 @@ Tensor all_gather(const Tensor& tensor) {
                 all_gather_buffer.emplace_shard(coord, [&buffer]() { return std::move(buffer); });
             }
         } else {
-            std::cout << "any_host_missing_shard false: " << shard_idx << std::endl;
             TT_FATAL(local_shard.has_value(), "Expected all hosts to have shard at coordinate {}", coord);
             all_gather_buffer.emplace_shard(coord, [&local_shard]() { return *local_shard; });
         }
