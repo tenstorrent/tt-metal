@@ -222,7 +222,6 @@ tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
 /models/*/**
 /**/functional_*/ @uaydonat @esmalTT
 models/common @yieldthought @mtairum @uaydonat
-models/common/utility_functions.py @yieldthought @mtairum @uaydonat
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat
 models/demos @uaydonat @yieldthought @cglagovichTT
 models/demos/deepseek_v3 @uaydonat @yieldthought @kpaigwar @barci2 @pprajapatiTT
