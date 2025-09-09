@@ -359,12 +359,28 @@ def reset_fabric(fabric_config):
 # Set fabric config to passed in value
 # Do nothing if not set
 # Must be called before creating the mesh device
-def set_fabric(fabric_config):
+def set_fabric(fabric_config, fabric_tensix_config=None):
     import ttnn
 
     # If fabric_config is not None, set it to fabric_config
     if fabric_config:
-        ttnn.set_fabric_config(fabric_config)
+        # Apply default logic for fabric_tensix_config
+        if fabric_tensix_config is None:
+            fabric_tensix_config = get_default_fabric_tensix_config()
+
+        ttnn.set_fabric_config(
+            fabric_config, ttnn.FabricReliabilityMode.STRICT_INIT, None, fabric_tensix_config  # num_planes
+        )
+
+
+def get_default_fabric_tensix_config():
+    import ttnn
+
+    # Default to MUX for Blackhole when fabric is enabled, DISABLED otherwise
+    if ttnn.device.is_blackhole():
+        return ttnn.FabricTensixConfig.MUX
+    else:
+        return ttnn.FabricTensixConfig.DISABLED
 
 
 @pytest.fixture(scope="function")
@@ -408,8 +424,9 @@ def mesh_device(request, silicon_arch_name, device_params):
 
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config)
+    set_fabric(fabric_config, fabric_tensix_config)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
@@ -468,8 +485,9 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config)
+    set_fabric(fabric_config, fabric_tensix_config)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(2, 2),
         **updated_device_params,
@@ -497,8 +515,9 @@ def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config)
+    set_fabric(fabric_config, fabric_tensix_config)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(1, 2),
         **updated_device_params,
@@ -525,8 +544,9 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     request.node.pci_ids = ttnn.get_pcie_device_ids()
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config)
+    set_fabric(fabric_config, fabric_tensix_config)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(1, 8),
         **updated_device_params,
@@ -556,8 +576,9 @@ def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     request.node.pci_ids = ttnn.get_pcie_device_ids()
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config)
+    set_fabric(fabric_config, fabric_tensix_config)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(ttnn.get_num_devices(), 1),
         **updated_device_params,
@@ -585,8 +606,9 @@ def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     request.node.pci_ids = ttnn.get_pcie_device_ids()
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config)
+    set_fabric(fabric_config, fabric_tensix_config)
     if ttnn.get_num_devices() == 8:
         mesh_device = ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(4, 2),
