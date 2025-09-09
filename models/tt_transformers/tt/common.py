@@ -390,7 +390,7 @@ def get_single_rot_mat(
 ):
     freqs_unscaled = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
     if scale_factor is not None:
-        freqs = apply_llama3_scaling(freqs_unscaled, scale_factor, orig_context_len)
+        freqs = apply_scaling(freqs_unscaled, scale_factor, orig_context_len, rope_type="llama3")
     rot_matrix = torch.zeros(dhead, dhead)
     # [INFO] freqs_unscaled and freqs are forced to float dtype above and it should be converted back to match dtype of rot_matrix
     sin_freqs, cos_freqs = torch.sin(freqs).to(rot_matrix.dtype), torch.cos(freqs).to(rot_matrix.dtype)
@@ -403,7 +403,7 @@ def get_single_rot_mat(
     # Support for start_pos different than 0
     freqs = start_pos * freqs_unscaled
     if scale_factor is not None:
-        freqs = apply_llama3_scaling(freqs, scale_factor, orig_context_len)
+        freqs = apply_scaling(freqs, scale_factor, orig_context_len, rope_type="llama3")
     current_rot_mat = torch.zeros(dhead, dhead)
     # [INFO] freqs_unscaled and freqs are forced to float dtype above and it should be converted back to match dtype of current_rot_mat
     sin_freqs, cos_freqs = torch.sin(freqs).to(current_rot_mat.dtype), torch.cos(freqs).to(current_rot_mat.dtype)

@@ -71,7 +71,7 @@ def test_forward_pass(
     torch_input = pad_or_trim_seq_len(torch_input, mode, seq_len)
 
     # Setup: Convert weights and get weight_config
-    weight_config = LMHead.convert_weights(hf_config, [state_dict], tmp_path, mesh_device)
+    weight_config = LMHead.convert_weights(hf_config, [state_dict], tmp_path, mesh_device, state_dict_prefix="lm_head.")
     model_config = get_model_config(LMHead, mode, hf_config, mesh_device, 3)
     model_state = LMHead.create_state(hf_config, mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)

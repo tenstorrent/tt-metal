@@ -9,6 +9,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
@@ -214,17 +215,11 @@ tt_metal::Program create_program_mcast_in0_in1(
     auto top_left_core_plus_one_physical = device->worker_core_from_logical_core(top_left_core_plus_one);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool in3_is_dram = true;
     if (bias_buffer != nullptr) {
         in3_is_dram = bias_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     }
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> in0_sender_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)in0_is_dram,
-
         // in0 tensor args
         (std::uint32_t)1,            // in0_tensor_stride_w
         (std::uint32_t)K,            // in0_tensor_stride_h
@@ -245,11 +240,8 @@ tt_metal::Program create_program_mcast_in0_in1(
         (std::uint32_t)M * K,  // MtKt
         (std::uint32_t)B       // batch
     };
+    tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(in0_sender_compile_time_args);
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)in1_is_dram,
-        (std::uint32_t)out_is_dram,
-
         // READER
         // in1 tensor args
         (std::uint32_t)1,                // in1_tensor_stride_w
@@ -285,7 +277,10 @@ tt_metal::Program create_program_mcast_in0_in1(
         // batch args
         (std::uint32_t)M * N  // MtNt
     };
+    tt::tt_metal::TensorAccessorArgs(in1_buffer).append_to(in1_sender_writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(in1_sender_writer_compile_time_args);
     if (bias_buffer != nullptr) {
+        tt::tt_metal::TensorAccessorArgs(bias_buffer).append_to(in1_sender_writer_compile_time_args);
         // in3 mcast args
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)in3_is_dram);
         // in1 tensor args
@@ -311,9 +306,6 @@ tt_metal::Program create_program_mcast_in0_in1(
         (std::uint32_t)B  // batch
     };
     std::vector<uint32_t> in1_receiver_writer_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)out_is_dram,
-
         // READER
         // in1 block args
         (std::uint32_t)per_core_N * in0_block_w,  // in1_block_num_tiles
@@ -346,11 +338,8 @@ tt_metal::Program create_program_mcast_in0_in1(
             (std::uint32_t)top_left_core_physical.y);  // in1_mcast_sender_noc_y
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in3_mcast_sender_semaphore_id);
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in3_mcast_receiver_semaphore_id);
-    } else {
-        in1_receiver_writer_compile_time_args.push_back(0);  // Placeholder; not used
     }
-    // no fusion
-    in1_receiver_writer_compile_time_args.push_back(0);
+    tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(in1_receiver_writer_compile_time_args);
 
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;

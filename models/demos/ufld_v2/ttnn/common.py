@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 class TtnnUFLDV2Conv2D:
@@ -17,10 +18,13 @@ class TtnnUFLDV2Conv2D:
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         is_blk=False,
         dealloc_act=False,
+        core_count=None,
     ):
         if is_blk:
             shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
         self.conv = conv
+        self.core_count = core_count
+        self.activation_dtype = activation_dtype
         self.device = device
         self.in_channels = conv.in_channels
         self.out_channels = conv.out_channels
@@ -35,7 +39,7 @@ class TtnnUFLDV2Conv2D:
             packer_l1_acc=False,
             math_approx_mode=True,
         )
-        self.conv_output_dtype = activation_dtype
+        self.conv_output_dtype = self.activation_dtype
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
@@ -46,6 +50,10 @@ class TtnnUFLDV2Conv2D:
             reshard_if_not_optimal=True,
             activation=activation,
         )
+        if self.core_count is not None:
+            shard_grid = get_shard_grid_from_num_cores(self.core_count, self.device)
+            self.conv_config.core_grid = shard_grid
+            self.conv_config.override_sharding_config = True
         if conv_pth.bias is not None:
             bias = ttnn.from_device(conv_pth.bias)
             self.bias = bias

@@ -13,7 +13,6 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -165,27 +164,10 @@ Tensor from_flatbuffer(
             coord, [host_buffer = std::move(host_buffer)]() mutable { return std::move(host_buffer); });
     }
 
-    // TODO: #24115 - `DistributedTensorConfig` will be replaced by distributed host buffer, which can be used
-    // directly in Tensor storage.
-    const auto strategy = [&]() -> tt::tt_metal::DistributedTensorConfig {
-        std::unordered_set<const std::byte*> buffer_addresses;
-        distributed_buffer.apply([&buffer_addresses](const tt::tt_metal::HostBuffer& shard) {
-            buffer_addresses.insert(shard.view_bytes().data());
-        });
-        if (buffer_addresses.size() == 1) {
-            return tt::tt_metal::ReplicateTensor();
-        } else if (ttnn_mesh_shape.dims() == 2) {
-            return tt::tt_metal::ShardTensor2D{
-                tt::tt_metal::ShardMesh{.y = ttnn_mesh_shape[0], .x = ttnn_mesh_shape[1]}};
-        } else {
-            return tt::tt_metal::AllGatherTensor{};
-        }
-    }();
-
     tt::tt_metal::HostStorage host_storage{std::move(distributed_buffer)};
 
     // TODO (#25340): Add TensorTopology to flatbuffer serialization and properly handle it in deserialization.
-    return Tensor(std::move(host_storage), spec, strategy, tt::tt_metal::TensorTopology{});
+    return Tensor(std::move(host_storage), spec, tt::tt_metal::TensorTopology{});
 }
 
 }  // namespace ttnn

@@ -1,0 +1,107 @@
+name: "[impl] TTSim Integration Tests"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      package-artifact-name:
+        required: true
+        type: string
+      product:
+        required: true
+        type: string
+
+jobs:
+  ttsim-integration:
+    if: github.repository == 'tenstorrent/tt-metal'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    env:
+      CC: gcc-12
+      CXX: g++-12
+      TT_METAL_HOME: /usr/libexec/tt-metalium
+      TT_METAL_SIMULATOR_HOME: /work/sim
+      TT_METAL_SIMULATOR: /work/sim/libttsim.so
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+    steps:
+
+      - name: Download packages artifact
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
+          path: /work/pkgs/
+
+      - name: Install packages
+        run: |
+          set -euo pipefail
+          apt update
+          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb
+
+      - name: Install System Packages
+        run: |
+          apt update
+          apt install -y git
+
+      - name: Checkout ttsim
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/ttsim
+          ref: 7193bee260c6c7fc91d731c3e2e5a52d2eeea6fd
+          path: docker-job/ttsim
+          token: ${{ secrets.TTSIM_TOKEN }}
+
+      - name: Build ttsim
+        run: |
+          cd /work/ttsim/src
+          ../scripts/make.py _out/release_wh/libttsim.so
+
+      - name: Install ttsim
+        run: |
+          mkdir -p $TT_METAL_SIMULATOR_HOME
+          cp /work/ttsim/src/_out/release_wh/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          cp $TT_METAL_HOME/tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+
+      - name: Build and Run Metal Examples
+        timeout-minutes: 15
+        run: |
+          working_examples=(
+            "add_2_integers_in_compute"
+            "add_2_integers_in_riscv"
+            "eltwise_binary"
+            "eltwise_sfpu"
+            "hello_world_compute_kernel"
+            "hello_world_datamovement_kernel"
+          )
+          for example_name in "${working_examples[@]}"; do
+            example_path="/usr/share/${{ inputs.product }}/examples/${example_name}"
+            if [[ -d "$example_path" ]]; then
+              echo "::group::${example_name} - build and run"
+              build_dir=$(mktemp -d)
+              cd "$build_dir"
+              # Build the example
+              cmake -G Ninja -S "$example_path" -B .
+              cmake --build .
+              # Find and run the built executable
+              readarray -t exec_paths < <(find . -maxdepth 2 -type f -executable -not -name "*.so")
+              for exe in "${exec_paths[@]}"; do
+                exe_basename=$(basename "$exe")
+                echo "Running ${exe_basename}"
+                "$exe"
+              done
+              echo "::endgroup::"
+            else
+              echo "Warning: Example directory not found: $example_path"
+            fi
+          done

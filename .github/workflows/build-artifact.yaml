@@ -46,8 +46,6 @@ on:
         required: false
         type: boolean
         default: true
-        # FIXME(afuller): We need to fix our artifact naming to avoid conflicts if we
-        #     wish to make builds of differing types available in a single workflow.
         description: "Make resulting artifact available in the workflow"
       skip-tt-train:
         # FIXME: TT-Train needs to get fixed to not assume a specific toolchain.
@@ -213,7 +211,11 @@ jobs:
         run: |
           TOOLCHAIN="${{ inputs.toolchain }}"
           TOOLCHAIN_CLEANED=$(echo "$TOOLCHAIN" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
-          ARTIFACT_NAME="packages-${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}"
+          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness across parallel builds
+          # Sanitize ref/SHA by replacing invalid characters with hyphens
+          RAW_REF="${{ inputs.ref || github.sha }}"
+          SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
+          ARTIFACT_NAME="packages-${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}-${SANITIZED_REF}-${{ github.run_id }}"
 
           echo "name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
@@ -309,7 +311,11 @@ jobs:
         id: set_build_artifact_name
         run: |
           TOOLCHAIN_CLEANED=$(echo "${{ inputs.toolchain }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
-          BUILD_ARTIFACT_NAME="TTMetal_build_any_${{ inputs.version }}_${{ inputs.architecture }}_${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}${{ (inputs.distributed == false && '_no_distributed') || '' }}"
+          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness across parallel builds
+          # Sanitize ref/SHA by replacing invalid characters with hyphens
+          RAW_REF="${{ inputs.ref || github.sha }}"
+          SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
+          BUILD_ARTIFACT_NAME="TTMetal_build_any_${{ inputs.version }}_${{ inputs.architecture }}_${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}${{ (inputs.distributed == false && '_no_distributed') || '' }}_${SANITIZED_REF}_${{ github.run_id }}"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_ENV"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
@@ -405,7 +411,11 @@ jobs:
         id: set_wheel_artifact_name
         run: |
           PYTHON_VERSION_NODOT=$(echo "${{ steps.set_python_version.outputs.python_version }}" | tr -d '.')
-          WHEEL_ARTIFACT_NAME="eager-dist-cp${PYTHON_VERSION_NODOT}-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}"
+          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness across parallel builds
+          # Sanitize ref/SHA by replacing invalid characters with hyphens
+          RAW_REF="${{ inputs.ref || github.sha }}"
+          SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
+          WHEEL_ARTIFACT_NAME="eager-dist-cp${PYTHON_VERSION_NODOT}-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}-${SANITIZED_REF}-${{ github.run_id }}"
           echo "wheel_artifact_name=${WHEEL_ARTIFACT_NAME}" >> $GITHUB_OUTPUT
           echo "wheel_artifact_name=${WHEEL_ARTIFACT_NAME}" >> "$GITHUB_ENV"
 

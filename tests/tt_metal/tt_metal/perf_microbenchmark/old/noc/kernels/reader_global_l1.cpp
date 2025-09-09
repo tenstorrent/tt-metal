@@ -13,9 +13,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id = 0;
     uint32_t single_tile_size_bytes = get_tile_size(cb_id);
-    constexpr uint32_t tile_size_pow2_exponent = 11;
-    const InterleavedPow2AddrGen<false> s = {
-        .bank_base_address = l1_buffer_addr, .log_base_2_of_page_size = tile_size_pow2_exponent};
+    const auto s = TensorAccessor(TensorAccessorArgs<0>(), l1_buffer_addr, single_tile_size_bytes);
 
     uint32_t cb_addr;
     cb_reserve_back(cb_id, cb_tile_cnt);

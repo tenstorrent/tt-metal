@@ -7,7 +7,7 @@ from typing import List
 import torch
 
 import ttnn
-from models.utility_functions import is_grayskull, is_wormhole_b0, pad_and_fold_conv_activation_for_unity_stride
+from models.utility_functions import is_wormhole_b0
 
 hardcoded_matmul_config_linear = {
     1: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -241,10 +241,7 @@ class resnet50Bottleneck:
         )
 
         act_block_h_override = 0
-        if is_grayskull():
-            if self.conv2_output_channels == 64 and input_height == 56 and batch_size == 20:
-                act_block_h_override = 320
-        elif is_wormhole_b0():
+        if is_wormhole_b0():
             if (
                 self.conv2_input_channels == 128
                 and self.conv2_output_channels == 128
@@ -375,25 +372,18 @@ class resnet50:
     ) -> None:
         super().__init__()
         layers = [3, 4, 6, 3]
-        num_classes = 1000
         conv_input_face_shape_hw = [512, 512]
         self.device = device
         self.conv_input_face_shape_hw = conv_input_face_shape_hw
         self.batch_size = batch_size
         self.model_config = model_config
         self.inplanes = 64
-        if is_grayskull():
-            compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-                math_fidelity=model_config["MATH_FIDELITY"],
-                math_approx_mode=True,
-            )
-        else:
-            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=model_config["MATH_FIDELITY"],
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
-            )
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=model_config["MATH_FIDELITY"],
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
         self.conv1_weight_tensor = parameters.conv1.weight
         self.conv1_bias_tensor = parameters.conv1.bias
         self.conv1_input_channels = self.conv1_weight_tensor.shape[1]
@@ -498,16 +488,7 @@ class resnet50:
         return layers
 
     def preprocessing(self, torch_input_tensor):
-        resnet50_first_conv_kernel_size = 3
-        resnet50_first_conv_stride = 2
-        input_tensor = pad_and_fold_conv_activation_for_unity_stride(
-            torch_input_tensor,
-            resnet50_first_conv_kernel_size,
-            resnet50_first_conv_kernel_size,
-            resnet50_first_conv_stride,
-            resnet50_first_conv_stride,
-        )
-        input_tensor = torch.permute(input_tensor, (0, 2, 3, 1))
+        input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
         input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
         return input_tensor
 
@@ -535,12 +516,12 @@ class resnet50:
             out_channels=self.conv1_output_channels,
             device=device,
             bias_tensor=self.conv1_bias_tensor,
-            kernel_size=(4, 4),
-            stride=(1, 1),
-            padding=(0, 0),
+            kernel_size=(7, 7),
+            stride=(2, 2),
+            padding=(3, 3),
             batch_size=self.batch_size,
-            input_height=self.conv1_input_height,
-            input_width=self.conv1_input_width,
+            input_height=512,
+            input_width=512,
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
@@ -834,12 +815,12 @@ class resnet50:
             out_channels=self.conv1_output_channels,
             device=device,
             bias_tensor=self.conv1_bias_tensor,
-            kernel_size=(4, 4),
-            stride=(1, 1),
-            padding=(0, 0),
+            kernel_size=(7, 7),
+            stride=(2, 2),
+            padding=(3, 3),
             batch_size=self.batch_size,
-            input_height=self.conv1_input_height,
-            input_width=self.conv1_input_width,
+            input_height=512,
+            input_width=512,
             conv_config=ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",

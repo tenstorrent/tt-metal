@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,17 +12,40 @@ class TtnnResnet34:
         self.maxpool_args = conv_args.maxpool
         self.device = device
         self.conv1 = TtnnUFLDV2Conv2D(
-            conv_args.conv1, conv_pth.conv1, device=self.device, activation="relu", dealloc_act=True
+            conv_args.conv1,
+            conv_pth.conv1,
+            device=self.device,
+            activation="relu",
+            dealloc_act=True,
+            activation_dtype=ttnn.bfloat8_b,
         )
-        self.layer1_0 = TtnnBasicBlock(conv_args.layer1[0], conv_pth.layer1_0, device=self.device, is_downsample=False)
-        self.layer1_1 = TtnnBasicBlock(conv_args.layer1[1], conv_pth.layer1_1, device=self.device, is_downsample=False)
-        self.layer1_2 = TtnnBasicBlock(conv_args.layer1[2], conv_pth.layer1_2, device=self.device, is_downsample=False)
-        self.layer2_0 = TtnnBasicBlock(conv_args.layer2[0], conv_pth.layer2_0, device=self.device, is_downsample=True)
-        self.layer2_1 = TtnnBasicBlock(conv_args.layer2[1], conv_pth.layer2_1, device=self.device, is_downsample=False)
-        self.layer2_2 = TtnnBasicBlock(conv_args.layer2[2], conv_pth.layer2_2, device=self.device, is_downsample=False)
-        self.layer2_3 = TtnnBasicBlock(conv_args.layer2[3], conv_pth.layer2_3, device=self.device, is_downsample=False)
+        self.layer1_0 = TtnnBasicBlock(
+            conv_args.layer1[0], conv_pth.layer1_0, device=self.device, is_downsample=False, precision=ttnn.bfloat8_b
+        )
+        self.layer1_1 = TtnnBasicBlock(
+            conv_args.layer1[1], conv_pth.layer1_1, device=self.device, is_downsample=False, precision=ttnn.bfloat8_b
+        )
+        self.layer1_2 = TtnnBasicBlock(
+            conv_args.layer1[2], conv_pth.layer1_2, device=self.device, is_downsample=False, precision=ttnn.bfloat8_b
+        )
+        self.layer2_0 = TtnnBasicBlock(
+            conv_args.layer2[0], conv_pth.layer2_0, device=self.device, is_downsample=True, precision=ttnn.bfloat8_b
+        )
+        self.layer2_1 = TtnnBasicBlock(
+            conv_args.layer2[1], conv_pth.layer2_1, device=self.device, is_downsample=False, precision=ttnn.bfloat8_b
+        )
+        self.layer2_2 = TtnnBasicBlock(
+            conv_args.layer2[2], conv_pth.layer2_2, device=self.device, is_downsample=False, precision=ttnn.bfloat8_b
+        )
+        self.layer2_3 = TtnnBasicBlock(
+            conv_args.layer2[3], conv_pth.layer2_3, device=self.device, is_downsample=False, precision=ttnn.bfloat8_b
+        )
         self.layer3_0 = TtnnBasicBlock(
-            conv_args.layer3[0], conv_pth.layer3_0, device=self.device, is_downsample=True, blk_sharded=True
+            conv_args.layer3[0],
+            conv_pth.layer3_0,
+            device=self.device,
+            is_downsample=True,
+            blk_sharded=True,
         )
         self.layer3_1 = TtnnBasicBlock(
             conv_args.layer3[1], conv_pth.layer3_1, device=self.device, is_downsample=False, blk_sharded=True
@@ -49,7 +72,7 @@ class TtnnResnet34:
             conv_args.layer4[2], conv_pth.layer4_2, device=self.device, is_downsample=False, blk_sharded=True
         )
 
-    def __call__(self, input, batch_size=1, min_channels=16):
+    def __call__(self, input, batch_size=1, min_channels=16, shard_height_for_maxcores=16128):
         n, c, h, w = input.shape
         channel_padding_needed = min_channels - c
         x = ttnn.pad(input, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
@@ -57,6 +80,7 @@ class TtnnResnet34:
         x = ttnn.permute(x, (0, 2, 3, 1))
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
         x1, out_ht, out_wdth = self.conv1(x)
+        ttnn.deallocate(x)
         x1 = ttnn.max_pool2d(
             x1,
             batch_size=batch_size,
@@ -68,9 +92,14 @@ class TtnnResnet34:
             padding=[self.maxpool_args.padding, self.maxpool_args.padding],
             dilation=[self.maxpool_args.dilation, self.maxpool_args.dilation],
         )
-        x = ttnn.sharded_to_interleaved(x1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(x1)
-        x = ttnn.reallocate(x)
+        mem_config = ttnn.create_sharded_memory_config_(
+            ttnn.Shape([shard_height_for_maxcores, x1.shape[-1]]),
+            x1.memory_config().shard_spec.grid,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            tile_layout=True,
+        )
+        x = ttnn.to_memory_config(x1, mem_config)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = self.layer1_0(x)
         x = self.layer1_1(x)

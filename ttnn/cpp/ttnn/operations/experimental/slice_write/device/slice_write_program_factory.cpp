@@ -90,10 +90,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
     uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);
-    TT_FATAL(
-        output_tensor_start[-1] == 0,
-        "slice_write expects output start for the last dimension to be 0. Got {}",
-        output_tensor_start[-1]);
 
     std::vector<uint32_t> common_writer_kernel_args = {
         output_buffer->address() + output_tensor_start[-1] * output_tensor.element_size(),
@@ -198,7 +194,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(input_tensor);
 
     uint32_t output_row_size_bytes = output_shape[-1] * input_tensor.element_size();
     uint32_t input_row_size_bytes = input_shard_shape[1] * input_tensor.element_size();
@@ -418,10 +413,8 @@ static operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
 
     auto input_cb_handle = tt::tt_metal::CreateCircularBuffer(program, input_cores, cb_src0_config);
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, 0};
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args_vec);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -732,10 +725,8 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
         input_cb_data_format,
         input.buffer());
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, 0};
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args_vec);
     std::map<std::string, std::string> writer_defines;
     if (num_tiles_channel_per_core * TILE_WIDTH * num_cores_channels > output_shape[-1]) {
@@ -825,10 +816,6 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     uint32_t max_read_size = 4096;
 
     auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
@@ -841,10 +828,12 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
 
     // if begins is not aligned then we need to pad the cb size, so that we can read from the nearest aligned address
     uint32_t begins_bytes = output_tensor_start[-1] * input.element_size();
-    uint32_t misalignment = begins_bytes % src_buffer_alignment;
+    uint32_t page_alignment_offset = begins_bytes % src_buffer_alignment;
 
-    if (misalignment != 0) {
-        alignment *= 2;
+    // reader defines
+    std::map<std::string, std::string> reader_defines;
+    if (page_alignment_offset != 0) {
+        reader_defines["LAST_DIM"] = "1";
     }
 
     const uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -865,8 +854,8 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
             .set_page_size(src0_cb_index, cb_page_size);
     tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
-    std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_cb_index, page_alignment_offset};
+    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, page_alignment_offset};
     tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args_vec);
 
@@ -875,7 +864,7 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
         "ttnn/cpp/ttnn/operations/experimental/slice_write/device/kernels/dataflow/"
         "slice_write_reader_interleaved.cpp",
         total_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec, reader_defines));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,

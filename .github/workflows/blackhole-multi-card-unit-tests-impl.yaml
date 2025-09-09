@@ -9,10 +9,6 @@ on:
       runner-label:
         required: true
         type: string
-      timeout:
-        required: false
-        type: number
-        default: 10
       build-artifact-name:
         required: true
         type: string
@@ -33,16 +29,22 @@ jobs:
         test-group:
           - name: fabric 1D unit tests
             cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
+            timeout: 15
           - name: fabric 1D performance microbenchmarks
             cmd: pytest tests/tt_metal/microbenchmarks/ethernet/test_fabric_edm_bandwidth.py
+            timeout: 15
           - name: fabric 2D fixture unit tests
             cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+            timeout: 15
           - name: fabric system health tests
             cmd: ./build/test/tt_metal/tt_fabric/test_system_health ${{ inputs.runner-label == 'BH-DeskBox' && '--min-connections 4' || '' }}
+            timeout: 15
           - name: cpp unit tests eth
             cmd: ./build/test/tt_metal/unit_tests_eth
+            timeout: 15
           - name: ccl nightly tests
             cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly
+            timeout: 30
           # - name: t3000 fast fabric tests
           #   cmd: "source tests/scripts/t3000/run_t3000_unit_tests.sh && run_t3000_ttfabric_tests"
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
@@ -78,7 +80,7 @@ jobs:
         with:
           runner-label: ${{ inputs.runner-label }}
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ inputs.timeout }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main

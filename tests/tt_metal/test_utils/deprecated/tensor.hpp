@@ -20,13 +20,10 @@ enum class Initialize { ZEROS = 0, ONES = 1, INCREMENT = 2, RANDOM = 3 };
 template <class T>
 class Tensor {
 public:
-    Tensor(std::vector<T>& values, std::array<uint32_t, 4>& shape) {
-        this->shape = shape;
-        this->values = values;
+    Tensor(std::vector<T>& values, std::array<uint32_t, 4>& shape) : shape(shape), values(values) {
         this->strides = {shape[1] * shape[2] * shape[3], shape[2] * shape[3], shape[3], 1};
     }
-    Tensor(std::array<uint32_t, 4>& shape) {
-        this->shape = shape;
+    Tensor(std::array<uint32_t, 4>& shape) : shape(shape) {
         auto volume = shape[0] * shape[1] * shape[2] * shape[3];
         this->values.resize(volume);
         this->strides = {shape[1] * shape[2] * shape[3], shape[2] * shape[3], shape[3], 1};

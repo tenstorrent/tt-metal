@@ -53,13 +53,13 @@ BankManager::BankManager(
     uint32_t alignment_bytes,
     DeviceAddr alloc_offset,
     bool disable_interleaved) :
-    buffer_type_(buffer_type), alignment_bytes_(alignment_bytes) {
+    buffer_type_(buffer_type), interleaved_address_limit_(0), alignment_bytes_(alignment_bytes) {
     unsigned int bank_id = 0;
     for (const auto bank_offset : bank_offsets) {
         bank_id_to_bank_offset_.insert({bank_id, bank_offset});
         bank_id++;
     }
-    interleaved_address_limit_ = 0;
+
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
     this->init_allocator(size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset);
 }

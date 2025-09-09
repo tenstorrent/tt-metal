@@ -271,13 +271,10 @@ process_mcast_in0_program_and_create_override_variables(
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool in3_is_dram = true;
     if (bias_buffer != nullptr) {
         in3_is_dram = bias_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     }
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -341,8 +338,10 @@ process_mcast_in0_program_and_create_override_variables(
             (std::uint32_t)M * K,  // MtKt
             (std::uint32_t)B,      // batch
             // sparsity args
-            (std::uint32_t)0,  // batchB
-            (std::uint32_t)0,  // sparsity_pagesize (placeholder since sparsity not used in this case)
+            (std::uint32_t)0,     // batchB
+            (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
+            (std::uint32_t)true,  // bcast_A
+            (std::uint32_t)false  // get_batch_from_reader
         };
     }
     in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
@@ -420,7 +419,8 @@ process_mcast_in0_program_and_create_override_variables(
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)B  // batch
+        (std::uint32_t)B,     // batch
+        (std::uint32_t)false  // get_batch_from_reader
     };
 
     std::map<std::string, std::string> mm_kernel_defines;
@@ -586,14 +586,15 @@ process_mcast_in0_program_and_create_override_variables(
         B,                       // batch
         out_block_tiles,         // out_block_num_tiles
 
-        untilize_out  // untilize_out
+        untilize_out,  // untilize_out
+        false          // get_batch_from_reader
     };
 
     // Create compute kernel
     // bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode
     // bool math_approx_mode = false;
-    auto mm_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         all_cores_with_work,
@@ -610,7 +611,7 @@ process_mcast_in0_program_and_create_override_variables(
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size)
             .set_tile_dims(src0_cb_index, in0_tile);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -687,7 +688,7 @@ process_mcast_in0_program_and_create_override_variables(
                                 .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                 .set_tile_dims(interm0_cb_index, output_tile);
 
-        auto cb_interm0 = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
+        tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
         log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -1038,8 +1039,6 @@ process_mcast_in1_program_and_create_override_variables(
     uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
 
     CoreCoord start_core = {0, 0};
-    uint32_t start_core_x = start_core.x;
-    uint32_t start_core_y = start_core.y;
 
     uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
     uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
@@ -1071,13 +1070,10 @@ process_mcast_in1_program_and_create_override_variables(
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool in3_is_dram = true;
     if (bias_buffer != nullptr) {
         in3_is_dram = bias_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     }
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> in0_sender_compile_time_args = {
         // in0 tensor args
         (std::uint32_t)1,                // in0_tensor_stride_w
@@ -1107,8 +1103,10 @@ process_mcast_in1_program_and_create_override_variables(
         (std::uint32_t)B,      // batch
 
         // sparsity args
-        (std::uint32_t)0,  // batchB
-        (std::uint32_t)0,  // sparsity_pagesize (placeholder since sparsity not used in this case)
+        (std::uint32_t)0,     // batchB
+        (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
+        (std::uint32_t)true,  // bcast_A
+        (std::uint32_t)false  // get_batch_from_reader
     };
     in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
     tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(in0_sender_compile_time_args);
@@ -1329,14 +1327,15 @@ process_mcast_in1_program_and_create_override_variables(
         B,                       // batch
         out_block_tiles,         // out_block_num_tiles
 
-        untilize_out  // untilize_out
+        untilize_out,  // untilize_out
+        false          // get_batch_from_reader
     };
 
     // Create compute kernel
     // bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode
     // bool math_approx_mode = false;
-    auto mm_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         all_cores,
@@ -1388,7 +1387,7 @@ process_mcast_in1_program_and_create_override_variables(
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
             .set_page_size(src1_cb_index, in1_single_tile_size)
             .set_tile_dims(src1_cb_index, in1_tile);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -1421,7 +1420,7 @@ process_mcast_in1_program_and_create_override_variables(
                                 .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                 .set_tile_dims(interm0_cb_index, output_tile);
 
-        auto cb_interm0 = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
+        tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
         log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -1458,7 +1457,7 @@ process_mcast_in1_program_and_create_override_variables(
             tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
                 .set_page_size(src3_cb_index, bias_single_tile_size)
                 .set_tile_dims(src3_cb_index, bias_tile);
-        auto cb_src3 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
         log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -1822,21 +1821,21 @@ process_gather_in0_program_and_create_override_variables(
         tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
             .set_page_size(src2_cb_index, in2_single_tile_size)
             .set_tile_dims(src2_cb_index, in0_tile);
-    auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
 
     uint32_t sync_cb_index = base_cb_index + 3;
     uint32_t sync_cb_size_bytes = 16;
     tt_metal::CircularBufferConfig sync_cb_config =
         tt_metal::CircularBufferConfig(sync_cb_size_bytes, {{sync_cb_index, DataFormat::UInt16}})
             .set_page_size(sync_cb_index, sync_cb_size_bytes);
-    auto cb_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
 
     uint32_t sync_cb2_index = base_cb_index + 4;
     uint32_t sync_cb2_size_bytes = 16;
     tt_metal::CircularBufferConfig sync_cb2_config =
         tt_metal::CircularBufferConfig(sync_cb2_size_bytes, {{sync_cb2_index, DataFormat::UInt16}})
             .set_page_size(sync_cb2_index, sync_cb2_size_bytes);
-    auto cb2_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb2_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, sync_cb2_config);
 
     uint32_t output_cb_index = base_cb_index + 5;  // output operands start at index 16
     uint32_t interm0_cb_index = base_cb_index + 6;
@@ -1857,7 +1856,7 @@ process_gather_in0_program_and_create_override_variables(
                                 .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                 .set_tile_dims(interm0_cb_index, output_tile);
 
-        auto cb_interm0 = tt_metal::CreateCircularBuffer(program, all_cores, interm0_cb_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, interm0_cb_config);
 
         for (uint32_t i = 0; i < out_buffers.size(); ++i) {
             const auto& out_buffer = out_buffers[i];
@@ -2411,7 +2410,6 @@ inline void override_gather_in0_program_parameters(
 
     auto src_buffer_a = input_tensors[0].buffer();
     auto src_buffer_b = input_tensors[1].buffer();
-    auto dst_buffer = output_tensors[0].buffer();
 
     bool src0_sharded = input_tensors[0].is_sharded();
     bool src1_sharded = input_tensors[1].is_sharded();
@@ -2934,7 +2932,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     const Tensor& a,
     const Tensor& b,
     const Tensor& sparsity,
-    uint32_t nnz,
+    const std::optional<uint32_t> nnz,
+    bool is_input_a_sparse,
     Tensor& output_tensor,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -2988,7 +2987,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    const auto B_A = get_batch_size(ashape);
+    const auto B_A = is_input_a_sparse ? 1 : get_batch_size(ashape);
     const auto B_B = get_batch_size(bshape);
     const uint32_t Mt = ashape[-2] / in0_tile_shape[0];
     const uint32_t Kt = ashape[-1] / in0_tile_shape[1];
@@ -3060,9 +3059,6 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     uint32_t interm0_CB_size = interm0_CB_tiles * interm0_single_tile_size;
 
     CoreCoord start_core = {0, 0};
-    uint32_t start_core_x = start_core.x;
-    uint32_t start_core_y = start_core.y;
-    uint32_t num_cores_c = compute_with_storage_grid_size.x;
 
     uint32_t num_cores_with_work = num_blocks_total;
 
@@ -3106,10 +3102,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool sparsity_is_dram = sparsity_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    uint32_t num_batch_compute = nnz.value_or(sparsity.logical_volume());
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -3146,6 +3139,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         // sparsity args
         (std::uint32_t)B_B,                               // batchB
         (std::uint32_t)B_B * (uint32_t)sizeof(uint32_t),  // sparsity_pagesize
+        (std::uint32_t)!is_input_a_sparse,                // bcast_A
+        (std::uint32_t)!nnz.has_value(),                  // get_batch_from_reader
         // fuse op args
         (std::uint32_t)false,  // fuse_op
     };
@@ -3218,7 +3213,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)nnz,  // batch
+        (std::uint32_t)num_batch_compute,  // batch
+        (std::uint32_t)!nnz.has_value(),   // get_batch_from_reader
     };
 
     std::map<std::string, std::string> mm_kernel_defines;
@@ -3252,9 +3248,6 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
             .noc = in0_noc,
             .compile_args = in0_sender_compile_time_args,
             .defines = mm_kernel_in0_sender_writer_defines});
-
-    tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid_id = 0;
-    tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = 0;
 
     tt::tt_metal::KernelHandle mm_kernel_in0_receiver_id = 0;
     if (in0_mcast_receivers.num_cores() > 0) {
@@ -3305,17 +3298,18 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
-        nnz,                     // batch_nnz
+        num_batch_compute,       // batch_nnz
         out_block_tiles,         // out_block_num_tiles
 
-        false  // untilize_out
+        false,            // untilize_out
+        !nnz.has_value()  // get_batch_from_reader
     };
 
     // Create compute kernel
     // bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode
     // bool math_approx_mode = false;
-    auto mm_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         all_cores_with_work,
@@ -3332,7 +3326,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size)
             .set_tile_dims(src0_cb_index, in0_tile);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -3356,7 +3350,6 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         in1_CB_size / in1_single_tile_size,
         in1_CB_size);
 
-    uint32_t src2_cb_index = tt::CBIndex::c_2;
     tt::tt_metal::CBHandle cb_src2 = 0;
 
     uint32_t output_cb_index = tt::CBIndex::c_4;
@@ -3377,8 +3370,19 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         tt_metal::CircularBufferConfig(sparsity_cb_size, {{sparsity_cb_index1, tt::DataFormat::Float32}})
             .set_page_size(sparsity_cb_index1, sparsity_cb_size);
 
-    auto cb_sparsity0 = tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config0);
-    auto cb_sparsity1 = tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config1);
+    tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config0);
+    tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config1);
+
+    if (!nnz.has_value()) {
+        // When nnz is not provided, we need to infer this at runtime based on the sparsity tensor.
+        // We create a circular buffer to pass this value to the compute kernel from the reader.
+        uint32_t nnz_cb_index = tt::CBIndex::c_25;
+        const auto nnz_data_format = tt::DataFormat::UInt32;
+        const auto nnz_cb_size = sparsity.logical_volume() * tt::datum_size(nnz_data_format);
+        const auto nnz_cb_config = tt_metal::CircularBufferConfig(nnz_cb_size, {{nnz_cb_index, nnz_data_format}})
+                                       .set_page_size(nnz_cb_index, nnz_cb_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, nnz_cb_config);
+    }
 
     if (interm0_data_format != output_data_format) {
         // output
@@ -3396,7 +3400,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
                                 .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                 .set_tile_dims(interm0_cb_index, output_tile);
 
-        auto cb_interm0 = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
+        tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
         log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",

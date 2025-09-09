@@ -154,7 +154,7 @@ test_suite_wh_6u_metal_unit_tests() {
     echo "[upstream-tests] running WH 6U upstream metalium unit tests. Note that skips should be treated as failures"
     ./build/test/tt_metal/tt_fabric/test_system_health
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardFixture.*"
-    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UntiMeshCQSingleCardFixture.*"
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardFixture.*"
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardProgramFixture.*"
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardProgramFixture.*"
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardBufferFixture.ShardedBufferLarge*ReadWrites"
@@ -182,8 +182,7 @@ test_suite_wh_6u_llama_demo_tests() {
 
     pytest models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k "quick"
     pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
-    # Repeat test seeing AssertionError on token mismatches: Issue #27446
-    # pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat"
+    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat"
     # Some AssertionError: Throughput is out of targets 49 - 53 t/s/u in 200 iterations
     # assert 200 <= 20
     # pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full"
