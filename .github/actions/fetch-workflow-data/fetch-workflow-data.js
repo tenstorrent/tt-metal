@@ -47,7 +47,7 @@ function getLatestCachedDate(runs) {
  * @param {Date} sinceDate - Only fetch runs after this date
  * @returns {Promise<Array>} Array of workflow run objects
  */
-async function fetchAllWorkflowRuns(github, context, days, sinceDate) {
+async function fetchAllWorkflowRuns(github, context, days, sinceDate, branchFilter) {
   const allRuns = [];
   const cutoffDate = getCutoffDate(days);
   core.info(`days ${days}, sinceDate: ${sinceDate}`);
@@ -55,6 +55,8 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate) {
     const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo({
       owner: context.repo.owner,
       repo: context.repo.repo,
+      branch: branchFilter,
+      status: 'completed',
       per_page: RUNS_PER_PAGE,
       page
     });
@@ -138,7 +140,7 @@ async function run() {
     core.info(`Restored previousRuns count: ${previousRuns.length}`);
     core.info(`Latest cached run date: ${latestCachedDate}`);
     // Fetch new runs from GitHub (for the last N days, only after latest cached run)
-    const newRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate);
+    const newRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate, branch);
     core.info(`Fetched newRuns count: ${newRuns.length}`);
     // Merge and deduplicate by run id
     // This ensures we keep the most recent data for each run and avoid duplicates
