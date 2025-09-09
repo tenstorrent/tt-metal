@@ -26,10 +26,11 @@ jobs:
     strategy:
       fail-fast: false
     name: "profiler tests"
-    runs-on:
-      - arch-wormhole_b0
-      - ${{ inputs.topology }}
-      - ${{ inputs.extra-tag }}
+    # Profiler tests run on CIv2 for t3000 and CIv1 for all others (just WH 6U for now)
+    runs-on: ${{ 
+      inputs.topology == 'config-t3000' && 'tt-ubuntu-2204-N300-llmbox-stable' ||
+      fromJSON(format('["arch-wormhole_b0", "{0}", "{1}"]', inputs.topology, inputs.extra-tag))
+    }}
     container:
       image: ${{ inputs.docker-image }}
       env:
