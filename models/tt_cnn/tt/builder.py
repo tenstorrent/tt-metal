@@ -90,6 +90,26 @@ class Conv2dConfiguration:
     reallocate_halo_output: bool = True
 
 
+@dataclass(frozen=True)
+class MaxPool2dConfiguration:
+    input_height: int
+    input_width: int
+    channels: int
+    batch_size: int
+    kernel_size: Tuple[int, int]
+    stride: Tuple[int, int] = (1, 1)
+    padding: Tuple[int, int] = (0, 0)
+    dilation: Tuple[int, int] = (1, 1)
+    ceil_mode: bool = False
+
+    in_place: bool = False
+    deallocate_input: bool = False
+    reallocate_halo_output: bool = True
+
+
+LayerConfiguration = Union[Conv2dConfiguration, MaxPool2dConfiguration]
+
+
 def get_core_grid_from_num_cores(num_cores: int, grid_rows: int, grid_cols: int):
     rows = num_cores // grid_cols
     assert rows <= grid_rows, "Not enough cores for specified core grid"
@@ -203,7 +223,6 @@ class TtConv2d:
 
         # TODO: Here we should check the weight shapes to see if they are correct
         self.weight = ttnn.from_torch(weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
-
         if bias is not None:
             bias = torch.reshape(bias, (1, 1, 1, -1))
             self.bias = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
@@ -226,7 +245,7 @@ class TtConv2d:
         }
 
     def __call__(self, x):
-        print(self.compute_config, self.get_conv2d_kwargs())
+        # TODO: Preprocess the weights explicitly?
         x, [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
@@ -235,5 +254,29 @@ class TtConv2d:
             return_weights_and_bias=True,
             compute_config=self.compute_config,
             **self.get_conv2d_kwargs(),
+        )
+        return x
+
+
+class TtMaxPool2d:
+    def __init__(self, configuration: MaxPool2dConfiguration, device):
+        self.configuration = configuration
+        self.device = device
+
+    def __call__(self, x):
+        x = ttnn.max_pool2d(
+            input_tensor=x,
+            batch_size=self.configuration.batch_size,
+            input_h=self.configuration.input_height,
+            input_w=self.configuration.input_width,
+            channels=self.configuration.channels,
+            kernel_size=self.configuration.kernel_size,
+            stride=self.configuration.stride,
+            padding=self.configuration.padding,
+            dilation=self.configuration.dilation,
+            ceil_mode=self.configuration.ceil_mode,
+            in_place_halo=self.configuration.in_place,
+            deallocate_input=self.configuration.deallocate_input,
+            reallocate_halo_output=self.configuration.reallocate_halo_output,
         )
         return x
