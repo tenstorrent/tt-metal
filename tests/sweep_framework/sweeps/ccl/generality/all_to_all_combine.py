@@ -28,7 +28,7 @@ parameters = {
         "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
         "input_shape": [
             [_pd(1), 1, 8, 32],
-            [_pd(1), 1, 2, 1280],
+            [_pd(1), 1, 2, 2880],  # GPT-OSS
             [_pd(1), 1, 8, 31],
             [_pd(8), 1, 2, 7168],
             [_pd(16), 1, 2, 7168],
@@ -48,6 +48,10 @@ parameters = {
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    mesh_shape, cluster_axis = test_vector["mesh_shape"], test_vector["cluster_axis"]
+    if cluster_axis and mesh_shape[cluster_axis] == 1:
+        return True, "Unit cluster axis, no neighbors"
+
     if test_vector["select_experts_k"] > test_vector["experts"]:
         return True, "k greater than experts"
 
@@ -86,6 +90,9 @@ def run(
     logger.info(vars())
 
     batch, _, seq, hidden = tuple(input_shape)
+
+    if 1 in mesh_shape:
+        raise Exception("Linear meshes seem to cause a hang")
 
     with device_context(mesh_shape, fabric_config) as (device, device_err):
         assert tuple(device.shape) == mesh_shape

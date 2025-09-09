@@ -32,10 +32,10 @@ parameters = {
             [1, 1, 1, 32, 256],
             [2, 32, 256],
             [1, 1, 32, 16384],
+            [1, 1, 32, 2880],  # GPT-OSS 20B
         ],
         "dim": [0, 1, 2, 3, 4],
         "cluster_axis": [0, 1, None],
-        "math_op": [ttnn.ReduceType.Sum],
         "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
         "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
@@ -76,7 +76,7 @@ def _reference_map_op(math_op):
         raise NotImplementedError(f"Math op: {math_op} not yet implemented in sweep")
 
 
-def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, math_op, dtype, layout, device):
+def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, dtype, layout, device, math_op=ttnn.ReduceType.Sum):
     assert _valid_cluster_div(input_shape, dim, cluster_axis, mesh_shape)
 
     torch_input = torch.randn(input_shape).bfloat16()
@@ -105,7 +105,6 @@ def run(
     mem_config,
     num_iters,
     topology,
-    math_op,
     *,
     device,  # unused
 ) -> list:
@@ -122,27 +121,24 @@ def run(
         logger.info("device set up")
 
         tt_input, torch_references = _get_tensors(
-            input_shape, mesh_shape, dim, cluster_axis, math_op, input_dtype, layout, device
+            input_shape, mesh_shape, dim, cluster_axis, input_dtype, layout, device
         )
 
         compute_grid_size = device.compute_with_storage_grid_size()
         ccl_sub_device_crs = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )
-        semaphores = [ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(2)]
+        semaphores = [ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(3)]
 
         for i in range(num_iters):
             try:
                 start_time = start_measuring_time()
-                tt_out_tensor = ttnn.experimental.reduce_scatter_async(
+                tt_out_tensor = ttnn.experimental.reduce_scatter_minimal_async(
                     tt_input,
-                    dim,
+                    dim=dim,
+                    multi_device_global_semaphore=semaphores,
                     cluster_axis=cluster_axis,
-                    mesh_device=device,
                     topology=topology,
-                    from_remote_multi_device_global_semaphore=semaphores[0],
-                    to_remote_multi_device_global_semaphore=semaphores[0],
-                    math_op=math_op,
                     num_links=num_links,
                     memory_config=mem_config,
                 )

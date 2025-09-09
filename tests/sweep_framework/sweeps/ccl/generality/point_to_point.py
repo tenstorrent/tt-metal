@@ -140,7 +140,6 @@ def run(
         ccl_sub_device_crs = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )
-        semaphore = ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0)
 
         for i in range(num_iters):
             try:
@@ -150,7 +149,6 @@ def run(
                     ttnn.MeshCoordinate(coord1),
                     ttnn.MeshCoordinate(coord0),
                     topology=topology,
-                    semaphore=semaphore,
                 )
                 e2e_perf = stop_measuring_time(start_time)
             except Exception as e:

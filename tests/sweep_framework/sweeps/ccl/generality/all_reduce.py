@@ -106,6 +106,10 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     """
     Prunes the test space by invalidating known unsupported or problematic configurations.
     """
+    mesh_shape, cluster_axis = test_vector["mesh_shape"], test_vector["cluster_axis"]
+    if cluster_axis and mesh_shape[cluster_axis] == 1:
+        return True, "Unit cluster axis"
+
     if (
         test_vector["topology"] == ttnn.Topology.Ring
         and test_vector["fabric_config"] != ttnn.FabricConfig.FABRIC_1D_RING
@@ -189,7 +193,7 @@ def run(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )
         # all_reduce_async requires 3 semaphores
-        semaphores = [ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(3)]
+        semaphores = [ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(7)]
 
         for i in range(num_iters):
             try:
@@ -198,13 +202,13 @@ def run(
                     tt_input,
                     cluster_axis=cluster_axis,
                     mesh_device=device,
-                    topology=topology,
-                    from_remote_multi_device_global_semaphore=semaphores[0],
-                    to_remote_multi_device_global_semaphore=semaphores[1],
-                    gather_multi_device_global_semaphore=semaphores[2],
+                    barrier_semaphores=semaphores[:2],
+                    rs_global_semaphores=semaphores[2:5],
+                    ag_global_semaphores=semaphores[5:],
                     math_op=math_op,
                     num_links=num_links,
                     memory_config=mem_config,
+                    topology=topology,
                 )
                 e2e_perf = stop_measuring_time(start_time)
             except Exception as e:
