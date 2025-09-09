@@ -191,6 +191,7 @@ void JitBuildEnv::init(
     if (rtoptions.get_watcher_enabled()) {
         this->defines_ += "-DWATCHER_ENABLED ";
     }
+    // WATCHER_ENABLED is set in program.cpp
     if (rtoptions.get_watcher_noinline()) {
         this->defines_ += "-DWATCHER_NOINLINE ";
     }
