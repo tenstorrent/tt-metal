@@ -419,6 +419,7 @@ class ModelArgs:
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
+        self.is_mixture_of_experts = False
 
         assert not os.getenv(
             "FAKE_DEVICE"
