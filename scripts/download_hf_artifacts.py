@@ -39,6 +39,7 @@ SINGLE_CARD_MODELS = [
     "distil-whisper/distil-large-v3",
     "emrecan/bert-base-turkish-cased-mean-nli-stsb-tr",
     "EleutherAI/gpt-neox-20b",
+    "google/gemma-3-4b-it",
     "google/vit-base-patch16-224",
     "meta-llama/Llama-3.1-8B-Instruct",
     "meta-llama/Llama-3.2-1B-Instruct",
@@ -58,7 +59,6 @@ SINGLE_CARD_MODELS = [
 ]
 
 T3K_MODELS = [
-    "google/gemma-3-4b-it",
     "google/gemma-3-27b-it",
     "meta-llama/Llama-3.1-8B-Instruct",
     "meta-llama/Llama-3.1-70B-Instruct",
