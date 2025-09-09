@@ -34,6 +34,7 @@ public:
     // store lower 16 as 16-bit uint
     bfloat16(int int_data);
 
+    operator float() const { return to_float(); }
     float to_float() const {
         // move lower 16 to upper 16 (of 32) and convert to float
         uint32_t uint32_data = (uint32_t)uint16_data << 16;
@@ -60,8 +61,6 @@ std::vector<std::uint32_t> create_arange_vector_of_bfloat16(size_t num_bytes, bo
 
 std::vector<bfloat16> create_random_vector_of_bfloat16_native(
     size_t num_bytes, float rand_max_float, int seed, float offset = 0.0f);
-
-void print_golden_metalium_vectors(std::vector<bfloat16>& golden_vec, std::vector<bfloat16>& result_vec);
 
 std::vector<std::uint32_t> create_random_vector_of_bfloat16(
     size_t num_bytes, int rand_max_float, int seed, float offset = 0.0f);
