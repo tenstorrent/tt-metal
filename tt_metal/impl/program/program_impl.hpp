@@ -12,7 +12,6 @@
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/command_queue.hpp"
 #include "tt-metalium/core_coord.hpp"
-#include "dev_msgs.h"                    // DISPATCH_CLASS_MAX
 #include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
 #include "tt-metalium/kernel.hpp"        // Kernel
 #include "tt-metalium/kernel_types.hpp"  // KernelHandle
