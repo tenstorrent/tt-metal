@@ -34,21 +34,11 @@ void MAIN() {
 
             tile_regs_acquire();
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                copy_tile_init(kParamInCbIndex);
-                copy_tile(kParamInCbIndex, /* tile_index */ block_idx, /* register_idx */ block_idx);
-
-                const uint32_t grad_register = block_size + block_idx;
-                copy_tile_init(kGradCbIndex);
-                copy_tile(kGradCbIndex, /* tile_index */ block_idx, /* register_idx */ grad_register);
-
                 // binop_with_scalar_tile_init();
                 // mul_unary_tile(grad_register, lr);
 
-                sub_tiles_init(block_idx, grad_register);
-                sub_tiles(
-                    /* register_param_in_idx */ block_idx,
-                    /* register_grad_idx */ grad_register,
-                    /* register_out_idx */ block_idx);
+                sub_tiles_init(kParamInCbIndex, kGradCbIndex);
+                sub_tiles(kParamInCbIndex, kGradCbIndex, block_idx, block_idx, block_idx);
             }
             tile_regs_commit();
 
