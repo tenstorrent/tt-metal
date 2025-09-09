@@ -21,6 +21,7 @@
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/welford.h"
 #include "debug/dprint.h"
+#include "debug/dprint_tensix.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -200,14 +201,15 @@ void MAIN {
                         transpose_wh_init_short(cb_in0);
                         transpose_wh_tile(cb_in0, index, 0);
 #endif
-                        welford_tile<0, 1, 2, false>(curr_xy_coord, curr_xy_limit, this_tile_offset);
+                        dprint_tensix_dest_reg(0);
+                        welford_tile<0, 1, 2, false, false>(curr_xy_coord, curr_xy_limit, this_tile_offset, 0);
                         curr_xy_coord += std::min(32 - this_tile_offset, curr_xy_limit - curr_xy_coord);
                     }
                     index_subblock_w_offset += subblock_w;
                 }
                 index_h_offset += per_core_N;
             }
-            welford_final(curr_xy_limit);  // Convert M2 to variance
+            welford_M2_to_var<0, 1, 2>(curr_xy_limit, 0);  // Convert M2 to variance
 
             // Update for next group
             tile_offset = (tile_offset + channels_per_group) % TILE_WIDTH;
@@ -228,17 +230,19 @@ void MAIN {
 #endif
             // Wait for final welford values in cb_ex_global
             cb_wait_front(cb_ex_global, 2);
+            index_h_offset = index_b_offset + index_g_offset;
             for (uint32_t i = 0; i < block_h; i++) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; j++) {
                     tile_regs_acquire();
                     for (uint32_t w = 0; w < subblock_w; w++) {
-                        uint32_t index = w + index_subblock_w_offset;
+                        uint32_t index = w + index_subblock_w_offset + index_h_offset;
 #ifdef TILIZE_IN
                         sub_tiles_bcast_scalar(cb_in, cb_ex_global, index, 0, w);
 #else
                         sub_tiles_bcast_scalar(cb_in0, cb_ex_global, index, 0, w);
 #endif
+                        dprint_tensix_dest_reg(w);
                     }
                     tile_regs_commit();
                     cb_reserve_back(cb_x, subblock_w);
@@ -250,22 +254,22 @@ void MAIN {
                     tile_regs_release();
                     index_subblock_w_offset += subblock_w;
                 }
+                index_h_offset += per_core_N;
             }
             DPRINT << "xmm done" << ENDL();
 
             // Mask out the garbage values
             reconfig_data_format_srcb(cb_ex_global, cb_input_mask);
             mul_tiles_init(cb_x, cb_input_mask);
-            cb_wait_front(cb_x, block_hw);
-
+            cb_wait_front(cb_input_mask, block_w);
             for (uint32_t i = 0; i < block_h; i++) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; ++j) {
+                    cb_wait_front(cb_x, subblock_w);
                     tile_regs_acquire();
                     for (uint32_t w = 0; w < subblock_w; ++w) {
-                        uint32_t index = w + index_subblock_w_offset;
-                        uint32_t index_mask = index;
-                        mul_tiles(cb_x, cb_input_mask, index, index_mask, w);
+                        uint32_t index_mask = w + index_subblock_w_offset;
+                        mul_tiles(cb_x, cb_input_mask, w, index_mask, w);
                     }
                     tile_regs_commit();
 
@@ -278,6 +282,7 @@ void MAIN {
                     }
                     cb_push_back(cb_x, subblock_w);
                     tile_regs_release();
+                    index_subblock_w_offset += subblock_w;
                 }
             }
             cb_pop_front(cb_input_mask, block_w);
@@ -305,7 +310,6 @@ void MAIN {
             DPRINT << "ex2pe done" << ENDL();
 
             //  (x - Ex) * 1/[sqrt(Var + eps)]
-            index_h_offset = 0;
             mul_tiles_bcast_scalar_init_short(cb_x, cb_ex2pe);
 
             cb_wait_front(cb_ex2pe, 1);
