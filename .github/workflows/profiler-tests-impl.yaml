@@ -22,6 +22,7 @@ on:
 
 jobs:
   .profiler-job-template:
+    runs-on: ubuntu-latest
     # Anchor the entire container block
     container: &container-config
       image: ${{ inputs.docker-image }}
