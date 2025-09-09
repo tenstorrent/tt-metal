@@ -209,9 +209,6 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
             tt::tt_metal::Buffer* src_buffer = input_tensors.at(0).buffer();
             tt::tt_metal::Buffer* dst_buffer = output_tensors.at(0).buffer();
 
-            std::cout << "ReshapeOperation::rm_reshape_preparer override_runtime_args_callback"
-                      << std::endl;  // --- IGNORE ---
-
             for (int core_x = 0; core_x < num_cores_x; core_x++) {
                 for (int core_y = 0; core_y < num_cores_y; core_y++) {
                     CoreCoord core = {core_x, core_y};
