@@ -505,7 +505,8 @@ bool is_split_reader_supported(
     return memory_layout == TensorMemoryLayout::HEIGHT_SHARDED && !is_1d_depthwise_conv && act_block_h_ntiles > 1;
 }
 
-static uint32_t get_tilize_cycles(tt::ARCH arch, DataType input_dtype, DataType output_dtype, bool fp32_dest_acc) {
+static uint32_t get_tilize_cycles_per_tile(
+    tt::ARCH arch, DataType input_dtype, DataType output_dtype, bool fp32_dest_acc) {
     switch (arch) {
         case tt::ARCH::BLACKHOLE:
             switch (input_dtype) {
@@ -547,20 +548,42 @@ static uint32_t get_tilize_cycles(tt::ARCH arch, DataType input_dtype, DataType 
     }
 }
 /*
-    Split reader viability is calculated by comparing activation and weight transfer costs.
-    - Activation cost is calculated by using benchmarked NOC transfer rate for L1 local transfer.
-    Activations are transfered in chunks of input_bytes_per_element * input_channels_padded * kernel_width bytes because
-    that is sequential data in the L1.
-    Activation cost is calculated by dividing the activation block size by the NOC transfer local l1 transfer rate.
-    Activations are in ROW_MAJOR layout so dtype is used to calculate the total activation block size.
-    - Weight cost is calculated by using non benchmarked NOC link bandwidth for the time
-    it takes to transfer the weights from DRAM to L1.
-    Weight cost is calculated by sum of dividing the weight block size by the NOC all dram transfer rate and the NOC
-   multicast L1-linked transfer rate. Weights are in TILE_LAYOUT so tile size is used to calculate the total weight
-   block size.
-    - A threshold factor of 2.0 is used to compare the
-    activation and weight costs because activating split reader will delay weights reading and multicasting.
+    Split reader viability is determined by comparing the time required before matmul computation begins.
 
+    Thread organization and dependencies differ based on split reader configuration:
+
+    Without split reader:
+    - Compute thread: Waits for activations to be read, then performs tilization, then performs matmul
+    - Activation reader thread: Reads activations from L1
+    - Weight reader thread: Reads weights from DRAM and multicasts to cores
+
+    With split reader enabled:
+    - Compute thread: Waits for activations to be read, then performs tilization, then performs matmul
+    - Activation reader thread: Reads activations from L1
+    - Weight reader thread: Reads activations from L1 before reading weights from DRAM and multicasting to cores
+
+    Two scenarios are compared:
+    1. Without split reader (single activation reader):
+       - Single activation reader transfers full activation block
+       - Weight reader operates in parallel with activation reader
+       - Compute waits for activation reading to complete, then tilizes, then does matmul
+       - Time before matmul: max(activation_transfer + tilize, weight_transfer)
+
+    2. With split reader (dual activation readers):
+       - Two activation readers each transfer half the activation block in parallel
+       - Weight reader is delayed and starts after completing activation reading
+       - Compute waits for first activation reader to finish (activation_transfer/2), then tilizes
+       - Compute waits for tilization to complete and weights to be available before matmul
+       - Time before matmul: activation_transfer/2 + max(tilize, weight_transfer)
+
+    Cost calculations (all in clock cycles):
+    - Activation cost: (data_bytes / transfer_rate_gbps) * clock_frequency_ghz
+    - Weight cost: data_bytes * (1/dram_rate_gbps + 1/mcast_rate_gbps) * clock_frequency_ghz
+    - Tilize cost: cycles_per_tile * num_tiles (already in cycles)
+
+    Transfer rates are measured in GB/s and converted to cycles by: (bytes / GB_per_s) * GHz = cycles
+    The clock_frequency_ghz represents the actual clock frequency used in the transfer rate lookup tables,
+    which is why we use it to convert transfer rates to cycles.
 */
 bool is_split_reader_viable(
     uint32_t act_block_h_ntiles,
@@ -575,41 +598,58 @@ bool is_split_reader_viable(
     uint32_t act_block_w_ntiles,
     bool fp32_dest_acc,
     DataType output_datatype) {
-    const float empirical_clock = arch == tt::ARCH::BLACKHOLE ? 1.35f : 1.0f;
-    // Calculate activation transfer cost
+    // Clock frequency in GHz used in the transfer rate lookup tables for this architecture
+    // This is the reference clock frequency that the lookup tables were measured against
+    const float clock_frequency_ghz = arch == tt::ARCH::BLACKHOLE ? 1.35f : 1.0f;
+
+    // Calculate activation transfer cost in cycles
     const uint32_t input_bytes_per_element = (input_datatype == DataType::FLOAT32) ? 4 : 2;
     const DataType halo_datatype = input_datatype == DataType::FLOAT32 ? DataType::FLOAT32 : DataType::BFLOAT16;
-    // For dilated convs the kernel_width number of channels isn't sequential in the L1, so we transfer 1 channel at a
-    // time
+
+    // For dilated convs, kernel_width channels aren't sequential in L1, so transfer 1 channel at a time
     const uint32_t coallesced_read_channels = (dilation_w == 1 ? kernel_width : 1);
-    const uint32_t noc_local_l1_transfer_unit_bytes =
-        input_bytes_per_element * input_channels_padded * coallesced_read_channels;
-    const float noc_local_l1_transfer_rate_gbps =
-        get_local_l1_noc_transfer_rate(noc_local_l1_transfer_unit_bytes, arch);
-    const float activation_cost = empirical_clock *
-                                  static_cast<float>(
-                                      input_bytes_per_element * act_block_h_ntiles * tt::constants::TILE_HEIGHT *
-                                      input_channels_padded * kernel_width) /
-                                  noc_local_l1_transfer_rate_gbps;
+    const uint32_t noc_transfer_unit_bytes = input_bytes_per_element * input_channels_padded * coallesced_read_channels;
 
-    const float noc_mcast_many_l1_linked_transfer_rate_gbps =
-        get_mcast_many_l1_linked_noc_transfer_rate(weights_block_ntiles * weights_tile_size, arch);
-    const float noc_all_dram_transfer_rate_gbps = get_all_dram_noc_transfer_rate(weights_tile_size, arch);
-    const float weight_cost =
-        empirical_clock * static_cast<float>(weights_tile_size * weights_block_ntiles) *
-        (1.0f / noc_all_dram_transfer_rate_gbps + 1.0f / noc_mcast_many_l1_linked_transfer_rate_gbps);
+    // Get transfer rate in GB/s for local L1-to-L1 NoC transfers
+    const float noc_local_l1_transfer_rate_gbps = get_local_l1_noc_transfer_rate(noc_transfer_unit_bytes, arch);
 
-    const float tilize_cost = get_tilize_cycles(arch, halo_datatype, output_datatype, fp32_dest_acc) *
-                              act_block_w_ntiles * act_block_h_ntiles;
+    // Calculate total activation data size in bytes
+    const uint32_t activation_data_bytes = input_bytes_per_element * act_block_h_ntiles * tt::constants::TILE_HEIGHT *
+                                           input_channels_padded * kernel_width;
 
-    const bool is_viable =
-        activation_cost / 2 + std::max(weight_cost, tilize_cost) < std::max(activation_cost + tilize_cost, weight_cost);
+    // Convert to cycles: (bytes / GB_per_s) * GHz = cycles
+    const float activation_cycles =
+        clock_frequency_ghz * static_cast<float>(activation_data_bytes) / noc_local_l1_transfer_rate_gbps;
+
+    // Calculate weight transfer cost in cycles
+    const uint32_t weight_data_bytes = weights_tile_size * weights_block_ntiles;
+
+    // Get transfer rates in GB/s for DRAM-to-L1 and L1-to-L1 multicast
+    const float noc_mcast_rate_gbps = get_mcast_many_l1_linked_noc_transfer_rate(weight_data_bytes, arch);
+    const float noc_dram_rate_gbps = get_all_dram_noc_transfer_rate(weights_tile_size, arch);
+
+    // Weight transfer involves both DRAM read and multicast (sequential operations)
+    // Convert to cycles: bytes * (1/dram_rate + 1/mcast_rate) * GHz = cycles
+    const float weight_cycles = clock_frequency_ghz * static_cast<float>(weight_data_bytes) *
+                                (1.0f / noc_dram_rate_gbps + 1.0f / noc_mcast_rate_gbps);
+
+    // Calculate tilization cost in cycles (get_tilize_cycles_per_tile already returns cycles per tile)
+    const uint32_t total_tiles = act_block_w_ntiles * act_block_h_ntiles;
+    const float tilize_cycles =
+        get_tilize_cycles_per_tile(arch, halo_datatype, output_datatype, fp32_dest_acc) * total_tiles;
+
+    // Compare scenarios:
+    // Single reader: max(activation_cycles + tilize_cycles, weight_cycles)
+    // Split reader: activation_cycles/2 + max(weight_cycles, tilize_cycles)
+    const bool is_viable = activation_cycles / 2 + std::max(weight_cycles, tilize_cycles) <
+                           std::max(activation_cycles + tilize_cycles, weight_cycles);
+
     log_debug(
         tt::LogOp,
-        "Split reader viability: activation_cost={:.3f}, weight_cost={:.3f}, tilize_cost={:.3f}, is_viable={}",
-        activation_cost,
-        weight_cost,
-        tilize_cost,
+        "Split reader viability: activation_cycles={:.3f}, weight_cycles={:.3f}, tilize_cycles={:.3f}, is_viable={}",
+        activation_cycles,
+        weight_cycles,
+        tilize_cycles,
         is_viable);
 
     return is_viable;
