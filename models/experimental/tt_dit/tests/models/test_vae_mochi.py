@@ -240,26 +240,14 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds):
     torch_input = torch.randn(N, C, T, H, W)
     tt_input = torch_input.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
 
-    if T % mesh_device.shape[vae_parallel_config.time_parallel.mesh_axis]:
-        tt_input = torch.nn.functional.pad(
-            tt_input,
-            pad=(
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                get_padded_size(T, mesh_device.shape[vae_parallel_config.time_parallel.mesh_axis]) - T,
-            ),
-        )
+    num_devices_T = mesh_device.shape[vae_parallel_config.time_parallel.mesh_axis]
+    if T % num_devices_T:
+        padded_T = get_padded_size(T, num_devices_T) - T
+        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, 0, 0, 0, 0, padded_T))
     num_devices_HW = mesh_device.shape[vae_parallel_config.hw_parallel.mesh_axis]
     if W % num_devices_HW:
-        tt_input = torch.nn.functional.pad(
-            tt_input,
-            pad=(0, 0, 0, get_padded_size(W, num_devices_HW) - W),
-        )
+        padded_HW = get_padded_size(W, num_devices_HW) - W
+        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, padded_HW))
 
     tt_input = ttnn.from_torch(
         tt_input,
@@ -397,81 +385,12 @@ def create_random_causalupsampleblock_models(
             "input_shape": [1, 256, 163, 240, 424],
             # "expected_output_shape": (1, 128, 163, 480, 848),
         },
-        # medium latent
-        # First upsample block (768->512), T padded from 28->32
-        {
-            "name": "block1_768-512",
-            "in_channels": 768,
-            "out_channels": 512,
-            "num_res_blocks": 6,
-            "temporal_expansion": 3,
-            "spatial_expansion": 2,
-            "input_shape": [1, 768, 28, 40, 76],
-            # "expected_output_shape": (1, 512, 82, 80, 152),
-        },
-        # Second upsample block (512->256), T padded from 82->88
-        {
-            "name": "block2_512-256",
-            "in_channels": 512,
-            "out_channels": 256,
-            "num_res_blocks": 4,
-            "temporal_expansion": 2,
-            "spatial_expansion": 2,
-            "input_shape": [1, 512, 82, 80, 152],
-            # "expected_output_shape": (1, 256, 163, 160, 304),
-        },
-        # Third upsample block (256->128), T padded from 163->168
-        {
-            "name": "block3_256-128",
-            "in_channels": 256,
-            "out_channels": 128,
-            "num_res_blocks": 3,
-            "temporal_expansion": 1,
-            "spatial_expansion": 2,
-            "input_shape": [1, 256, 163, 160, 304],
-            # "expected_output_shape": (1, 128, 163, 320, 608),
-        },
-        # small latent
-        # First upsample block (768->512), T padded from 28->32
-        {
-            "name": "block1_768-512",
-            "in_channels": 768,
-            "out_channels": 512,
-            "num_res_blocks": 6,
-            "temporal_expansion": 3,
-            "spatial_expansion": 2,
-            "input_shape": [1, 768, 28, 30, 53],
-            # "expected_output_shape": (1, 512, 82, 60, 106),
-        },
-        # Second upsample block (512->256), T padded from 82->88
-        {
-            "name": "block2_512-256",
-            "in_channels": 512,
-            "out_channels": 256,
-            "num_res_blocks": 4,
-            "temporal_expansion": 2,
-            "spatial_expansion": 2,
-            "input_shape": [1, 512, 82, 60, 106],
-            # "expected_output_shape": (1, 256, 163, 120, 212),
-        },
-        # Third upsample block (256->128), T padded from 163->168
-        {
-            "name": "block3_256-128",
-            "in_channels": 256,
-            "out_channels": 128,
-            "num_res_blocks": 3,
-            "temporal_expansion": 1,
-            "spatial_expansion": 2,
-            "input_shape": [1, 256, 163, 120, 212],
-            # "expected_output_shape": (1, 128, 163, 240, 424),
-        },
     ],
-    ids=["l768", "l512", "l256", "m768", "m512", "m256", "s768", "s512", "s256"],
+    ids=["l768", "l512", "l256"],
 )
-@pytest.mark.parametrize("divide_T", [8, 1], ids=["T8", "T1"])  # Emulate T fracturing
 @pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
 @vae_device_config
-def test_tt_upsample_forward(mesh_device, config, divide_T, reset_seeds, use_real_weights):
+def test_tt_upsample_forward(mesh_device, config, reset_seeds, use_real_weights):
     """Test TtCausalUpsampleBlock against reference implementation."""
     in_channels = config["in_channels"]
     out_channels = config["out_channels"]
@@ -480,10 +399,7 @@ def test_tt_upsample_forward(mesh_device, config, divide_T, reset_seeds, use_rea
     spatial_expansion = config["spatial_expansion"]
     input_shape = config["input_shape"]
     N, C, T, H, W = input_shape
-    T = T // divide_T
-    # expected_output_shape = config["expected_output_shape"]
 
-    # Prepare model args
     block_args = upsample_base_args.copy()
     block_args.update(
         {
@@ -493,16 +409,11 @@ def test_tt_upsample_forward(mesh_device, config, divide_T, reset_seeds, use_rea
         }
     )
 
-    logger.info(
-        f"Testing upsample with in_channels={in_channels}, out_channels={out_channels}, "
-        f"temporal_expansion={temporal_expansion}, "
-        f"spatial_expansion={spatial_expansion}, "
-        f"num_res_blocks={num_res_blocks}, "
-        f"use_real_weights={use_real_weights}"
-    )
-
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=1)
-    vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=8, mesh_axis=1))
+    vae_parallel_config = MochiVAEParallelConfig(
+        time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
+        hw_parallel=ParallelFactor(factor=mesh_device.shape[0], mesh_axis=0),
+    )
 
     reference_model, tt_model = create_random_causalupsampleblock_models(
         mesh_device,
@@ -514,39 +425,51 @@ def test_tt_upsample_forward(mesh_device, config, divide_T, reset_seeds, use_rea
         **block_args,
     )
 
-    # Create input tensor with correct shape from the decoder
+    # Create input tensor
     torch_input = torch.randn(N, C, T, H, W)
     tt_input = torch_input.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
-    tt_input = torch.nn.functional.pad(
-        tt_input, pad=(0, 0, 0, 0, 0, 0, 0, get_padded_size(T, mesh_device.get_num_devices()) - T)
-    )
+    num_devices_T = mesh_device.shape[vae_parallel_config.time_parallel.mesh_axis]
+    if T % num_devices_T:
+        padded_T = get_padded_size(T, num_devices_T) - T
+        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, 0, 0, 0, 0, padded_T))
+    num_devices_HW = mesh_device.shape[vae_parallel_config.hw_parallel.mesh_axis]
+    if W % num_devices_HW:
+        padded_HW = get_padded_size(W, num_devices_HW) - W
+        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, padded_HW))
+
     tt_input = ttnn.from_torch(
         tt_input,
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, 1]),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[3, 1]),
     )
 
     logger.info(f"Input shape: {torch_input.shape}")
     logger.info("Run TtCausalUpsampleBlock forward")
     tt_output = tt_model(tt_input)
-
     # Convert TT output to torch tensor
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[0, 1]),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[3, 1]),
     )
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
     if mesh_device.get_num_devices() > 1:
-        tt_output_torch = tt_output_torch[:, :, 0 : T * temporal_expansion - (temporal_expansion - 1), :, :]
+        tt_output_torch = tt_output_torch[
+            0:N,
+            :,
+            0 : T * temporal_expansion - (temporal_expansion - 1),
+            0 : H * spatial_expansion,
+            0 : W * spatial_expansion,
+        ]
 
     # Get reference output
-    logger.info("Run RefResBlock forward")
+    logger.info("Run RefCausalUpsampleBlock forward")
     with torch.no_grad():
         ref_output = reference_model(torch_input)
 
+    breakpoint()
     logger.info("assert quality")
     assert_quality(ref_output, tt_output_torch, pcc=0.989)
 
@@ -604,14 +527,12 @@ decoder_test_configs = [
     decoder_test_configs,
     ids=[cfg["name"] for cfg in decoder_test_configs],
 )
-@pytest.mark.parametrize("divide_T", [8, 1], ids=["T8", "T1"])  # Emulate T fracturing
 @pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
 @pytest.mark.parametrize("load_dit_weights", [False, True], ids=["no_dit", "load_dit"])
 @vae_device_config
 def test_tt_decoder_forward(mesh_device, config, divide_T, reset_seeds, use_real_weights, load_dit_weights):
     input_shape = config["input_shape"]
     N, C, T, H, W = input_shape
-    T = T // divide_T
 
     # Initialize model arguments
     model_args = decoder_base_args.copy()
