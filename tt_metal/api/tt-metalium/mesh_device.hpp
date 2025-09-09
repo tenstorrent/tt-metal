@@ -56,13 +56,13 @@ namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
 class ThreadPool;
-class TraceDescriptor;
+struct TraceDescriptor;
 
 namespace distributed {
 
 class MeshCommandQueue;
 class MeshDeviceView;
-class MeshTraceBuffer;
+struct MeshTraceBuffer;
 
 using DeviceIds = std::vector<int>;
 
