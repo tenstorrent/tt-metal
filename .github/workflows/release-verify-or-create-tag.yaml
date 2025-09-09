@@ -61,6 +61,12 @@ jobs:
             fi
             echo "version=$version" >> "$GITHUB_OUTPUT"
             echo "$version"
+
+      - name: Echo GITHUB_TOKEN permissions
+        run: |
+          echo "GITHUB_TOKEN Permissions:"
+          echo "${{ toJson(github.token) }}"
+
       - name: Create tag
         if: ${{ !inputs.dry-run }}
         uses: actions/github-script@v7.0.1
