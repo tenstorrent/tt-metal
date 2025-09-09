@@ -6,9 +6,9 @@ TTNN implementation of Panoptic-DeepLab model for panoptic segmentation.
 
 ### 1. Download Weights
 
-Download the ResNet-52 weights file: [https://dl.fbaipublicfiles.com/detectron2/DeepLab/R-52.pkl]
+Download the Panoptic-DeepLab CityScapes weights file: [https://dl.fbaipublicfiles.com/detectron2/PanopticDeepLab/Cityscapes-PanopticSegmentation/panoptic_deeplab_R_52_os16_mg124_poly_90k_bs32/model_final_bd324a.pkl]
 
-Place the downloaded `R-52.pkl` file in `models/experimental/panoptic_deeplab/weights/`
+Place the downloaded `model_final_bd324a.pkl` file in `models/experimental/panoptic_deeplab/weights/`
 
 ### 2. Running the Model
 
