@@ -513,7 +513,7 @@ void MeshGraphDescriptor::validate_legacy_requirements(const proto::MeshGraphDes
         }
     }
 
-    // Check that there is only 2 dimensions in the device topology and host topology
+    // Check that there are only 2 dimensions in the device topology and host topology
     for (const auto& mesh : proto.mesh_descriptors()) {
         if (mesh.device_topology().dims_size() != 2 || mesh.host_topology().dims_size() != 2) {
             error_messages.push_back(fmt::format(
