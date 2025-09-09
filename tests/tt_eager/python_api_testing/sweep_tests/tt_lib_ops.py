@@ -11,8 +11,8 @@ import ttnn._ttnn
 import ttnn.operations
 import ttnn.operations.matmul
 import ttnn.operations.reduction
-from models.helper_funcs import Linear as tt_Linear
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, ttl_complex_2_torch_complex
+from models.common.helper_funcs import Linear as tt_Linear
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, ttl_complex_2_torch_complex
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
