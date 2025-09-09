@@ -32,52 +32,53 @@ class GraphRef;
 enum Policy : int;
 }
 
-// TODO: Try make efficient by storing stringviews?
-class MeshGraphDescriptor {
-public:
-    using LocalNodeId = uint32_t;   // Scoped to parent (mesh_id, graph_id, device index)
-    using GlobalNodeId = uint32_t;  // Unique across the instantiated MGD
-    using ConnectionId = uint32_t;
+inline namespace v1_0 {
+using LocalNodeId = uint32_t;   // Scoped to parent (mesh_id, graph_id, device index)
+using GlobalNodeId = uint32_t;  // Unique across the instantiated MGD
+using ConnectionId = uint32_t;
 
-    enum class NodeKind : uint8_t { Mesh = 0, Graph = 1, Device = 2 };
+enum class NodeKind : uint8_t { Mesh = 0, Graph = 1, Device = 2 };
+// NOTE: Instance Data and ConnectionData are subject to change as Physical discovery is implemented
+// These will be moved to Mesh Graph object once MGD 1.0 is deprecated
+struct InstanceData {
+    const LocalNodeId local_id;        // instance id from proto or computed device index
+    const std::string name;
+    const std::string type;
+    const NodeKind kind; // Type of instance (mesh, graph, device)
+    std::variant<const proto::MeshDescriptor*, const proto::GraphDescriptor*> desc; // Pointer to the descriptor that this instance is based on
+    std::unordered_set<GlobalNodeId> sub_instances; // direct list of child GlobalNodeIds
+    std::unordered_map<LocalNodeId, GlobalNodeId> sub_instances_local_id_to_global_id; // child LocalId -> GlobalId
+    std::vector<GlobalNodeId> hierarchy; // path from root using GlobalNodeIds
 
-    // NOTE: Instance Data and ConnectionData are subject to change as Physical discovery is implemented
-    // These will be moved to Mesh Graph object once MGD 1.0 is deprecated
-    struct InstanceData {
-        const LocalNodeId local_id;        // instance id from proto or computed device index
-        const std::string name;
-        const std::string type;
-        const NodeKind kind; // Type of instance (mesh, graph, device)
-        std::variant<const proto::MeshDescriptor*, const proto::GraphDescriptor*> desc; // Pointer to the descriptor that this instance is based on
-        std::unordered_set<GlobalNodeId> sub_instances; // direct list of child GlobalNodeIds
-        std::unordered_map<LocalNodeId, GlobalNodeId> sub_instances_local_id_to_global_id; // child LocalId -> GlobalId
-        std::vector<GlobalNodeId> hierarchy; // path from root using GlobalNodeIds
+    const GlobalNodeId global_id = generate_next_global_id();
 
-        const GlobalNodeId global_id = generate_next_global_id();
+private:
+    inline static GlobalNodeId generate_next_global_id() {
+        static std::atomic_uint32_t next_global_id_ = 0;
+        return next_global_id_++;
+    }
+};
+
+struct ConnectionData {
+    std::vector<GlobalNodeId> nodes; // [src_global_device_id, dst_global_device_id]
+    const std::uint32_t count;             // ethernet lanes per connection
+    const proto::Policy policy;
+    const bool directional;
+    const GlobalNodeId parent_instance_id;
+
+    const ConnectionId connection_id = generate_next_global_id();
 
     private:
-        inline static GlobalNodeId generate_next_global_id() {
+        inline static ConnectionId generate_next_global_id() {
             static std::atomic_uint32_t next_global_id_ = 0;
             return next_global_id_++;
         }
-    };
+};
+} // v1_0
 
-    struct ConnectionData {
-        std::vector<GlobalNodeId> nodes; // [src_global_device_id, dst_global_device_id]
-        const std::uint32_t count;             // ethernet lanes per connection
-        const proto::Policy policy;
-        const bool directional;
-        const GlobalNodeId parent_instance_id;
-
-        const ConnectionId connection_id = generate_next_global_id();
-
-        private:
-            inline static ConnectionId generate_next_global_id() {
-                static std::atomic_uint32_t next_global_id_ = 0;
-                return next_global_id_++;
-            }
-    };
-
+// TODO: Try make efficient by storing stringviews?
+class MeshGraphDescriptor {
+public:
     // backwards_compatible will enable all checks related to MGD 1.0. This will limit the functionality of MGD 2.0
     explicit MeshGraphDescriptor(const std::string& text_proto,  const bool backwards_compatible = false);
     explicit MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path,  const bool backwards_compatible = false);
