@@ -12,7 +12,6 @@
 #include <tt-metalium/kernel.hpp>
 #include "tt-metalium/kernel_types.hpp"
 #include <tt-metalium/fabric.hpp>
-#include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
 #include "ttnn/common/queue_id.hpp"
@@ -48,7 +47,6 @@
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 
 enum TwoInputReaderKernelWriteMode { LOCAL_WRITEBACK, FABRIC_UNICAST, FABRIC_MULTICAST };
 
