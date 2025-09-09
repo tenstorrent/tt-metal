@@ -15,14 +15,15 @@ from models.experimental.panoptic_deeplab.tt.tt_conv2d_wrapper import (
 
 class TtBottleneck(nn.Module):
     """
-    TTNN implementation of BottleneckBlock.
+    TTNN implementation of BottleneckBlock with fused Conv+BatchNorm.
 
     Based on the model structure, BottleneckBlock contains:
-    - conv1: 1x1 conv (channel reduction)
-    - conv2: 3x3 conv (spatial convolution, potentially with stride/dilation)
-    - conv3: 1x1 conv (channel expansion)
+    - conv1: 1x1 conv (channel reduction) with bias
+    - conv2: 3x3 conv (spatial convolution, potentially with stride/dilation) with bias
+    - conv3: 1x1 conv (channel expansion) with bias
     - shortcut: optional 1x1 conv for residual connection when input/output dimensions differ
-    Each with SyncBatchNorm and ReLU activation, except the final output uses residual addition + ReLU.
+    Each with ReLU activation. BatchNorm operations are fused into the Conv weights and biases.
+    The final output uses residual addition + ReLU.
     """
 
     def __init__(
@@ -87,61 +88,8 @@ class TtBottleneck(nn.Module):
                 padding=(0, 0),
             )
 
-        # Extract normalization parameters from preprocessed structure
-        conv1_norm_params = conv1_params.get("norm", None)
-        conv2_norm_params = conv2_params.get("norm", None)
-        conv3_norm_params = conv3_params.get("norm", None)
-
-        # Normalization parameters are already TTNN tensors from preprocessing
-        # Conv1 normalization
-        if conv1_norm_params:
-            self.conv1_norm_weight = conv1_norm_params["weight"]
-            self.conv1_norm_bias = conv1_norm_params["bias"]
-            self.conv1_norm_running_mean = conv1_norm_params["running_mean"]
-            self.conv1_norm_running_var = conv1_norm_params["running_var"]
-        else:
-            self.conv1_norm_weight = None
-            self.conv1_norm_bias = None
-            self.conv1_norm_running_mean = None
-            self.conv1_norm_running_var = None
-
-        # Conv2 normalization
-        if conv2_norm_params:
-            self.conv2_norm_weight = conv2_norm_params["weight"]
-            self.conv2_norm_bias = conv2_norm_params["bias"]
-            self.conv2_norm_running_mean = conv2_norm_params["running_mean"]
-            self.conv2_norm_running_var = conv2_norm_params["running_var"]
-        else:
-            self.conv2_norm_weight = None
-            self.conv2_norm_bias = None
-            self.conv2_norm_running_mean = None
-            self.conv2_norm_running_var = None
-
-        # Conv3 normalization
-        if conv3_norm_params:
-            self.conv3_norm_weight = conv3_norm_params["weight"]
-            self.conv3_norm_bias = conv3_norm_params["bias"]
-            self.conv3_norm_running_mean = conv3_norm_params["running_mean"]
-            self.conv3_norm_running_var = conv3_norm_params["running_var"]
-        else:
-            self.conv3_norm_weight = None
-            self.conv3_norm_bias = None
-            self.conv3_norm_running_mean = None
-            self.conv3_norm_running_var = None
-
-        # Shortcut normalization (if exists)
-        if has_shortcut:
-            shortcut_norm_params = shortcut_params.get("norm", None)
-            if shortcut_norm_params:
-                self.shortcut_norm_weight = shortcut_norm_params["weight"]
-                self.shortcut_norm_bias = shortcut_norm_params["bias"]
-                self.shortcut_norm_running_mean = shortcut_norm_params["running_mean"]
-                self.shortcut_norm_running_var = shortcut_norm_params["running_var"]
-            else:
-                self.shortcut_norm_weight = None
-                self.shortcut_norm_bias = None
-                self.shortcut_norm_running_mean = None
-                self.shortcut_norm_running_var = None
+        # With fused Conv+BN, we no longer need separate normalization parameters
+        # All BatchNorm operations are now fused into the Conv weights and biases
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         logger.debug(f"TtBottleneck {self.block_id} forward pass starting, input shape: {x.shape}")
@@ -151,92 +99,33 @@ class TtBottleneck(nn.Module):
         # workaround for conv tilize issue with non-height shard
         if identity.spec.layout != ttnn.TILE_LAYOUT:
             identity = ttnn.tilize(identity)
-        # ttnn.deallocate(x)
 
-        # Process shortcut if needed
+        # Process shortcut if needed (BatchNorm is now fused into shortcut Conv)
         if self.has_shortcut:
             logger.debug(f"TtBottleneck {self.block_id} processing shortcut convolution")
             identity = self.shortcut(identity)
             identity = ttnn.to_memory_config(identity, ttnn.DRAM_MEMORY_CONFIG)
-            # Convert NHWC to NCHW for batch_norm
-            identity = ttnn.permute(identity, (0, 3, 1, 2))
-            logger.debug(f"TtBottleneck {self.block_id} applying shortcut batch norm")
-            identity = ttnn.batch_norm(
-                identity,
-                running_mean=self.shortcut_norm_running_mean,
-                running_var=self.shortcut_norm_running_var,
-                weight=self.shortcut_norm_weight,
-                bias=self.shortcut_norm_bias,
-                eps=1e-05,
-                training=False,
-            )
-            # Convert back to NHWC
-            identity = ttnn.permute(identity, (0, 2, 3, 1))
             logger.debug(f"TtBottleneck {self.block_id} shortcut processing complete, shape: {identity.shape}")
 
-        # Main path: Conv1 + BatchNorm + ReLU
+        # Main path: Conv1 + ReLU (BatchNorm fused into Conv1)
         logger.debug(f"TtBottleneck {self.block_id} processing conv1 (1x1 reduction)")
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         out = self.conv1(x)
-        # Convert NHWC to NCHW for batch_norm
-        out = ttnn.permute(out, (0, 3, 1, 2))
-        logger.debug(f"TtBottleneck {self.block_id} applying conv1 batch norm")
-        out = ttnn.batch_norm(
-            out,
-            running_mean=self.conv1_norm_running_mean,
-            running_var=self.conv1_norm_running_var,
-            weight=self.conv1_norm_weight,
-            bias=self.conv1_norm_bias,
-            eps=1e-05,
-            training=False,
-        )
-        # Convert back to NHWC
-        out = ttnn.permute(out, (0, 2, 3, 1))
         out = ttnn.relu(out)
         out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"TtBottleneck {self.block_id} conv1 complete, output shape: {out.shape}")
 
-        # Conv2 + BatchNorm + ReLU
+        # Conv2 + ReLU (BatchNorm fused into Conv2)
         logger.debug(f"TtBottleneck {self.block_id} processing conv2 (3x3 spatial)")
         out = self.conv2(out)
-        # Convert NHWC to NCHW for batch_norm
-        # out = ttnn.to_memory_config(out, ttnn.L1_MEMORY_CONFIG)
-        out = ttnn.permute(out, (0, 3, 1, 2))
-        logger.debug(f"TtBottleneck {self.block_id} applying conv2 batch norm")
-        out = ttnn.batch_norm(
-            out,
-            running_mean=self.conv2_norm_running_mean,
-            running_var=self.conv2_norm_running_var,
-            weight=self.conv2_norm_weight,
-            bias=self.conv2_norm_bias,
-            eps=1e-05,
-            training=False,
-        )
-        # Convert back to NHWC
-        out = ttnn.permute(out, (0, 2, 3, 1))
         out = ttnn.relu(out)
         out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"TtBottleneck {self.block_id} conv2 complete, output shape: {out.shape}")
 
-        # Conv3 + BatchNorm (no ReLU yet)
+        # Conv3 (no ReLU yet, BatchNorm fused into Conv3)
         logger.debug(f"TtBottleneck {self.block_id} processing conv3 (1x1 expansion)")
         out = self.conv3(out)
-        logger.debug(f"TtBottleneck {self.block_id} conv3 convolution complete, output shape: {out.shape}")
-        # Convert NHWC to NCHW for batch_norm
         out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
-        out = ttnn.permute(out, (0, 3, 1, 2))
-        logger.debug(f"TtBottleneck {self.block_id} applying conv3 batch norm")
-        out = ttnn.batch_norm(
-            out,
-            running_mean=self.conv3_norm_running_mean,
-            running_var=self.conv3_norm_running_var,
-            weight=self.conv3_norm_weight,
-            bias=self.conv3_norm_bias,
-            eps=1e-05,
-            training=False,
-        )
-        # Convert back to NHWC
-        out = ttnn.permute(out, (0, 2, 3, 1))
         logger.debug(f"TtBottleneck {self.block_id} conv3 complete, output shape: {out.shape}")
 
         # Residual connection + ReLU
