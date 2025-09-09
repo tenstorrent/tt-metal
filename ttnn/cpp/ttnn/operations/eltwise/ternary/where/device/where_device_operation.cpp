@@ -95,14 +95,12 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
                 predicate_tensor.logical_shape(),
                 value_true_tensor.value().logical_shape());
         } else if (broadcast_type == WhereBroadcastType::COL_BCAST) {
-            // For column broadcast, validate that dimensions are broadcastable
-            // Either heights are same, or one is 1 (broadcastable)
+            // For column broadcast, validate that heights are identical (broadcasting along width)
             const auto pred_h = predicate_tensor.logical_shape()[-2];
             const auto true_h = value_true_tensor.value().logical_shape()[-2];
-            const bool height_broadcastable = (pred_h == true_h) || (pred_h == 1) || (true_h == 1);
             TT_FATAL(
-                height_broadcastable,
-                "Where TTS column broadcast requires predicate and value_true heights to be broadcastable. "
+                pred_h == true_h,
+                "Where TTS column broadcast requires predicate and value_true heights to be identical. "
                 "Predicate: {}, Value true: {}",
                 predicate_tensor.logical_shape(),
                 value_true_tensor.value().logical_shape());
@@ -111,12 +109,24 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
             args.value_false_scalar.has_value(),
             "Where TTS operation requires value_false_scalar to be set in operation attributes");
     } else if (args.where_variant == WhereVariant::TST) {
-        TT_FATAL(
-            (predicate_tensor.logical_shape() == value_false_tensor.value().logical_shape() ||
-             broadcast_type == ttnn::operations::ternary::WhereBroadcastType::OUTER_BCAST),
-            "Where TST operation requires predicate and value_false to have same shape. Predicate: {}, Value false: {}",
-            predicate_tensor.logical_shape(),
-            value_false_tensor.value().logical_shape());
+        if (broadcast_type == WhereBroadcastType::NONE) {
+            TT_FATAL(
+                predicate_tensor.logical_shape() == value_false_tensor.value().logical_shape(),
+                "Where TST operation requires predicate and value_false to have same shape for NONE broadcast. "
+                "Predicate: {}, Value false: {}",
+                predicate_tensor.logical_shape(),
+                value_false_tensor.value().logical_shape());
+        } else if (broadcast_type == WhereBroadcastType::COL_BCAST) {
+            // For column broadcast, validate that heights are identical (broadcasting along width)
+            const auto pred_h = predicate_tensor.logical_shape()[-2];
+            const auto false_h = value_false_tensor.value().logical_shape()[-2];
+            TT_FATAL(
+                pred_h == false_h,
+                "Where TST column broadcast requires predicate and value_false heights to be identical. "
+                "Predicate: {}, Value false: {}",
+                predicate_tensor.logical_shape(),
+                value_false_tensor.value().logical_shape());
+        }
         TT_FATAL(
             args.value_true_scalar.has_value(),
             "Where TST operation requires value_true_scalar to be set in operation attributes");
