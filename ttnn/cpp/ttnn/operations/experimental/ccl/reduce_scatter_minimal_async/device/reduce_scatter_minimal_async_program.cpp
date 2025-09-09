@@ -63,6 +63,8 @@ uint32_t default_workers(
     double data_moved_per_link_bytes = double(input_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
                                        (topology == ttnn::ccl::Topology::Ring ? 2 : 1);
     log_info(tt::LogAlways, "DEBUG: data_moved_per_link_bytes: {}", data_moved_per_link_bytes);
+    // Heuristic values are based on the sweep test:
+    // tests/ttnn/multidevice_perf_tests/test_reduce_scatter_hyperparameter_sweep_perf_galaxy.py
     if (topology == ttnn::ccl::Topology::Ring) {
         // For ring, 50+MB is where 8 workers start scaling. 1-50MB is where 4 workers start scaling. 0-1MB is where 2
         // workers start scaling.
@@ -103,6 +105,10 @@ uint32_t default_workers(
 
 uint32_t default_chunks_per_sync(
     ttnn::ccl::Topology topology, uint32_t tiles_to_read, uint32_t tiles_read, uint32_t tile_granularity) {
+    // For Line, as early as 20 chunks per sync we get statistically significant performance improvements
+    // For Ring there is no statistically significant performance improvements until 80 chunks per sync, which beats the
+    // default value of syncing once This was determined by the sweep test:
+    // tests/ttnn/multidevice_perf_tests/test_reduce_scatter_hyperparameter_sweep_perf_galaxy.py
     TT_FATAL(topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear, "Invalid topology");
     uint32_t default_value = topology == ttnn::ccl::Topology::Ring ? 80 : 20;
     uint32_t total_chunks = std::max((tiles_to_read - tiles_read) / tile_granularity / 2, (uint32_t)1);

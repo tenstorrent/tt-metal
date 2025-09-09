@@ -105,7 +105,7 @@ TOPOLOGY = ["ring", "linear"]
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 1),
+        (True, 4),
     ],
     ids=["perf"],
 )
