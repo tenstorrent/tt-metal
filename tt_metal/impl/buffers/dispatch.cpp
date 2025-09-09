@@ -589,7 +589,11 @@ void issue_buffer_dispatch_command_sequence(
     uint32_t num_worker_counters = sub_device_ids.size();
     uint32_t data_size_bytes = dispatch_params.pages_per_txn * dispatch_params.page_size_to_write;
     tt::tt_metal::DeviceCommandCalculator calculator;
-    calculator.add_dispatch_write_linear<true, true>(data_size_bytes);
+    if constexpr (std::is_same_v<T, ShardedBufferWriteDispatchParams>) {
+        calculator.add_dispatch_write_linear<true, true>(data_size_bytes);
+    } else {
+        calculator.add_dispatch_write_paged<true>(dispatch_params.page_size_to_write, dispatch_params.pages_per_txn);
+    }
     if (dispatch_params.issue_wait) {
         for (int i = 0; i < num_worker_counters; ++i) {
             calculator.add_dispatch_wait();
