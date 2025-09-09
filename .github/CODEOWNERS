@@ -307,5 +307,8 @@ dockerfile/upstream_test_images/ @tenstorrent/metalium-developers-infra
 # tt-train
 tt-train/** @dmakoviichuk-tt @rfurko-tt @ayerofieiev-tt
 
+# tt-telemetry
+tt_telemetry/** @btrzynadlowski-tt
+
 # .clang-tidy files - Metalium infra team owns all clang-tidy configuration files
 **/.clang-tidy @tenstorrent/metalium-developers-infra
