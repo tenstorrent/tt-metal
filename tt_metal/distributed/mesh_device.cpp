@@ -648,7 +648,7 @@ void MeshDevice::disable_and_clear_program_cache() {
 size_t MeshDevice::num_program_cache_entries() { return program_cache_->num_entries(); }
 
 SubDeviceManagerId MeshDevice::create_sub_device_manager(
-    std::initializer_list<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) {
     auto lock = lock_api();
     return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
 }
