@@ -8,6 +8,7 @@ import math
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import is_blackhole
+from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import HS, BS, WS
 
 
 # helper to correct torch output for asymmetric padding
@@ -289,16 +290,14 @@ def run_avg_pool2d(
     rtol = 0.01
     if out_dtype == ttnn.bfloat4_b:
         pcc_thresh = 0.98
-    if in_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b:
+    if in_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat4_b:
         atol = 0.35
     assert_with_pcc(torch_output, ttnn_output, pcc_thresh)
     # Ensure both tensors have the same dtype for comparison
     if out_dtype != ttnn.bfloat16:
         ttnn_output = ttnn_output.to(torch.bfloat16)
-    # Skip allclose for bfloat4 output as it is too noisy
-    if out_dtype != ttnn.bfloat4_b:
-        allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
-        assert allclose
+    allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
+    assert allclose
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -376,13 +375,6 @@ def run_avg_pool2d(
     "in_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
 )
-@pytest.mark.parametrize(
-    "out_layout",
-    [
-        ttnn.ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.ttnn.TILE_LAYOUT,
-    ],
-)
 def test_run_avg_pool2d(
     device,
     tensor_map,
@@ -395,7 +387,6 @@ def test_run_avg_pool2d(
     count_include_pad,
     shard_scheme,
     in_dtype,
-    out_layout,
 ):
     run_avg_pool2d(
         device,
@@ -410,8 +401,6 @@ def test_run_avg_pool2d(
         shard_scheme=shard_scheme,
         in_dtype=in_dtype,
         run_twice=True,
-        output_layout=out_layout,
-        out_dtype=ttnn.bfloat16 if out_layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.bfloat8_b,
     )
 
 
@@ -419,11 +408,15 @@ def test_run_avg_pool2d(
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
-    "input_shape",  ## NCHW
+    "input_shape, shard_startegy",
     (
         (
-            [1, 64, 112, 112],
-            [16, 320, 32, 32],
+            ([1, 256, 56, 56], HS),
+            ([1, 512, 28, 28], HS),
+            ([1, 192, 264, 40], HS),
+            ([1, 800, 32, 32], HS),
+            ([1, 576, 32, 32], HS),
+            ([1, 16, 12, 12], HS),
         )
     ),
 )
@@ -431,12 +424,20 @@ def test_run_avg_pool2d(
     "kernel_size",
     (
         (3, 3),
-        (9, 9),
+        (5, 5),
+        (7, 7),
     ),
 )
-def test_avg_pool2d_output_formats_and_layouts(device, tensor_map, input_shape, kernel_size, out_dtype, output_layout):
-    padding = (1, 1)
+@pytest.mark.parametrize(
+    "in_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+def test_avg_pool2d_output_formats_and_layouts(
+    device, tensor_map, input_shape, shard_startegy, kernel_size, out_dtype, output_layout, in_dtype
+):
+    padding = (0, 0)
     stride = (1, 1)
+
     run_avg_pool2d(
         device,
         tensor_map,
@@ -447,8 +448,8 @@ def test_avg_pool2d_output_formats_and_layouts(device, tensor_map, input_shape, 
         ceil_mode=False,
         divisor_override=None,
         count_include_pad=False,
-        shard_scheme=None,
-        in_dtype=ttnn.bfloat16,
+        shard_scheme=shard_startegy,
+        in_dtype=in_dtype,
         output_layout=output_layout,
         out_dtype=out_dtype,
     )

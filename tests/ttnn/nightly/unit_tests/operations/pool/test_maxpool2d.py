@@ -12,6 +12,10 @@ import math
 from models.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+WS = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+
 
 # Cache map used for torch tensor reuse - the tensor will not be generated if a tensor of the same dimensions has already been generated
 @pytest.fixture(scope="module")
@@ -220,12 +224,13 @@ def run_max_pool(
         atol = 0.35
     if out_dtype == ttnn.bfloat4_b:
         pcc_thresh = 0.93
+        atol = 0.5
+        rtol = 1.0
     assert_with_pcc(ttnn_output, torch_output, pcc_thresh)
     if out_dtype != ttnn.bfloat16:
         ttnn_output = ttnn_output.to(torch.bfloat16)
-    if out_dtype != ttnn.bfloat4_b:  # skip allclose check for bfloat4_b due to precision issues
-        allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
-        assert allclose
+    allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
+    assert allclose
     if in_dtype == ttnn.bfloat16 and out_dtype == ttnn.bfloat16:
         isequal = torch.equal(ttnn_output, torch_output)
         assert isequal
@@ -311,15 +316,8 @@ def run_max_pool(
         True,
     ],
 )
-@pytest.mark.parametrize(
-    "out_layout",
-    [
-        ttnn.ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.ttnn.TILE_LAYOUT,
-    ],
-)
 def test_run_max_pool_height_shard(
-    input_shape, kernel_size, padding, stride, dilation, device, tensor_map, in_dtype, ceil_mode, out_layout
+    input_shape, kernel_size, padding, stride, dilation, device, tensor_map, in_dtype, ceil_mode
 ):
     run_max_pool(
         input_shape,
@@ -332,8 +330,6 @@ def test_run_max_pool_height_shard(
         in_dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
-        output_layout=out_layout,
-        out_dtype=ttnn.bfloat16 if out_layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.bfloat8_b,
     )
 
 
@@ -387,13 +383,6 @@ def test_run_max_pool_height_shard(
         False,
     ],
 )
-@pytest.mark.parametrize(
-    "out_layout",
-    [
-        ttnn.ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.ttnn.TILE_LAYOUT,
-    ],
-)
 def test_run_max_pool_width_shard(
     input_shape,
     kernel_size,
@@ -404,7 +393,6 @@ def test_run_max_pool_width_shard(
     tensor_map,
     in_dtype,
     ceil_mode,
-    out_layout,
 ):
     run_max_pool(
         input_shape,
@@ -417,8 +405,6 @@ def test_run_max_pool_width_shard(
         in_dtype,
         shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ceil_mode=ceil_mode,
-        output_layout=out_layout,
-        out_dtype=ttnn.bfloat16 if out_layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.bfloat8_b,
     )
 
 
@@ -472,13 +458,6 @@ def test_run_max_pool_width_shard(
         False,
     ],
 )
-@pytest.mark.parametrize(
-    "out_layout",
-    [
-        ttnn.ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.ttnn.TILE_LAYOUT,
-    ],
-)
 def test_run_max_pool_block_shard(
     input_shape,
     kernel_size,
@@ -489,7 +468,6 @@ def test_run_max_pool_block_shard(
     tensor_map,
     in_dtype,
     ceil_mode,
-    out_layout,
 ):
     run_max_pool(
         input_shape,
@@ -502,8 +480,6 @@ def test_run_max_pool_block_shard(
         in_dtype,
         shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ceil_mode=ceil_mode,
-        output_layout=out_layout,
-        out_dtype=ttnn.bfloat16 if out_layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.bfloat8_b,
     )
 
 
@@ -628,11 +604,16 @@ def test_run_max_pool_squeeze_net_model(
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
-    "input_shape",  ## NCHW
+    "input_shape, shard_startegy",
     (
         (
-            [1, 64, 112, 112],
-            [16, 320, 32, 32],
+            ([1, 64, 112, 112], HS),
+            ([1, 280, 10, 10], HS),
+            ([1, 384, 32, 32], HS),
+            ([1, 256, 132, 20], BS),
+            ([1, 512, 8, 6], BS),
+            ([2, 4096, 10, 16], WS),
+            ([1, 32768, 10, 10], WS),
         )
     ),
 )
@@ -640,11 +621,21 @@ def test_run_max_pool_squeeze_net_model(
     "kernel_size",
     (
         (3, 3),
+        (5, 5),
         (9, 9),
     ),
 )
-def test_max_pool2d_output_formats_and_layouts(device, tensor_map, input_shape, kernel_size, out_dtype, output_layout):
-    padding = (1, 1)
+@pytest.mark.parametrize(
+    "in_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+def test_max_pool2d_output_formats_and_layouts(
+    device, tensor_map, input_shape, shard_startegy, kernel_size, out_dtype, output_layout, in_dtype
+):
+    padding = (0, 0)
     stride = (1, 1)
     dilation = (1, 1)
 
@@ -656,7 +647,8 @@ def test_max_pool2d_output_formats_and_layouts(device, tensor_map, input_shape, 
         dilation,
         device,
         tensor_map,
-        ttnn.bfloat16,
+        in_dtype,
+        shard_scheme=shard_startegy,
         out_dtype=out_dtype,
         output_layout=output_layout,
         nightly_skips=False,
