@@ -1,5 +1,5 @@
 
-![](CablingFlow.png)
+![](images/CablingFlow.png)
 # Cabling Generator
 A tool meant to be used in in scale-out of various Tenstorrent systems. Given 
 deployment specifications (rack locations of systems i.e. from the rack 
@@ -19,4 +19,6 @@ This is where a person managing a specific data center deployment of a system cl
 ### Putting Them Together
 One thing to consider with how the Cabling Generator puts both the Specifications together is that the Cabling treats hosts indexes array, and the Deployment is basically an array of hosts. This is brought up to point out that order matters in the Deployment Specification; you will not get the same cabling guide if you mix up the order of hosts in a Deployment specification
 
-<!-- ## Notes/Warnings -->
+## Notes/Warnings
+
+- As stated previously, the ordering of hosts in the deployment descriptor does matter. This means that you will get different cabling setups with different ordering of hosts.
