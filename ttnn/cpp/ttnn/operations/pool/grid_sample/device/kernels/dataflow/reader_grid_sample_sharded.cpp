@@ -51,9 +51,11 @@ void kernel_main() {
     constexpr uint32_t grid_nsticks_per_core = get_compile_time_arg_val(7);
     constexpr uint32_t grid_batching_factor = get_compile_time_arg_val(8);
     constexpr uint32_t use_precomputed_grid = get_compile_time_arg_val(9);
+    constexpr uint32_t split_reader = get_compile_time_arg_val(10);
+    constexpr uint32_t reader_id = get_compile_time_arg_val(11);
 
-    // Input tensor accessor for remote NOC reads
-    constexpr auto input_tensor_args = TensorAccessorArgs<10>();
+    // Input tensor accessor for remote NOC reads (updated for new arg count)
+    constexpr auto input_tensor_args = TensorAccessorArgs<12>();
     const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr, input_stick_nbytes);
 
     // Grid coordinates scaling factors (for standard grid mode)
@@ -74,12 +76,15 @@ void kernel_main() {
     uint32_t grid_stick_idx = 0;
     uint32_t l1_grid_addr = l1_grid_base_addr;
 
+    // Global grid point tracking for split reader - starts at reader_id offset
+    uint32_t global_batch_idx = split_reader ? reader_id : 0;
+
     while (grid_stick_idx < grid_nsticks_per_core) {
         volatile tt_l1_ptr uint16_t* const grid_stick_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_grid_addr);
 
-        // Process each batched grid point within this stick
-        uint32_t batch_idx = 0;
+        // Process each batched grid point within this stick using global tracking
+        uint32_t batch_idx = global_batch_idx;
         while (batch_idx < grid_batching_factor) {
             uint16_t weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf;
             int32_t h0, h1, w0, w1;
@@ -197,9 +202,26 @@ void kernel_main() {
             cb_push_back(scalar_cb_index, 1);
 
             ++batch_idx;
-            if (batch_idx == grid_batching_factor) {
+            ++global_batch_idx;
+
+            // Check after first increment
+            if (batch_idx >= grid_batching_factor) {
                 l1_grid_addr += grid_stick_nbytes;
                 ++grid_stick_idx;
+                global_batch_idx = global_batch_idx - grid_batching_factor;
+            }
+
+            // Duplicate the increment logic for split reader
+            if constexpr (split_reader) {
+                ++batch_idx;
+                ++global_batch_idx;
+
+                // Check after second increment
+                if (batch_idx >= grid_batching_factor) {
+                    l1_grid_addr += grid_stick_nbytes;
+                    ++grid_stick_idx;
+                    global_batch_idx = global_batch_idx - grid_batching_factor;
+                }
             }
         }
     }
