@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
-# TODO: This shouldn't depend on torch
 import torch
 
 import ttnn
@@ -102,7 +101,6 @@ class Conv2dConfiguration:
         kernel_size: Tuple[int, int],
         **kwargs,
     ):
-        """Create Conv2dConfiguration with randomly initialized weights."""
         weight_shape = (
             out_channels,
             in_channels // kwargs.get("groups", 1),
@@ -125,10 +123,7 @@ class Conv2dConfiguration:
         )
 
     @classmethod
-    def from_torch_layer(
-        cls, torch_layer: torch.nn.Conv2d, input_height: int, input_width: int, batch_size: int, **kwargs
-    ):
-        """Create Conv2dConfiguration from existing PyTorch Conv2d layer."""
+    def from_torch(cls, torch_layer: torch.nn.Conv2d, input_height: int, input_width: int, batch_size: int, **kwargs):
         return cls(
             input_height=input_height,
             input_width=input_width,
@@ -146,7 +141,11 @@ class Conv2dConfiguration:
         )
 
     def validate_weights(self):
-        """Validate that weight and bias shapes match configuration parameters."""
+        """Validate that weight and bias tensor shapes match layer configuration.
+
+        Ensures weight tensor dimensions align with the specified convolution
+        parameters.
+        """
         expected_weight_shape = (
             self.out_channels,
             self.in_channels // self.groups,
@@ -182,6 +181,32 @@ class MaxPool2dConfiguration:
     in_place: bool = False
     deallocate_input: bool = False
     reallocate_halo_output: bool = True
+
+    @classmethod
+    def from_torch(
+        cls,
+        torch_layer: torch.nn.MaxPool2d,
+        input_height: int,
+        input_width: int,
+        batch_size: int,
+        channels: int,
+        **kwargs,
+    ):
+        kernel_size = (torch_layer.kernel_size, torch_layer.kernel_size)
+        stride = (torch_layer.stride, torch_layer.stride)
+        padding = (torch_layer.padding, torch_layer.padding)
+        dilation = (torch_layer.dilation, torch_layer.dilation)
+        return cls(
+            input_height=input_height,
+            input_width=input_width,
+            batch_size=batch_size,
+            channels=channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            **kwargs,
+        )
 
 
 LayerConfiguration = Union[Conv2dConfiguration, MaxPool2dConfiguration]
@@ -296,7 +321,6 @@ class TtConv2d:
 
         self.device = device_descriptor.device
 
-        # Validate weight shapes match configuration
         configuration.validate_weights()
 
         self.weight = ttnn.from_torch(configuration.weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)

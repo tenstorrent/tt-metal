@@ -192,7 +192,7 @@ def test_downblock(input_height, input_width, batch_size, device):
             sharding_strategy=sharding_strategy,
         ),
         MaxPool2dConfiguration(
-            input_height, input_width, 32, batch_size=batch_size, kernel_size=(2, 2), padding=(0, 0)
+            input_height, input_width, 32, batch_size=batch_size, kernel_size=(2, 2), padding=(0, 0), stride=(2, 2)
         ),
     ]
 
@@ -208,3 +208,109 @@ def test_downblock(input_height, input_width, batch_size, device):
     for layer in downblock:
         x = layer(x)
     ttnn_output_tensor = x
+
+    weight0, bias0 = configurations[0].weight, configurations[0].bias
+    weight1, bias1 = configurations[1].weight, configurations[1].bias
+
+    x = torch_input_tensor
+    x = torch.nn.functional.conv2d(x, weight0.clone(), bias0.clone().reshape(-1), padding=(1, 1))
+    x = torch.nn.functional.conv2d(x, weight1.clone(), bias1.clone().reshape(-1), padding=(1, 1))
+    torch_output_tensor = torch.nn.functional.max_pool2d(x, kernel_size=(2, 2), stride=(2, 2), padding=(0, 0))
+
+    output_height, output_width = torch_output_tensor.shape[-2:]  # [B, C, H, W]
+    assert_with_pcc(
+        torch_output_tensor,
+        ttnn.to_torch(ttnn_output_tensor)
+        .reshape(configurations[0].batch_size, output_height, output_width, configurations[2].channels)
+        .permute(0, 3, 1, 2),
+        0.999,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "l1_small_size": 1024,
+        }
+    ],
+    indirect=True,
+)
+def test_conv2d_configuration_from_torch_layer(device):
+    device_descriptor = DeviceDescriptor(device, (4, 4))
+
+    torch_layer = torch.nn.Conv2d(
+        in_channels=16, out_channels=32, kernel_size=3, stride=2, padding=1, groups=1, bias=True
+    )
+
+    configuration = Conv2dConfiguration.from_torch(
+        torch_layer=torch_layer, input_height=64, input_width=64, batch_size=2
+    )
+
+    assert configuration.in_channels == torch_layer.in_channels
+    assert configuration.out_channels == torch_layer.out_channels
+    assert configuration.kernel_size == torch_layer.kernel_size
+    assert configuration.stride == torch_layer.stride
+    assert configuration.padding == torch_layer.padding
+    assert configuration.groups == torch_layer.groups
+
+    assert torch.equal(configuration.weight, torch_layer.weight.data)
+    assert torch.equal(configuration.bias, torch_layer.bias.data)
+
+    configuration.validate_weights()
+
+    tt_layer = TtConv2d(configuration, device_descriptor)
+
+    torch_input = torch.randn(2, 16, 64, 64)
+    ttnn_input = ttnn.from_torch(torch_input.permute(0, 2, 3, 1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    ttnn_output = tt_layer(ttnn_input)
+    torch_output = torch_layer(torch_input)
+
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+    output_height, output_width = torch_output.shape[-2:]
+    ttnn_output_torch = ttnn_output_torch.reshape(2, output_height, output_width, 32).permute(0, 3, 1, 2)
+
+    assert_with_pcc(torch_output, ttnn_output_torch, 0.99)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "l1_small_size": 1024,
+        }
+    ],
+    indirect=True,
+)
+def test_pool2d_configuration_from_torch_layer(device):
+    device_descriptor = DeviceDescriptor(device, (4, 4))
+
+    torch_layer = torch.nn.MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+
+    configuration = MaxPool2dConfiguration.from_torch(
+        torch_layer=torch_layer, input_height=64, input_width=64, batch_size=2, channels=16
+    )
+
+    assert configuration.kernel_size == (torch_layer.kernel_size, torch_layer.kernel_size)
+    assert configuration.stride == (torch_layer.stride, torch_layer.stride)
+    assert configuration.padding == (torch_layer.padding, torch_layer.padding)
+
+    tt_layer = TtMaxPool2d(configuration, device_descriptor)
+
+    torch_input = torch.randn(2, 16, 64, 64)
+    ttnn_input = ttnn.from_torch(
+        torch_input.permute(0, 2, 3, 1).reshape(1, 1, -1, 16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+    ttnn_output = tt_layer(ttnn_input)
+    torch_output = torch_layer(torch_input)
+
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+    output_height, output_width = torch_output.shape[-2:]
+    ttnn_output_torch = ttnn_output_torch.reshape(2, output_height, output_width, 16).permute(0, 3, 1, 2)
+
+    assert_with_pcc(torch_output, ttnn_output_torch, 0.999)
