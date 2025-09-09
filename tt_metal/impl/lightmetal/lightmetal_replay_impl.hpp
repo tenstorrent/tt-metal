@@ -16,7 +16,7 @@
 #include <tt-metalium/kernel.hpp>
 
 namespace tt::tt_metal {
-class TraceDescriptor;
+struct TraceDescriptor;
 }
 
 // Forward decl for command_generated.h / light_metal_binary_generated.h

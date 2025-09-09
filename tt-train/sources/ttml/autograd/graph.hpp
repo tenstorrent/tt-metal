@@ -11,7 +11,7 @@
 
 namespace ttml::autograd {
 class Graph;
-class GraphNode;
+struct GraphNode;
 
 using GradFunction = std::function<void()>;
 

@@ -46,7 +46,7 @@ class Program;
 class IDevice;
 class Trace;
 class CircularBuffer;
-class Event;
+struct Event;
 class Buffer;
 class GlobalSemaphore;
 
