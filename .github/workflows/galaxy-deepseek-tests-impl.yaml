@@ -27,7 +27,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "Galaxy DeepSeek tests", arch: wormhole_b0, model: deepseek, timeout: 90, owner_id: U03HY7MK4BT}, # Mark O'Connor
+          { name: "(Galaxy) DeepSeek tests", arch: wormhole_b0, model: deepseek, timeout: 90, owner_id: U03HY7MK4BT}, # Mark O'Connor
         ]
     runs-on:
       - arch-wormhole_b0
