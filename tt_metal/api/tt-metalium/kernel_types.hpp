@@ -112,29 +112,6 @@ struct EthernetConfig {
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
 };
 
-struct KernelSource {
-    enum SourceType { FILE_PATH, SOURCE_CODE };
-
-    std::string source_;
-    SourceType source_type_;
-    // if source_type_ is FILE_PATH, file pointed by path_ exists at time of construction
-    std::filesystem::path path_;
-
-    KernelSource(const std::string& source, const SourceType& source_type);
-
-    std::string name() const {
-        std::string name;
-        if (this->source_type_ == SourceType::FILE_PATH) {
-            const std::size_t start_pos_of_name = this->source_.rfind("/") + 1;
-            const std::size_t pos_of_dot = this->source_.rfind(".");
-            name = this->source_.substr(start_pos_of_name, (pos_of_dot - start_pos_of_name));
-        } else {
-            name = "Kernel_Source_Code";
-        }
-        return name;
-    }
-};
-
 // These are only used in op_profiler
 
 struct KernelBinaryMeta {
