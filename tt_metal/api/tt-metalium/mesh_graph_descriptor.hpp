@@ -114,12 +114,12 @@ public:
     const std::vector<GlobalNodeId>& all_graphs() const { return graph_instances_; }
 
     // Queries
-    const std::vector<GlobalNodeId>& instances_by_name(std::string name) const {
+    const std::vector<GlobalNodeId>& instances_by_name(const std::string& name) const {
         auto it = instances_by_name_.find(name);
         TT_FATAL(it != instances_by_name_.end(), "No instances found with name {}", name);
         return it->second;
     }
-    const std::vector<GlobalNodeId>& instances_by_type(std::string type) const { // includes "MESH"
+    const std::vector<GlobalNodeId>& instances_by_type(const std::string& type) const { // includes "MESH"
         auto it = instances_by_type_.find(type);
         TT_FATAL(it != instances_by_type_.end(), "No instances found with type {}", type);
         return it->second;
@@ -129,7 +129,7 @@ public:
         TT_FATAL(it != connections_by_instance_id_.end(), "No connections indexed for instance id {}", instance_id);
         return it->second;
     }
-    const std::vector<ConnectionId>& connections_by_type(std::string type) const {
+    const std::vector<ConnectionId>& connections_by_type(const std::string& type) const {
         auto it = connections_by_type_.find(type);
         TT_FATAL(it != connections_by_type_.end(), "No connections found for type {}", type);
         return it->second;
@@ -142,7 +142,7 @@ public:
 
 
 private:
-    const bool backwards_compatible_;
+    bool backwards_compatible_;
 
     // Descriptor fast lookup
     std::unique_ptr<const proto::MeshGraphDescriptor> proto_;
@@ -189,6 +189,7 @@ private:
     void populate_descriptors();
 
     // Populate Instances
+    void populate_top_level_instance();
     const GlobalNodeId populate_instance(const proto::NodeRef& node_ref, std::vector<GlobalNodeId>& hierarchy);
     const GlobalNodeId populate_mesh_instance(const proto::MeshRef& mesh_ref, std::vector<GlobalNodeId>& hierarchy);
     const GlobalNodeId populate_graph_instance(const proto::GraphRef& graph_ref, std::vector<GlobalNodeId>& hierarchy);

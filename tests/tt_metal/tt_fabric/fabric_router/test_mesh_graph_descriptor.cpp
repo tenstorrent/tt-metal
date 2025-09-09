@@ -506,7 +506,6 @@ TEST(MeshGraphDescriptorTests, GraphMustHaveAtLeastOneConnection) {
                 ::testing::HasSubstr("Graph descriptor must have either graph_topology or connections defined (Graph: G0)"))));
 }
 
-
 TEST(MeshGraphDescriptorTests, TestInstanceCreation) {
     const std::filesystem::path text_proto_file_path =
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto";

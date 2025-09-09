@@ -115,7 +115,6 @@ std::unordered_map<MeshGraphDescriptor::GlobalNodeId, std::vector<MeshGraphDescr
     return connections;
 }
 
-
 }  // namespace
 
 MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) : top_level_id_(static_cast<GlobalNodeId>(-1)), backwards_compatible_(backwards_compatible) {
@@ -215,11 +214,16 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshG
 void MeshGraphDescriptor::populate() {
     populate_descriptors();
 
-    std::vector<GlobalNodeId> hierarchy;
-    top_level_id_ = populate_instance(proto_->top_level_instance(), hierarchy);
+    populate_top_level_instance();
 
     populate_connections();
 }
+
+void MeshGraphDescriptor::populate_top_level_instance() {
+    std::vector<GlobalNodeId> hierarchy;
+    top_level_id_ = populate_instance(proto_->top_level_instance(), hierarchy);
+}
+
 
 
 void MeshGraphDescriptor::validate_basic_structure(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors) {
@@ -340,6 +344,21 @@ void MeshGraphDescriptor::validate_mesh_topology(const proto::MeshGraphDescripto
                 )
             );
             continue;
+        }
+
+        // Check that the device topology dimensions are divisible by the host topology dimensions
+        if (mesh.device_topology().dims_size() > 0) {
+            for (int i = 0; i < mesh.device_topology().dims_size(); i++) {
+                if (mesh.device_topology().dims(i) % mesh.host_topology().dims(i) != 0) {
+                    error_messages.push_back(
+                        fmt::format(
+                            "Device topology dimensions must be divisible by host topology dimensions (Mesh: {})",
+                            mesh.name()
+                        )
+                    );
+                    continue;
+                }
+            }
         }
     }
 
@@ -648,8 +667,8 @@ const MeshGraphDescriptor::GlobalNodeId MeshGraphDescriptor::populate_mesh_insta
         .desc = mesh_desc,
     };
 
-    const auto emplace_result = instances_.emplace(data.global_id, std::move(data));
-    auto & instance = emplace_result.first->second;
+    const auto & [instance_it, _] = instances_.emplace(data.global_id, std::move(data));
+    auto & instance = instance_it->second;
 
     instance.hierarchy = hierarchy;
 
