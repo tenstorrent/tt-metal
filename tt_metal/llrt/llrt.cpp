@@ -3,14 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <assert.hpp>
-#include "dev_msgs.h"
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
 #include <unistd.h>
 #include <chrono>
 #include <condition_variable>
-#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -217,29 +215,30 @@ bool is_active_eth_core(chip_id_t chip_id, const CoreCoord& core) {
 
 static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core, int run_state) {
     tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(chip_id, core);
+    const auto& hal = tt_metal::MetalContext::instance().hal();
+    auto dev_msgs_factory = hal.get_dev_msgs_factory(dispatch_core_type);
 
-    uint64_t go_msg_addr =
-        tt_metal::MetalContext::instance().hal().get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
+    uint64_t go_msg_addr = hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
     auto get_mailbox_is_done = [&](uint64_t go_msg_addr) {
-        constexpr int RUN_MAILBOX_BOGUS = 3;
-        std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
-        run_mailbox_read_val = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            chip_id, core, go_msg_addr & ~0x3, sizeof(go_msg_t));
-        go_msg_t* core_status = (go_msg_t*)(run_mailbox_read_val.data());
-        uint8_t run = core_status->signal;
-        if (run != run_state && run != RUN_MSG_DONE) {
+        auto core_status = dev_msgs_factory.create<tt_metal::dev_msgs::go_msg_t>();
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            core_status.data(), core_status.size(), {chip_id, core}, go_msg_addr & ~0x3);
+        uint8_t run = core_status.view().signal();
+        if (run != run_state && run != tt_metal::dev_msgs::RUN_MSG_DONE) {
             fprintf(
                 stderr,
                 "Read unexpected run_mailbox value: 0x%x (expected 0x%x or 0x%x)\n",
                 run,
                 run_state,
-                RUN_MSG_DONE);
+                tt_metal::dev_msgs::RUN_MSG_DONE);
             TT_FATAL(
-                run == run_state || run == RUN_MSG_DONE, "Read unexpected run_mailbox value from core {}", core.str());
+                run == run_state || run == tt_metal::dev_msgs::RUN_MSG_DONE,
+                "Read unexpected run_mailbox value from core {}",
+                core.str());
         }
 
-        return run == RUN_MSG_DONE;
+        return run == tt_metal::dev_msgs::RUN_MSG_DONE;
     };
     return get_mailbox_is_done(go_msg_addr);
 }
