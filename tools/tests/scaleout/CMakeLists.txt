@@ -4,7 +4,7 @@ set_target_properties(
     test_factory_system_descriptor
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
-            ${PROJECT_BINARY_DIR}/test
+            ${PROJECT_BINARY_DIR}/test/tools/scaleout
 )
 
 target_link_libraries(
