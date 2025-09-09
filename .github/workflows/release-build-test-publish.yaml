@@ -184,6 +184,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write  # Required for AWS OIDC
+    if: ${{ github.ref == 'refs/heads/main' || inputs.dry-run }}
     steps:
       - name: Set up Python
         uses: actions/setup-python@v4
