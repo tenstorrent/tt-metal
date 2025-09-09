@@ -59,7 +59,7 @@ struct WelfordStats {
  * @param b Second WelfordStats.
  * @return Combined WelfordStats.
  */
-WelfordStats<float> combine(const WelfordStats<float>& a, const WelfordStats<float>& b) {
+inline WelfordStats<float> combine(const WelfordStats<float>& a, const WelfordStats<float>& b) {
     WelfordStats<float> result;
     result.count = a.count + b.count;
 
@@ -84,7 +84,7 @@ WelfordStats<float> combine(const WelfordStats<float>& a, const WelfordStats<flo
  * @return Combined WelfordStats<float> for all subgroups.
  */
 template <uint32_t ARRAY_SIZE, uint32_t COUNT_PER_VALUE, uint32_t STRIDE>
-WelfordStats<float> combine_welford_stats(const float* means, const float* vars) {
+inline WelfordStats<float> combine_welford_stats(const float* means, const float* vars) {
     static_assert(ARRAY_SIZE > 0, "ARRAY_SIZE must be greater than 0");
 
     WelfordStats<float> result;
@@ -115,7 +115,7 @@ WelfordStats<float> combine_welford_stats(const float* means, const float* vars)
  * @return Combined WelfordStats<uint16_t> for all subgroups.
  */
 template <uint32_t ARRAY_SIZE, uint32_t COUNT_PER_VALUE, uint32_t STRIDE, typename T>
-WelfordStats<uint16_t> combine_welford_stats(T means, T vars) {
+inline WelfordStats<uint16_t> combine_welford_stats(T means, T vars) {
     static_assert(ARRAY_SIZE > 0, "ARRAY_SIZE must be greater than 0");
     static_assert(
         std::is_same_v<std::remove_volatile_t<std::remove_pointer_t<T>>, uint16_t>,
