@@ -29,7 +29,7 @@ namespace tt {
 namespace tt_metal {
 
 namespace program_cache::detail {
-class ProgramCache;
+struct ProgramCache;
 }
 /*
 MemoryBlockTable is a list of memory blocks in the following format:
@@ -46,7 +46,7 @@ class SubDevice;
 
 class CommandQueue;
 class SystemMemoryManager;
-class TraceBuffer;
+struct TraceBuffer;
 struct TraceDescriptor;
 
 namespace distributed {
