@@ -180,11 +180,10 @@ void DataCollector::RecordKernelGroup(
     uint64_t program_id = program.get_id();
     // Make a copy of relevant info, since user may destroy program before we dump.
     std::vector<KernelData> kernel_data;
+    kernel_data.reserve(kernel_group.kernel_ids.size());
     for (auto kernel_id : kernel_group.kernel_ids) {
-        if (kernel_id) {
-            auto kernel = program.get_kernel(*kernel_id);
-            kernel_data.push_back({kernel->get_watcher_kernel_id(), kernel->get_kernel_processor_class()});
-        }
+        auto kernel = program.get_kernel(kernel_id);
+        kernel_data.push_back({kernel->get_watcher_kernel_id(), kernel->get_kernel_processor_class()});
     }
     program_id_to_kernel_groups[program_id][core_type].push_back({std::move(kernel_data), kernel_group.core_ranges});
 }

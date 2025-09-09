@@ -17,14 +17,12 @@ from ttnn.model_preprocessing import (
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
-    pad_and_fold_conv_filters_for_unity_stride,
     enable_memory_reports,
     is_wormhole_b0,
     is_blackhole,
     is_grayskull,
 )
 
-# from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_xlarge_new_conv_api import resnet50
 from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_xlarge_new_conv_api_24 import resnet50
 
 
@@ -55,7 +53,6 @@ def custom_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
             parameters["downsample"]["bias"] = ttnn.from_torch(torch.reshape(downsample_bias, (1, 1, 1, -1)))
     elif isinstance(model, torchvision.models.resnet.ResNet):
         conv1_weight, conv1_bias = fold_batch_norm2d_into_conv2d(model.conv1, model.bn1)
-        conv1_weight = pad_and_fold_conv_filters_for_unity_stride(conv1_weight, 2, 2)
         parameters["conv1"] = {}
         parameters["conv1"]["weight"] = ttnn.from_torch(conv1_weight)
         parameters["conv1"]["bias"] = ttnn.from_torch(torch.reshape(conv1_bias, (1, 1, 1, -1)))
