@@ -72,7 +72,7 @@ PerfStats aggregate_stats(const std::vector<PerfPoint>& pts) {
 }
 
 void warmup_once(HelpersFixture* fixture, PerfParams base, int iters) {
-    base.tensor_bytes = std::max<uint32_t>(base.page_size, 4 * base.page_size);
+    base.tensor_bytes = 4 * base.page_size;
     for (int i = 0; i < iters; ++i) {
         (void)RunUnicastConnWithParams(fixture, base);
     }
