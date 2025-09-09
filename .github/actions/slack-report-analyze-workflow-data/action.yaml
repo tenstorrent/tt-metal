@@ -1,0 +1,18 @@
+name: "Report Workflow Status to Slack"
+description: "Report the workflow status to Slack to help identify breakages faster."
+inputs:
+  slack_webhook_url:
+    description: "Webhook URL for the Slack channel to be posted to. Generated via slack app!"
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: Report Github Pipeline Status Slack Action
+      uses: slackapi/slack-github-action@v1.26.0
+      with:
+        payload: |
+          {
+            "text": ""
+          }
+      env:
+        SLACK_WEBHOOK_URL: ${{ inputs.slack_webhook_url }}

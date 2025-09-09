@@ -75,8 +75,14 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const branch = 'main'; // explicitly look on main branch
-            const currentRunNumber = context.runNumber;
+            const branch = 'main';
+            const targetPath = '.github/workflows/aggregate-workflow-data.yaml';
+
+            // Get current run start time
+            const current = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: context.runId });
+            const currentStarted = new Date(current.data.created_at);
+
+            // Fetch recent completed runs on main
             const res = await github.rest.actions.listWorkflowRunsForRepo({
               owner,
               repo,
@@ -84,19 +90,30 @@ jobs:
               status: 'completed',
               per_page: 100
             });
-            const targetPath = '.github/workflows/aggregate-workflow-data.yaml';
             const all = res.data.workflow_runs || [];
             core.info(`Total runs fetched: ${all.length}`);
             const uniquePaths = Array.from(new Set(all.map(r => r.path))).join(', ');
             core.info(`Workflow paths seen: ${uniquePaths}`);
+
+            // Pick newest candidate strictly before current run start, same workflow file, not self
             const candidates = all
-              .filter(r => r.path === targetPath && r.run_number < currentRunNumber)
+              .filter(r => r.path === targetPath && r.id !== context.runId && new Date(r.created_at) < currentStarted)
               .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
             core.info(`Candidates after filter: ${candidates.length}`);
-            const selected = candidates[0];
-            const selectedId = selected ? String(selected.id) : '';
-            core.info(`Selected previous run id: ${selectedId || 'none'}`);
-            core.setOutput('run_id', selectedId);
+
+            // Choose first with a valid 'workflow-data' artifact
+            for (const r of candidates) {
+              core.info(`Try run id=${r.id} created_at=${r.created_at}`);
+              const arts = await github.rest.actions.listWorkflowRunArtifacts({ owner, repo, run_id: r.id, per_page: 100 });
+              const ok = arts.data.artifacts.some(a => a.name === 'workflow-data' && !a.expired && a.size_in_bytes > 0);
+              if (ok) {
+                core.info(`Selected previous run id: ${r.id}`);
+                core.setOutput('run_id', String(r.id));
+                return;
+              }
+            }
+            core.info('Selected previous run id: none');
+            core.setOutput('run_id', '');
       - name: Install analyze-workflow-data dependencies
         shell: bash
         working-directory: .github/actions/analyze-workflow-data
