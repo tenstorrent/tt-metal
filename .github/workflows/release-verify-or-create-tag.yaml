@@ -24,14 +24,16 @@ on:
         description: "New version"
         value: ${{ jobs.verify-create-new-tag.outputs.version }}
 
-permissions: write-all
-
 jobs:
   verify-create-new-tag:
-    permissions: write-all
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.TT_METAL_RELEASE_TOKEN }}
     outputs:
       version: ${{ steps.get-tag-version.outputs.version }}
     steps:
@@ -70,18 +72,6 @@ jobs:
         run: |
           echo "GITHUB_TOKEN Permissions:"
           echo "${{ toJson(github) }}"
-
-      - name: Create GitHub Release (creates tag if missing)
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.get-tag-version.outputs.version }}
-          target_commitish: ${{ github.sha }}
-          release_name: Release ${{ steps.get-tag-version.outputs.version }}
-          draft: false
-          prerelease: false
-
 
       - name: Create tag
         if: ${{ !inputs.dry-run }}

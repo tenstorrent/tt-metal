@@ -13,7 +13,11 @@ on:
     - cron: "0 0 * * *"
 
 
-permissions: write-all
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  attestations: write
 
 
 # Some explanation:
@@ -53,7 +57,7 @@ jobs:
   create-tag:
     needs: release-precheck
     uses: ./.github/workflows/release-verify-or-create-tag.yaml
-    permissions: write-all
+    secrets: inherit
     with:
       fetch_depth: 0
       bump_each_commit: false
