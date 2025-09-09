@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -197,6 +197,10 @@ ALWI void read_window_with_top_left_index(
             noc_async_read_barrier();
             cb_push_back(in_cb_id, 1);
             if constexpr (return_indices) {
+                if (ind == 0) {
+                    DPRINT << "IN IDX CB" << ENDL();
+                    tt::data_movement::common::print_bf16_pages(get_write_ptr(in_idx_cb_id), TILE_WIDTH, TILE_HEIGHT);
+                }
                 cb_push_back(in_idx_cb_id, 1);
             }
         }
@@ -322,7 +326,24 @@ void kernel_main() {
             init_index = (start_row - (uint16_t)pad_t) * in_w + (start_col - (uint16_t)pad_l);
         }
 
-        DPRINT << " starting index: " << init_index << "\n";
+        // initialize the index CB
+        cb_reserve_back(tile_idx_tmp_cb_id, 1);
+        volatile tt_l1_ptr uint16_t* idx_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(tile_idx_tmp_cb_id));
+        uint32_t write_inc = TILE_WIDTH;
+#ifdef ARCH_BLACKHOLE
+        if (in_c <= FACE_WIDTH) {
+            write_inc = FACE_WIDTH;
+        }
+#endif
+        for (uint32_t hw = 0; hw < window_h * window_w; ++hw) {
+            for (uint32_t c = 0; c < write_inc; ++c) {
+                idx_ptr[hw * write_inc + c] = init_index + hw;
+            }
+        }
+        DPRINT << "TILE IDX CB" << ENDL();
+        tt::data_movement::common::print_bf16_pages(get_write_ptr(tile_idx_tmp_cb_id), TILE_WIDTH, TILE_HEIGHT);
+        cb_push_back(tile_idx_tmp_cb_id, 1);
     }
 
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
