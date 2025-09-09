@@ -131,6 +131,7 @@ void kernel_main() {
         // inc mcast sender
         noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
         noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
+        noc_async_atomic_barrier();
         noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
 
         if constexpr (is_all_to_all_worker) {
@@ -190,6 +191,7 @@ void kernel_main() {
             // sync with the gather worker
             cb_wait_front(cb_reduce_first_stage, num_tiles_per_partial_result * num_tiles_to_read);
             noc_semaphore_inc(reduce_second_stage_receiver_semaphore_noc_addr, 1);
+            noc_async_atomic_barrier();
         }
     };
     global_reduce_receiver(cb_ex_partial2, cb_ex_external2, cb_ex2);
