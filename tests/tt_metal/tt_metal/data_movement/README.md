@@ -79,7 +79,7 @@ Follow these steps to add new tests to this test suite.
 5. Assign your test a unique test id to make sure your test results are grouped together and are plotted separately from other tests.
     - Refer to the "Tests in the Test Suite" section for already taken test ids.
     - Preferably use the next integer available.
-    - Add the test id and test name to this README and to `/python/test_mappings/test_information.yaml`. If test bounds are relevant, add these to `/python/test_mappings/test_bounds.yaml`
+    - Add the test id and test name to this README and to `/python/test_mappings/test_information.yaml`. If test bounds are relevant, add these to `/python/test_mappings/test_bounds.yaml`. When determining bounds, perferably add a 3-5% variance margin so that subtle differences in machines don't cause failures in the perf microbenchmarks.
 6. Create a README file within the test directory that describes:
     1. What your test does,
     2. What the test parameters are,
@@ -88,4 +88,4 @@ Follow these steps to add new tests to this test suite.
 7. In the `CMakeLists.txt` file, add your test path in the `set(UNIT_TESTS_DATA_MOVEMENT_SRC ... )` call.
     - **Example:** `${CMAKE_CURRENT_SOURCE_DIR}/dram_unary/test_unary_dram.cpp`
 
-**Note:** Make sure the tests pass by building and running as above.
+**Note:** Make sure the tests pass locally and on CI/perf pipelines.
