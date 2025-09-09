@@ -279,9 +279,9 @@ void kernel_main() {
     uint32_t config_read_index = get_arg_val<uint32_t>(0);
 
     uint64_t padding_src_noc_addr = get_noc_addr(config_read_index, padding_config_accessor);
-    noc_async_read(padding_src_noc_addr, get_write_ptr(padding_config_cb_id), padding_config_page_size);
-
     uint64_t gather_src_noc_addr = get_noc_addr(config_read_index, gather_config_accessor);
+
+    noc_async_read(padding_src_noc_addr, get_write_ptr(padding_config_cb_id), padding_config_page_size);
     noc_async_read(gather_src_noc_addr, get_write_ptr(gather_config_cb_id), gather_config_page_size);
     noc_async_read_barrier();
 #endif

@@ -827,7 +827,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                 }
                 reader_rt_args.push_back(static_cast<uint32_t>(is_receiver_core));  // is_receiver_core
                 reader_rt_args.push_back(static_cast<uint32_t>(is_sender_core));    // is_receiver_core
-                reader_rt_args.push_back(transpose_mcast ? core.x : core.y);         // dram config reader index
+                reader_rt_args.push_back(transpose_mcast ? core.x : core.y);        // dram config reader index
                 reader_rt_args.insert(reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());
                 SetRuntimeArgs(program, reader_id, core, reader_rt_args);
             }

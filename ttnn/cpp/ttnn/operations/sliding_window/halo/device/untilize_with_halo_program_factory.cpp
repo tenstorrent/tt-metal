@@ -177,6 +177,14 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         }
     }
 
+    log_debug(
+        tt::LogOp,
+        "\n\n Halo Config Tensors: Padding: \n\t {} \n\t {} \nGather \n\t {} \n\t {}",
+        padding_config0,
+        padding_config1,
+        gather_config0,
+        gather_config1);
+
     TT_ASSERT(padding_config0.dtype() == DataType::UINT16);
     TT_ASSERT(padding_config1.dtype() == DataType::UINT16);
     TT_ASSERT(gather_config0.dtype() == DataType::UINT16);
@@ -290,8 +298,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         tt::tt_metal::TensorAccessorArgs(gather_config_storage1.get_buffer()).append_to(core_1_reader_ct_args);
     }
     const uint32_t EMPTY_PADDING_CONFIG_BUFFER_SIZE = 4;
-    const bool enable_padding = padding_config_buffer0->size() / num_cores != EMPTY_PADDING_CONFIG_BUFFER_SIZE ||
-                                padding_config_buffer1->size() / num_cores != EMPTY_PADDING_CONFIG_BUFFER_SIZE;
+    const bool enable_padding = padding_config_buffer0->page_size() != EMPTY_PADDING_CONFIG_BUFFER_SIZE ||
+                                padding_config_buffer1->page_size() != EMPTY_PADDING_CONFIG_BUFFER_SIZE;
 
     core_0_reader_ct_args[0] = enable_padding ? cb_indices.padding_config0 : 0;
     core_0_reader_ct_args[1] = cb_indices.gather_config0;
