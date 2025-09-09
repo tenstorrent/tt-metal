@@ -281,7 +281,7 @@ class ResBlock:
         )
         return output
 
-    def sharded_reshape_untilize_tilize2(self, x, shapes):
+    def sharded_reshape_untilize_tilize_no_deallocate(self, x, shapes):
         dim0, dim1, dim2, dim3 = shapes
         output = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         output = ttnn.reshape(output, [dim0, dim1, dim2, dim3])
@@ -357,7 +357,9 @@ class ResBlock:
         x_conv1_tiled_NTHWC = self.reshape_tilize(x_conv1_NTHWC, shapes)
 
         if self.parallel_config.hw_parallel.factor > 1:
-            x_conv1_tiled_NTHWC = self.sharded_reshape_untilize_tilize2(x_conv1_tiled_NTHWC, (1, 1, N * T * H, W * C))
+            x_conv1_tiled_NTHWC = self.sharded_reshape_untilize_tilize_no_deallocate(
+                x_conv1_tiled_NTHWC, (1, 1, N * T * H, W * C)
+            )
             ttnn.deallocate(x_conv1_NTHWC)
             x_conv1_tiled_NTHWC = vae_all_gather(
                 self.ccl_manager,
