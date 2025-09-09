@@ -2,13 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dev_msgs.h"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
-#include "dispatch_core_common.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
+#include "llrt/hal.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "tt_align.hpp"
@@ -32,9 +30,10 @@ void write_go_signal(
     bool send_mcast,
     bool send_unicasts,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
-    uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
-    uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) +
-                                  MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    const auto& hal = MetalContext::instance().hal();
+    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
+    uint32_t cmd_sequence_sizeB =
+        align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) + hal.get_alignment(HalMemType::HOST);
     cmd_sequence_sizeB +=
         dispatch_md.prefetcher_cache_info.is_cached ? 0 : align(sizeof(CQPrefetchCmd), pcie_alignment);
 
@@ -50,12 +49,11 @@ void write_go_signal(
             true);
     }
 
-    go_msg_t run_program_go_signal{};
-    run_program_go_signal.signal = RUN_MSG_GO;
-    run_program_go_signal.master_x = dispatch_core.x;
-    run_program_go_signal.master_y = dispatch_core.y;
-    run_program_go_signal.dispatch_message_offset =
-        MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index);
+    uint32_t go_msg_u32_val = hal.make_go_msg_u32(
+        dev_msgs::RUN_MSG_GO,
+        dispatch_core.x,
+        dispatch_core.y,
+        MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index));
 
     // When running with dispatch_s enabled:
     //   - dispatch_d must notify dispatch_s that a go signal can be sent
@@ -74,7 +72,7 @@ void write_go_signal(
     }
     go_signal_cmd_sequence.add_dispatch_go_signal_mcast(
         expected_num_workers_completed,
-        *reinterpret_cast<uint32_t*>(&run_program_go_signal),
+        go_msg_u32_val,
         MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(sub_device_index),
         (send_mcast && device->has_noc_mcast_txns(sub_device_id)) ? *sub_device_id
                                                                   : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
