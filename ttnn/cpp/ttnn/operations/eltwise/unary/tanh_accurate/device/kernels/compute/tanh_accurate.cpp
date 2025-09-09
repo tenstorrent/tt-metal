@@ -62,8 +62,8 @@ void MAIN {
             copy_tile(cb_input, 0, 0);
 
             mul_unary_tile(0, two);
-            exp_tile_init<1u>();
-            exp_tile<1u>(0);
+            exp_tile_init();
+            exp_tile(0);
 
             tile_regs_commit();
             tile_regs_wait();
