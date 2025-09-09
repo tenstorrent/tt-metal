@@ -28,10 +28,16 @@ class TtnnYoloV11:
         self.sppf = TtnnSPPF(device, parameters.conv_args[9], parameters.model[9])
         self.c2psa = TtnnC2PSA(device, parameters.conv_args[10], parameters.model[10])
 
-        self.c3k2_5 = TtnnC3k2(device, parameters.conv_args[13], parameters.model[13], is_bk_enabled=False, reshard=True)
-        self.c3k2_6 = TtnnC3k2(device, parameters.conv_args[16], parameters.model[16], is_bk_enabled=False, reshard=True)
+        self.c3k2_5 = TtnnC3k2(
+            device, parameters.conv_args[13], parameters.model[13], is_bk_enabled=False, reshard=True
+        )
+        self.c3k2_6 = TtnnC3k2(
+            device, parameters.conv_args[16], parameters.model[16], is_bk_enabled=False, reshard=True
+        )
         self.conv7 = TtnnConv(device, parameters.conv_args[17], parameters.model[17], deallocate_activation=True)
-        self.c3k2_7 = TtnnC3k2(device, parameters.conv_args[19], parameters.model[19], is_bk_enabled=False, reshard=True)
+        self.c3k2_7 = TtnnC3k2(
+            device, parameters.conv_args[19], parameters.model[19], is_bk_enabled=False, reshard=True
+        )
         self.conv8 = TtnnConv(device, parameters.conv_args[20], parameters.model[20], deallocate_activation=True)
         self.c3k2_8 = TtnnC3k2(
             device, parameters.conv_args[22], parameters.model[22], is_bk_enabled=False, reshard=True
