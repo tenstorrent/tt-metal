@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import torch
 import ttnn
 from loguru import logger
 
@@ -28,8 +27,8 @@ class TtBottleneck(nn.Module):
 
     def __init__(
         self,
+        parameters,
         device: ttnn.MeshDevice,
-        state_dict: dict[str, torch.Tensor],
         dtype: ttnn.DataType = ttnn.bfloat16,
         has_shortcut: bool = False,
         stride: int = 1,
@@ -42,34 +41,37 @@ class TtBottleneck(nn.Module):
         self.has_shortcut = has_shortcut
         self.block_id = block_id
 
-        # Extract weights for conv1, conv2, conv3
-        conv1_state = {k.replace("conv1.", ""): v for k, v in state_dict.items() if k.startswith("conv1.")}
-        conv2_state = {k.replace("conv2.", ""): v for k, v in state_dict.items() if k.startswith("conv2.")}
-        conv3_state = {k.replace("conv3.", ""): v for k, v in state_dict.items() if k.startswith("conv3.")}
+        # Extract parameters for conv1, conv2, conv3 from preprocessed structure
+        conv1_params = parameters["conv1"]
+        conv2_params = parameters["conv2"]
+        conv3_params = parameters["conv3"]
 
         # Use passed stride and dilation parameters
         conv2_stride = (stride, stride)
         conv2_dilation = (dilation, dilation)
         conv2_padding = (dilation, dilation)  # Padding should match dilation for 3x3 conv
 
-        # Initialize conv layers
+        # Initialize conv layers using preprocessed parameters
         self.conv1 = TtConv2d(
-            TtConv2dParameters.from_torch(conv1_state, device=device, dtype=dtype), stride=(1, 1), padding=(0, 0)
+            TtConv2dParameters.from_preprocessed_parameters(conv1_params, device=device, dtype=dtype),
+            stride=(1, 1),
+            padding=(0, 0),
         )
 
-        # For conv2, use architecture parameters
-        conv2_params = TtConv2dParameters.from_torch(conv2_state, device=device, dtype=dtype)
-        # Update conv2_params with correct dilation
-        conv2_params.dilation = conv2_dilation
-        self.conv2 = TtConv2d(conv2_params, stride=conv2_stride, padding=conv2_padding)
+        # For conv2, use architecture parameters and update dilation
+        conv2_tt_params = TtConv2dParameters.from_preprocessed_parameters(conv2_params, device=device, dtype=dtype)
+        conv2_tt_params.dilation = conv2_dilation
+        self.conv2 = TtConv2d(conv2_tt_params, stride=conv2_stride, padding=conv2_padding)
 
         self.conv3 = TtConv2d(
-            TtConv2dParameters.from_torch(conv3_state, device=device, dtype=dtype), stride=(1, 1), padding=(0, 0)
+            TtConv2dParameters.from_preprocessed_parameters(conv3_params, device=device, dtype=dtype),
+            stride=(1, 1),
+            padding=(0, 0),
         )
 
         # Initialize shortcut if needed
         if has_shortcut:
-            shortcut_state = {k.replace("shortcut.", ""): v for k, v in state_dict.items() if k.startswith("shortcut.")}
+            shortcut_params = parameters["shortcut"]
             shortcut_stride_tuple = (shortcut_stride, shortcut_stride)
 
             # Apply width slicing for res3 blocks
@@ -78,150 +80,68 @@ class TtBottleneck(nn.Module):
                 shortcut_slice_config = SliceConfig(mode=SliceMode.WIDTH, num_slices=2)
 
             self.shortcut = TtConv2d(
-                TtConv2dParameters.from_torch(
-                    shortcut_state, device=device, dtype=dtype, slice_config=shortcut_slice_config
+                TtConv2dParameters.from_preprocessed_parameters(
+                    shortcut_params, device=device, dtype=dtype, slice_config=shortcut_slice_config
                 ),
                 stride=shortcut_stride_tuple,
                 padding=(0, 0),
             )
 
-        # Extract normalization parameters
-        conv1_norm_state = {
-            k.replace("conv1.norm.", ""): v for k, v in state_dict.items() if k.startswith("conv1.norm.")
-        }
-        conv2_norm_state = {
-            k.replace("conv2.norm.", ""): v for k, v in state_dict.items() if k.startswith("conv2.norm.")
-        }
-        conv3_norm_state = {
-            k.replace("conv3.norm.", ""): v for k, v in state_dict.items() if k.startswith("conv3.norm.")
-        }
+        # Extract normalization parameters from preprocessed structure
+        conv1_norm_params = conv1_params.get("norm", None)
+        conv2_norm_params = conv2_params.get("norm", None)
+        conv3_norm_params = conv3_params.get("norm", None)
 
-        # Convert normalization parameters to TTNN tensors
-        mesh_mapper = ttnn.ReplicateTensorToMesh(device) if isinstance(device, ttnn.MeshDevice) else None
-
+        # Normalization parameters are already TTNN tensors from preprocessing
         # Conv1 normalization
-        self.conv1_norm_weight = ttnn.from_torch(
-            conv1_norm_state["weight"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self.conv1_norm_bias = ttnn.from_torch(
-            conv1_norm_state["bias"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self.conv1_norm_running_mean = ttnn.from_torch(
-            conv1_norm_state["running_mean"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self.conv1_norm_running_var = ttnn.from_torch(
-            conv1_norm_state["running_var"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
+        if conv1_norm_params:
+            self.conv1_norm_weight = conv1_norm_params["weight"]
+            self.conv1_norm_bias = conv1_norm_params["bias"]
+            self.conv1_norm_running_mean = conv1_norm_params["running_mean"]
+            self.conv1_norm_running_var = conv1_norm_params["running_var"]
+        else:
+            self.conv1_norm_weight = None
+            self.conv1_norm_bias = None
+            self.conv1_norm_running_mean = None
+            self.conv1_norm_running_var = None
 
         # Conv2 normalization
-        self.conv2_norm_weight = ttnn.from_torch(
-            conv2_norm_state["weight"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self.conv2_norm_bias = ttnn.from_torch(
-            conv2_norm_state["bias"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self.conv2_norm_running_mean = ttnn.from_torch(
-            conv2_norm_state["running_mean"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self.conv2_norm_running_var = ttnn.from_torch(
-            conv2_norm_state["running_var"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
+        if conv2_norm_params:
+            self.conv2_norm_weight = conv2_norm_params["weight"]
+            self.conv2_norm_bias = conv2_norm_params["bias"]
+            self.conv2_norm_running_mean = conv2_norm_params["running_mean"]
+            self.conv2_norm_running_var = conv2_norm_params["running_var"]
+        else:
+            self.conv2_norm_weight = None
+            self.conv2_norm_bias = None
+            self.conv2_norm_running_mean = None
+            self.conv2_norm_running_var = None
 
         # Conv3 normalization
-        self.conv3_norm_weight = ttnn.from_torch(
-            conv3_norm_state["weight"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self.conv3_norm_bias = ttnn.from_torch(
-            conv3_norm_state["bias"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self.conv3_norm_running_mean = ttnn.from_torch(
-            conv3_norm_state["running_mean"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self.conv3_norm_running_var = ttnn.from_torch(
-            conv3_norm_state["running_var"].view(1, -1, 1, 1),
-            dtype=dtype,
-            device=device,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-        )
+        if conv3_norm_params:
+            self.conv3_norm_weight = conv3_norm_params["weight"]
+            self.conv3_norm_bias = conv3_norm_params["bias"]
+            self.conv3_norm_running_mean = conv3_norm_params["running_mean"]
+            self.conv3_norm_running_var = conv3_norm_params["running_var"]
+        else:
+            self.conv3_norm_weight = None
+            self.conv3_norm_bias = None
+            self.conv3_norm_running_mean = None
+            self.conv3_norm_running_var = None
 
         # Shortcut normalization (if exists)
         if has_shortcut:
-            shortcut_norm_state = {
-                k.replace("shortcut.norm.", ""): v for k, v in state_dict.items() if k.startswith("shortcut.norm.")
-            }
-            self.shortcut_norm_weight = ttnn.from_torch(
-                shortcut_norm_state["weight"].view(1, -1, 1, 1),
-                dtype=dtype,
-                device=device,
-                mesh_mapper=mesh_mapper,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            self.shortcut_norm_bias = ttnn.from_torch(
-                shortcut_norm_state["bias"].view(1, -1, 1, 1),
-                dtype=dtype,
-                device=device,
-                mesh_mapper=mesh_mapper,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            self.shortcut_norm_running_mean = ttnn.from_torch(
-                shortcut_norm_state["running_mean"].view(1, -1, 1, 1),
-                dtype=dtype,
-                device=device,
-                mesh_mapper=mesh_mapper,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            self.shortcut_norm_running_var = ttnn.from_torch(
-                shortcut_norm_state["running_var"].view(1, -1, 1, 1),
-                dtype=dtype,
-                device=device,
-                mesh_mapper=mesh_mapper,
-                layout=ttnn.TILE_LAYOUT,
-            )
+            shortcut_norm_params = shortcut_params.get("norm", None)
+            if shortcut_norm_params:
+                self.shortcut_norm_weight = shortcut_norm_params["weight"]
+                self.shortcut_norm_bias = shortcut_norm_params["bias"]
+                self.shortcut_norm_running_mean = shortcut_norm_params["running_mean"]
+                self.shortcut_norm_running_var = shortcut_norm_params["running_var"]
+            else:
+                self.shortcut_norm_weight = None
+                self.shortcut_norm_bias = None
+                self.shortcut_norm_running_mean = None
+                self.shortcut_norm_running_var = None
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         logger.debug(f"TtBottleneck {self.block_id} forward pass starting, input shape: {x.shape}")

@@ -123,17 +123,17 @@ class TtASPP(nn.Module):
 
         # --- ISPRAVKA OVDJE ---
         # Grana 1: 1x1 konvolucija
-        conv0_path = parameters.convs[0]
-        conv0_bias = conv0_path.bias if "bias" in conv0_path else None
+        conv0_path = parameters["convs"][0]
+        conv0_bias = conv0_path.get("bias", None)
 
         conv0_params = TtConv2dParameters(
-            weight=conv0_path.weight,
+            weight=conv0_path["weight"],
             bias=conv0_bias,
             device=self.device,
         )
         conv0 = TtConv2d.create(conv0_params, stride=(1, 1), padding=(0, 0))
 
-        norm0_params = parameters.convs[0].norm if "norm" in parameters.convs[0] else None
+        norm0_params = parameters["convs"][0].get("norm", None)
         norm0 = get_ttnn_norm(norm, out_channels, device=self.device, norm_params=norm0_params)
         self.conv_branches.append((conv0, norm0))
 
@@ -143,46 +143,46 @@ class TtASPP(nn.Module):
 
         for i, dilation in enumerate(dilations):
             conv_idx = i + 1
-            conv_params_path = parameters.convs[conv_idx]
+            conv_params_path = parameters["convs"][conv_idx]
 
-            conv_bias = conv_params_path.bias if "bias" in conv_params_path else None
+            conv_bias = conv_params_path.get("bias", None)
             conv_params = TtConv2dParameters(
-                weight=conv_params_path.weight, bias=conv_bias, device=self.device, dilation=(dilation, dilation)
+                weight=conv_params_path["weight"], bias=conv_bias, device=self.device, dilation=(dilation, dilation)
             )
             conv = TtConv2d.create_with_channel_slicing(
                 conv_params, stride=(1, 1), padding=(dilation, dilation), num_slices=channel_slices[i]
             )
 
-            norm_params = conv_params_path.norm if "norm" in conv_params_path else None
+            norm_params = conv_params_path.get("norm", None)
             norm_func = get_ttnn_norm(norm, out_channels, device=self.device, norm_params=norm_params)
             self.conv_branches.append((conv, norm_func))
 
         # --- ISPRAVKA OVDJE ---
-        # Grana 5: Global pooling
-        pool_conv_path = parameters.aspp_pool[1]
-        pool_conv_bias = pool_conv_path.bias if "bias" in pool_conv_path else None
+        # Grana 5: Global pooling (index 4 in convs)
+        pool_conv_path = parameters["convs"][4][1]  # pooling branch is convs[4], then [1] for the Conv2d part
+        pool_conv_bias = pool_conv_path.get("bias", None)
         pool_conv_params = TtConv2dParameters(
-            weight=pool_conv_path.weight,
+            weight=pool_conv_path["weight"],
             bias=pool_conv_bias,
             device=self.device,
         )
         self.pool_conv = TtConv2d.create(pool_conv_params, stride=(1, 1), padding=(0, 0))
 
-        pool_norm_params = pool_conv_path.norm if "norm" in pool_conv_path else None
+        pool_norm_params = pool_conv_path.get("norm", None)
         self.pool_norm = get_ttnn_norm(norm, out_channels, device=self.device, norm_params=pool_norm_params)
 
         # --- ISPRAVKA OVDJE ---
         # Finalna Project konvolucija
-        project_conv_path = parameters.project_conv
-        project_conv_bias = project_conv_path.bias if "bias" in project_conv_path else None
+        project_conv_path = parameters["project"]
+        project_conv_bias = project_conv_path.get("bias", None)
         project_conv_params = TtConv2dParameters(
-            weight=project_conv_path.weight,
+            weight=project_conv_path["weight"],
             bias=project_conv_bias,
             device=self.device,
         )
         self.project_conv = TtConv2d.create(project_conv_params, stride=(1, 1), padding=(0, 0))
 
-        project_norm_params = project_conv_path.norm if "norm" in project_conv_path else None
+        project_norm_params = project_conv_path.get("norm", None)
         self.project_norm = get_ttnn_norm(norm, out_channels, device=self.device, norm_params=project_norm_params)
 
         # Inicijalizacija upsample wrappera (ostaje ista)
