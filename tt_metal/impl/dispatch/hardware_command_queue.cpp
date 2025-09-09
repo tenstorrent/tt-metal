@@ -85,7 +85,13 @@ HWCommandQueue::HWCommandQueue(
     uint32_t completion_queue_reader_core) :
     manager_(device->sysmem_manager()),
     completion_queue_thread_{},
+    id_(id),
     completion_queue_reader_core_(completion_queue_reader_core),
+    device_(device),
+    cq_shared_state_(std::move(cq_shared_state)),
+    noc_index_(noc_index),
+    num_entries_in_completion_q_(0),
+    num_completed_completion_q_reads_(0),
     prefetcher_dram_aligned_block_size_(MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
     prefetcher_cache_sizeB_(
         MetalContext::instance().dispatch_mem_map(this->get_dispatch_core_type()).ringbuffer_size()),
@@ -97,12 +103,6 @@ HWCommandQueue::HWCommandQueue(
     dummy_prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
         prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)) {
     ZoneScopedN("CommandQueue_constructor");
-    this->device_ = device;
-    this->cq_shared_state_ = std::move(cq_shared_state);
-    this->id_ = id;
-    this->noc_index_ = noc_index;
-    this->num_entries_in_completion_q_ = 0;
-    this->num_completed_completion_q_reads_ = 0;
 
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
