@@ -77,7 +77,7 @@ struct ConstraintQueryResponse {
  */
 template <typename Op, typename... Args>
 auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, Args&&... args) {
-    nlohmann::json op_trace;
+    nlohmann::json op_trace, outer_trace;
     Tensor output;
     // outer graph capture is to avoid dispatching/allocating dummy input tensors
     {
@@ -110,8 +110,9 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
         catch (const std::exception& e) {
             log_debug(tt::LogOp, "Error during graph capture: {}", e.what());
             return ConstraintQueryResponse{
-                ExecutionStatus::Error, {0, 0, 0}, /* output_tensor_spec= */ std::nullopt, e.what()};
+                ExecutionStatus::Error, {0, 0, 0, 0}, /* output_tensor_spec= */ std::nullopt, e.what()};
         }
+        outer_trace = capture_outer.end_graph_capture();
 
     }  // end of outer graph capture
 
@@ -120,7 +121,7 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
     size_t cb_peak_size_per_core = extract_circular_buffers_peak_size_per_core(op_trace);
     size_t l1_buffers_peak_per_core =
         extract_l1_buffer_allocation_peak_size_per_core(op_trace, interleaved_storage_cores);
-    size_t peak_memory_usage_per_core = extract_peak_memory_usage(op_trace, interleaved_storage_cores);
+    size_t peak_memory_usage_per_core = extract_peak_memory_usage(outer_trace, interleaved_storage_cores);
     size_t l1_output_buffer_per_core = output.buffer()->is_dram() ? 0
                                                                   : extract_l1_output_buffer_allocation_size_per_core(
                                                                         output, interleaved_storage_cores);
