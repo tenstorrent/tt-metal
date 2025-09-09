@@ -117,9 +117,8 @@ struct EthernetConfig {
     std::unordered_map<std::string, uint32_t> named_compile_args;
 };
 
+// These are only used in op_profiler, are unstable and have not been designed for general use.
 namespace detail {
-
-// These are only used in op_profiler
 
 struct KernelBinaryMeta {
     // This maps to Kernel::get_kernel_processor_type
