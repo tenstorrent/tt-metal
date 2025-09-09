@@ -277,12 +277,12 @@ uint32_t calculate_L1_usage(
     }
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
-    uint32_t temp_cb_size = 0;
+    uint32_t pre_tilize_cb_size = 0;
 
     if (is_output_tiled) {
-        const uint32_t temp_cb_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
-        const uint32_t temp_cb_npages = 1;
-        temp_cb_size = temp_cb_pagesize * temp_cb_npages;
+        const uint32_t pre_tilize_cb_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
+        const uint32_t pre_tilize_cb_npages = 1;
+        pre_tilize_cb_size = pre_tilize_cb_pagesize * pre_tilize_cb_npages;
     }
 
     uint32_t out_idx_cb_config_size = 0;
@@ -294,8 +294,9 @@ uint32_t calculate_L1_usage(
     }
 
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
-           in_idx_cb_config_0_size + in_idx_cb_config_1_size + tile_tmp_cb_size + tile_idx_tmp_cb_size + temp_cb_size +
-           sliding_window::align_buffer(out_cb_config_size) + sliding_window::align_buffer(out_idx_cb_config_size);
+           in_idx_cb_config_0_size + in_idx_cb_config_1_size + tile_tmp_cb_size + tile_idx_tmp_cb_size +
+           pre_tilize_cb_size + sliding_window::align_buffer(out_cb_config_size) +
+           sliding_window::align_buffer(out_idx_cb_config_size);
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(

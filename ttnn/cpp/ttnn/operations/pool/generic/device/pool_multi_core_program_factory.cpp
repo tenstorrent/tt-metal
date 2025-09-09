@@ -419,14 +419,16 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const bool is_output_block_format = is_block_float(outputs[0].dtype());
 
     // Conditionally allocate temporary CB - only needed for TILED output
-    uint32_t temp_cb_id = 32;  // default invalid CB ID
+    uint32_t pre_tilize_cb_id = 32;  // default invalid CB ID
 
     if (is_output_tiled) {
-        temp_cb_id = next_cb_index++;
-        const uint32_t temp_cb_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
-        const uint32_t temp_cb_npages = 1;
-        tt::tt_metal::create_cb(temp_cb_id, program, all_cores, temp_cb_pagesize, temp_cb_npages, params.data_format);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", temp_cb_id, temp_cb_pagesize, temp_cb_npages);
+        pre_tilize_cb_id = next_cb_index++;
+        const uint32_t pre_tilize_cb_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
+        const uint32_t pre_tilize_cb_npages = 1;
+        tt::tt_metal::create_cb(
+            pre_tilize_cb_id, program, all_cores, pre_tilize_cb_pagesize, pre_tilize_cb_npages, params.data_format);
+        log_debug(
+            tt::LogOp, "CB {} :: PS = {}, NP = {}", pre_tilize_cb_id, pre_tilize_cb_pagesize, pre_tilize_cb_npages);
     }
 
     uint32_t out_cb_pagesize;
@@ -613,7 +615,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         out_idx_cb_id,                  // 16
         one_scalar_per_core,            // 17
         (uint32_t)return_indices,       // 18
-        temp_cb_id,                     // 19
+        pre_tilize_cb_id,               // 19
         is_output_tiled,                // 20
         is_output_block_format};        // 21
 

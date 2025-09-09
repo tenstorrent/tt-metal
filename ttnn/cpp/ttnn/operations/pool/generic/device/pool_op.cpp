@@ -32,11 +32,6 @@ void validate_pool2d(
     TT_FATAL(input.dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now. Tracked by issue #23338");
 
-    // Blackhole does not support tiled output for pool operations
-    if (input.device()->arch() == tt::ARCH::BLACKHOLE) {
-        TT_FATAL(output_layout == Layout::ROW_MAJOR, "Blackhole does not support tiled output for pool operations");
-    }
-
     TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded");
 
     if (return_indices) {
@@ -189,7 +184,8 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
 tt::stl::hash::hash_t Pool2D::compute_program_hash(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto input_mem_config = tensors.input_tensors_[0].memory_config();
-    auto dtype = tensors.input_tensors_[0].dtype();
+    auto in_dtype = tensors.input_tensors_[0].dtype();
+    auto out_dtype = op_attr.output_dtype_;
     return tt::tt_metal::operation::hash_operation<Pool2D>(
         op_attr.sliding_window_config_.get_hash(),
         op_attr.pool_type_,
@@ -198,7 +194,8 @@ tt::stl::hash::hash_t Pool2D::compute_program_hash(
         op_attr.count_include_pad_,
         op_attr.return_indices_,
         input_mem_config,
-        dtype);
+        in_dtype,
+        out_dtype);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Pool2D::tensor_return_value_t> Pool2D::create_op_performance_model(

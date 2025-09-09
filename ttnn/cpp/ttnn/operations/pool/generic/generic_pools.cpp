@@ -161,7 +161,8 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
         uint32_t input_channels = input_tensor_shape[3];
         uint32_t padding_needed = input_tensor_width_snapped_to_channels_alignment - input_channels;
 
-        // Apply zero padding to channels if needed
+        // Apply zero padding to channels if needed - we need it in case when output dtype is block float because if we
+        // have random values it would affect common exponent calculation
         Tensor input_tensor_padded;
         if (padding_needed > 0 && is_block_float(dtype)) {
             ttnn::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
