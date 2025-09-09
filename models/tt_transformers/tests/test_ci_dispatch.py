@@ -6,6 +6,7 @@ import os
 import pytest
 from loguru import logger
 
+from models.tt_transformers.tt.common import get_hf_tt_cache_path
 from models.utility_functions import skip_for_grayskull
 
 
@@ -34,7 +35,7 @@ def test_ci_dispatch(model_weights):
     if os.getenv("LLAMA_DIR"):
         del os.environ["LLAMA_DIR"]
     os.environ["HF_MODEL"] = model_weights
-    os.environ["TT_CACHE_PATH"] = f"/mnt/MLPerf/huggingface/tt_cache/{model_weights}"
+    os.environ["TT_CACHE_PATH"] = get_hf_tt_cache_path(model_weights)
 
     # Pass the exit code of pytest to proper keep track of failures during runtime
     exit_code = pytest.main(
