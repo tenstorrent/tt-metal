@@ -23,7 +23,6 @@
 #include <functional>
 #include <iostream>
 #include <optional>
-#include <type_traits>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -51,7 +50,6 @@
 #include "tt-metalium/program.hpp"
 #include "program/program_impl.hpp"
 #include "semaphore.hpp"
-#include "trace/trace.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>
@@ -170,8 +168,9 @@ void ConfigureKernelGroup(
         MetalContext::instance().hal().get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
     for (auto kernel_id : kernel_group->kernel_ids) {
         // Need the individual offsets of each bin
+        // TODO: make configure take a std::span
         program.impl().get_kernel(kernel_id)->configure(
-            device, logical_core, kernel_config_base, kernel_group->kernel_text_offsets);
+            device, logical_core, kernel_config_base, kernel_group->kernel_text_offsets.data());
     }
 }
 
