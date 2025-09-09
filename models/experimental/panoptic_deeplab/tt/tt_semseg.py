@@ -1,4 +1,3 @@
-import torch
 from typing import Dict, List, Union, Optional, Tuple
 from torch import nn
 import ttnn
@@ -18,9 +17,12 @@ class TtDeepLabV3PlusHead(nn.Module):
 
     def __init__(
         self,
-        input_shape: Dict[str, ShapeSpec],
+        # NOVO: Svi torch.Tensor argumenti su zamijenjeni sa jednim 'parameters' objektom
+        parameters,
         device: ttnn.Device,
         *,
+        # Konfiguracioni parametri ostaju isti
+        input_shape: Dict[str, ShapeSpec],
         project_channels: List[int],
         aspp_dilations: List[int],
         aspp_dropout: float,
@@ -28,13 +30,6 @@ class TtDeepLabV3PlusHead(nn.Module):
         common_stride: int,
         norm: str,
         train_size: Optional[Tuple],
-        shared_weight_tensor_kernel1: torch.Tensor,
-        shared_weight_tensor_kernel3: torch.Tensor,
-        shared_weight_tensor_kernel1_output5: torch.Tensor,
-        project_conv_weights: Dict[str, torch.Tensor],
-        fuse_conv_0_weights: Dict[str, torch.Tensor],
-        fuse_conv_1_weights: Dict[str, torch.Tensor],
-        predictor_weight: Optional[torch.Tensor] = None,
         num_classes: Optional[int] = None,
     ):
         super().__init__()
@@ -74,66 +69,62 @@ class TtDeepLabV3PlusHead(nn.Module):
                     out_channels=aspp_channels,
                     dilations=aspp_dilations,
                     device=self.device,
+                    pool_kernel_size=pool_kernel_size,
                     norm=norm,
                     activation="relu",
                     dropout=aspp_dropout,
-                    pool_kernel_size=pool_kernel_size,
-                    shared_weight_tensor_kernel1=shared_weight_tensor_kernel1,
-                    shared_weight_tensor_kernel3=shared_weight_tensor_kernel3,
-                    shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
+                    parameters=parameters[feature_name].project_conv,
                 )
                 decoder_stage["project_conv"] = project_conv
                 decoder_stage["fuse_conv_0"] = None
             else:
                 proj_out_ch = project_channels[idx]
-                param_dict = {"weight": project_conv_weights[feature_name]}
-                if use_bias:
-                    param_dict["bias"] = torch.zeros(1, 1, 1, proj_out_ch)
-                parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
-                project_conv = TtConv2d.create(parameters, stride=(1, 1), padding=(0, 0))
-
-                fuse_in_ch = proj_out_ch + decoder_channels[idx + 1]
                 fuse_out_ch = decoder_channels[idx]
-                # Create fuse_conv_0 with no slicing (for i=0) and height slicing (for i>0)
-                param_dict = {"weight": fuse_conv_0_weights[feature_name]}
-                if use_bias:
-                    param_dict["bias"] = torch.zeros(1, 1, 1, fuse_out_ch)
-                parameters_no_slice = TtConv2dParameters.from_torch(param_dict, device=self.device)
-                fuse_conv_0_no_slice = TtConv2d.create(parameters_no_slice, stride=(1, 1), padding=(1, 1))
 
-                # Create height-sliced version for i>0
-                param_dict = {"weight": fuse_conv_0_weights[feature_name]}
-                if use_bias:
-                    param_dict["bias"] = torch.zeros(1, 1, 1, fuse_out_ch)
-                parameters_height_slice = TtConv2dParameters.from_torch(param_dict, device=self.device)
+                # Generalna putanja do parametara za ovaj dekoder stejdž
+                base_path = parameters[feature_name]
+
+                # --- FINALNA ISPRAVKA OVDJE ---
+                # Koristimo 'in' operator za provjeru postojanja ključa
+
+                # Project Conv
+                proj_conv_path = base_path.project_conv
+                proj_bias = proj_conv_path.bias if "bias" in proj_conv_path else None
+                proj_params = TtConv2dParameters(weight=proj_conv_path.weight, bias=proj_bias, device=self.device)
+                project_conv = TtConv2d.create(proj_params, stride=(1, 1), padding=(0, 0))
+
+                # Fuse Conv 0
+                fuse0_path = base_path.fuse_conv[0]
+                fuse0_bias = fuse0_path.bias if "bias" in fuse0_path else None
+                fuse0_params = TtConv2dParameters(weight=fuse0_path.weight, bias=fuse0_bias, device=self.device)
+
+                fuse_conv_0_no_slice = TtConv2d.create(fuse0_params, stride=(1, 1), padding=(1, 1))
                 fuse_conv_0_height_slice = TtConv2d.create_with_height_slicing(
-                    parameters_height_slice, num_slices=4, stride=(1, 1), padding=(1, 1)
+                    fuse0_params, num_slices=4, stride=(1, 1), padding=(1, 1)
                 )
 
-                # Create fuse_conv_1 with no slicing (for i=0) and height slicing (for i>0)
-                param_dict = {"weight": fuse_conv_1_weights[feature_name]}
-                if use_bias:
-                    param_dict["bias"] = torch.zeros(1, 1, 1, fuse_out_ch)
-                parameters_no_slice = TtConv2dParameters.from_torch(param_dict, device=self.device)
-                fuse_conv_1_no_slice = TtConv2d.create(parameters_no_slice, stride=(1, 1), padding=(1, 1))
+                # Fuse Conv 1
+                fuse1_path = base_path.fuse_conv[1]
+                fuse1_bias = fuse1_path.bias if "bias" in fuse1_path else None
+                fuse1_params = TtConv2dParameters(weight=fuse1_path.weight, bias=fuse1_bias, device=self.device)
 
-                # Create height-sliced version for i>0
-                param_dict = {"weight": fuse_conv_1_weights[feature_name]}
-                if use_bias:
-                    param_dict["bias"] = torch.zeros(1, 1, 1, fuse_out_ch)
-                parameters_height_slice = TtConv2dParameters.from_torch(param_dict, device=self.device)
+                fuse_conv_1_no_slice = TtConv2d.create(fuse1_params, stride=(1, 1), padding=(1, 1))
                 fuse_conv_1_height_slice = TtConv2d.create_with_height_slicing(
-                    parameters_height_slice, num_slices=2, stride=(1, 1), padding=(1, 1)
+                    fuse1_params, num_slices=2, stride=(1, 1), padding=(1, 1)
                 )
+
+                proj_norm_params = base_path.project_conv.norm if "norm" in base_path.project_conv else None
+                fuse0_norm_params = base_path.fuse_conv[0].norm if "norm" in base_path.fuse_conv[0] else None
+                fuse1_norm_params = base_path.fuse_conv[1].norm if "norm" in base_path.fuse_conv[1] else None
 
                 decoder_stage["project_conv"] = project_conv
-                decoder_stage["project_norm"] = get_ttnn_norm(norm, proj_out_ch, device, norm_params=None)
+                decoder_stage["project_norm"] = get_ttnn_norm(norm, proj_out_ch, device, norm_params=proj_norm_params)
                 decoder_stage["fuse_conv_0_no_slice"] = fuse_conv_0_no_slice
                 decoder_stage["fuse_conv_0_height_slice"] = fuse_conv_0_height_slice
-                decoder_stage["fuse_norm_0"] = get_ttnn_norm(norm, fuse_out_ch, device, norm_params=None)
+                decoder_stage["fuse_norm_0"] = get_ttnn_norm(norm, fuse_out_ch, device, norm_params=fuse0_norm_params)
                 decoder_stage["fuse_conv_1_no_slice"] = fuse_conv_1_no_slice
                 decoder_stage["fuse_conv_1_height_slice"] = fuse_conv_1_height_slice
-                decoder_stage["fuse_norm_1"] = get_ttnn_norm(norm, fuse_out_ch, device, norm_params=None)
+                decoder_stage["fuse_norm_1"] = get_ttnn_norm(norm, fuse_out_ch, device, norm_params=fuse1_norm_params)
 
             self.decoder[feature_name] = decoder_stage
 
@@ -208,7 +199,7 @@ class TtDeepLabV3PlusHead(nn.Module):
                 y_conv0 = stage["fuse_conv_0_height_slice"](y)
             ttnn.deallocate(y)
             y_norm0 = stage["fuse_norm_0"](y_conv0)
-            ttnn.deallocate(y_conv0)
+            #            ttnn.deallocate(y_conv0)
 
             y_act0 = self.activation(y_norm0)
             ttnn.deallocate(y_norm0)
@@ -220,7 +211,7 @@ class TtDeepLabV3PlusHead(nn.Module):
             else:
                 y_conv1 = stage["fuse_conv_1_height_slice"](y_act0)
             y_norm1 = stage["fuse_norm_1"](y_conv1)
-            ttnn.deallocate(y_conv1)
+            #           ttnn.deallocate(y_conv1)
 
             y = self.activation(y_norm1)
             ttnn.deallocate(y_norm1)
@@ -236,9 +227,12 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
 
     def __init__(
         self,
-        input_shape: Dict[str, ShapeSpec],
+        # NOVO: Svi torch.Tensor argumenti su zamijenjeni
+        parameters,
         device: ttnn.Device,
         *,
+        # Konfiguracioni parametri ostaju
+        input_shape: Dict[str, ShapeSpec],
         head_channels: int,
         num_classes: int,
         norm: str,
@@ -248,63 +242,68 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         decoder_channels: List[int],
         common_stride: int,
         train_size: Optional[Tuple],
-        shared_weight_tensor_kernel1: torch.Tensor,
-        shared_weight_tensor_kernel3: torch.Tensor,
-        shared_weight_tensor_kernel1_output5: torch.Tensor,
-        project_conv_weights: Dict[str, torch.Tensor],
-        fuse_conv_0_weights: Dict[str, torch.Tensor],
-        fuse_conv_1_weights: Dict[str, torch.Tensor],
-        panoptic_head_0_weight: torch.Tensor,
-        panoptic_head_1_weight: torch.Tensor,
-        panoptic_predictor_weight: torch.Tensor,
     ):
         super().__init__(
-            input_shape=input_shape,
+            parameters=parameters.decoder,
             device=device,
+            input_shape=input_shape,
             norm=norm,
             num_classes=None,
-            predictor_weight=None,
             project_channels=project_channels,
             aspp_dilations=aspp_dilations,
             aspp_dropout=aspp_dropout,
             decoder_channels=decoder_channels,
             common_stride=common_stride,
             train_size=train_size,
-            shared_weight_tensor_kernel1=shared_weight_tensor_kernel1,
-            shared_weight_tensor_kernel3=shared_weight_tensor_kernel3,
-            shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
-            project_conv_weights=project_conv_weights,
-            fuse_conv_0_weights=fuse_conv_0_weights,
-            fuse_conv_1_weights=fuse_conv_1_weights,
         )
         assert self.decoder_only
         use_bias = norm == ""
         decoder_out_ch = decoder_channels[0]
         logger.debug(f"Initializing TtPanopticDeepLabSemSegHead with {num_classes} classes")
 
-        # Create head_0 with height slicing
-        param_dict = {"weight": panoptic_head_0_weight}
-        if use_bias:
-            param_dict["bias"] = torch.zeros(1, 1, 1, decoder_out_ch)
-        parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
-        self.head_0 = TtConv2d.create_with_height_slicing(parameters, num_slices=2, stride=(1, 1), padding=(1, 1))
-        self.head_norm_0 = get_ttnn_norm(norm, decoder_out_ch, device, norm_params=None)
+        # --- ISPRAVKA OVDJE ---
+        # Putanje sada kreću od 'parameters', a ne od 'parameters.semantic_head'
+        # jer smo 'semantic_head' dio već proslijedili u super() i on nije dostupan ovdje.
+        # MORAMO da koristimo punu putanju `parameters.semantic_head...`
 
-        # Create head_1 with height slicing
-        param_dict = {"weight": panoptic_head_1_weight}
-        if use_bias:
-            param_dict["bias"] = torch.zeros(1, 1, 1, head_channels)
-        parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
-        self.head_1 = TtConv2d.create_with_height_slicing(parameters, num_slices=2, stride=(1, 1), padding=(1, 1))
-        self.head_norm_1 = get_ttnn_norm(norm, head_channels, device, norm_params=None)
+        # Head 0
+        head0_path = parameters.head[0]
+        head0_bias = head0_path.bias if "bias" in head0_path else None
+        head0_params = TtConv2dParameters(
+            weight=head0_path.weight,
+            bias=head0_bias,
+            device=self.device,
+        )
+        self.head_0 = TtConv2d.create_with_height_slicing(head0_params, num_slices=2, stride=(1, 1), padding=(1, 1))
 
-        # Create predictor without slicing
-        param_dict = {"weight": panoptic_predictor_weight, "bias": torch.zeros(1, 1, 1, num_classes)}
-        parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
-        self.predictor = TtConv2d.create(parameters, stride=(1, 1), padding=(0, 0))
+        head0_norm_params = head0_path.norm if "norm" in head0_path else None
+        self.head_norm_0 = get_ttnn_norm(norm, decoder_out_ch, device, norm_params=head0_norm_params)
 
-        # Initialize final upsample for semantic head
-        # Use default mode if bilinear causes memory issues, otherwise bilinear for PCC
+        # --- ISPRAVKA OVDJE ---
+        # Head 1
+        head1_path = parameters.head[1]
+        head1_bias = head1_path.bias if "bias" in head1_path else None
+        head1_params = TtConv2dParameters(
+            weight=head1_path.weight,
+            bias=head1_bias,
+            device=self.device,
+        )
+        self.head_1 = TtConv2d.create_with_height_slicing(head1_params, num_slices=2, stride=(1, 1), padding=(1, 1))
+
+        head1_norm_params = head1_path.norm if "norm" in head1_path else None
+        self.head_norm_1 = get_ttnn_norm(norm, head_channels, device, norm_params=head1_norm_params)
+
+        # --- ISPRAVKA OVDJE ---
+        # Predictor
+        predictor_path = parameters.predictor
+        predictor_bias = predictor_path.bias if "bias" in predictor_path else None
+        predictor_params = TtConv2dParameters(
+            weight=predictor_path.weight,
+            bias=predictor_bias,
+            device=self.device,
+        )
+        self.predictor = TtConv2d.create(predictor_params, stride=(1, 1), padding=(0, 0))
+
         self.final_upsample = TtUpsample.create(device=device, scale_factor=common_stride, mode="nearest")
         logger.debug("TtPanopticDeepLabSemSegHead initialization complete")
 

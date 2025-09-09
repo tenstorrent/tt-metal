@@ -1,4 +1,3 @@
-import torch
 from typing import Callable, Dict, List, Union, Optional, Tuple
 from torch import nn
 from torch.nn import functional as F
@@ -30,18 +29,6 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
         norm: Union[str, Callable],
         train_size: Optional[Tuple],
         use_depthwise_separable_conv: bool,
-        shared_weight_tensor_kernel1: torch.Tensor,
-        shared_weight_tensor_kernel3: torch.Tensor,
-        shared_weight_tensor_kernel1_output5: torch.Tensor,
-        project_conv_weights: Dict[str, torch.Tensor],
-        fuse_conv_0_weights: Dict[str, torch.Tensor],
-        fuse_conv_1_weights: Dict[str, torch.Tensor],
-        center_head_0_weight: torch.Tensor,
-        center_head_1_weight: torch.Tensor,
-        center_predictor_weight: torch.Tensor,
-        offset_head_0_weight: torch.Tensor,
-        offset_head_1_weight: torch.Tensor,
-        offset_predictor_weight: torch.Tensor,
     ):
         super().__init__(
             input_shape=input_shape,
@@ -54,13 +41,6 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
             train_size=train_size,
             use_depthwise_separable_conv=use_depthwise_separable_conv,
             num_classes=None,
-            predictor_weight=None,
-            shared_weight_tensor_kernel1=shared_weight_tensor_kernel1,
-            shared_weight_tensor_kernel3=shared_weight_tensor_kernel3,
-            shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
-            project_conv_weights=project_conv_weights,
-            fuse_conv_0_weights=fuse_conv_0_weights,
-            fuse_conv_1_weights=fuse_conv_1_weights,
         )
         assert self.decoder_only
 
@@ -80,8 +60,6 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
             norm=get_norm(norm, decoder_output_channels),
             activation=F.relu,
         )
-        center_head_conv1.weight.data = center_head_0_weight
-
         center_head_conv2 = Conv2d(
             decoder_output_channels,
             head_channels,
@@ -91,12 +69,9 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
             norm=get_norm(norm, head_channels),
             activation=F.relu,
         )
-        center_head_conv2.weight.data = center_head_1_weight
-
         self.center_head = nn.Sequential(center_head_conv1, center_head_conv2)
 
         self.center_predictor = Conv2d(head_channels, 1, kernel_size=1)
-        self.center_predictor.weight.data = center_predictor_weight
         nn.init.constant_(self.center_predictor.bias, 0)
 
         # --- Build the Offset Prediction Branch ---
@@ -109,8 +84,6 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
             norm=get_norm(norm, decoder_output_channels),
             activation=F.relu,
         )
-        offset_head_conv1.weight.data = offset_head_0_weight
-
         offset_head_conv2 = Conv2d(
             decoder_output_channels,
             head_channels,
@@ -120,12 +93,9 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
             norm=get_norm(norm, head_channels),
             activation=F.relu,
         )
-        offset_head_conv2.weight.data = offset_head_1_weight
-
         self.offset_head = nn.Sequential(offset_head_conv1, offset_head_conv2)
 
         self.offset_predictor = Conv2d(head_channels, 2, kernel_size=1)
-        self.offset_predictor.weight.data = offset_predictor_weight
         nn.init.constant_(self.offset_predictor.bias, 0)
 
     def forward(

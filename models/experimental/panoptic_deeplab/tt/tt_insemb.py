@@ -1,5 +1,4 @@
-import torch
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 import ttnn
 from loguru import logger
 
@@ -17,112 +16,125 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
 
     def __init__(
         self,
-        input_shape: Dict[str, ShapeSpec],
+        # NOVO: Svi torch.Tensor argumenti su zamijenjeni
+        parameters,
         device: ttnn.Device,
         *,
-        # --- Parametri specifični za ovu klasu ---
+        # Konfiguracioni parametri ostaju
+        input_shape: Dict[str, ShapeSpec],
         head_channels: int,
-        # --- Parametri koji se prosljeđuju baznoj klasi ---
-        project_channels: List[int],
-        aspp_dilations: List[int],
+        project_channels,
+        aspp_dilations,
         aspp_dropout: float,
-        decoder_channels: List[int],
+        decoder_channels,
         common_stride: int,
         norm: str,
         train_size: Optional[Tuple],
-        shared_weight_tensor_kernel1: torch.Tensor,
-        shared_weight_tensor_kernel3: torch.Tensor,
-        shared_weight_tensor_kernel1_output5: torch.Tensor,
-        project_conv_weights: Dict[str, torch.Tensor],
-        fuse_conv_0_weights: Dict[str, torch.Tensor],
-        fuse_conv_1_weights: Dict[str, torch.Tensor],
-        center_head_0_weight: torch.Tensor,
-        center_head_1_weight: torch.Tensor,
-        center_predictor_weight: torch.Tensor,
-        offset_head_0_weight: torch.Tensor,
-        offset_head_1_weight: torch.Tensor,
-        offset_predictor_weight: torch.Tensor,
     ):
         super().__init__(
-            input_shape=input_shape,
+            parameters=parameters.decoder,
             device=device,
+            input_shape=input_shape,
             norm=norm,
-            num_classes=None,
-            predictor_weight=None,
+            num_classes=None,  # decoder_only mode
             project_channels=project_channels,
             aspp_dilations=aspp_dilations,
             aspp_dropout=aspp_dropout,
             decoder_channels=decoder_channels,
             common_stride=common_stride,
             train_size=train_size,
-            shared_weight_tensor_kernel1=shared_weight_tensor_kernel1,
-            shared_weight_tensor_kernel3=shared_weight_tensor_kernel3,
-            shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
-            project_conv_weights=project_conv_weights,
-            fuse_conv_0_weights=fuse_conv_0_weights,
-            fuse_conv_1_weights=fuse_conv_1_weights,
         )
         assert self.decoder_only
         use_bias = norm == ""
         decoder_out_ch = decoder_channels[0]
         logger.debug(f"Initializing TtPanopticDeepLabInsEmbedHead with head_channels: {head_channels}")
 
-        # --- Center Prediction ---
-        # center_head_0 with height slicing
-        param_dict = {"weight": center_head_0_weight}
-        if use_bias:
-            param_dict["bias"] = torch.zeros(1, 1, 1, decoder_out_ch)
-        parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
+        # --- ISPRAVLJENO: Kreiranje slojeva sa ispravnim putanjama i provjerama ---
+
+        # --- Center Prediction Grana ---
+        # center_head_0
+        center_head0_path = parameters.center_head[0]
+        ch0_bias = center_head0_path.bias if "bias" in center_head0_path else None
+        ch0_params = TtConv2dParameters(
+            weight=center_head0_path.weight,
+            bias=ch0_bias,
+            device=self.device,
+        )
         self.center_head_0 = TtConv2d.create_with_height_slicing(
-            parameters, num_slices=2, stride=(1, 1), padding=(1, 1)
+            ch0_params, num_slices=2, stride=(1, 1), padding=(1, 1)
         )
-        self.center_head_norm_0 = get_ttnn_norm(norm, decoder_out_ch, device, norm_params=None)
 
-        # center_head_1 with height slicing
-        param_dict = {"weight": center_head_1_weight}
-        if use_bias:
-            param_dict["bias"] = torch.zeros(1, 1, 1, head_channels)
-        parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
+        ch0_norm_params = center_head0_path.norm if "norm" in center_head0_path else None
+        self.center_head_norm_0 = get_ttnn_norm(norm, decoder_out_ch, device, norm_params=ch0_norm_params)
+
+        # center_head_1
+        center_head1_path = parameters.center_head[1]
+        ch1_bias = center_head1_path.bias if "bias" in center_head1_path else None
+        ch1_params = TtConv2dParameters(
+            weight=center_head1_path.weight,
+            bias=ch1_bias,
+            device=self.device,
+        )
         self.center_head_1 = TtConv2d.create_with_height_slicing(
-            parameters, num_slices=2, stride=(1, 1), padding=(1, 1)
+            ch1_params, num_slices=2, stride=(1, 1), padding=(1, 1)
         )
-        self.center_head_norm_1 = get_ttnn_norm(norm, head_channels, device, norm_params=None)
 
-        # center_predictor without slicing
-        param_dict = {"weight": center_predictor_weight, "bias": torch.zeros(1, 1, 1, 1)}
-        parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
-        self.center_predictor = TtConv2d.create(parameters, stride=(1, 1), padding=(0, 0))
+        ch1_norm_params = center_head1_path.norm if "norm" in center_head1_path else None
+        self.center_head_norm_1 = get_ttnn_norm(norm, head_channels, device, norm_params=ch1_norm_params)
 
-        # --- Offset Prediction ---
-        # offset_head_0 with height slicing
-        param_dict = {"weight": offset_head_0_weight}
-        if use_bias:
-            param_dict["bias"] = torch.zeros(1, 1, 1, decoder_out_ch)
-        parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
+        # center_predictor
+        center_predictor_path = parameters.center_predictor
+        cp_bias = center_predictor_path.bias if "bias" in center_predictor_path else None
+        cp_params = TtConv2dParameters(
+            weight=center_predictor_path.weight,
+            bias=cp_bias,
+            device=self.device,
+        )
+        self.center_predictor = TtConv2d.create(cp_params, stride=(1, 1), padding=(0, 0))
+
+        # --- Offset Prediction Grana ---
+        # offset_head_0
+        offset_head0_path = parameters.offset_head[0]
+        oh0_bias = offset_head0_path.bias if "bias" in offset_head0_path else None
+        oh0_params = TtConv2dParameters(
+            weight=offset_head0_path.weight,
+            bias=oh0_bias,
+            device=self.device,
+        )
         self.offset_head_0 = TtConv2d.create_with_height_slicing(
-            parameters, num_slices=2, stride=(1, 1), padding=(1, 1)
+            oh0_params, num_slices=2, stride=(1, 1), padding=(1, 1)
         )
-        self.offset_head_norm_0 = get_ttnn_norm(norm, decoder_out_ch, device, norm_params=None)
 
-        # offset_head_1 with height slicing
-        param_dict = {"weight": offset_head_1_weight}
-        if use_bias:
-            param_dict["bias"] = torch.zeros(1, 1, 1, head_channels)
-        parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
+        oh0_norm_params = offset_head0_path.norm if "norm" in offset_head0_path else None
+        self.offset_head_norm_0 = get_ttnn_norm(norm, decoder_out_ch, device, norm_params=oh0_norm_params)
+
+        # offset_head_1
+        offset_head1_path = parameters.offset_head[1]
+        oh1_bias = offset_head1_path.bias if "bias" in offset_head1_path else None
+        oh1_params = TtConv2dParameters(
+            weight=offset_head1_path.weight,
+            bias=oh1_bias,
+            device=self.device,
+        )
         self.offset_head_1 = TtConv2d.create_with_height_slicing(
-            parameters, num_slices=2, stride=(1, 1), padding=(1, 1)
+            oh1_params, num_slices=2, stride=(1, 1), padding=(1, 1)
         )
-        self.offset_head_norm_1 = get_ttnn_norm(norm, head_channels, device, norm_params=None)
 
-        # offset_predictor without slicing
-        param_dict = {"weight": offset_predictor_weight, "bias": torch.zeros(1, 1, 1, 2)}
-        parameters = TtConv2dParameters.from_torch(param_dict, device=self.device)
-        self.offset_predictor = TtConv2d.create(parameters, stride=(1, 1), padding=(0, 0))
+        oh1_norm_params = offset_head1_path.norm if "norm" in offset_head1_path else None
+        self.offset_head_norm_1 = get_ttnn_norm(norm, head_channels, device, norm_params=oh1_norm_params)
 
-        # Initialize upsample operations for instance head
-        # Note: Using default mode (no mode specified) to match original implementation
-        self.center_upsample = TtUpsample.create(device=device, scale_factor=common_stride, mode="nearest")
-        self.offset_upsample = TtUpsample.create(device=device, scale_factor=common_stride, mode="nearest")
+        # offset_predictor
+        offset_predictor_path = parameters.offset_predictor
+        op_bias = offset_predictor_path.bias if "bias" in offset_predictor_path else None
+        op_params = TtConv2dParameters(
+            weight=offset_predictor_path.weight,
+            bias=op_bias,
+            device=self.device,
+        )
+        self.offset_predictor = TtConv2d.create(op_params, stride=(1, 1), padding=(0, 0))
+
+        # --- Inicijalizacija Upsample operacija ---
+        self.final_upsample = TtUpsample.create(device=device, scale_factor=common_stride, mode="nearest")
         logger.debug("TtPanopticDeepLabInsEmbedHead initialization complete")
 
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, ttnn.Tensor, Dict, Dict]:
@@ -130,11 +142,11 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         center_logits, offset_logits = self.layers(features)
 
         # --- Final Upsample for Center ---
-        center_logits = self.center_upsample(center_logits)
+        center_logits = self.final_upsample(center_logits)
         logger.debug(f"TtPanopticDeepLabInsEmbedHead center upsample complete - shape: {center_logits.shape}")
 
         # --- Final Upsample for Offset ---
-        offset_logits = self.offset_upsample(offset_logits)
+        offset_logits = self.final_upsample(offset_logits)
         offset_logits = ttnn.mul(offset_logits, self.common_stride)
         logger.debug(f"TtPanopticDeepLabInsEmbedHead offset upsample complete - shape: {offset_logits.shape}")
 
