@@ -474,8 +474,6 @@ KernelGroup::KernelGroup(
     TT_FATAL(noc_modes.size() <= 1, "KernelGroup must have the same noc mode for all kernels");
 
     for (uint32_t index = 0; index < NUM_PROCESSORS_PER_CORE_TYPE; index++) {
-        this->kernel_bin_sizes[index] = 0;
-        this->kernel_text_offsets[index] = 0;
         this->launch_msg.kernel_config.kernel_text_offset[index] = 0;
     }
     this->launch_msg.kernel_config.ncrisc_kernel_size16 = 0;
