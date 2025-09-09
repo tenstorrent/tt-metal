@@ -154,7 +154,7 @@ async function run() {
     const cutoff = getCutoffDate(days);
     mergedRuns = mergedRuns.filter(run =>
       run.head_branch === branch &&
-      run.status === 'completed' &&
+      // run.status === 'completed' &&
       new Date(run.created_at) >= cutoff
     );
     // Group runs by workflow name
