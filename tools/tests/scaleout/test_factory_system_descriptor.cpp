@@ -47,6 +47,8 @@ TEST(Cluster, TestFactorySystemDescriptor5WHGalaxyYTorus) {
     // Generate the FSD (textproto format)
     cabling_generator.emit_factory_system_descriptor("fsd/factory_system_descriptor_5_wh_galaxy_y_torus.textproto");
 
+    cabling_generator.emit_cabling_guide_csv("fsd/cabling_guide_5_wh_galaxy_y_torus.csv");
+
     // Validate the FSD against the discovered GSD using the common utility function
     EXPECT_THROW(
         {

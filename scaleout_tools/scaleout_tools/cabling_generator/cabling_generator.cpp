@@ -28,12 +28,13 @@ CablingGenerator::CablingGenerator(
     // Store deployment hosts
     deployment_hosts_.reserve(deployment_descriptor.hosts().size());
     for (const auto& proto_host : deployment_descriptor.hosts()) {
-        deployment_hosts_.emplace_back(Host{
-            .hostname = proto_host.host(),
-            .hall = proto_host.hall(),
-            .aisle = proto_host.aisle(),
-            .rack = proto_host.rack(),
-            .shelf_u = proto_host.shelf_u()});
+        deployment_hosts_.emplace_back(
+            Host{
+                .hostname = proto_host.host(),
+                .hall = proto_host.hall(),
+                .aisle = proto_host.aisle(),
+                .rack = proto_host.rack(),
+                .shelf_u = proto_host.shelf_u()});
     }
 
     // Build cluster with all connections and port validation
@@ -523,6 +524,43 @@ void CablingGenerator::populate_boards_from_resolved_graph(std::shared_ptr<Resol
     // Recursively add boards from subgraphs
     for (const auto& [subgraph_name, subgraph] : graph->subgraphs) {
         populate_boards_from_resolved_graph(subgraph);
+    }
+}
+
+void CablingGenerator::get_all_connections_of_type(
+    std::shared_ptr<ResolvedGraphInstance> instance,
+    PortType port_type,
+    std::vector<std::pair<std::tuple<uint32_t, uint32_t, uint32_t>, std::tuple<uint32_t, uint32_t, uint32_t>>>&
+        conn_list) {
+    if (!instance) {
+        instance = CablingGenerator::root_instance_;
+    }
+
+    if (!instance) {
+        throw std::runtime_error("No root instance defined");
+    }
+
+    // Process internal connections of this instance
+    for (const auto& [conn_a, conn_b] : instance->internal_connections[port_type]) {
+        const auto& path_a = std::get<0>(conn_a);
+        TrayId board_a_id = std::get<1>(conn_a);
+        PortId port_a_id = std::get<2>(conn_a);
+
+        const auto& path_b = std::get<0>(conn_b);
+        TrayId board_b_id = std::get<1>(conn_b);
+        PortId port_b_id = std::get<2>(conn_b);
+
+        // Resolve pods using path-based addressing
+        auto [pod_a, host_a_id] = resolve_pod_from_path(path_a, instance);
+        auto [pod_b, host_b_id] = resolve_pod_from_path(path_b, instance);
+
+        conn_list.emplace_back(
+            std::make_tuple(*host_a_id, *board_a_id, *port_a_id), std::make_tuple(*host_b_id, *board_b_id, *port_b_id));
+    }
+
+    // Recursively process subgraphs
+    for (const auto& [subgraph_name, subgraph] : instance->subgraphs) {
+        get_all_connections_of_type(subgraph, port_type, conn_list);
     }
 }
 

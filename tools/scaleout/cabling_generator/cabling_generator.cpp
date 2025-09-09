@@ -8,6 +8,7 @@
 #include <enchantum/enchantum.hpp>
 #include <filesystem>
 #include <fstream>
+#include <math.h>
 #include <google/protobuf/text_format.h>
 #include <connector/connector.hpp>
 #include <tt_stl/caseless_comparison.hpp>
@@ -293,12 +294,13 @@ CablingGenerator::CablingGenerator(
     // Store deployment hosts
     deployment_hosts_.reserve(deployment_descriptor.hosts().size());
     for (const auto& proto_host : deployment_descriptor.hosts()) {
-        deployment_hosts_.emplace_back(Host{
-            .hostname = proto_host.host(),
-            .hall = proto_host.hall(),
-            .aisle = proto_host.aisle(),
-            .rack = proto_host.rack(),
-            .shelf_u = proto_host.shelf_u()});
+        deployment_hosts_.emplace_back(
+            Host{
+                .hostname = proto_host.host(),
+                .hall = proto_host.hall(),
+                .aisle = proto_host.aisle(),
+                .rack = proto_host.rack(),
+                .shelf_u = proto_host.shelf_u()});
     }
 
     // Build cluster with all connections and port validation
@@ -394,6 +396,58 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
     }
 
     output_file << output_string;
+    output_file.close();
+}
+
+void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path) const {
+    // Create parent directory if it doesn't exist
+    std::filesystem::path output_file_path(output_path);
+    if (output_file_path.has_parent_path()) {
+        std::filesystem::create_directories(output_file_path.parent_path());
+    }
+
+    std::ofstream output_file(output_path);
+    if (!output_file.is_open()) {
+        throw std::runtime_error("Failed to open output file: " + output_path);
+    }
+
+    // Vector of (Host,Tray,Port) Connection Pairs
+    std::vector<std::pair<std::tuple<HostId, TrayId, PortId>, std::tuple<HostId, TrayId, PortId>>> conn_list;
+
+    CablingGenerator::get_all_connections_of_type(root_instance_, PortType::QSFP, conn_list);
+    output_file.fill('0');
+    output_file << "Source,,,,,,,Destination,,,,,,,Cable Length,Cable Type" << std::endl;
+    output_file << "Hall,Aisle,Rack,Shelf U,Tray,Port,Label,Hall,Aisle,Rack,Shelf U,Tray,Port,Label,," << std::endl;
+    for (const auto& [start, end] : conn_list) {
+        auto host_id1 = std::get<0>(start).get();
+        auto tray_id1 = std::get<1>(start).get();
+        auto port_id1 = std::get<2>(start).get();
+
+        auto host_id2 = std::get<0>(end).get();
+        auto tray_id2 = std::get<1>(end).get();
+        auto port_id2 = std::get<2>(end).get();
+
+        const auto& host1 = deployment_hosts_[host_id1];
+        const auto& host2 = deployment_hosts_[host_id2];
+
+        CableLength cable_l = calc_cable_length(host1, host2);
+
+        output_file << host1.hall << "," << host1.aisle << "," << std::setw(2) << host1.rack << ",U" << std::setw(2)
+                    << host1.shelf_u << "," << tray_id1 << "," << port_id1 << ",";
+
+        output_file << host1.hall << host1.aisle << std::setw(2) << host1.rack << "U" << std::setw(2) << host1.shelf_u
+                    << "-" << tray_id1 << "-" << port_id1 << ",";
+
+        output_file << host2.hall << "," << host2.aisle << "," << std::setw(2) << host2.rack << ",U" << std::setw(2)
+                    << host2.shelf_u << "," << tray_id2 << "," << port_id2 << ",";
+
+        output_file << host2.hall << host2.aisle << std::setw(2) << host2.rack << "U" << std::setw(2) << host2.shelf_u
+                    << "-" << tray_id2 << "-" << port_id2 << ",";
+
+        output_file << cable_length_str.at(cable_l) << ",";
+        output_file << ((cable_l == CableLength::OPTICAL_CABLE) ? "Optical" : "QSFP_DD_AEC") << std::endl;
+    }
+
     output_file.close();
 }
 
@@ -562,6 +616,73 @@ void CablingGenerator::populate_boards_from_resolved_graph(const std::unique_ptr
     // Recursively add boards from subgraphs
     for (const auto& [subgraph_name, subgraph] : graph->subgraphs) {
         populate_boards_from_resolved_graph(subgraph);
+    }
+}
+
+void CablingGenerator::get_all_connections_of_type(
+    const std::unique_ptr<ResolvedGraphInstance>& instance,
+    PortType port_type,
+    std::vector<std::pair<std::tuple<HostId, TrayId, PortId>, std::tuple<HostId, TrayId, PortId>>>& conn_list) const {
+    for (const auto& [start, end] : instance->internal_connections[port_type]) {
+        auto host_id1 = resolve_node_from_path(std::get<0>(start), instance);
+
+        std::tuple<HostId, TrayId, PortId> s_tuple =
+            std::make_tuple(host_id1.second, std::get<1>(start), std::get<2>(start));
+
+        auto host_id2 = resolve_node_from_path(std::get<0>(end), instance);
+
+        std::tuple<HostId, TrayId, PortId> e_tuple =
+            std::make_tuple(host_id2.second, std::get<1>(end), std::get<2>(end));
+        conn_list.push_back(std::make_pair(s_tuple, e_tuple));
+    }
+
+    for (const auto& [child_name, child_instance] : instance->nodes) {
+        for (const auto& [start, end] : child_instance.inter_board_connections.at(port_type)) {
+            std::tuple<HostId, TrayId, PortId> s_tuple =
+                std::make_tuple(child_instance.host_id, start.first, start.second);
+
+            std::tuple<HostId, TrayId, PortId> e_tuple = std::make_tuple(child_instance.host_id, end.first, end.second);
+            conn_list.push_back(std::make_pair(s_tuple, e_tuple));
+        }
+    }
+
+    for (const auto& [child_name, child_instance] : instance->subgraphs) {
+        get_all_connections_of_type(child_instance, port_type, conn_list);
+    }
+}
+
+CableLength calc_cable_length(Host host1, Host host2) {
+    if (host1.hall != host2.hall) {
+        return CableLength::OPTICAL_CABLE;
+    } else if (host1.aisle != host2.aisle) {
+        return CableLength::OPTICAL_CABLE;
+    }
+
+    int rack_0 = host1.rack;
+    int shelf_u_0 = host1.shelf_u;
+    int rack_1 = host2.rack;
+    int shelf_u_1 = host2.shelf_u;
+
+    double standard_rack_w = 600.0;    // mm
+    double standard_rack_u_h = 44.45;  // mm
+
+    double rack_distance = fabs(rack_0 - rack_1) * standard_rack_w;
+    double u_distance = (fabs(shelf_u_0 - shelf_u_1)) * standard_rack_u_h;
+
+    double cable_length = sqrt(rack_distance * rack_distance + u_distance * u_distance) + 150;  // 150mm slack
+
+    if (cable_length <= 500.0) {
+        return CableLength::CABLE_0_5;
+    } else if (cable_length <= 1000.0) {
+        return CableLength::CABLE_1;
+    } else if (cable_length <= 2500.0) {
+        return CableLength::CABLE_2_5;
+    } else if (cable_length <= 3000.0) {
+        return CableLength::CABLE_3;
+    } else if (cable_length <= 5000.0) {
+        return CableLength::CABLE_5;
+    } else {
+        return CableLength::OPTICAL_CABLE;
     }
 }
 

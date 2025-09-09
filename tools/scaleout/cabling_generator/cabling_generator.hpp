@@ -90,6 +90,18 @@ struct ResolvedGraphInstance {
     std::unordered_map<PortType, std::vector<PortConnection>> internal_connections;
 };
 
+enum class CableLength { CABLE_0_5, CABLE_1, CABLE_2_5, CABLE_3, CABLE_5, OPTICAL_CABLE };
+
+const std::unordered_map<CableLength, std::string> cable_length_str = {
+    {CableLength::CABLE_0_5, "0.5m"},
+    {CableLength::CABLE_1, "1m"},
+    {CableLength::CABLE_2_5, "2.5m"},
+    {CableLength::CABLE_3, "3m"},
+    {CableLength::CABLE_5, "5m"},
+    {CableLength::OPTICAL_CABLE, "Optical"}};
+
+CableLength calc_cable_length(Host host1, Host host2);
+
 class CablingGenerator {
 public:
     // Constructor
@@ -102,6 +114,8 @@ public:
 
     // Method to emit factory system descriptor
     void emit_factory_system_descriptor(const std::string& output_path) const;
+
+    void emit_cabling_guide_csv(const std::string& output_path) const;
 
 private:
     // Validate that each host_id is assigned to exactly one node
@@ -121,6 +135,12 @@ private:
     void populate_boards_by_host_tray();
 
     void populate_boards_from_resolved_graph(const std::unique_ptr<ResolvedGraphInstance>& graph);
+
+    void get_all_connections_of_type(
+        const std::unique_ptr<ResolvedGraphInstance>& instance,
+        PortType port_type,
+        std::vector<std::pair<std::tuple<HostId, TrayId, PortId>, std::tuple<HostId, TrayId, PortId>>>& conn_list)
+        const;
 
     // Caches for optimization
     std::unordered_map<tt::umd::BoardType, Board> board_templates_;
