@@ -70,14 +70,12 @@ def run_max_pool2d(
 
     act_shape = [in_n, in_c, in_h, in_w]
     act = torch.randn(act_shape, dtype=torch.bfloat16)
-    act_shape = (1, 1, in_n * in_h * in_w, in_c)
     act_permuted = torch.permute(act, (0, 2, 3, 1))
-    act_reshaped = act_permuted.reshape(act_shape)
 
     if dtype == ttnn.bfloat8_b:
-        ttact = ttnn.from_torch(act_reshaped, dtype, layout=ttnn.TILE_LAYOUT)
+        ttact = ttnn.from_torch(act_permuted, dtype, layout=ttnn.TILE_LAYOUT)
     else:
-        ttact = ttnn.from_torch(act_reshaped, dtype)
+        ttact = ttnn.from_torch(act_permuted, dtype)
 
     ttact_device = ttnn.to_device(ttact, device)
     start_time = start_measuring_time()

@@ -154,6 +154,17 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
         }
 
         ttnn::Shape input_tensor_shape = input_tensor.padded_shape();
+
+        bool is_tensor_already_flattened = (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1);
+
+        // If tensor is in (n,h,w,c) format, flatten it to (1,1,nhw,c) for optimal sharding
+        if (!is_tensor_already_flattened) {
+            const auto flattened_input_shape = conv::flatten_4d_shape(input_tensor.logical_shape());
+            const auto flattened_padded_input_shape = conv::flatten_4d_shape(input_tensor.padded_shape());
+            input_tensor_sharded = ttnn::reshape(input_tensor, flattened_input_shape, flattened_padded_input_shape);
+            input_tensor_shape = flattened_input_shape;
+        }
+
         uint32_t input_tensor_width_snapped_to_channels_alignment =
             tt::round_up(input_tensor_shape[3], num_cores_c * input_channels_alignment);
 
