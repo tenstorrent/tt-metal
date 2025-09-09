@@ -3512,6 +3512,10 @@ def test_conv2d_sdxl_refiner(
         # input_channels 8,
         (1, 512,   8, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, False, ttnn.Conv2dSliceWidth, 2,   0, 0),
 
+        # stride 2x2
+        (1, 128,   128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (0, 1, 0, 1), (1, 1), HS, False, ttnn.Conv2dSliceWidth, 8,   256, 0),
+        (1, 256,   256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (0, 1, 0, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth, 4,   1024, 0),
+        (1, 512,   512, 256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (2, 2), (0, 1, 0, 1), (1, 1), BS, False, ttnn.Conv2dSliceWidth, 2,   512, 0),
     ),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 27 * 1024}], indirect=True)

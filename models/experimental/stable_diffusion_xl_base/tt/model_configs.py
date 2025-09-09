@@ -205,13 +205,13 @@ class ModelOptimisations:
             act_block_h_override=512,
         )
 
-        self.conv_configs["ABH_1024_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+        self.conv_configs["ABH_1024_NO_ADB_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=True,
             reallocate_halo_output=True,
-            enable_act_double_buffer=True,
-            enable_weights_double_buffer=True,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=False,
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=1024,
@@ -762,7 +762,7 @@ class ModelOptimisations:
         if conv_path is None:
             return None
 
-        if not ("decoder" in conv_path):
+        if not ("decoder" in conv_path or "encoder" in conv_path):
             if "conv_in" == conv_path:
                 return self.conv_configs["ABH_256_ADB"]
 
@@ -835,8 +835,8 @@ class ModelOptimisations:
             # DECODER CONV IN
             if "decoder.conv_in" == conv_path:
                 return self.conv_configs["ABH_0_ADB_HS"]
-            # MID BLOCK and UP BLOCK 0
-            elif "decoder.mid_block.resnet" in conv_path or "decoder.up_blocks.0.resnet" in conv_path:
+            # MID BLOCK (ENCODER + DECODER) and UP BLOCK 0
+            elif "mid_block.resnet" in conv_path or "decoder.up_blocks.0.resnet" in conv_path:
                 return self.conv_configs["ABH_512_NO_ADB_BS"]
             elif "decoder.up_blocks.0.upsamplers" in conv_path:
                 return self.conv_configs["ABH_256_NO_ADB_BS"]
@@ -856,11 +856,19 @@ class ModelOptimisations:
             # DECODER CONV OUT
             elif "decoder.conv_out" == conv_path:
                 return self.conv_configs["ABH_256_NO_ADB_HS"]
+            # ENCODER DOWNSAMPLERS
+            elif "downsamplers" in conv_path:
+                if "down_blocks.0" in conv_path:
+                    return self.conv_configs["ABH_256_NO_ADB_HS"]
+                elif "down_blocks.1" in conv_path:
+                    return self.conv_configs["ABH_1024_NO_ADB_BS"]
+                elif "down_blocks.2" in conv_path:
+                    return self.conv_configs["ABH_512_NO_ADB_BS"]
             else:
                 return self.conv_configs["DEFAULT_DRAM"]
 
     def get_conv_compute_config(self, module_path):
-        if not ("decoder" in module_path):
+        if not ("decoder" in module_path or "encoder" in module_path):
             if "conv_in" in module_path or "conv_out" in module_path:
                 return self.compute_configs["CONV_HIFI2_NO_FP32_NO_L1_COMPUTE_CONFIG"]
             if "resnets" in module_path:
