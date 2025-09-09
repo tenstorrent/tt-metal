@@ -3,6 +3,7 @@ hosts: {
   aisle: "A"
   rack: 3
   shelf_u: 2
+  node_type: "wh_galaxy_y_torus_node"
   host: "wh-glx-a03u02"
 }
 hosts: {
@@ -10,6 +11,7 @@ hosts: {
   aisle: "A"
   rack: 3
   shelf_u: 6
+  node_type: "wh_galaxy_y_torus_node"
   host: "wh-glx-a03u08"
 }
 hosts: {
@@ -17,6 +19,7 @@ hosts: {
   aisle: "A"
   rack: 3
   shelf_u: 14
+  node_type: "wh_galaxy_y_torus_node"
   host: "wh-glx-a03u14"
 }
 hosts: {
@@ -24,6 +27,7 @@ hosts: {
   aisle: "A"
   rack: 4
   shelf_u: 2
+  node_type: "wh_galaxy_y_torus_node"
   host: "wh-glx-a04u02"
 }
 hosts: {
@@ -31,5 +35,6 @@ hosts: {
   aisle: "A"
   rack: 4
   shelf_u: 8
+  node_type: "wh_galaxy_y_torus_node"
   host: "wh-glx-a04u08"
 }
