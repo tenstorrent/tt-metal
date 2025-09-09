@@ -28,7 +28,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat val) {
     // y = (val * (val * (val * 1.166f + 0.5f )+ 1)
     v_if(sfpi::abs(val) < sfpi::vFloat(1e-3f)) {
         // y = val + (sfpi::vFloat(0.5f) * val * val) + (val * val * val * sfpi::vFloat(1.166f));
-        y = val * (1.0f + val * (sfpi::vFloat(0.5f) + val * sfpi::vFloat(1.166f)));
+        y = val * (sfpi::vConst1 + val * (sfpi::vFloat(0.5f) + val * sfpi::vFloat(1.166f)));
 
         if constexpr (!is_fp32_dest_acc_en) {
             // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.

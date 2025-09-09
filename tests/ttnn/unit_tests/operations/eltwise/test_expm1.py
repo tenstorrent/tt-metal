@@ -5,13 +5,13 @@
 import torch
 import pytest
 import ttnn
-import numpy as np
+import math
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
 
 
 def test_expm1_arange_masking(device):
     # Expm1 Working range - Overflow from 88.5(inf) as in exp
-    low = -float("inf")
+    low = -math.inf
     high = 88.5
 
     # Generate all possible bit patterns for bf16
@@ -51,7 +51,7 @@ def test_expm1_arange_masking(device):
     ],
 )
 def test_expm1_atol(low, high, expected_atol, device):
-    num_elements = torch.prod(torch.tensor(torch.Size([1, 3, 320, 320]))).item()
+    num_elements = math.prod(torch.tensor(torch.Size([1, 3, 320, 320])))
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
     torch_input = torch_input[:num_elements].reshape(torch.Size([1, 3, 320, 320]))
 
