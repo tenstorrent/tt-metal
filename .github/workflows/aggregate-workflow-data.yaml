@@ -97,10 +97,10 @@ jobs:
             const selectedId = selected ? String(selected.id) : '';
             core.info(`Selected previous run id: ${selectedId || 'none'}`);
             core.setOutput('run_id', selectedId);
-  #     - name: Install analyze-workflow-data dependencies
-  #       shell: bash
-  #       working-directory: .github/actions/analyze-workflow-data
-  #       run: npm install
+      - name: Install analyze-workflow-data dependencies
+        shell: bash
+        working-directory: .github/actions/analyze-workflow-data
+        run: npm install
       - name: Download previous workflow data artifact (if any)
         if: ${{ steps.prev.outputs.run_id != '' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 #@v4
