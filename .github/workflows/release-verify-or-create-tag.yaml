@@ -71,6 +71,18 @@ jobs:
           echo "GITHUB_TOKEN Permissions:"
           echo "${{ toJson(github) }}"
 
+      - name: Create GitHub Release (creates tag if missing)
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.get-tag-version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          release_name: Release ${{ steps.get-tag-version.outputs.version }}
+          draft: false
+          prerelease: false
+
+
       - name: Create tag
         if: ${{ !inputs.dry-run }}
         uses: actions/github-script@v7.0.1
