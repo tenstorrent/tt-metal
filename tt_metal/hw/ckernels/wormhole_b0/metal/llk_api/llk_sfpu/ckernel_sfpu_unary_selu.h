@@ -25,7 +25,7 @@ inline void calculate_selu(uint scale, uint alpha) {
         v_else {
             sfpi::vFloat exp_calc = _sfpu_exp_21f_<true>(
                 v);  // is_fp32_dest_acc_en set to true to avoid rounding as it has to be done at the end of operation
-            sfpi::vFloat minus_mul = exp_calc - 1.0f;
+            sfpi::vFloat minus_mul = exp_calc - sfpi::vConst1;
             sfpi::vFloat result = minus_mul * alpha_value * scale_value;
 
             if constexpr (!is_fp32_dest_acc_en) {
