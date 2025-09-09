@@ -14,7 +14,6 @@ from transformers import AutoConfig
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
 from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
-from models.demos.deepseek_v3.tt.lm_head import LMHead
 from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.model_1d import Model1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
@@ -149,11 +148,11 @@ class DeepseekGenerator:
             model1d_state = {
                 k: v
                 for k, v in stripped.items()
-                if k.startswith("embed_tokens.") or k.startswith("layers.") or k.startswith("norm.")
+                if k.startswith("embed_tokens.")
+                or k.startswith("layers.")
+                or k.startswith("norm.")
+                or k.startswith("lm_head.")
             }
-            if "lm_head.weight" not in stripped:
-                raise RuntimeError("Reference model did not contain 'lm_head.weight'.")
-            lm_head_state = {"lm_head.weight": stripped["lm_head.weight"]}
         else:
             logger.info("Loading HF weights (this may take a while)...")
             hf_weights = load_model_weights(self.model_path)
@@ -169,21 +168,16 @@ class DeepseekGenerator:
             model1d_state = {
                 k: v
                 for k, v in stripped.items()
-                if k.startswith("embed_tokens.") or k.startswith("layers.") or k.startswith("norm.")
+                if k.startswith("embed_tokens.")
+                or k.startswith("layers.")
+                or k.startswith("norm.")
+                or k.startswith("lm_head.")
             }
-            lm_head_state = {"lm_head.weight": stripped["lm_head.weight"]}
-
         # Convert weights to TT tensors-on-disk and build weight_config
         logger.info("Converting weights to TTNN SavedWeight format (Model1D)...")
         self.model1d_weight_config = Model1D.convert_weights(
             self.hf_config, model1d_state, weights_out / "model_1d", self.mesh_device
-        )
-        logger.info("Converting weights to TTNN SavedWeight format (LMHead)...")
-        self.lm_head_weight_config = LMHead.convert_weights(
-            self.hf_config, [lm_head_state], weights_out / "lm_head", self.mesh_device
-        )
-
-        # Build model and head decode configs + states
+        )  # Build model and head decode configs + states
         model_decode_cfg = Model1D.decode_model_config(self.hf_config, self.mesh_device)
         model_state = Model1D.create_state(
             self.hf_config, self.mesh_device, paged_config=self.paged_config, ccl=self.ccl
@@ -192,10 +186,6 @@ class DeepseekGenerator:
         self.model1d_run_config = create_run_config(
             model_decode_cfg, self.model1d_weight_config, model_state, model_shared_state
         )
-
-        lm_decode_cfg = LMHead.decode_model_config(self.hf_config, self.mesh_device, input_row_idx=0)
-        lm_state = LMHead.create_state(self.hf_config, self.mesh_device, self.ccl)
-        self.lm_head_run_config = create_run_config(lm_decode_cfg, self.lm_head_weight_config, lm_state)
 
     def _tt_from_tokens_step(self, tokens_step: torch.Tensor) -> ttnn.Tensor:
         """Tokens step: [B] -> TTNN tensor [1, 1, B] uint32, replicated to mesh."""
@@ -237,33 +227,14 @@ class DeepseekGenerator:
         rope_tensors, tt_positions = self._tt_from_positions(positions)
 
         # Model forward
-        hidden = Model1D.forward_decode(
+        logits_tt = Model1D.forward_decode(
             tt_tokens, tt_positions, rope_tensors, self.page_table_tt, self.model1d_run_config
         )
-        # Gather width-sharded hidden across mesh columns so each device has full K=hidden_size,
-        # mirroring the CCL conventions used elsewhere (cluster_axis=1, dim=-1, Linear topology).
-        hidden_gathered = ttnn.experimental.all_gather_async(
-            hidden,
-            dim=-1,
-            cluster_axis=1,
-            mesh_device=self.mesh_device,
-            topology=ttnn.Topology.Linear,
-            multi_device_global_semaphore=self.ccl.get_gather_sem(1),
-            num_links=self.ccl.get_max_links(1),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(hidden)
-        # Reshard gathered activations to LMHead's expected input memory config
-        hidden = ttnn.to_memory_config(hidden_gathered, self.lm_head_run_config["input_memory_config"])
-        ttnn.deallocate(hidden_gathered)
-        logits_tt = LMHead.forward_decode(hidden, self.lm_head_run_config)
-
         # Gather to host
         logits = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=3))
 
         # Free device tensors for this step
         ttnn.deallocate(tt_tokens)
-        ttnn.deallocate(hidden)
         ttnn.deallocate(logits_tt)
 
         return logits  # [1, 1, B, V]
