@@ -127,10 +127,18 @@ struct KernelBinaryMeta {
 };
 
 struct KernelMeta {
+    // Kernel identifiers:
     std::string_view name, source;
+
+    // Core identifiers:
     HalProcessorClassType processor_class;
     HalProgrammableCoreType programmable_core_type;
+
+    // Core configuration:
+    // This optinonal only contains a MathFidelity if the kernel is a compute kernel
     std::optional<MathFidelity> math_fidelity;
+
+    // Binary metadata:
     std::vector<KernelBinaryMeta> binary_meta;
 };
 

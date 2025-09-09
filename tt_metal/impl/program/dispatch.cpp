@@ -39,7 +39,6 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
-#include "kernel.hpp"
 #include "math.hpp"
 #include "mesh_device.hpp"
 #include "program_device_map.hpp"

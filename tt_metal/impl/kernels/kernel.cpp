@@ -5,7 +5,6 @@
 #include <core_coord.hpp>
 #include <device.hpp>
 #include <fmt/ranges.h>
-#include <kernel.hpp>
 #include <kernel_types.hpp>
 #include <enchantum/enchantum.hpp>
 #include <utils.hpp>
