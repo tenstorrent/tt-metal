@@ -1,0 +1,6 @@
+wh-glx-a03u02 slots=1
+wh-glx-a03u08 slots=1
+wh-glx-a03u14 slots=1
+wh-glx-a04u02 slots=1
+wh-glx-a04u08 slots=1
+wh-glx-a04u14 slots=1
