@@ -252,7 +252,6 @@ void wait_until_cores_done(
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();
-
     if (is_simulator) timeout_ms = 0;
     while (!not_done_phys_cores.empty()) {
         if (timeout_ms > 0) {
@@ -268,12 +267,14 @@ void wait_until_cores_done(
             }
         }
 
+#ifdef DEBUG
         // Print not-done cores
         if (loop_count % 1000 == 0) {
             log_debug(
                 tt::LogMetal, "Device {}: Not done phys cores: {}", device_id, fmt::join(not_done_phys_cores, " "));
             usleep(100000);
         }
+#endif
 
         for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end(); ) {
             const auto &phys_core = *it;

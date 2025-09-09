@@ -58,6 +58,9 @@ using FabricConfig = tt::tt_fabric::FabricConfig;
 using RoutingType = tt::tt_fabric::fabric_tests::RoutingType;
 using FabricTensixConfig = tt::tt_fabric::FabricTensixConfig;
 
+// Access to internal API: ProgramImpl::num_kernel
+#include "impl/program/program_impl.hpp"
+
 // Bandwidth measurement result structures
 struct BandwidthResult {
     uint32_t num_devices;
@@ -349,7 +352,7 @@ public:
 
             test_device.create_kernels();
             auto& program_handle = test_device.get_program_handle();
-            if (program_handle.num_kernels()) {
+            if (program_handle.impl().num_kernels()) {
                 fixture_->enqueue_program(coord, std::move(program_handle));
             }
         }
@@ -659,8 +662,6 @@ private:
     }
 
     void trace_traffic_path(const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config) {
-        const auto& hops = config.hops;
-
         // Use proper topology detection from fixture
         if (fixture_->get_topology() == Topology::Ring) {
             // Ring topology - use ring traversal logic with boundary turning
@@ -791,7 +792,7 @@ private:
         log_debug(tt::LogTest, "Performance profiling results:");
         // Results are automatically sorted by device ID and core coordinates
         for (const auto& [device_id, core_cycles] : device_core_cycles_) {
-            for (const auto& [core, cycles] : core_cycles) {
+            for ([[maybe_unused]] const auto& [core, cycles] : core_cycles) {
                 log_debug(tt::LogTest, "Device {} Core ({},{}) Cycles: {}", device_id.chip_id, core.x, core.y, cycles);
             }
         }
@@ -885,7 +886,8 @@ private:
                         bool found_connected_core = false;
                         for (const auto& [core, sender] : test_device.get_senders()) {
                             for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
-                                RoutingDirection config_direction = fixture_->get_forwarding_direction(config.hops.value());
+                                RoutingDirection config_direction =
+                                    fixture_->get_forwarding_direction(config.hops.value());
                                 uint32_t config_link_id = config.link_id.value_or(0);
                                 if (config_direction == direction && config_link_id == link_id) {
                                     uint32_t payload_size_bytes = config.parameters.payload_size_bytes;
