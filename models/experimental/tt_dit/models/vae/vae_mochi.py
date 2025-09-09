@@ -435,21 +435,9 @@ class CausalUpsampleBlock:
     ):
         self.reshard_time_map = {
             # small latent, medium latent, large,latent
-            512: {
-                60 * 106: 82,
-                80 * 152: 82,
-                120 * 212: 82,
-            },
-            256: {
-                120 * 212: 163,
-                160 * 304: 163,
-                240 * 424: 163,
-            },
-            128: {
-                240 * 424: 163,
-                320 * 608: 163,
-                480 * 848: 163,
-            },
+            512: 82,
+            256: 163,
+            128: 163,
         }
 
         assert causal
@@ -521,13 +509,6 @@ class CausalUpsampleBlock:
 
             x_NTHWC = ttnn.reshape(x_NTHWC, [B, T * texp, H * sexp, W * sexp, self.out_channels])
 
-            # if texp > 1 and i == 0:
-            #     x_NTHWC = ttnn.slice(
-            #         x_NTHWC, [0, texp - 1, 0, 0, 0], [B, T * texp, H * sexp, W * sexp, self.out_channels]
-            #     )
-            #     # TODO: This messes up the shape of the tensor...
-            # TODO fix depth_to_spaceitme multi tensor
-
             return x_NTHWC
 
     def reshard_output(self, x_NTHWC):
@@ -535,7 +516,7 @@ class CausalUpsampleBlock:
             HW = x_NTHWC.shape[2] * x_NTHWC.shape[3]
             C = x_NTHWC.shape[4]
             num_devices = self.parallel_config.time_parallel.factor
-            padded_T = ((self.reshard_time_map[C][HW] + num_devices - 1) // num_devices) * num_devices
+            padded_T = ((self.reshard_time_map[C] + num_devices - 1) // num_devices) * num_devices
             x_NTHWC = ttnn.squeeze(x_NTHWC, 0)
             x_NTHWC = vae_slice_reshard(
                 self.ccl_manager,
