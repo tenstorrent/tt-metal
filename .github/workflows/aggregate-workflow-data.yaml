@@ -20,18 +20,18 @@ jobs:
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
 
-      - name: Set rolling cache index
-        id: cache-index
-        run: echo "CACHE_INDEX=$(( ${{ github.run_number }} % 3 ))" >> $GITHUB_ENV
+      # - name: Set rolling cache index
+      #   id: cache-index
+      #   run: echo "CACHE_INDEX=$(( ${{ github.run_number }} % 3 ))" >> $GITHUB_ENV
 
-      - name: Restore workflow data cache
-        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 #@v4
-        with:
-          path: ${{ github.workspace }}/workflow-data.json
-          key: metal-workflow-data-${{ github.ref }}-${{ env.CACHE_INDEX }}
-          restore-keys: |
-            metal-workflow-data-${{ github.ref }}-
-            metal-workflow-data-
+      # - name: Restore workflow data cache
+      #   uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 #@v4
+      #   with:
+      #     path: ${{ github.workspace }}/workflow-data.json
+      #     key: metal-workflow-data-${{ github.ref }}-${{ env.CACHE_INDEX }}
+      #     restore-keys: |
+      #       metal-workflow-data-${{ github.ref }}-
+      #       metal-workflow-data-
 
       - name: Install fetch-workflow-data dependencies
         shell: bash
@@ -42,7 +42,7 @@ jobs:
         uses: ./.github/actions/fetch-workflow-data
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          cache-path: ${{ github.workspace }}/workflow-data.json
+          # cache-path: ${{ github.workspace }}/workflow-data.json
           days: ${{ github.event.inputs.days || 15 }}
       - name: Upload workflow data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
@@ -51,11 +51,11 @@ jobs:
           path: ${{ github.workspace }}/workflow-data.json
           retention-days: 1
 
-      - name: Save workflow data cache
-        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 #@v4
-        with:
-          path: ${{ github.workspace }}/workflow-data.json
-          key: metal-workflow-data-${{ github.ref }}-${{ env.CACHE_INDEX }}-${{ github.run_id }}
+      # - name: Save workflow data cache
+      #   uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 #@v4
+      #   with:
+      #     path: ${{ github.workspace }}/workflow-data.json
+      #     key: metal-workflow-data-${{ github.ref }}-${{ env.CACHE_INDEX }}-${{ github.run_id }}
 
       - name: Debug cache file
         run: ls -l ${{ github.workspace }}/workflow-data.json || echo "File not found"

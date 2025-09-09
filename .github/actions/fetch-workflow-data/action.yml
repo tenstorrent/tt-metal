@@ -19,7 +19,7 @@ inputs:
     required: false
   cache-path:
     description: 'Path to save the cached workflow data'
-    required: true
+    required: false
   GITHUB_TOKEN:
     description: 'GitHub token for API access'
     required: true

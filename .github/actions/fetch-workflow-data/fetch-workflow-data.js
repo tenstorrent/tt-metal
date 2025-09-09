@@ -101,13 +101,13 @@ async function run() {
     // Get inputs
     const branch = core.getInput('branch') || 'main';
     const days = parseInt(core.getInput('days') || DEFAULT_DAYS);
-    const cachePath = core.getInput('cache-path', { required: true });
+    const cachePath = core.getInput('cache-path', { required: false });
     // Create authenticated Octokit client
     const octokit = github.getOctokit(core.getInput('GITHUB_TOKEN', { required: true }));
     // Load previous cache if it exists
     let previousRuns = [];
     let latestCachedDate = null;
-    if (fs.existsSync(cachePath)) {
+    if (cachePath && fs.existsSync(cachePath)) {
       try {
         const rawCache = fs.readFileSync(cachePath, 'utf8');
         const prev = JSON.parse(rawCache);
@@ -126,7 +126,7 @@ async function run() {
         } else {
           previousRuns = [];
         }
-        // latestCachedDate = getLatestCachedDate(previousRuns);
+        latestCachedDate = getLatestCachedDate(previousRuns);
       } catch (e) {
         core.warning('Could not parse previous cache, ignoring.');
       }
