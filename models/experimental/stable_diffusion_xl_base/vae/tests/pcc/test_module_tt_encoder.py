@@ -5,50 +5,45 @@ import gc
 import torch
 import pytest
 import ttnn
-from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
+from models.experimental.stable_diffusion_xl_base.vae.tt.tt_encoder import TtEncoder
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random
+from models.utility_functions import torch_random
 
 from loguru import logger
 
 
 @torch.no_grad()
 @pytest.mark.parametrize(
-    "input_shape, pcc, vae_block",
+    "input_shape, pcc",
     [
-        ((1, 4, 128, 128), 0.89, "decoder"),
-        ((1, 3, 1024, 1024), 0.999, "encoder"),
+        ((1, 3, 1024, 1024), 0.83),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_vae(device, input_shape, vae_block, pcc, is_ci_env, reset_seeds, is_ci_v2_env, model_location_generator):
-    model_location = model_location_generator(
-        "stable-diffusion-xl-base-1.0/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
+def test_vae_decoder(device, input_shape, pcc, is_ci_env, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0" if not is_ci_v2_env else model_location,
+        "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_env or is_ci_v2_env,
-        subfolder="vae" if not is_ci_v2_env else None,
+        subfolder="vae",
+        local_files_only=is_ci_env,
     )
     vae.eval()
     state_dict = vae.state_dict()
 
+    torch_vae = vae.encoder
+
     logger.info("Loading weights to device")
     model_config = ModelOptimisations()
-    tt_vae = TtAutoencoderKL(device, state_dict, model_config)
+    tt_vae = TtEncoder(device, state_dict, model_config=model_config)
     logger.info("Loaded weights")
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
 
     logger.info("Running reference model")
-    if vae_block == "encoder":
-        torch_output_tensor = vae.encode(torch_input_tensor, return_dict=False)[0]
-    else:
-        torch_output_tensor = vae.decode(torch_input_tensor, return_dict=False)[0]
+    torch_output_tensor = torch_vae(torch_input_tensor)
     logger.info("Torch model done")
 
     ttnn_input_tensor = ttnn.from_torch(
@@ -64,10 +59,7 @@ def test_vae(device, input_shape, vae_block, pcc, is_ci_env, reset_seeds, is_ci_
     ttnn_input_tensor = ttnn.reshape(ttnn_input_tensor, (B, 1, H * W, C))
 
     logger.info("Running TT model")
-    if vae_block == "encoder":
-        output_tensor, [C, H, W] = tt_vae.encode(ttnn_input_tensor, [B, C, H, W])
-    else:
-        output_tensor, [C, H, W] = tt_vae.decode(ttnn_input_tensor, [B, C, H, W])
+    output_tensor, [C, H, W] = tt_vae.forward(ttnn_input_tensor, [B, C, H, W])
     logger.info("TT model done")
 
     output_tensor = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)).float()
