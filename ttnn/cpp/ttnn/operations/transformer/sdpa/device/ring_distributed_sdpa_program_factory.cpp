@@ -216,8 +216,8 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(nullptr).append_to(reader_compile_time_args);  // mask tensor (not used in ring)
-    TensorAccessorArgs(nullptr).append_to(reader_compile_time_args);  // page table (not used in ring)
+    TensorAccessorArgs().append_to(reader_compile_time_args);  // mask tensor (not used in ring)
+    TensorAccessorArgs().append_to(reader_compile_time_args);  // page table (not used in ring)
 
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args

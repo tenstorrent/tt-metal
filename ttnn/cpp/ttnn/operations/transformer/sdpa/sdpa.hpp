@@ -116,7 +116,8 @@ struct ExecuteRingDistributedScaledDotProductAttention {
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,
         uint32_t ring_size,
-        uint32_t ring_id,
+        std::optional<uint32_t> ring_id =
+            std::nullopt,  // Optional: if provided, uses this value; if nullopt, infers from device coordinate
         std::optional<float> scale = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,
@@ -127,7 +128,8 @@ struct ExecuteRingDistributedScaledDotProductAttention {
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,
         uint32_t ring_size,
-        uint32_t ring_id,
+        std::optional<uint32_t> ring_id =
+            std::nullopt,  // Optional: if provided, uses this value; if nullopt, infers from device coordinate
         std::optional<float> scale = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,

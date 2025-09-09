@@ -509,7 +509,8 @@ void py_bind_sdpa(py::module& module) {
             input_tensor_k (ttnn.Tensor): the input tensor.          [b x nkv x s x dh]
             input_tensor_v (ttnn.Tensor): the input tensor.          [b x nkv x s x dh]
             ring_size (uint32_t): Number of devices in the ring topology.
-            ring_id (uint32_t): This device's position in the ring (0 to ring_size-1).
+            ring_id (uint32_t, optional): This device's position in the ring (0 to ring_size-1).
+                                         If None, automatically infers from device coordinate. Defaults to `None`.
 
         Keyword args:
             scale (float, optional): Attention scaling factor. Defaults to `None`.
@@ -534,7 +535,7 @@ void py_bind_sdpa(py::module& module) {
                const ttnn::Tensor& input_tensor_k,
                const ttnn::Tensor& input_tensor_v,
                uint32_t ring_size,
-               uint32_t ring_id,
+               std::optional<uint32_t> ring_id,
                std::optional<float> scale,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
@@ -556,7 +557,7 @@ void py_bind_sdpa(py::module& module) {
             py::arg("input_tensor_k").noconvert(),
             py::arg("input_tensor_v").noconvert(),
             py::arg("ring_size").noconvert(),
-            py::arg("ring_id").noconvert(),
+            py::arg("ring_id").noconvert() = std::nullopt,
             py::kw_only(),
             py::arg("scale").noconvert() = std::nullopt,
             py::arg("memory_config").noconvert() = std::nullopt,

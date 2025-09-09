@@ -7,6 +7,7 @@
 #include "ring_distributed_sdpa_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/constants.hpp>
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 using namespace tt::tt_metal;
 
@@ -21,12 +22,16 @@ void RingDistributedScaledDotProductAttention::validate(const std::vector<Tensor
 
     // Ring parameter validation
     TT_FATAL(this->ring_size > 0, "ring_size must be greater than 0, got {}", this->ring_size);
-    TT_FATAL(
-        this->ring_id < this->ring_size,
-        "ring_id must be less than ring_size, got ring_id={}, ring_size={}",
-        this->ring_id,
-        this->ring_size);
     TT_FATAL(this->ring_size <= 32, "ring_size must be <= 32 for practical use, got {}", this->ring_size);
+
+    // Validate ring_id if provided
+    if (this->ring_id.has_value()) {
+        TT_FATAL(
+            this->ring_id.value() < this->ring_size,
+            "ring_id must be less than ring_size, got ring_id={}, ring_size={}",
+            this->ring_id.value(),
+            this->ring_size);
+    }
 
     // Ring distribution requires even number of chunks for load balancing
     TT_FATAL(this->ring_size % 2 == 0, "ring_size must be even for balanced distribution, got {}", this->ring_size);
@@ -170,8 +175,20 @@ std::vector<TensorSpec> RingDistributedScaledDotProductAttention::compute_output
         local_output_shape, TensorLayout(input_tensor_q.dtype(), PageConfig(Layout::TILE), output_mem_config))};
 }
 
-operation::ProgramWithCallbacks RingDistributedScaledDotProductAttention::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+operation::MeshWorkloadWithCallbacks RingDistributedScaledDotProductAttention::create_mesh_workload(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    return ccl::create_mesh_workload_from_programs(
+        tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
+            return create_program_at(coord, input_tensors, output_tensors);
+        });
+}
+
+operation::ProgramWithCallbacks RingDistributedScaledDotProductAttention::create_program_at(
+    const ttnn::MeshCoordinate& coord,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
     auto& input_tensor_q = input_tensors.at(0);
     auto& input_tensor_k = input_tensors.at(1);
     auto& input_tensor_v = input_tensors.at(2);
@@ -185,13 +202,55 @@ operation::ProgramWithCallbacks RingDistributedScaledDotProductAttention::create
     std::size_t q_chunk_size = this->get_q_chunk_size();
     std::size_t k_chunk_size = this->get_k_chunk_size();
 
+    // Determine ring_id: use provided value or infer from device coordinate
+    uint32_t ring_id;
+    if (this->ring_id.has_value()) {
+        // Use explicitly provided ring_id
+        ring_id = this->ring_id.value();
+        auto mesh_device = input_tensors[0].device();
+        IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
+        log_debug(tt::LogOp, "Using provided ring_id: {} for device_id: {}", ring_id, target_device->id());
+    } else {
+        // Infer ring_id from device coordinate (similar to ring_joint_sdpa)
+        auto mesh_device = input_tensors[0].device();
+        IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
+
+        // Get all devices in the ring (assuming linear layout along one axis)
+        const auto& mesh_view = mesh_device->get_view();
+        std::vector<IDevice*> devices_to_use;
+        // For simplicity, assume ring is along the first axis (adjust as needed)
+        if (mesh_view.shape()[0] == this->ring_size) {
+            devices_to_use = mesh_view.get_devices_on_column(coord[1]);
+        } else if (mesh_view.shape()[1] == this->ring_size) {
+            devices_to_use = mesh_view.get_devices_on_row(coord[0]);
+        } else {
+            TT_FATAL(
+                false,
+                "Ring size {} doesn't match mesh dimensions [{}, {}]",
+                this->ring_size,
+                mesh_view.shape()[0],
+                mesh_view.shape()[1]);
+        }
+
+        // Find ring_id (device index in the ring)
+        ring_id = 0;
+        for (uint32_t i = 0; i < this->ring_size; ++i) {
+            if (devices_to_use.at(i) == target_device) {
+                ring_id = i;
+                break;
+            }
+        }
+
+        log_debug(tt::LogOp, "Inferred ring_id: {} for device_id: {}", ring_id, target_device->id());
+    }
+
     return detail::ring_sdpa_multi_core(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
         output_tensor,
         this->ring_size,
-        this->ring_id,
+        ring_id,
         scale,
         q_chunk_size,
         k_chunk_size,

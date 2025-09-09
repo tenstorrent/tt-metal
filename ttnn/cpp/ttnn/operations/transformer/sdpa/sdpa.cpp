@@ -284,7 +284,8 @@ ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
     uint32_t ring_size,
-    uint32_t ring_id,
+    std::optional<uint32_t>
+        ring_id,  // Optional: if provided, uses this value; if nullopt, infers from device coordinate
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
@@ -299,7 +300,7 @@ ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
     return tt::tt_metal::operation::run(
                RingDistributedScaledDotProductAttention{
                    .ring_size = ring_size,
-                   .ring_id = ring_id,
+                   .ring_id = ring_id,  // Pass through the ring_id parameter (can be used or ignored)
                    .scale = scale,
                    .output_mem_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
                    .program_config = std::move(program_config),
@@ -316,7 +317,8 @@ ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
     uint32_t ring_size,
-    uint32_t ring_id,
+    std::optional<uint32_t>
+        ring_id,  // Optional: if provided, uses this value; if nullopt, infers from device coordinate
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
