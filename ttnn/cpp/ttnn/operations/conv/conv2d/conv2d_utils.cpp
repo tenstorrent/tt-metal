@@ -64,7 +64,7 @@ uint32_t find_closest_largest_divisor_with_num_padding_and_mult(uint32_t num, ui
     uint32_t divisor = start_divisor;
     uint32_t big_divisor = divisor * mult;
     uint32_t padded_num = tt::round_up(num, big_divisor);
-    while ((padded_num - num) >= (int)(padded_num / big_divisor) and divisor > 1) {
+    while ((padded_num - num) >= (int)(padded_num / divisor) && divisor > 1) {
         divisor = divisor - 1;
         big_divisor = divisor * mult;
         padded_num = tt::round_up(num, big_divisor);
@@ -137,6 +137,11 @@ ParallelConfig determine_parallel_config(
     uint32_t out_nhw_ntiles = tt::div_up(batch_size * output_height * output_width, effective_tile_height);
 
     uint32_t out_channels_ntiles = tt::div_up(output_channels, effective_tile_width);
+    log_info(
+        tt::LogOp,
+        "Conv2d parallel config: out_nhw_ntiles {}, out_channels_ntiles {}, ",
+        out_nhw_ntiles,
+        out_channels_ntiles);
     // In case non native activation block height is used, we need to ensure that the amount
     // of work per core in the height dimension is a multiple of the activation block height override.
     uint32_t act_block_h_override_ntiles =
@@ -148,6 +153,12 @@ ParallelConfig determine_parallel_config(
     if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding_and_mult(
             out_nhw_ntiles, max_num_cores, act_block_h_override_ntiles);
+        log_info(
+            tt::LogOp,
+            "Conv2d parallel config: num_cores_nhw {}, max_num_cores {}, act_block_h_override_ntiles {}",
+            num_cores_nhw,
+            max_num_cores,
+            act_block_h_override_ntiles);
         grid = tt::tt_metal::num_cores_to_corerangeset(num_cores_nhw, compute_grid_size, true);
     } else if (shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         uint32_t input_channels_blocks = tt::div_up(input_channels, input_channels_alignment);
@@ -155,6 +166,12 @@ ParallelConfig determine_parallel_config(
             block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.x : compute_grid_size.y;
         uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding_and_mult(
             out_nhw_ntiles, start_divisor, act_block_h_override_ntiles);
+        log_info(
+            tt::LogOp,
+            "Conv2d parallel config: num_cores_nhw {}, start_divisor {}, act_block_h_override_ntiles {}",
+            num_cores_nhw,
+            start_divisor,
+            act_block_h_override_ntiles);
         uint32_t start_divisor_c =
             block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.y : compute_grid_size.x;
         uint32_t num_cores_c =
