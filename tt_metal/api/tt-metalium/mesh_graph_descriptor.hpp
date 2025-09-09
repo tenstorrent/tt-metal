@@ -41,19 +41,19 @@ enum class NodeKind : uint8_t { Mesh = 0, Graph = 1, Device = 2 };
 // NOTE: Instance Data and ConnectionData are subject to change as Physical discovery is implemented
 // These will be moved to Mesh Graph object once MGD 1.0 is deprecated
 struct InstanceData {
-    const LocalNodeId local_id;        // instance id from proto or computed device index
-    const std::string name;
-    const std::string type;
-    const NodeKind kind; // Type of instance (mesh, graph, device)
+    LocalNodeId local_id;        // instance id from proto or computed device index
+    std::string name;
+    std::string type;
+    NodeKind kind; // Type of instance (mesh, graph, device)
     std::variant<const proto::MeshDescriptor*, const proto::GraphDescriptor*> desc; // Pointer to the descriptor that this instance is based on
     std::unordered_set<GlobalNodeId> sub_instances; // direct list of child GlobalNodeIds
     std::unordered_map<LocalNodeId, GlobalNodeId> sub_instances_local_id_to_global_id; // child LocalId -> GlobalId
     std::vector<GlobalNodeId> hierarchy; // path from root using GlobalNodeIds
 
-    const GlobalNodeId global_id = generate_next_global_id();
+    GlobalNodeId global_id = generate_next_global_id();
 
 private:
-    inline static GlobalNodeId generate_next_global_id() {
+    static GlobalNodeId generate_next_global_id() {
         static std::atomic_uint32_t next_global_id_ = 0;
         return next_global_id_++;
     }
@@ -61,18 +61,18 @@ private:
 
 struct ConnectionData {
     std::vector<GlobalNodeId> nodes; // [src_global_device_id, dst_global_device_id]
-    const std::uint32_t count;             // ethernet lanes per connection
-    const proto::Policy policy;
-    const bool directional;
-    const GlobalNodeId parent_instance_id;
+    std::uint32_t count;             // ethernet lanes per connection
+    proto::Policy policy;
+    bool directional;
+    GlobalNodeId parent_instance_id;
 
-    const ConnectionId connection_id = generate_next_global_id();
+    ConnectionId connection_id = generate_next_global_id();
 
-    private:
-        inline static ConnectionId generate_next_global_id() {
-            static std::atomic_uint32_t next_global_id_ = 0;
-            return next_global_id_++;
-        }
+private:
+    static ConnectionId generate_next_global_id() {
+        static std::atomic_uint32_t next_global_id_ = 0;
+        return next_global_id_++;
+    }
 };
 } // v1_0
 
