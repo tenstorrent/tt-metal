@@ -17,7 +17,6 @@
 #include <vector>
 
 #include "core_coord.hpp"
-#include "dev_msgs.h"
 #include "dispatch/dispatch_settings.hpp"
 #include "kernel_types.hpp"
 #include "program_impl.hpp"
