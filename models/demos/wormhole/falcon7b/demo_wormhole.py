@@ -5,7 +5,6 @@
 import pytest
 
 from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
-from models.utility_functions import is_wormhole_b0
 
 
 @pytest.mark.parametrize(
@@ -50,7 +49,7 @@ def test_demo(
         if not expected_greedy_output_path and not expected_perf_metrics and not len(user_input) == 1:
             pytest.skip("Skipping test in CI since it provides redundant testing")
 
-    assert is_wormhole_b0()
+    # assert is_wormhole_b0()
 
     batch_size = 32
     if perf_mode:

@@ -11,6 +11,7 @@ import torch
 import torch.nn.functional as F
 from loguru import logger
 from tqdm import tqdm
+from tracy import signpost
 from transformers import AutoTokenizer
 
 import ttnn
@@ -406,6 +407,7 @@ def run_falcon_demo_kv(
     prompt_is_done = [False for _ in range(num_users)]
 
     profiler.start("inference_decode")
+    signpost(header="start inference_decode")
     time_decode_inference = 0
     if not perf_mode:
         N_decode = max_seq_len - num_input_tokens
@@ -468,6 +470,7 @@ def run_falcon_demo_kv(
                 os.system("clear")
                 print_output_prompts(generated_ids, tokenizer, batch_size)
 
+    signpost(header="end inference_decode")
     profiler.end("inference_decode")
     profiler.end("inference_prefill_decode")
     logger.info("Finished inference decode stage!")
