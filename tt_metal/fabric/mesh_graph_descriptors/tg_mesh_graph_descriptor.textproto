@@ -15,7 +15,7 @@ mesh_descriptors {
   name: "M1"
   arch: WORMHOLE_B0
   device_topology { dims: [ 4, 8 ] }
-  host_topology   { dims: [ 1, 2 ] }
+  host_topology   { dims: [ 1, 1 ] }
   channels {
     count: 4
     policy: STRICT
