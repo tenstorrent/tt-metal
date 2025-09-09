@@ -425,17 +425,17 @@ class Flux1Pipeline:
                 latents_width * 2,
             ]
             # SD3:
-            # latents = torch.randn(shape, dtype=prompt_embeds.dtype).permute(0, 2, 3, 1)
+            # latents = torch.randn(shape, dtype=torch.bfloat16).permute(0, 2, 3, 1)
             latents = _pack_latents(
-                torch.randn(shape, dtype=prompt_embeds.dtype),
+                torch.randn(shape, dtype=torch.bfloat16),
                 prompt_count * num_images_per_prompt,
                 self._num_channels_latents,
                 latents_height,
                 latents_width,
             )
 
-            text_ids = torch.zeros([prompt_sequence_length, 3], dtype=prompt_embeds.dtype)
-            image_ids = _latent_image_ids(height=latents_height, width=latents_width).to(dtype=prompt_embeds.dtype)
+            text_ids = torch.zeros([prompt_sequence_length, 3])
+            image_ids = _latent_image_ids(height=latents_height, width=latents_width)
             ids = torch.cat((text_ids, image_ids), dim=0)
             rope_cos, rope_sin = self._pos_embed.forward(ids)
 
