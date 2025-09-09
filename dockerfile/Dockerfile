@@ -62,7 +62,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
-RUN python3 -m venv $PYTHON_ENV_DIR
+RUN umask 000 && python3 -m venv $PYTHON_ENV_DIR
 
 # Ensure the virtual environment is used for all Python-related commands
 ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
@@ -94,11 +94,13 @@ COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
 COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/.
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
 
-# TODO: Why do we need the chmod?
-RUN python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu && \
+RUN umask 000 && python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu && \
     python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
-    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
-    chmod -R 777 $VIRTUAL_ENV
+    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
+
+COPY /scripts/install_debugger.sh /opt/tt_metal_infra/scripts/install_debugger.sh
+COPY /scripts/ttexalens_ref.txt /opt/tt_metal_infra/scripts/ttexalens_ref.txt
+RUN if [ "$UBUNTU_VERSION" = "22.04" ]; then /opt/tt_metal_infra/scripts/install_debugger.sh; fi
 
 #############################################################
 
@@ -168,9 +170,6 @@ RUN mkdir -p /etc && \
 ARG WHEEL_FILENAME
 ADD $WHEEL_FILENAME $WHEEL_FILENAME
 RUN pip3 install $WHEEL_FILENAME
-
-# Set up virtual environment
-RUN python3 -m venv $PYTHON_ENV_DIR
 
 #############################################################
 
