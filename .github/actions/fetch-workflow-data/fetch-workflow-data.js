@@ -56,7 +56,8 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate) {
       owner: context.repo.owner,
       repo: context.repo.repo,
       per_page: RUNS_PER_PAGE,
-      page
+      page,
+      branch: 'main'
     });
     if (!runs.workflow_runs.length) {
       break;
