@@ -160,7 +160,7 @@ std::uint32_t RingDistributedScaledDotProductAttention::get_k_chunk_size() const
 std::vector<TensorSpec> RingDistributedScaledDotProductAttention::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_q = input_tensors.at(0);
-    const auto q_shape = input_tensor_q.logical_shape();
+    const auto& q_shape = input_tensor_q.logical_shape();
 
     // Calculate local output shape: each device processes subset of queries
     const auto global_seq_len = q_shape[2];
