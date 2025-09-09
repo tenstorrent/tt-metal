@@ -4,7 +4,6 @@
 
 #include <math.h>
 
-#include "tt-metalium/kernel_types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
@@ -158,8 +157,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
                         second_write_pos = write_start_page + half_output_pages;
                     }
 
-                    // Common args template: {src_addr, dst_addr, read_size, start_read, end_read, write_pos, 0, 0}
-                    const std::vector<uint32_t> first_args = {
+                    std::vector<uint32_t> runtime_args = {
                         src_buffer->address(),
                         dst_buffer->address(),
                         source_read_size_bytes,
@@ -168,18 +166,14 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
                         write_start_page,
                         0,
                         0};
-                    const std::vector<uint32_t> second_args = {
-                        src_buffer->address(),
-                        dst_buffer->address(),
-                        source_read_size_bytes,
-                        mid_read,
-                        end_of_read,
-                        second_write_pos,
-                        0,
-                        0};
 
-                    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, first_args);
-                    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id2, core, second_args);
+                    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
+
+                    runtime_args[3] = mid_read;
+                    runtime_args[4] = end_of_read;
+                    runtime_args[5] = second_write_pos;
+
+                    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id2, core, runtime_args);
                 } else {
                     // Original single kernel approach (remove dead code)
                     const std::vector<uint32_t> reader_runtime_args = {
