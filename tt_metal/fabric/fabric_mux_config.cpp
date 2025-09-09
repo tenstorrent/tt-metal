@@ -174,9 +174,8 @@ FabricMuxConfig::FabricMuxConfig(
         l1_end_address);
 }
 
-std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const {
-    const auto& fabric_router_config =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_router_config();
+std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(
+    const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const {
     return std::vector<uint32_t>{
         num_full_size_channels_,
         num_buffers_full_size_channel_,
@@ -195,6 +194,37 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
         num_full_size_channel_iters_,
         num_iters_between_teardown_checks_,
         core_type_index_};
+}
+
+std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args() const {
+    const auto& fabric_router_config =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_router_config();
+    return get_fabric_mux_compile_time_main_args(fabric_router_config);
+}
+
+std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const {
+    auto ct_args = get_fabric_mux_compile_time_main_args();
+
+    // Add stream IDs for all channels (full size + header only)
+    // Full size channels first
+    for (uint8_t i = 0; i < num_full_size_channels_; i++) {
+        ct_args.push_back(get_channel_credits_stream_id(FabricMuxChannelType::FULL_SIZE_CHANNEL, i));
+    }
+    // Header only channels second
+    for (uint8_t i = 0; i < num_header_only_channels_; i++) {
+        ct_args.push_back(get_channel_credits_stream_id(FabricMuxChannelType::HEADER_ONLY_CHANNEL, i));
+    }
+
+    // Add persistent channel flags - all false by default
+    for (uint8_t i = 0; i < num_full_size_channels_; i++) {
+        ct_args.push_back(0);
+    }
+    // Header only channels second
+    for (uint8_t i = 0; i < num_header_only_channels_; i++) {
+        ct_args.push_back(0);
+    }
+
+    return ct_args;
 }
 
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(

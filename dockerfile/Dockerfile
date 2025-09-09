@@ -4,7 +4,7 @@
 
 # Accept an argument to specify the Ubuntu version
 ARG UBUNTU_VERSION=22.04
-FROM public.ecr.aws/ubuntu/ubuntu:${UBUNTU_VERSION} AS base
+FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
 

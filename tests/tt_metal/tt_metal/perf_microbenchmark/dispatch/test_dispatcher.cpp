@@ -541,7 +541,8 @@ int main(int argc, char** argv) {
         // Generate commands once and write them to prefetcher core.
         vector<uint32_t> cmds;
         gen_cmds(device, cmds, all_workers_g, device_data, dispatch_buffer_page_size_g);
-        llrt::write_hex_vec_to_core(device->id(), phys_spoof_prefetch_core, cmds, l1_buf_base);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            device->id(), phys_spoof_prefetch_core, cmds, l1_buf_base);
 
         const uint32_t spoof_prefetch_core_sem_0_id =
             tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, dispatch_buffer_pages);

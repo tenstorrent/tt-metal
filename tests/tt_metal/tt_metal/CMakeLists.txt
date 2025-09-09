@@ -66,6 +66,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/debug_tools)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/device)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/eth)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hal_codegen)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/integration)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/llk)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/perf_microbenchmark)
@@ -103,7 +104,11 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels test_kernels/*)
+file(
+    GLOB_RECURSE kernels
+    test_kernels/*
+    perf_microbenchmark/routing/kernels/*
+)
 target_sources(
     metalium_test_files
     PUBLIC
@@ -111,7 +116,10 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS
             ${CMAKE_CURRENT_SOURCE_DIR}/../../.. # FIXME
-        FILES ${kernels}
+        FILES
+            ${kernels}
+            perf_microbenchmark/common/kernel_utils.hpp
+            perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp
 )
 
 install(

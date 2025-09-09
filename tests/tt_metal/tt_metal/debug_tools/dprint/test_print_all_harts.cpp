@@ -12,6 +12,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -39,11 +40,15 @@ using namespace tt::tt_metal;
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 const std::string golden_output =
-R"(Test Debug Print: Data0
+    R"(Test Debug Print: Data0
 Basic Types:
 101-1.618@0.122559
 e5551234569123456789
 -17-343-44444-5123456789
+Pointer:
+123
+456
+789
 SETPRECISION/FIXED/DEFAULTFLOAT:
 3.1416
 3.14159012
@@ -69,6 +74,10 @@ Basic Types:
 101-1.618@0.122559
 e5551234569123456789
 -17-343-44444-5123456789
+Pointer:
+123
+456
+789
 SETPRECISION/FIXED/DEFAULTFLOAT:
 3.1416
 3.14159012
@@ -94,6 +103,10 @@ Basic Types:
 101-1.618@0.122559
 e5551234569123456789
 -17-343-44444-5123456789
+Pointer:
+123
+456
+789
 SETPRECISION/FIXED/DEFAULTFLOAT:
 3.1416
 3.14159012
@@ -112,6 +125,10 @@ Basic Types:
 101-1.618@0.122559
 e5551234569123456789
 -17-343-44444-5123456789
+Pointer:
+123
+456
+789
 SETPRECISION/FIXED/DEFAULTFLOAT:
 3.1416
 3.14159012
@@ -137,6 +154,10 @@ Basic Types:
 101-1.618@0.122559
 e5551234569123456789
 -17-343-44444-5123456789
+Pointer:
+123
+456
+789
 SETPRECISION/FIXED/DEFAULTFLOAT:
 3.1416
 3.14159012
@@ -158,10 +179,15 @@ SLICE:
 <TileSlice data truncated due to exceeding max count (32)>
 Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b))";
 
-void RunTest(DPrintFixture* fixture, IDevice* device) {
+void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
     // Set up program and command queue
     constexpr CoreCoord core = {0, 0}; // Print on first core only
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
 
     // Create a CB for testing TSLICE, dimensions are 32x32 bfloat16s
     constexpr uint32_t buffer_size = 32*32*sizeof(bfloat16);
@@ -169,52 +195,47 @@ void RunTest(DPrintFixture* fixture, IDevice* device) {
         buffer_size,
         {{CBIndex::c_0, tt::DataFormat::Float16_b}}
     ).set_page_size(CBIndex::c_0, buffer_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
     // A CB with an unsupported data format
     CircularBufferConfig cb_src1_config = CircularBufferConfig(
         buffer_size,
         {{CBIndex::c_1, tt::DataFormat::Bfp2_b}}
     ).set_page_size(CBIndex::c_1, buffer_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_src1_config);
 
     // Three different kernels to mirror typical usage and some previously
     // failing test cases, although all three kernels simply print.
     CreateKernel(
-        program,
+        program_,
         tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/brisc_print.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     CreateKernel(
-        program,
+        program_,
         tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/ncrisc_print.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     CreateKernel(
-        program,
+        program_,
         tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/trisc_print.cpp",
         core,
         ComputeConfig{});
 
     // Run the program
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(mesh_device, workload);
 
     // Check that the expected print messages are in the log file
-    EXPECT_TRUE(
-        FilesMatchesString(
-            DPrintFixture::dprint_file_name,
-            golden_output
-        )
-    );
+    EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, golden_output));
 }
-}
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
-TEST_F(DPrintFixture, TensixTestPrintFromAllHarts) {
-    for (IDevice* device : this->devices_) {
-        this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
+TEST_F(DPrintMeshFixture, TensixTestPrintFromAllHarts) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, mesh_device);
     }
 }

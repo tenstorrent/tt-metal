@@ -15,38 +15,25 @@ void kernel_main() {
     uint32_t out_tensor_tile_id_with_transpose = get_arg_val<uint32_t>(4);
 
     // COMPILE TIME ARGS
-    // interleaved accessor args
-    constexpr uint32_t out_is_dram = get_compile_time_arg_val(0);
     // WRITER COMPILE TIME ARGS
-    constexpr bool block_size_is_one = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t block_size = get_compile_time_arg_val(2);
-    constexpr uint32_t out_num_blocks_per_tensor = get_compile_time_arg_val(3);
-    constexpr uint32_t out_num_c_per_block = get_compile_time_arg_val(4);
-    constexpr uint32_t out_w_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t out_h_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t out_HtWt = get_compile_time_arg_val(7);
+    constexpr bool block_size_is_one = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t block_size = get_compile_time_arg_val(1);
+    constexpr uint32_t out_num_blocks_per_tensor = get_compile_time_arg_val(2);
+    constexpr uint32_t out_num_c_per_block = get_compile_time_arg_val(3);
+    constexpr uint32_t out_w_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t out_h_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t out_HtWt = get_compile_time_arg_val(6);
+    constexpr auto q_args = TensorAccessorArgs<7>();
+    constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
+    constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id_out0 = 16;
     constexpr uint32_t cb_id_out1 = 1;  // same as cb_id_in1
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
     const DataFormat data_format = get_dataformat(cb_id_out0);
-
-    constexpr bool out_is_dram_bool = out_is_dram == 1;
-    const InterleavedAddrGenFast<out_is_dram_bool> sq = {
-        .bank_base_address = q_tensor_addr,
-        .page_size = single_tile_size_bytes,
-        .data_format = data_format,
-    };
-    const InterleavedAddrGenFast<out_is_dram_bool> sk = {
-        .bank_base_address = k_tensor_addr,
-        .page_size = single_tile_size_bytes,
-        .data_format = data_format,
-    };
-    const InterleavedAddrGenFast<out_is_dram_bool> sv = {
-        .bank_base_address = v_tensor_addr,
-        .page_size = single_tile_size_bytes,
-        .data_format = data_format,
-    };
+    const auto sq = TensorAccessor(q_args, q_tensor_addr, single_tile_size_bytes);
+    const auto sk = TensorAccessor(k_args, k_tensor_addr, single_tile_size_bytes);
+    const auto sv = TensorAccessor(v_args, v_tensor_addr, single_tile_size_bytes);
 
     uint32_t l1_read_addr_out0 = get_read_ptr(cb_id_out0);
     uint32_t l1_read_addr_out1 = get_read_ptr(cb_id_out1);

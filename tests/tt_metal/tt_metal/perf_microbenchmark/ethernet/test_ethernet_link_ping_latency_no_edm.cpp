@@ -45,10 +45,9 @@ using namespace tt::test_utils::df;
 
 class N300TestDevice {
 public:
-    N300TestDevice() : device_open(false) {
+    N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()), device_open(false) {
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
-        num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
             tt::tt_metal::GetNumPCIeDevices() >= 1) {
             std::vector<chip_id_t> ids(num_devices_, 0);
@@ -230,14 +229,16 @@ int main(int argc, char** argv) {
     tt_xy_pair eth_sender_core;
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     do {
-        TT_ASSERT(eth_sender_core_iter != eth_sender_core_iter_end);
+        TT_FATAL(eth_sender_core_iter != eth_sender_core_iter_end, "No active ethernet core found for device 0");
         if (cluster.is_ethernet_link_up(device_0->id(), *eth_sender_core_iter)) {
             std::tie(device_id, eth_receiver_core) = device_0->get_connected_ethernet_core(*eth_sender_core_iter);
             eth_sender_core = *eth_sender_core_iter;
         }
         eth_sender_core_iter++;
-    } while (device_id != 1);
-    TT_ASSERT(device_id == 1);
+    } while (device_id == std::numeric_limits<chip_id_t>::max() ||
+             !test_fixture.devices_.at(device_id)->is_mmio_capable());
+    TT_FATAL(device_id != std::numeric_limits<chip_id_t>::max(), "No valid receiver device found to connect to");
+    TT_FATAL(test_fixture.devices_.at(device_id)->is_mmio_capable(), "Receiver device is not mmio capable");
     const auto& device_1 = test_fixture.devices_.at(device_id);
 
     // Add more configurations here until proper argc parsing added

@@ -9,13 +9,14 @@
 #include <fmt/core.h>
 
 #include "ttnn/tensor/host_buffer/functions.hpp"
+#include "tt-metalium/hal.hpp"
 
 namespace ttnn::operations::sliding_window {
 
 struct ParallelConfig {
     CoreRangeSet grid = {};
-    tt::tt_metal::TensorMemoryLayout shard_scheme;
-    tt::tt_metal::ShardOrientation shard_orientation;
+    tt::tt_metal::TensorMemoryLayout shard_scheme{0};
+    tt::tt_metal::ShardOrientation shard_orientation{0};
 
     bool operator==(const ParallelConfig& other) {
         return (
@@ -131,7 +132,8 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
     tt::tt_metal::IDevice* device,
     uint32_t max_out_nsticks_per_core = INT_MAX,
     uint32_t in_nsticks_per_core = 0,
-    bool in_place = false);
+    bool in_place = false,
+    uint32_t in_out_shard_size_delta = 0);
 
 struct HaloGatherKernelConfig {
     std::vector<std::vector<uint16_t>> pad_config0;
@@ -178,6 +180,8 @@ Tensor move_config_tensor_to_device(
     const ParallelConfig& p_config,
     bool is_block_sharded,
     tt::tt_metal::distributed::MeshDevice* device);
+
+uint32_t align_buffer(uint32_t size);
 
 }  // namespace ttnn::operations::sliding_window
 

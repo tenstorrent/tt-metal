@@ -115,7 +115,9 @@ enum SfpuType {
     lcm,
     softshrink,
     hardsigmoid,
+    threshold,
     where,
     softsign,
-    celu
+    celu,
+    max_pool_with_indices,
 };

@@ -59,25 +59,25 @@ enum SendStatus : uint8_t {
 };
 
 struct EDMChannelWorkerLocationInfo {
-    uint32_t worker_semaphore_address;
-    uint32_t align_pad_0;  // Padding added for safe reading over noc
-    uint32_t align_pad_1;
-    uint32_t align_pad_2;
+    uint32_t worker_semaphore_address{};
+    uint32_t align_pad_0{};  // Padding added for safe reading over noc
+    uint32_t align_pad_1{};
+    uint32_t align_pad_2{};
 
-    uint32_t worker_teardown_semaphore_address;
-    uint32_t align_pad_3;  // Padding added for safe reading over noc
-    uint32_t align_pad_4;
-    uint32_t align_pad_5;
+    uint32_t worker_teardown_semaphore_address{};
+    uint32_t align_pad_3{};  // Padding added for safe reading over noc
+    uint32_t align_pad_4{};
+    uint32_t align_pad_5{};
 
-    WorkerXY worker_xy;
-    uint32_t align_pad_6;  // Padding added for safe reading over noc
-    uint32_t align_pad_7;
-    uint32_t align_pad_8;
+    WorkerXY worker_xy{0, 0};
+    uint32_t align_pad_6{};  // Padding added for safe reading over noc
+    uint32_t align_pad_7{};
+    uint32_t align_pad_8{};
 
     uint32_t edm_read_counter = 0;
-    uint32_t align_pad_9;  // Padding added for safe reading over noc
-    uint32_t align_pad_10;
-    uint32_t align_pad_11;
+    uint32_t align_pad_9{};  // Padding added for safe reading over noc
+    uint32_t align_pad_10{};
+    uint32_t align_pad_11{};
 };
 
 static_assert(sizeof(EDMChannelWorkerLocationInfo) <= 64);

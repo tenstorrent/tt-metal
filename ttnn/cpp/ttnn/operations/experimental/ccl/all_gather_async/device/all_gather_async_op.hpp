@@ -26,9 +26,8 @@ namespace ttnn {
 using ccl::EriscDatamoverBuilder;
 
 enum class AllGatherAsyncVersion {
-    GENERIC = 0,
-    LLAMA_MINIMAL_SHARDED = 1,
-    MINIMAL_DEFAULT = 2,
+    LLAMA_MINIMAL_SHARDED = 0,
+    MINIMAL_DEFAULT = 1,
 };
 
 struct AllGatherAsync {
@@ -41,6 +40,7 @@ struct AllGatherAsync {
     const std::vector<GlobalSemaphore> semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
+    bool use_all_gather_async_llama_sharded;
     bool use_optimal_ccl_for_llama;
     const std::optional<GlobalSemaphore>& barrier_semaphore;
     bool using_persistent_buffers;
@@ -58,6 +58,7 @@ struct AllGatherAsync {
         std::vector<GlobalSemaphore> semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         std::optional<uint32_t> cluster_axis,
+        bool use_all_gather_async_llama_sharded,
         bool use_optimal_ccl_for_llama,
         const std::optional<GlobalSemaphore>& barrier_semaphore,
         bool using_persistent_buffers,
@@ -73,6 +74,7 @@ struct AllGatherAsync {
         semaphore(semaphore),
         sub_device_id(sub_device_id),
         cluster_axis(cluster_axis),
+        use_all_gather_async_llama_sharded(use_all_gather_async_llama_sharded),
         use_optimal_ccl_for_llama(use_optimal_ccl_for_llama),
         barrier_semaphore(barrier_semaphore),
         using_persistent_buffers(using_persistent_buffers),
@@ -93,6 +95,7 @@ struct AllGatherAsync {
         attrs.emplace_back("barrier_semaphore", barrier_semaphore);
         attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);
         attrs.emplace_back("cluster_axis", cluster_axis);
+        attrs.emplace_back("use_all_gather_async_llama_sharded", use_all_gather_async_llama_sharded);
         attrs.emplace_back("use_optimal_ccl_for_llama", use_optimal_ccl_for_llama);
         attrs.emplace_back("semaphore", semaphore);
         attrs.emplace_back("chunks_per_sync", chunks_per_sync);
@@ -121,25 +124,6 @@ struct AllGatherAsync {
 };
 
 // All Gather Variants
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
-    size_t num_links,
-    size_t num_workers_per_link,
-    IDevice* device,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    CoreCoord core_grid_offset = CoreCoord(0, 0));
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
-    const Tensor& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
-    Tensor& output_tensor,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    uint32_t ring_index,
-    ccl::Topology topology,
-    GlobalSemaphore semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     const Tensor& input_tensor,
     IDevice* target_device,
@@ -191,6 +175,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool use_optimal_ccl_for_llama);
 
@@ -206,6 +192,7 @@ Tensor all_gather_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    bool use_all_gather_async_llama_sharded = false,
     bool use_optimal_ccl_for_llama = false,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
 
@@ -219,22 +206,12 @@ Tensor all_gather_async(
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     std::optional<uint32_t> cluster_axis = std::nullopt,
+    bool use_all_gather_async_llama_sharded = false,
     bool use_optimal_ccl_for_llama = false,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     std::optional<uint32_t> chunks_per_sync = std::nullopt,
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
-
-std::vector<Tensor> all_gather_async(
-    const std::vector<Tensor>& input_tensors,
-    uint32_t dim,
-    const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphore,
-    uint32_t num_links = 1,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    bool use_optimal_ccl_for_llama = false,
-    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
@@ -247,20 +224,7 @@ Tensor all_gather_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    bool use_optimal_ccl_for_llama = false,
-    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
-
-std::vector<Tensor> all_gather_async(
-    const std::vector<Tensor>& input_tensors,
-    int32_t dim,
-    uint32_t cluster_axis,
-    const MeshDevice& mesh_device,
-    ttnn::ccl::Topology topology,
-    const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphore,
-    const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<size_t> num_preferred_links = std::nullopt,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    bool use_all_gather_async_llama_sharded = false,
     bool use_optimal_ccl_for_llama = false,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
 

@@ -36,7 +36,6 @@ static const char* TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 // Set this var to change the cache dir.
 static const char* TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 // Used for demonstration purposes and will be removed in the future.
-static const char* TT_METAL_VISIBLE_DEVICES_ENV_VAR = "TT_METAL_VISIBLE_DEVICES";
 // Env variable to override the core grid configuration
 static const char* TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
 
@@ -60,21 +59,6 @@ RunTimeOptions::RunTimeOptions() {
         this->kernel_dir = std::string(kernel_dir_str) + "/";
     }
     this->system_kernel_dir = "/usr/share/tenstorrent/kernels/";
-
-    const char* visible_devices_str = std::getenv(TT_METAL_VISIBLE_DEVICES_ENV_VAR);
-    if (visible_devices_str != nullptr) {
-        this->is_visible_devices_env_var_set = true;
-        std::string devices_string(visible_devices_str);
-        size_t pos = 0;
-        while ((pos = devices_string.find(',')) != std::string::npos) {
-            std::string device_str = devices_string.substr(0, pos);
-            this->visible_devices.push_back(std::stoi(device_str));
-            devices_string.erase(0, pos + 1);
-        }
-        if (!devices_string.empty()) {
-            this->visible_devices.push_back(std::stoi(devices_string));
-        }
-    }
 
     const char* custom_fabric_mesh_graph_desc_path_str = std::getenv("TT_MESH_GRAPH_DESC_PATH");
     if (custom_fabric_mesh_graph_desc_path_str != nullptr) {
@@ -102,7 +86,7 @@ RunTimeOptions::RunTimeOptions() {
     profiler_enabled = false;
     profile_dispatch_cores = false;
     profiler_sync_enabled = false;
-    profiler_mid_run_tracy_push = false;
+    profiler_mid_run_dump = false;
     profiler_buffer_usage_enabled = false;
     profiler_trace_profiler = false;
 #if defined(TRACY_ENABLE)
@@ -121,9 +105,9 @@ RunTimeOptions::RunTimeOptions() {
         if (profiler_trace_profiler_str != nullptr && profiler_trace_profiler_str[0] == '1') {
             profiler_trace_profiler = true;
         }
-        const char* profiler_force_push_enabled_str = std::getenv("TT_METAL_TRACY_MID_RUN_PUSH");
-        if (profiler_force_push_enabled_str != nullptr && profiler_force_push_enabled_str[0] == '1') {
-            profiler_mid_run_tracy_push = true;
+        const char* profiler_mid_run_dump_str = std::getenv("TT_METAL_PROFILER_MID_RUN_DUMP");
+        if (profiler_mid_run_dump_str != nullptr && profiler_mid_run_dump_str[0] == '1') {
+            profiler_mid_run_dump = true;
         }
     }
 
@@ -219,8 +203,15 @@ RunTimeOptions::RunTimeOptions() {
     }
 
     if (std::getenv("TT_METAL_SIMULATOR")) {
-        this->simulator_enabled = true;
         this->simulator_path = std::getenv("TT_METAL_SIMULATOR");
+        this->runtime_target_device_ = tt::TargetDevice::Simulator;
+    }
+
+    // Enable mock cluster if TT_METAL_MOCK is set to a descriptor path
+    // This is used for initializing UMD without any hardware using a mock cluster descriptor
+    if (const char* mock_path = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH")) {
+        this->mock_cluster_desc_path = std::string(mock_path);
+        this->runtime_target_device_ = tt::TargetDevice::Mock;
     }
 
     if (auto str = getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
@@ -265,6 +256,11 @@ RunTimeOptions::RunTimeOptions() {
     if (getenv("TT_METAL_LOG_KERNELS_COMPILE_COMMANDS")) {
         this->log_kernels_compilation_commands = true;
     }
+
+    const char* timeout_duration_for_operations_value = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");
+    float timeout_duration_for_operations =
+        timeout_duration_for_operations_value ? std::stof(timeout_duration_for_operations_value) : 0.f;
+    this->timeout_duration_for_operations = std::chrono::duration<float>(timeout_duration_for_operations);
 }
 
 const std::string& RunTimeOptions::get_root_dir() const {
@@ -331,7 +327,8 @@ void RunTimeOptions::ParseWatcherEnv() {
         watcher_pause_str,
         watcher_ring_buffer_str,
         watcher_stack_usage_str,
-        watcher_dispatch_str};
+        watcher_dispatch_str,
+        watcher_eth_link_status_str};
     for (const std::string& feature : all_features) {
         std::string env_var("TT_METAL_WATCHER_DISABLE_");
         env_var += feature;

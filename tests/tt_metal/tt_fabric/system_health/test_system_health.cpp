@@ -21,21 +21,11 @@
 namespace tt::tt_fabric {
 namespace system_health_tests {
 
-struct UbbId {
-    std::uint32_t tray_id;
-    std::uint32_t asic_id;
-};
-
-enum class ConnectorType { UNUSED, QSFP, TFLY, TRACE, LK1, LK2, LK3 };
+enum class ConnectorType { UNUSED, QSFP, WARP, TRACE, LK1, LK2, LK3, UNKNOWN };
 
 enum class LinkingBoardType {
     A,
     B,
-};
-
-const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
-    {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
-    {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
 };
 
 const std::unordered_map<ConnectorType, LinkingBoardType> linking_board_types = {
@@ -48,62 +38,76 @@ std::uint64_t cw_pair_to_full(uint32_t hi, uint32_t lo) {
     return (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
 }
 
-UbbId get_ubb_id(chip_id_t chip_id) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& tray_bus_ids = ubb_bus_ids.at(cluster.arch());
-    const auto bus_id = cluster.get_bus_id(chip_id);
-    auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
-    if (tray_bus_id_it != tray_bus_ids.end()) {
-        auto ubb_asic_id = bus_id & 0x0F;
-        return UbbId{tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id};
-    }
-    return UbbId{0, 0};  // Invalid UBB ID if not found
-}
-
 ConnectorType get_connector_type(chip_id_t chip_id, CoreCoord eth_core, uint32_t chan, ClusterType cluster_type) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    if (cluster_type == ClusterType::GALAXY) {
-        if (cluster.is_external_cable(chip_id, eth_core)) {
-            return ConnectorType::QSFP;
-        }
-        auto ubb_id = get_ubb_id(chip_id);
-        if ((ubb_id.asic_id == 5 || ubb_id.asic_id == 6) && (12 <= chan && chan <= 15)) {
-            return ConnectorType::LK1;
-        } else if ((ubb_id.asic_id == 7 || ubb_id.asic_id == 8) && (12 <= chan && chan <= 15)) {
-            return ConnectorType::LK2;
-        } else if ((ubb_id.asic_id == 4 || ubb_id.asic_id == 8) && (8 <= chan && chan <= 11)) {
-            return ConnectorType::LK3;
+    auto arch = cluster.arch();
+    auto board_type = cluster.get_board_type(chip_id);
+    if (arch == tt::ARCH::WORMHOLE_B0) {
+        if (cluster_type == ClusterType::GALAXY) {
+            if (cluster.is_external_cable(chip_id, eth_core)) {
+                return ConnectorType::QSFP;
+            }
+            auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
+            if ((ubb_id.asic_id == 5 || ubb_id.asic_id == 6) && (12 <= chan && chan <= 15)) {
+                return ConnectorType::LK1;
+            } else if ((ubb_id.asic_id == 7 || ubb_id.asic_id == 8) && (12 <= chan && chan <= 15)) {
+                return ConnectorType::LK2;
+            } else if ((ubb_id.asic_id == 4 || ubb_id.asic_id == 8) && (8 <= chan && chan <= 11)) {
+                return ConnectorType::LK3;
+            } else {
+                return ConnectorType::TRACE;
+            }
         } else {
-            return ConnectorType::TRACE;
-        }
-    } else {
-        if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
             auto mmio_device_id = cluster.get_associated_mmio_device(chip_id);
             if (mmio_device_id == chip_id) {
                 if (chan == 14 || chan == 15) {
-                    return ConnectorType::TFLY;
+                    return ConnectorType::WARP;
                 } else if (chan == 0 || chan == 1 || chan == 6 || chan == 7) {
                     return ConnectorType::QSFP;
-                } else if ((chan == 8 || chan == 9) && cluster.get_board_type(chip_id) == tt::umd::BoardType::N300) {
+                } else if ((chan == 8 || chan == 9) && board_type == tt::umd::BoardType::N300) {
                     return ConnectorType::TRACE;
                 }
                 return ConnectorType::UNUSED;
             } else {
                 if (chan == 6 || chan == 7) {
-                    return ConnectorType::TFLY;
+                    return ConnectorType::WARP;
                 } else if (chan == 0 || chan == 1) {
                     return ConnectorType::TRACE;
                 }
                 return ConnectorType::UNUSED;
             }
-            // TODO: Need to add proper support for other architectures
-        } else {
-            if (cluster.is_external_cable(chip_id, eth_core)) {
+        }
+    } else if (arch == tt::ARCH::BLACKHOLE) {
+        if (board_type == tt::umd::BoardType::P150) {
+            if (4 <= chan && chan <= 11) {
                 return ConnectorType::QSFP;
+            } else {
+                return ConnectorType::UNUSED;
             }
-            return ConnectorType::TRACE;
+        } else if (board_type == tt::umd::BoardType::P300) {
+            auto asic_loc = cluster.get_cluster_desc()->get_asic_location(chip_id);
+            if (asic_loc == 1) {
+                // Left Chip
+                if (chan == 2 || chan == 3 || chan == 4 || chan == 6) {
+                    return ConnectorType::WARP;
+                } else if (chan == 8 || chan == 9) {
+                    return ConnectorType::TRACE;
+                } else {
+                    return ConnectorType::UNUSED;
+                }
+            } else if (asic_loc == 0) {
+                // Right Chip
+                if (chan == 4 || chan == 5 || chan == 7 || chan == 9) {
+                    return ConnectorType::WARP;
+                } else if (chan == 2 || chan == 3) {
+                    return ConnectorType::TRACE;
+                } else {
+                    return ConnectorType::UNUSED;
+                }
+            }
         }
     }
+    return ConnectorType::UNKNOWN;
 }
 
 bool is_chip_on_edge_of_mesh(chip_id_t physical_chip_id, tt::tt_metal::ClusterType cluster_type) {
@@ -141,7 +145,7 @@ bool is_chip_on_corner_of_mesh(chip_id_t physical_chip_id, tt::tt_metal::Cluster
 }
 
 std::string get_ubb_id_str(chip_id_t chip_id) {
-    auto ubb_id = get_ubb_id(chip_id);
+    auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
     return "Tray: " + std::to_string(ubb_id.tray_id) + " N" + std::to_string(ubb_id.asic_id);
 }
 
@@ -169,7 +173,7 @@ std::string get_connector_str(chip_id_t chip_id, CoreCoord eth_core, uint32_t ch
     switch (connector) {
         case ConnectorType::UNUSED: str << "unused"; break;
         case ConnectorType::QSFP: str << "QSFP"; break;
-        case ConnectorType::TFLY: str << "TFLY"; break;
+        case ConnectorType::WARP: str << "WARP"; break;
         case ConnectorType::TRACE: str << "internal trace"; break;
         case ConnectorType::LK1:
         case ConnectorType::LK2:
@@ -177,6 +181,7 @@ std::string get_connector_str(chip_id_t chip_id, CoreCoord eth_core, uint32_t ch
             str << "linking board " << enchantum::to_string(connector).back() << " type "
                 << enchantum::to_string(linking_board_types.at(connector));
             break;
+        case ConnectorType::UNKNOWN: str << "unknown"; break;
     }
     str << ")";
     return str.str();

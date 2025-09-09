@@ -8,10 +8,9 @@ import ttnn
 from loguru import logger
 
 from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
-    StableDiffusion3Pipeline,
+    create_pipeline,
     TimingCollector,
 )
-from ...parallel.config import DiTParallelConfig, ParallelFactor
 
 
 @pytest.mark.parametrize(
@@ -27,8 +26,8 @@ from ...parallel.config import DiTParallelConfig, ParallelFactor
         [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
-        "t3k_cfg2_sp2_tp2",
-        "tg_cfg2_sp4_tp4",
+        "2x4cfg1sp0tp1",
+        "4x8cfg1sp0tp1",
     ],
     indirect=["mesh_device"],
 )
@@ -37,6 +36,7 @@ from ...parallel.config import DiTParallelConfig, ParallelFactor
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 25000000}],
     indirect=True,
 )
+@pytest.mark.parametrize("use_cache", [True, False], ids=["yes_use_cache", "no_use_cache"])
 def test_sd35_new_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -51,60 +51,28 @@ def test_sd35_new_pipeline_performance(
     topology,
     num_links,
     model_location_generator,
+    use_cache,
 ) -> None:
     """Performance test for new SD35 pipeline with detailed timing analysis."""
 
-    cfg_factor, cfg_axis = cfg
-    sp_factor, sp_axis = sp
-    tp_factor, tp_axis = tp
-
-    # Create parallel configuration for the new pipeline
-    parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=cfg_factor, mesh_axis=cfg_axis),
-        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
-        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
-    )
-
-    # Determine guidance condition and T5 settings
-    if guidance_scale > 1 and cfg_factor == 1:
-        guidance_cond = 2
-    else:
-        guidance_cond = 1
-
-    # Calculate submesh shape to determine T5 availability
-    submesh_shape = list(mesh_device.shape)
-    submesh_shape[cfg_axis] //= cfg_factor
-    enable_t5_text_encoder = submesh_shape[1] == 4
-
-    logger.info(f"Performance test configuration:")
-    logger.info(f"  Mesh device shape: {mesh_device.shape}")
-    logger.info(f"  Submesh shape: {submesh_shape}")
-    logger.info(f"  Parallel config: {parallel_config}")
-    logger.info(f"  T5 enabled: {enable_t5_text_encoder}")
     logger.info(f"  Image size: {image_w}x{image_h}")
     logger.info(f"  Guidance scale: {guidance_scale}")
     logger.info(f"  Inference steps: {num_inference_steps}")
 
-    # Create pipeline
-    pipeline = StableDiffusion3Pipeline(
-        checkpoint_name=f"stabilityai/stable-diffusion-3.5-{model_name}",
+    pipeline = create_pipeline(
         mesh_device=mesh_device,
-        enable_t5_text_encoder=enable_t5_text_encoder,
-        guidance_cond=guidance_cond,
-        parallel_config=parallel_config,
-        height=image_h,
-        width=image_w,
-        model_location_generator=model_location_generator,
-    )
-
-    # Prepare pipeline
-    pipeline.prepare(
         batch_size=1,
-        width=image_w,
-        height=image_h,
+        image_w=image_w,
+        image_h=image_h,
         guidance_scale=guidance_scale,
-        prompt_sequence_length=333,
-        spatial_sequence_length=4096,
+        cfg_config=cfg,
+        sp_config=sp,
+        tp_config=tp,
+        num_links=num_links,
+        model_checkpoint_path=model_location_generator(
+            f"stabilityai/stable-diffusion-3.5-{model_name}", model_subdir="StableDiffusion_35_Large"
+        ),
+        use_cache=use_cache,
     )
 
     # Test prompts - diverse set for comprehensive performance testing
@@ -200,6 +168,11 @@ def test_sd35_new_pipeline_performance(
         all_denoising_steps.extend(timing.denoising_step_times)
 
     # Report results
+    cfg_factor = pipeline.dit_parallel_config.cfg_parallel.factor
+    sp_factor = pipeline.dit_parallel_config.sequence_parallel.factor
+    tp_factor = pipeline.dit_parallel_config.tensor_parallel.factor
+    enable_t5_text_encoder = pipeline.t5_enabled()
+
     print("\n" + "=" * 80)
     print("STABLE DIFFUSION 3.5 NEW PIPELINE PERFORMANCE RESULTS")
     print("=" * 80)

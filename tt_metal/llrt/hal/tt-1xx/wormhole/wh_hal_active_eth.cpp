@@ -5,12 +5,9 @@
 #define COMPILE_FOR_ERISC
 
 #include "dev_msgs.h"
-#include <cstddef>
-#include <cstdint>
-#include <vector>
 
-#include "core_config.h"
 #include "eth_l1_address_map.h"
+#include "eth_fw_api.h"
 #include "llrt_common/mailbox.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
@@ -22,6 +19,14 @@
     ((uint64_t)&(((mailboxes_t*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
 
 namespace tt::tt_metal::wormhole {
+
+// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
+#include "core_config.h"
+
+// This file is intended to be wrapped inside arch-specific namespace.
+namespace active_eth_dev_msgs {
+#include "hal/generated/dev_msgs_impl.hpp"
+}
 
 HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     std::vector<DeviceAddr> mem_map_bases;
@@ -60,6 +65,8 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CRC_ERR)] = eth_l1_mem::address_map::CRC_ERR_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORR_CW)] = eth_l1_mem::address_map::CORR_CW_HI_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNCORR_CW)] = eth_l1_mem::address_map::UNCORR_CW_HI_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] =
+        MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, link_status);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE;
 
@@ -92,12 +99,7 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_SIZE;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_LINK_REMOTE_INFO)] =
-        eth_l1_mem::address_map::ETH_LINK_REMOTE_INFO_ADDR;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::INTERMESH_ETH_LINK_CONFIG)] =
-        eth_l1_mem::address_map::INTERMESH_ETH_LINK_CONFIG_ADDR;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::INTERMESH_ETH_LINK_STATUS)] =
-        eth_l1_mem::address_map::INTERMESH_ETH_LINK_STATUS_ADDR;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = sizeof(uint32_t);
     // Base FW api not supported on WH
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
 
@@ -124,7 +126,8 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
         mem_map_sizes,
         fw_mailbox_addr,
         false /*supports_cbs*/,
-        false /*supports_receiving_multicast_cmds*/};
+        false /*supports_receiving_multicast_cmds*/,
+        active_eth_dev_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::wormhole

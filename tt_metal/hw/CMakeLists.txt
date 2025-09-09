@@ -302,6 +302,8 @@ target_sources(
             inc/accessor/tensor_accessor.h
             inc/accessor/tensor_accessor_args.h
             inc/accessor/shard_pages_address_iterator.h
+            inc/accessor/pages_address_iterator.h
+            inc/accessor/page.h
             inc/atomic_rwptr.h
             inc/bit_utils.h
             inc/blackhole/c_tensix_core.h
@@ -309,6 +311,7 @@ target_sources(
             inc/blackhole/core_config.h
             inc/blackhole/dev_mem_map.h
             inc/blackhole/eth_chan_noc_mapping.h
+            inc/blackhole/eth_fw_api.h
             inc/blackhole/eth_l1_address_map.h
             inc/blackhole/noc/noc.h
             inc/blackhole/noc/noc_overlay_parameters.h
@@ -332,6 +335,7 @@ target_sources(
             inc/debug/dprint_buffer.h
             inc/debug/dprint_pages.h
             inc/debug/dprint_tile.h
+            inc/debug/eth_link_status.h
             inc/debug/fw_debug.h
             inc/debug/noc_logging.h
             inc/debug/ring_buffer.h
@@ -360,6 +364,7 @@ target_sources(
             inc/wormhole/core_config.h
             inc/wormhole/dev_mem_map.h
             inc/wormhole/eth_chan_noc_mapping.h
+            inc/wormhole/eth_fw_api.h
             inc/wormhole/eth_l1_address_map.h
             inc/wormhole/noc/noc.h
             inc/wormhole/noc/noc_overlay_parameters.h

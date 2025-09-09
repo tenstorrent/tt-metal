@@ -19,11 +19,11 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "test_common.hpp"
-#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/profiler/profiler_paths.hpp"
@@ -149,24 +149,15 @@ void create_mux_kernel(
     auto default_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     size_t mux_status_address = mux_kernel_config->get_status_address();
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    std::vector<uint32_t> mux_ct_args = {
-        test_params.num_full_size_channels,
-        test_params.num_buffers_full_size_channel,
-        test_params.buffer_size_bytes_full_size_channel,
-        test_params.num_header_only_channels,
-        test_params.num_buffers_header_only_channel,
-        mux_status_address,
-        mux_kernel_config->get_termination_signal_address(),
-        mux_kernel_config->get_connection_info_address(default_channel_type, 0),
-        mux_kernel_config->get_connection_handshake_address(default_channel_type, 0),
-        mux_kernel_config->get_flow_control_address(default_channel_type, 0),
-        mux_kernel_config->get_channel_base_address(default_channel_type, 0),
-        mux_status_address + noc_address_padding_bytes,  // risky, could change if mux address map is updated
-        drainer_kernel_config->get_status_address(),
-        drainer_kernel_config->get_num_buffers(default_channel_type),
-        test_params.num_full_size_channel_iters,
-        test_params.num_iters_between_teardown_checks,
-        hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX)};
+
+    std::vector<uint32_t> mux_ct_args = mux_kernel_config->get_fabric_mux_compile_time_args();
+    // Point to the drainer's status address instead of the worker's status address
+    // The drainer's status address is used by the drainer to indicate which state it is in
+    // (i.e. setup, ready for traffic, done). This is needed by mux so mux doesn't send traffic
+    // before the drainer is ready to receive it.
+    mux_ct_args[11] = mux_status_address + noc_address_padding_bytes;
+    mux_ct_args[12] = drainer_kernel_config->get_status_address();
+    mux_ct_args[13] = drainer_kernel_config->get_num_buffers(default_channel_type);
 
     // semaphores needed to build connection with drainer core using the build_from_args API
     auto worker_teardown_semaphore_id = tt::tt_metal::CreateSemaphore(program_handle, mux_logical_core, 0);
@@ -218,7 +209,8 @@ void create_mux_kernel(
 void create_drainer_kernel(
     const DrainerTestConfig& drainer_test_config,
     tt::tt_metal::IDevice* device,
-    tt::tt_metal::Program& program_handle) {
+    tt::tt_metal::Program& program_handle,
+    CoreCoord mux_virtual_coord) {
     auto drainer_kernel_config = drainer_test_config.drainer_kernel_config;
     auto drainer_logical_core = drainer_test_config.drainer_logical_core;
     auto drainer_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
@@ -248,6 +240,8 @@ void create_drainer_kernel(
     }
 
     std::vector<uint32_t> drainer_rt_args = memory_regions_to_clear_args;
+    drainer_rt_args.push_back(mux_virtual_coord.x);
+    drainer_rt_args.push_back(mux_virtual_coord.y);
 
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {};
     create_kernel(
@@ -452,7 +446,7 @@ int main(int argc, char** argv) {
 
     create_mux_kernel(test_params, mux_test_config, drainer_test_config, device, program);
 
-    create_drainer_kernel(drainer_test_config, device, program);
+    create_drainer_kernel(drainer_test_config, device, program, mux_test_config.mux_virtual_core);
 
     // keep the receiver noc xy encoding same for all workers, wont matter since we are not committing any
     // packets into receiver's L1

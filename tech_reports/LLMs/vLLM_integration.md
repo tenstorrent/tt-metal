@@ -34,7 +34,11 @@ In order to add vLLM support to a new Tenstorrent model, the following requireme
       ```
     - `read_decode_output`: returns the decode output logits on host. The `tt_out` argument is the output of `decode_forward`. This function is intentionally separate from `decode_forward` to implement the asynchronous output processing + multi-step scheduling optimization (for more info see [vLLM v0.6.0 Blog Post](https://blog.vllm.ai/2024/09/05/perf-update.html)) where the execution of `decode_forward` (with `read_from_device=False`) is nonblocking on CPU, allowing for overlap of vLLM output processing (of previous decode iterations) with the current decode execution. The `is_tokens` argument specifies whether `tt_out` is logits or tokens. In vLLM, this function is used by `TTModelRunner::_execute_model_single_step` in [tt_model_runner.py](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py).
       ```python
-      read_decode_output(tt_out : ttnn.Tensor, unpadded_batch : int, is_tokens : bool)
+      read_decode_output(tt_out : ttnn.Tensor, async_read : bool)
+      ```
+    - `proprocess_decode_output_host`: returns torch decode output logits/tokens on host. The `tt_out` argument is the output of `read_decode_output`. The `is_tokens` argument specifies whether `tt_out` is logits or tokens. In vLLM, this function is used by `TTModelRunner::_execute_model_single_step` in [tt_model_runner.py](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py).
+      ```python
+      process_decode_output_host(tt_out : ttnn.Tensor, is_tokens : bool)
       ```
 3. **(Multi-modal and encoder-decoder models only)** Currently, the only multi-modal models we support in our Tenstorrent vLLM fork are image+text encoder-decoder models such as Llama3.2-11B-Vision. An example generation class is `MllamaForConditionalGeneration` in [models/tt_transformers/tt/generator_vllm.py](https://github.com/tenstorrent/tt-metal/blob/main/models/tt_transformers/tt/generator_vllm.py). These models have the same interface requirements as the text-only models, as well as the following:
    - `max_cross_attn_tokens`: class property which returns the max number of tokens in cross attention. In vLLM, this property is used in [tt_model_runner.py](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py) for padding cross page tables to `max_cross_blocks`.

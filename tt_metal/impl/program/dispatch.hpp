@@ -42,15 +42,15 @@ namespace program_dispatch {
 
 struct ProgramDispatchMetadata {
     std::vector<ConfigBufferEntry> kernel_config_addrs;
-    uint32_t sync_count;
-    uint32_t stall_first;
-    uint32_t stall_before_program;
+    uint32_t sync_count{};
+    uint32_t stall_first{};
+    uint32_t stall_before_program{};
 
     struct {
         uint32_t mesh_max_program_kernels_sizeB;
         bool is_cached;
         uint32_t offset;
-    } prefetcher_cache_info;
+    } prefetcher_cache_info{};
 };
 
 struct ExpectedNumWorkerUpdates {
@@ -200,6 +200,10 @@ void set_core_go_message_mapping_on_device(
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
     SystemMemoryManager& manager,
     uint8_t cq_id);
+
+template <typename WorkloadType, typename DeviceType>
+uint32_t program_base_addr_on_core(
+    WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType core_type);
 
 }  // namespace program_dispatch
 

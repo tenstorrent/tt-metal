@@ -1,6 +1,6 @@
 # Install
 
-These instructions will guide you through the installation of Tenstorrent system tools and drivers, followed by the installation of TT-Metalium and TT-NN.
+This document provides advanced users and developers with comprehensive instructions for installing **Tenstorrent**'s stack, featuring multiple deployment options for **TT-Metalium** and **TT-NN**.
 
 > [!IMPORTANT]
 >
@@ -14,125 +14,45 @@ These instructions will guide you through the installation of Tenstorrent system
 
 ---
 
-### 2: Install Driver & Firmware
+### 2: Install Software Dependencies
 
-Note the current compatibility matrix:
-
-| Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
-|----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
-| Galaxy (Wormhole 4U) | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.10.1.0                          | v2.2.3 or lower       | v1.1.3, `mesh` config          |
-| Galaxy (Wormhole 6U) | Ubuntu 22.04    | 3.10     | v2.0.0 or above    | fw_pack-18.6.0.fwbundle (v18.6.0)          | v3.0.20 or above      | N/A                            |
-| Wormhole             | Ubuntu 22.04    | 3.10     | v2.0.0 or above    | fw_pack-18.3.0.fwbundle (v18.3.0)          | v3.0.20 or above      | N/A                            |
-| T3000 (Wormhole)     | Ubuntu 22.04    | 3.10     | v2.0.0 or above    | fw_pack-18.3.0.fwbundle (v18.3.0)          | v3.0.20 or above      | v1.2.5 or above, `mesh` config |
-| Blackhole            | Ubuntu 22.04    | 3.10     | v2.1.0 or above    | fw_pack-18.5.0.fwbundle (v18.5.0)          | v3.0.20 or above      | N/A                            |
-
-#### Install System-level Dependencies
-For Ubuntu users. You can use the script provided in our repo to install build and runtime dependencies along with a working copy of Clang 17.
-
-```bash
-wget https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/{install_dependencies.sh,tt_metal/sfpi-version.sh}
-chmod a+x install_dependencies.sh
-sudo ./install_dependencies.sh
+#### Option 1: **TT-Installer** Script (recommended)
+- For a quick setup, download and run the **TT-Installer** installation script:
+```
+curl -fsSL https://github.com/tenstorrent/tt-installer/releases/latest/download/install.sh -O
+chmod +x install.sh
+./install.sh --no-install-podman --no-install-metalium-container
 ```
 
-For users on other Linux distributions, please consult the `install_dependencies.sh` script to see what packages need to be installed, then install the equivalent packages using your distribution's package manager. Package names may vary between distributions, and some distributions (like Gentoo and Arch) may not use suffixes like `-dev` or `-devel` for development packages.
+> [!WARNING]
+> TT-Installer automatically installs all latest versions. Galaxy Wormhole 4U and Blackhole systems require the following versions:
+> | Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
+> |----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
+> | Galaxy (Wormhole 4U) | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.10.1.0                          | v2.2.3 or lower       | v1.1.3, `mesh` config          |
+> | Blackhole            | Ubuntu 22.04    | 3.10     | v2.1.0 or above    | fw_pack-18.7.0.fwbundle (v18.7.0)          | v3.0.20 or above      | N/A                            |
 
-> [!IMPORTANT]
->
-> Building with Clang 17 and GCC 12 is supported. Later versions, while not officially supported, should work. For Ubuntu 22.04 users, the default compiler is GCC 11 and Clang 14. Please install a newer compiler to ensure a successful build (the dependency installation script will install Clang 17 for you).
+- If required, add the following flags for specifying dependencies versions:
 
-
----
-
-#### Install the Driver (TT-KMD)
-- DKMS must be installed:
-
-| OS                     | Command                                            |
-|------------------------|----------------------------------------------------|
-| Ubuntu / Debian        | ```apt install dkms```                             |
-| Fedora                 | ```dnf install dkms```                             |
-| Enterprise Linux Based | ```dnf install epel-release && dnf install dkms``` |
-| Arch Linux             | ```pacman -S dkms```                               |
-
-- Install the latest TT-KMD version:
-```
-git clone https://github.com/tenstorrent/tt-kmd.git
-cd tt-kmd
-sudo dkms add .
-sudo dkms install "tenstorrent/$(./tools/current-version)"
-sudo modprobe tenstorrent
-cd ..
-```
-
-- For more information visit Tenstorrent's [TT-KMD GitHub repository](https://github.com/tenstorrent/tt-kmd).
-
----
-
-#### Update Device TT-Firmware with TT-Flash
-
-
-- Install TT-Flash:
+> [!NOTE]
+> The following dependencies versions are examples. Install the versions above depending on your device.
 
 ```
-pip install git+https://github.com/tenstorrent/tt-flash.git
+./install.sh \
+  --smi-version=v3.0.17 \
+  --fw-version=18.3.0 \
+  --kmd-version=1.34 \
+  --no-install-podman \
+  --no-install-metalium-container
 ```
 
-- Update TT-Firmware:
+- For more information visit Tenstorrent's [TT-Installer GitHub repository](https://github.com/tenstorrent/tt-installer).
 
-  - First, set the appropriate TT-Firmware version per device:
+#### Option 2: Manual Installation
+- For more control over each stack component, refer to the [manual software dependencies installation guide.](https://docs.tenstorrent.com/getting-started/manual-software-install.html)
 
-  | Device                        | Command                                                    |
-  |-------------------------------|------------------------------------------------------------|
-  | Blackhole                     | ```fw_tag=v80.18.0.0 fw_pack=fw_pack-80.18.0.0.fwbundle``` |
-  | Galaxy (6U) / Wormhole / T300 | ```fw_tag=v80.17.0.0 fw_pack=fw_pack-80.17.0.0.fwbundle``` |
+## TT-NN / TT-Metalium Installation
 
-  - Then Download and install TT-Firmware:
-
-  ```
-  wget https://github.com/tenstorrent/tt-firmware/raw/refs/tags/$fw_tag/$fw_pack
-  tt-flash flash --fw-tar $fw_pack
-  ```
-
-- For more information visit Tenstorrent's [TT-Firmware GitHub Repository](https://github.com/tenstorrent/tt-firmware) and [TT-Flash GitHub Repository](https://github.com/tenstorrent/tt-flash).
-
----
-
-#### Install System Management Interface (TT-SMI)
-- Install Tenstorrent Software Management Interface (TT-SMI) according to the table above. We will use a specific version here as an example:
-```
-pip install git+https://github.com/tenstorrent/tt-smi@v3.0.12
-```
-
-- Verify System Configuration
-
-Once hardware and system software are installed, verify that the system has been configured correctly.
-
-  - Run the TT-SMI utility:
-  ```
-  tt-smi
-  ```
-  A display with device information, telemetry, and firmware will appear:<br>
-
-![image](https://docs.tenstorrent.com/_images/tt_smi.png)
-<br>
-  If the tool runs without error, your system has been configured correctly.
-
-- For more information, visit Tenstorrent's [TT-SMI GitHub repository](https://github.com/tenstorrent/tt-smi).
-
----
-
-#### (Optional) Multi-Card Configuration (TT-Topology)
-
-> [!CAUTION]
-> Be sure to align the topology version with the compatible version in the table above for your particular configuration.
-
-- For TT-Loudbox or TT-QuietBox systems, visit Tenstorrent's [TT-Topology README](https://github.com/tenstorrent/tt-topology/blob/main/README.md).
-
----
-
-### TT-NN / TT-Metalium Installation
-
-#### There are four options for installing TT-Metalium:
+### There are four options for installing TT-Metalium:
 
 - [Option 1: From Binaries](#binaries)
 
@@ -230,13 +150,18 @@ ninja
 ninja install # Installs to build directory by default, required for Python environment
 ```
 
-#### Step 3. Create a virtual environment and (optional) documentation.
+#### Step 3. Virtual Environment Setup
 
-- (recommended) For an out-of-the-box virtual environment to use, execute:
+- (Optional) Specify existing python envirionment:
+```
+export PYTHON_ENV_DIR=<path_to_your_env_directory>
+```
+- Run the script to set up your Python environment:
 ```
 ./create_venv.sh
 source python_env/bin/activate
 ```
+Note: If `PYTHON_ENV_DIR` is not set, the script creates a new virtual environment in `./python_env`
 
 - Continue to [You Are All Set!](#you-are-all-set)
 
@@ -254,11 +179,9 @@ All binaries support only Linux and distros with glibc 2.34 or newer.
   conda create -n metalium python=3.10 tt-metalium -c conda-forge
   ```
 
----
+## You are All Set!
 
-### You are All Set!
-
-#### To verify your installation (for source or wheel installation only), try executing a programming example:
+### To verify your installation (for source or wheel installation only), try executing a programming example:
 
 - First, set the following environment variables:
 
@@ -274,12 +197,16 @@ All binaries support only Linux and distros with glibc 2.34 or newer.
 
 - For more programming examples to try, visit Tenstorrent's [TT-NN Basic Examples Page](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [Simple Kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/examples/index.html)
 
----
 
 ### Interested in Contributing?
 - For more information on development and contributing, visit Tenstorrent's [CONTRIBUTING.md page](https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md).
 
 ---
+
+### Multi-Card Configuration (TT-Topology)
+TT-Topology can be used to specify different eth routing configurations for some multi-card systems such as **TT-Loudbox** and **TT-QuietBox**.
+
+- For more information, visit Tenstorrent's [TT-Topology README](https://github.com/tenstorrent/tt-topology/blob/main/README.md).
 
 ## Virtual Machine Requirements
 

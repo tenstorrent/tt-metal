@@ -73,24 +73,24 @@ struct BufferStressTestConfig {
 
 class BufferStressTestConfigSharded {
 public:
-    uint32_t seed;
+    uint32_t seed{};
     uint32_t num_iterations = 100;
 
     const std::array<uint32_t, 2> max_num_pages_per_core;
     const std::array<uint32_t, 2> max_num_cores;
 
-    std::array<uint32_t, 2> num_pages_per_core;
-    std::array<uint32_t, 2> num_cores;
+    std::array<uint32_t, 2> num_pages_per_core{};
+    std::array<uint32_t, 2> num_cores{};
     std::array<uint32_t, 2> page_shape = {32, 32};
     uint32_t element_size = 1;
     TensorMemoryLayout mem_config = TensorMemoryLayout::HEIGHT_SHARDED;
     ShardOrientation shard_orientation = ShardOrientation::ROW_MAJOR;
 
     BufferStressTestConfigSharded(std::array<uint32_t, 2> pages_per_core, std::array<uint32_t, 2> cores) :
-        max_num_pages_per_core(pages_per_core), max_num_cores(cores) {
-        this->num_pages_per_core = pages_per_core;
-        this->num_cores = cores;
-    }
+        max_num_pages_per_core(pages_per_core),
+        max_num_cores(cores),
+        num_pages_per_core(pages_per_core),
+        num_cores(cores) {}
 
     std::array<uint32_t, 2> tensor2d_shape_in_pages() {
         return {num_pages_per_core[0] * num_cores[0], num_pages_per_core[1] * num_cores[1]};

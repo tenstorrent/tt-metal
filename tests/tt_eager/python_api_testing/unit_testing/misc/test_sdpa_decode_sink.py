@@ -10,6 +10,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
+from models.utility_functions import skip_for_blackhole
 
 
 def flash_decode_sdpa(Q, K_cache, V_cache, sink, sm_scale, sliding_window=0, block_size=128):
@@ -289,6 +290,7 @@ def run_sdpa_decode_impl(
     ), f"Expected {expected_num_program_cache_entries} program cache entries, got {num_program_cache_entries}."
 
 
+@skip_for_blackhole("Failing on Blackhole, Issue #27193")
 @pytest.mark.parametrize(
     "batch, seq_len, nh, nkv, dim",
     [

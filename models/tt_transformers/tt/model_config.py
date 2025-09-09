@@ -27,6 +27,8 @@ from models.tt_transformers.tt.common import (
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_meta_to_hf,
+    convert_vision_hf_to_meta,
+    convert_vision_meta_to_hf,
     load_hf_state_dict,
     load_meta_state_dict,
     reverse_permute,
@@ -69,6 +71,7 @@ class OpGroup(Enum):
     LI_QKV_PREFILL = "li_qkv_prefill"
     LI_O_PREFILL = "li_o_prefill"
     SDPA_PREFILL = "sdpa_prefill"
+    ACCURACY = "accuracy"  # This is a special group for accuracy mode, not an actual operator group
 
 
 class MathFidelitySetting(Enum):
@@ -77,6 +80,7 @@ class MathFidelitySetting(Enum):
     HIFI2_NA = "hifi2na"  # na specified `packer_l1_acc=False` and `fp32_dest_acc_en=False` in compute kernel config
     HIFI2_FP16 = "hifi2fp16"  # fp16 specified `fp32_dest_acc_en=False` in compute kernel config
     HIFI4 = "hifi4"
+    HIFI4_FP32 = "hifi4fp32"
 
 
 class ModelOptimizations:
@@ -97,23 +101,31 @@ class ModelOptimizations:
                 }
             )
         else:
-            if base_model_name.startswith("Llama-3") or base_model_name.startswith("Mistral-7B"):
+            if (
+                base_model_name.startswith("Llama-3")
+                or base_model_name.startswith("Mistral-7B")
+                or base_model_name.startswith("Phi-3-mini")
+            ):
                 logger.info(
-                    f"Llama 3 and Mistral 7B models test insensitive to attention precision, using BFP8 attention and kv-cache with FP16 MLP accumulation even in accuracy mode"
+                    f"Llama 3, Mistral 7B and Phi3-mini models test insensitive to attention precision, using BFP8 attention and kv-cache with FP16 MLP accumulation even in accuracy mode"
                 )
-                inst = cls(
-                    {
-                        "TensorPrecision": {
-                            TensorGroup.WQKV: PrecisionSetting.BFP8,
-                            TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
-                            TensorGroup.WO: PrecisionSetting.BFP8,
-                        },
-                        "OpFidelity": {
-                            OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
-                            OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
-                        },
-                    }
-                )
+                settings = {
+                    "TensorPrecision": {
+                        TensorGroup.WQKV: PrecisionSetting.BFP8,
+                        TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                        TensorGroup.WO: PrecisionSetting.BFP8,
+                    },
+                    "OpFidelity": {
+                        OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
+                        OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
+                    },
+                }
+                if model_name.startswith("Phi-3-mini"):  # TODO: Only do this for N150
+                    logger.info(
+                        f"Model {model_name} is running out of L1 memory under standard accuracy settings, using FP16 accumulate in attention prefill QKV Matmul"
+                    )
+                    settings["OpFidelity"][OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.HIFI2_FP16
+                inst = cls(settings)
             else:
                 inst = cls(
                     {
@@ -163,12 +175,16 @@ class ModelOptimizations:
                 }
             )
         else:
-            inst = cls(
-                {
-                    "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
-                    "OpFidelity": {OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI},
-                }
-            )
+            settings = {
+                "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
+                "OpFidelity": {OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI},
+            }
+            if model_name.startswith("Phi-3-mini"):  # TODO: Only do this for N150
+                logger.info(
+                    f"Model {model_name} is running out of L1 memory under standard high-performance settings, using FP16 accumulate in attention prefill QKV Matmul"
+                )
+                settings["OpFidelity"][OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.HIFI2_FP16
+            inst = cls(settings)
         inst.__name__ = "performance"
         return inst
 
@@ -248,6 +264,7 @@ class ModelOptimizations:
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
                 OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
                 OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,  # FP32 accumulate is important here
+                OpGroup.ACCURACY: MathFidelitySetting.HIFI4_FP32,
             },
         }
 
@@ -446,6 +463,9 @@ class ModelArgs:
         self.tile_size = 32
         self.is_70b = False
         self.is_90b = False
+        self.fuse_qkv = False
+        self.fuse_mlp = False
+        self.trust_remote_code_hf = False
         self.from_hf_url = False  # updated below if true
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         self.dummy_weights = dummy_weights
@@ -521,6 +541,8 @@ class ModelArgs:
         # Load model params
         if HF_MODEL:
             self.checkpoint_type = CheckpointType.HuggingFace
+            if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
+                self.trust_remote_code_hf = True
             self._set_hf_params(self.CKPT_DIR)
         elif not dummy_weights:
             self.checkpoint_type = self.detect_checkpoint_type()
@@ -564,6 +586,7 @@ class ModelArgs:
                 "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
             }
@@ -584,9 +607,10 @@ class ModelArgs:
             max_prefill_chunk_size_div1024 = int(max_prefill_chunk_size_div1024)
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
-        if (self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B"] and self.device_name == "N150") or (
-            self.base_model_name in ["Qwen2.5-7B"] and self.device_name == "N300"
-        ):
+        if (
+            self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-4b"]
+            and self.device_name == "N150"
+        ) or (self.base_model_name in ["Qwen2.5-7B"] and self.device_name == "N300"):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
 
@@ -619,6 +643,7 @@ class ModelArgs:
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 
         self.tokenizer = None if dummy_weights else self.create_tokenizer()
+        self.processor = None if dummy_weights else self.create_processor()
 
         if device is not None:  # Avoid issue with test_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
@@ -660,6 +685,12 @@ class ModelArgs:
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
+            )
+            self.compute_kernel_config_hifi4_fp32 = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+                dst_full_sync_en=False,
             )
             self.compute_kernel_config_hifi2_na = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -859,7 +890,8 @@ class ModelArgs:
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=max(
-                    1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8)  # 8 rows
+                    1,
+                    8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(
                     self.qkv_size / self.cluster_shape[1] / 32 / dram_shard_grid_width
@@ -1236,7 +1268,10 @@ class ModelArgs:
 
             self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
 
-            self.VISION_MAX_MM_SEQ = nearest_32(self.vision_chunk_ntok)
+            if self.is_multimodal:
+                self.VISION_MAX_MM_SEQ = (
+                    self.vision_chunk_ntok if "gemma-3" in self.base_model_name else nearest_32(self.vision_chunk_ntok)
+                )
 
             # RMS NORM
             self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(attn_input_grid)
@@ -1382,6 +1417,9 @@ class ModelArgs:
         else:
             return ""
 
+    def _get_vision_prefix(self):
+        return "visual."
+
     def _get_hidden_activation_type(self, config):
         activation_map = {
             "gelu": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0),
@@ -1410,14 +1448,24 @@ class ModelArgs:
             self.embed_scale = self.dim**0.5
 
     def _set_params_from_dict(self, config, is_hf=False):
+        eos_token_id = config.get("eos_token_id", None)
+        self.image_token_index = config.get("image_token_index", 262144)
+
         # Try to get text_config, if it doesn't exist everything is text config
         text_config = config.get("text_config", config)
+        self.eos_token_id = None if isinstance(eos_token_id, int) else eos_token_id
+        layer_types = text_config["layer_types"] if "layer_types" in text_config else None
 
         # Common params with different names between Meta and HF
         self.dim = text_config.get("dim", text_config.get("hidden_size"))
         self.n_heads = text_config.get("n_heads", text_config.get("num_attention_heads"))
         self.n_kv_heads = text_config.get("n_kv_heads", text_config.get("num_key_value_heads"))
         self.n_layers = text_config.get("n_layers", text_config.get("num_hidden_layers"))
+
+        self.sliding_window_pattern = (
+            [lt == "sliding_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
+        )
+
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
@@ -1491,34 +1539,23 @@ class ModelArgs:
         self.rope_theta_local = text_config.get("rope_local_base_freq", None)
 
         rope_scaling_params = text_config.get("rope_scaling", None)
-        self.rope_scaling = rope_scaling_model_factory(rope_scaling_params) if rope_scaling_params else None
+        self.original_max_context_len = text_config.get("original_max_position_embeddings", None)
+        self.rope_scaling = (
+            rope_scaling_model_factory(rope_scaling_params, original_max_context_len=self.original_max_context_len)
+            if rope_scaling_params
+            else None
+        )
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
-        # Vision params (Meta-specific)
-        self.vision_chunk_size = config.get("vision_chunk_size", -1)
-        self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = config.get("vision_num_cross_attention_layers", -1)
-
-        # Vision constants
-        self.vision_dim = 1280
-        self.vision_mlp_ratio = 4
-        self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
-        self.vision_act_layer = ttnn.UnaryOpType.GELU
-        self.vision_dropout = 0.0
-        self.vision_attn_n_heads = 16
-        self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
-        self.vision_n_layers = 32
-        self.vision_n_global_layers = 8
-        self.vision_max_num_tiles = 4
-        self.vision_patch_size = 14
-        self.vision_in_channels = 3
+        self._set_vision_params(config)
+        self.is_multimodal = "vision_config" in config or self.is_vision()
 
         self.state_dict_text_prefix = self._get_text_prefix()
-        self.is_multimodal = "vision_config" in config or self.is_vision()
+        self.state_dict_vision_prefix = self._get_vision_prefix()
 
         self._set_model_specific_params()
 
@@ -1591,6 +1628,40 @@ class ModelArgs:
             else None
         )
 
+    def _set_vision_params(self, config):
+        vision_config = config.get("vision_config", config)
+
+        self.vision_chunk_size = vision_config.get("vision_chunk_size", -1)
+        self.image_size = vision_config.get("image_size", 896)
+        self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
+        self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", -1)
+        self.vision_dim = vision_config.get("hidden_size", 1280)
+
+        intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
+        self.vision_mlp_ratio = intermediate_size // self.vision_dim
+        self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
+        self.vision_attn_n_heads = vision_config.get("num_attention_heads", 16)
+        self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
+
+        self.vision_n_layers = vision_config.get("num_hidden_layers", 32)
+        self.vision_patch_size = vision_config.get("patch_size", 14)
+        self.vision_in_channels = vision_config.get("num_channels", 3)
+
+        self.vision_dropout = vision_config.get("attention_dropout", 0.0)
+        self.mm_tokens_per_image = vision_config.get("mm_tokens_per_image", 256)
+
+        # Optional vision activation layer, defaults to GELU
+        act_layer = vision_config.get("act_layer", "gelu").lower()
+        self.vision_act_layer = {
+            "gelu": ttnn.UnaryOpType.GELU,
+            "relu": ttnn.UnaryOpType.RELU,
+            "silu": ttnn.UnaryOpType.SILU,
+        }.get(act_layer, ttnn.UnaryOpType.GELU)
+
+        # Optional tuning knobs
+        self.vision_max_num_tiles = vision_config.get("max_num_tiles", 4)
+        self.vision_n_global_layers = vision_config.get("n_global_layers", 8)
+
     def _set_hf_params(self, checkpoint_dir):
         if self.from_hf_url:
             # Special case Qwen2.5-VL models until they are fully integrated into a HF release
@@ -1603,9 +1674,11 @@ class ModelArgs:
                 logger.info(
                     f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}"
                 )
-                self.hf_config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+                self.hf_config = AutoConfig.from_pretrained(
+                    self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
+                )
             else:
-                self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR)
+                self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf)
 
             config = self.hf_config.to_dict()
         else:
@@ -1634,19 +1707,34 @@ class ModelArgs:
     vision_num_cross_attention_layers={self.vision_num_cross_attention_layers}
 )"""
 
+    # TODO: Rename to is_llama_vision
     def is_vision(self):
         return self.vision_chunk_size > 0
 
-    def get_state_dict_prefix(self, module_name, layer_num):
+    def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         text_prefix = self.state_dict_text_prefix
+        vision_prefix = self.state_dict_vision_prefix
+
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
-        module_map = {
+
+        text_module_map = {
             "MLP": "feed_forward",
             "Attention": "attention",
             "TransformerBlock": "",
             "": "",  # If no module is given, just get layer prefix
         }
-        return text_prefix + layer_prefix + module_map[module_name]
+
+        vision_module_map = {
+            "MLP": "mlp.",
+            "Attention": "self_attn.",
+            "TransformerBlock": "",
+            "": "",
+        }
+
+        module_map = vision_module_map if is_vision else text_module_map
+        prefix = vision_prefix if is_vision else text_prefix
+
+        return prefix + layer_prefix + module_map[module_name]
 
     def weight_cache_path(self, dtype):
         # Keep the weight cache separate for generative and instruct weights
@@ -1669,10 +1757,12 @@ class ModelArgs:
             if self.checkpoint_type == CheckpointType.HuggingFace:
                 from transformers import AutoConfig, AutoModelForCausalLM
 
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+                config = AutoConfig.from_pretrained(
+                    self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
+                )
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+                model = AutoModelForCausalLM.from_config(config, trust_remote_code=self.trust_remote_code_hf)
                 state_dict = model.state_dict()
             else:
                 reference_model = Transformer(self)
@@ -1696,7 +1786,8 @@ class ModelArgs:
 
                 model = AutoModelForCausalLM.from_pretrained(
                     self.CKPT_DIR,
-                    torch_dtype="auto"
+                    torch_dtype="auto",
+                    trust_remote_code=self.trust_remote_code_hf
                     # Note that the default setting is torch.dtype.float32, but model weights are
                     # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                     # unnecessary cast.
@@ -1710,9 +1801,12 @@ class ModelArgs:
         if self.checkpoint_type == CheckpointType.HuggingFace:
             if self.is_multimodal:
                 state_dict = standardize_hf_keys_multimodal(state_dict)
+                state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
             else:
+                self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
+                self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
                 state_dict = standardize_hf_keys(state_dict)
-            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+                state_dict = convert_hf_to_meta(state_dict, self.head_dim)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
@@ -2051,6 +2145,7 @@ class ModelArgs:
             # Mapping of base model names to their known tokenizer paths
             # These are the original models that have proper tokenizers
             base_model_tokenizer_mapping = {
+                "gemma-3-4b-it": "google/gemma-3-4b-it",
                 "Qwen2.5-0.5B": "Qwen/Qwen2.5-Coder-0.5B-Instruct",
                 "Qwen2.5-1.5B": "Qwen/Qwen2.5-1.5B-Instruct",
                 "Qwen2.5-3B": "Qwen/Qwen2.5-3B-Instruct",
@@ -2065,6 +2160,7 @@ class ModelArgs:
                 "Llama-3.2-11B": "meta-llama/Llama-3.2-11B-Vision-Instruct",
                 "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
                 "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
+                "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
             }
 
             logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
@@ -2108,6 +2204,12 @@ class ModelArgs:
                         fallback_tokenizer_path = "meta-llama/Llama-3.2-3B-Instruct"
                     elif "mistral" in model_name_lower and "7b" in model_name_lower:
                         fallback_tokenizer_path = "mistralai/Mistral-7B-Instruct-v0.3"
+                    elif (
+                        "phi-3-mini" in model_name_lower
+                        and "128k" in model_name_lower
+                        and "instruct" in model_name_lower
+                    ):
+                        fallback_tokenizer_path = "microsoft/Phi-3-mini-128k-instruct"
 
                 if fallback_tokenizer_path:
                     logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
@@ -2124,7 +2226,23 @@ class ModelArgs:
             # Add meta-compatible stop token list to the HF tokenizer
             if not "stop_tokens" in tokenizer.__dict__:
                 tokenizer.stop_tokens = [tokenizer.eos_token_id]
+                # Phi-3-mini uses "<|end|>" as EOS token
+                if "phi-3-mini" in self.base_model_name.lower():
+                    tokenizer.stop_tokens.append(tokenizer.encode("<|end|>")[0])
             return tokenizer
+
+    def create_processor(self):
+        processor = None
+        if self.checkpoint_type == CheckpointType.HuggingFace:
+            from transformers import AutoProcessor
+
+            try:
+                processor = AutoProcessor.from_pretrained(self.TOKENIZER_PATH)
+                logger.info(f"Successfully loaded processor from {self.TOKENIZER_PATH}")
+            except Exception as e:
+                logger.warning(f"Failed to load processor from {self.TOKENIZER_PATH}: {e}")
+
+        return processor
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
         if self.checkpoint_type == CheckpointType.Meta:
@@ -2175,19 +2293,31 @@ class ModelArgs:
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
             if self.dummy_weights and not load_checkpoint:
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+                config = AutoConfig.from_pretrained(
+                    self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
+                )
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+                model = AutoModelForCausalLM.from_config(config, trust_remote_code=self.trust_remote_code_hf)
             else:
-                if self.cache_hf_flag and self.cached_hf_model is None:
-                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                    self.cached_hf_model = model
-                elif self.cache_hf_flag and self.cached_hf_model is not None:
-                    model = self.cached_hf_model
+                if "gemma-3" in self.model_name:
+                    from transformers import Gemma3ForConditionalGeneration
+
+                    model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR, device_map="auto")
+                    model = model
                 else:
-                    # No caching - load fresh each time
-                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                    if self.cache_hf_flag and self.cached_hf_model is None:
+                        model = AutoModelForCausalLM.from_pretrained(
+                            self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf
+                        )
+                        self.cached_hf_model = model
+                    elif self.cache_hf_flag and self.cached_hf_model is not None:
+                        model = self.cached_hf_model
+                    else:
+                        # No caching - load fresh each time
+                        model = AutoModelForCausalLM.from_pretrained(
+                            self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf
+                        )
                 # HACK: Assume that we want the language model layers only
                 if hasattr(model, "language_model"):
                     model.model = model.language_model
@@ -2198,6 +2328,20 @@ class ModelArgs:
                 return wrapper
             else:
                 return model
+
+    def reference_vision_multi_modal(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.multi_modal_projector
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_rms_norm(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.multi_modal_projector.mm_soft_emb_norm
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
 
     def reference_rms_norm(self):
         if self.checkpoint_type == CheckpointType.Meta:
@@ -2211,6 +2355,109 @@ class ModelArgs:
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
             return layer
 
+    def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
+        if self.checkpoint_type == CheckpointType.HuggingFace:
+            from transformers import AutoConfig, AutoModelForCausalLM
+
+            if self.dummy_weights and not load_checkpoint:
+                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+                config.num_layers = self.n_layers
+                config.num_hidden_layers = self.n_layers
+                model = AutoModelForCausalLM.from_config(config)
+            else:
+                if "gemma-3" in self.model_name:
+                    from transformers import Gemma3ForConditionalGeneration
+
+                    model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
+                    model = model
+                else:
+                    if self.cached_hf_model is None:
+                        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                        self.cached_hf_model = model
+                    else:
+                        model = self.cached_hf_model
+                    model.model.layers = model.model.layers[: self.n_layers]
+            if wrap:
+                wrapper = HfModelWrapper(model, self.head_dim)
+                return wrapper
+            else:
+                return model
+
+    def reference_gemma_model(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_model(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.vision_model
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_mlp(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.vision_model.encoder.layers[0].mlp
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_siglip_patch_embed(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.vision_model.embeddings.patch_embedding
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_pos_embedding(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.vision_model.embeddings.position_embedding
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_embedding(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.vision_model.embeddings
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_layernorm(self, layer_name="layer_norm1"):
+        model = self.reference_vision_transformer(wrap=False)
+        if layer_name == "layer_norm1":
+            layer = model.vision_tower.vision_model.encoder.layers[0].layer_norm1
+        elif layer_name == "layer_norm2":
+            layer = model.vision_tower.vision_model.encoder.layers[0].layer_norm2
+        else:
+            layer = model.vision_tower.vision_model.post_layernorm
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_attention(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.vision_model.encoder.layers[0].self_attn  # Common naming
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_encoder_block(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.vision_model.encoder.layers[0]
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_encoder(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.vision_model.encoder
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
     def reference_mlp(self):
         if self.checkpoint_type == CheckpointType.Meta:
             from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedForward
@@ -2220,7 +2467,9 @@ class ModelArgs:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].mlp
             layer._load_state_dict = layer.load_state_dict
-            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+            layer.load_state_dict = lambda x: layer._load_state_dict(
+                convert_meta_to_hf(x, self.head_dim, fuse_mlp=self.fuse_mlp)
+            )
             return layer
 
     def reference_embedding(self, reference_model=None):
@@ -2247,7 +2496,15 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
+            use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer"
+            model_name_env = os.getenv("HF_MODEL")
+            if hasattr(model.model, "rotary_emb_local"):
+                rotary_emb_local = model.model.rotary_emb_local
+            else:
+                rotary_emb_local = None
+            wrapper = HfDecoderWrapper(
+                layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None, rotary_emb_local
+            )
             return wrapper
 
     def reference_attention(self):
@@ -2258,7 +2515,11 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            use_position_embeddings = layer.__class__.__name__ in ("Qwen3Attention", "MistralAttention")
+            use_position_embeddings = layer.__class__.__name__ in (
+                "Qwen3Attention",
+                "MistralAttention",
+                "Gemma3Attention",
+            )
             wrapper = HfAttentionWrapper(
                 layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
             )
@@ -2385,7 +2646,11 @@ class HfAttentionWrapper:
         return self.forward(*args, **kwargs)
 
     def load_state_dict(self, state_dict):
-        return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
+        try:  # Checking for fused qkv layer
+            fuse_qkv = hasattr(self.attention, "qkv_proj")
+        except:
+            fuse_qkv = False
+        return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv))
 
     @property
     def cache_k(self):
@@ -2412,29 +2677,46 @@ class HfAttentionWrapper:
 
 
 class HfDecoderWrapper:
-    def __init__(self, decoder, head_dim, rotary_emb):
+    def __init__(self, decoder, head_dim, rotary_emb, rotary_emb_local=None):
         from transformers import DynamicCache
 
         self.decoder = decoder
         self.head_dim = head_dim
         self.rotary_emb = rotary_emb
+        self.rotary_emb_local = rotary_emb_local
         self.past_key_values = DynamicCache()
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-        position_embeddings = self.rotary_emb(x, position_ids)
+        position_embeddings = None
+        if self.rotary_emb is not None:
+            position_embeddings = self.rotary_emb(x, position_ids)
 
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
-        result = self.decoder.forward(
-            x,
-            position_embeddings=position_embeddings,
-            past_key_value=self.past_key_values,
-            use_cache=True,
-            position_ids=position_ids,
-            attention_mask=mask,
-        )
+
+        if self.rotary_emb_local is not None:
+            position_embeddings_local = self.rotary_emb_local(x, position_ids)
+            result = self.decoder.forward(
+                x,
+                position_embeddings_global=position_embeddings,
+                position_embeddings_local=position_embeddings_local,
+                past_key_value=self.past_key_values,
+                use_cache=True,
+                position_ids=position_ids,
+                attention_mask=mask,
+            )
+        else:
+            result = self.decoder.forward(
+                x,
+                position_embeddings=position_embeddings,
+                past_key_value=self.past_key_values,
+                use_cache=True,
+                position_ids=position_ids,
+                attention_mask=mask,
+            )
+
         output = result[0]
         return output
 
@@ -2442,7 +2724,12 @@ class HfDecoderWrapper:
         return self.forward(*args, **kwargs)
 
     def load_state_dict(self, state_dict):
-        return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
+        try:  # Checking for fused qkv and mlp layers
+            fuse_qkv = hasattr(self.decoder.self_attn, "qkv_proj")
+            fuse_mlp = hasattr(self.decoder.mlp, "gate_up_proj")
+        except:
+            fuse_qkv, fuse_mlp = False, False
+        return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
 
 
 class HfModelWrapper:
@@ -2472,7 +2759,12 @@ class HfModelWrapper:
         return self.forward(*args, **kwargs)
 
     def load_state_dict(self, state_dict):
-        return self.model.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
+        try:  # Checking for fused qkv and mlp layers
+            fuse_qkv = hasattr(self.model.model.layers[0].self_attn, "qkv_proj")
+            fuse_mlp = hasattr(self.model.model.layers[0].mlp, "gate_up_proj")
+        except:
+            fuse_qkv, fuse_mlp = False, False
+        return self.model.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
 
     def eval(self):
         self.model.eval()
@@ -2540,6 +2832,7 @@ class DecodersPrecision:
             MathFidelitySetting.HIFI2_NA: configuration.compute_kernel_config_hifi2_na,
             MathFidelitySetting.HIFI2_FP16: configuration.compute_kernel_config_hifi2_fp16,
             MathFidelitySetting.HIFI4: configuration.compute_kernel_config_hifi4,
+            MathFidelitySetting.HIFI4_FP32: configuration.compute_kernel_config_hifi4_fp32,
         }
         return math_fidelity_setting_lookup[self.decoder_optimizations[decoder_id].op_fidelity_settings[op]]
 

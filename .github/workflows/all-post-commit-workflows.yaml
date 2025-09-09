@@ -87,6 +87,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      gtest_filter: "*-*NIGHTLY_*"
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
     needs: build-artifact
@@ -175,6 +176,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      gtest_filter: "*-*NIGHTLY_*"
   tt-train-cpp-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -227,7 +229,7 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-  t3000-fast-tests:
+  t3000-apc-fast-tests:
     if: ${{ github.event.pull_request.head.repo.fork == false }}
     needs: build-artifact
     secrets: inherit
@@ -236,7 +238,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  tg-demo-apc-tests:
+  galaxy-apc-fast-tests:
     if: ${{ github.event.pull_request.head.repo.fork == false }}
     needs: build-artifact
     secrets: inherit
@@ -244,14 +246,15 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: in-service-dedicated-apc },
+          { arch: wormhole_b0, runner-label: in-service, topology: topology-6u },
         ]
-    uses: ./.github/workflows/tg-demo-all-post-commit-impl.yaml
+    uses: ./.github/workflows/galaxy-apc-fast-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       runner-label: ${{ matrix.test-group.runner-label }}
+      topology: ${{ matrix.test-group.topology }}
   build-docs:
     needs: build-artifact
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}

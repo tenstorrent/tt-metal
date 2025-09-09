@@ -78,10 +78,10 @@ def main():
         default=[],
     )
     parser.add_option(
-        "--push-device-data-mid-run",
+        "--dump-device-data-mid-run",
         dest="mid_run_device_data",
         action="store_true",
-        help="Push collected device data to Tracy GUI mid-run",
+        help="Dump collected device data to files and push to Tracy GUI mid-run",
         default=False,
     )
     parser.add_option(
@@ -144,6 +144,14 @@ def main():
     else:
         port = get_available_port()
 
+    if options.mid_run_device_data:
+        if options.device_trace_profiler:
+            logger.error("Cannot use --dump-device-data-mid-run and --device-trace-profiler together")
+            sys.exit(1)
+        if options.profile_dispatch_cores:
+            logger.error("Cannot use --dump-device-data-mid-run and --profile-dispatch-cores together")
+            sys.exit(1)
+
     opInfoCacheStr = "TT_METAL_PROFILER_NO_CACHE_OP_INFO"
     if options.opInfoCache:
         if opInfoCacheStr in os.environ.keys():
@@ -155,7 +163,7 @@ def main():
         os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "1"
 
     if options.mid_run_device_data:
-        os.environ["TT_METAL_TRACY_MID_RUN_PUSH"] = "1"
+        os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
 
     if options.sync_host_device:
         os.environ["TT_METAL_PROFILER_SYNC"] = "1"

@@ -5,12 +5,8 @@
 #define COMPILE_FOR_IDLE_ERISC
 
 #include "dev_msgs.h"
-#include <algorithm>
-#include <cstddef>
 #include <cstdint>
-#include <vector>
 
-#include "core_config.h"
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
 #include "llrt_common/mailbox.hpp"
@@ -24,8 +20,16 @@
 
 namespace tt::tt_metal::wormhole {
 
+// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
+#include "core_config.h"
+
+// This file is intended to be wrapped inside arch/core-specific namespace.
+namespace idle_eth_dev_msgs {
+#include "hal/generated/dev_msgs_impl.hpp"
+}
+
 HalCoreInfoType create_idle_eth_mem_map() {
-    std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
+    constexpr std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
     static_assert(MEM_IERISC_MAP_END % L1_ALIGNMENT == 0);
 
@@ -95,7 +99,8 @@ HalCoreInfoType create_idle_eth_mem_map() {
         mem_map_sizes,
         fw_mailbox_addr,
         false /*supports_cbs*/,
-        false /*supports_receiving_multicast_cmds*/};
+        false /*supports_receiving_multicast_cmds*/,
+        idle_eth_dev_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::wormhole

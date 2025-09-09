@@ -143,7 +143,6 @@ void directed_ideal_test(
     CoreCoord master_core_coord,
     CoreCoord subordinate_core_coord,
     NOC noc_id = NOC::RISCV_1_default) {
-    IDevice* device = mesh_device->get_device(0);
     // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
@@ -316,7 +315,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneVirtualChannels) {
     GTEST_SKIP() << "Skipping test";
     // Test ID (Arbitrary)
-    uint32_t test_id = 151;
+    uint32_t test_id = 152;
 
     unit_tests::dm::core_from_core::virtual_channels_test(
         get_mesh_device(),
@@ -328,7 +327,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneVirtualChannels) {
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromOneCustom) {
     GTEST_SKIP() << "Skipping test";
-    uint32_t test_id = 160;
+    uint32_t test_id = 153;
 
     // Parameters
     uint32_t num_of_transactions = 256;

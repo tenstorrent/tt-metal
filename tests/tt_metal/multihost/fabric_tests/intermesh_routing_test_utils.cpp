@@ -10,7 +10,7 @@
 
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
+#include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -36,7 +36,7 @@ struct WorkerMemMap {
 };
 
 // Utility function reused across tests to get address params
-WorkerMemMap generate_worker_mem_map(tt_metal::IDevice* device) {
+WorkerMemMap generate_worker_mem_map(std::shared_ptr<tt_metal::distributed::MeshDevice> device) {
     constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
     constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
 
@@ -94,10 +94,10 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
     );
     // Randomly select a tx device
     auto random_dev = std::uniform_int_distribution<uint32_t>(0, devices.size() - 1)(global_rng);
-    auto src_physical_device_id = devices[random_dev]->id();
+    auto src_physical_device_id = devices[random_dev]->get_devices()[0]->id();
     auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
     auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-    auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
+    const auto& sender_device = devices[random_dev];
     // Randomly select a tx core
     const auto& worker_grid_size = sender_device->compute_with_storage_grid_size();
     auto sender_x = std::uniform_int_distribution<uint32_t>(0, worker_grid_size.x - 2)(global_rng);
@@ -169,7 +169,7 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
     std::vector<uint32_t> sender_status;
 
     tt_metal::detail::ReadFromDeviceL1(
-        sender_device,
+        sender_device->get_devices()[0],
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -216,9 +216,9 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
 
     // Randomly select an rx device
     auto random_dev = std::uniform_int_distribution<uint32_t>(0, devices.size() - 1)(global_rng);
-    auto dst_physical_device_id = devices[random_dev]->id();
+    auto dst_physical_device_id = devices[random_dev]->get_devices()[0]->id();
     auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
-    auto* receiver_device = DevicePool::instance().get_active_device(dst_physical_device_id);
+    const auto& receiver_device = devices[random_dev];
 
     // Randomly select an rx core
     const auto& worker_grid_size = receiver_device->compute_with_storage_grid_size();
@@ -259,7 +259,7 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
     std::vector<uint32_t> receiver_status;
 
     tt_metal::detail::ReadFromDeviceL1(
-        receiver_device,
+        receiver_device->get_devices()[0],
         receiver_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -310,7 +310,7 @@ void run_mcast_sender_step(
     );
     // Randomly select a mcast sender device
     auto sender_phys_id = control_plane.get_physical_chip_id_from_fabric_node_id(mcast_sender_node);
-    auto sender_device = DevicePool::instance().get_active_device(sender_phys_id);
+    auto sender_device = fixture->get_device(sender_phys_id);
     const auto& worker_grid_size = sender_device->compute_with_storage_grid_size();
     // Randomly select a mcast sender core
     auto sender_x = std::uniform_int_distribution<uint32_t>(0, worker_grid_size.x - 2)(global_rng);
@@ -376,7 +376,7 @@ void run_mcast_sender_step(
     // Validate status of sender
     std::vector<uint32_t> sender_status;
     tt_metal::detail::ReadFromDeviceL1(
-        sender_device,
+        sender_device->get_devices()[0],
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -426,7 +426,7 @@ void run_mcast_recv_step(
     );
     // Query the mcast start device
     auto mcast_start_phys_id = control_plane.get_physical_chip_id_from_fabric_node_id(mcast_start_node);
-    auto mcast_start_device = DevicePool::instance().get_active_device(mcast_start_phys_id);
+    auto mcast_start_device = fixture->get_device(mcast_start_phys_id);
 
     // Randomly select an mcast receiver core
     const auto& worker_grid_size = mcast_start_device->compute_with_storage_grid_size();
@@ -440,11 +440,11 @@ void run_mcast_recv_step(
         tt::tt_metal::distributed::multihost::Tag{0}              // exchange logical core over tag 0
     );
     // Query the mcast group devices
-    std::vector<tt_metal::IDevice*> mcast_group_devices = {};
+    std::vector<std::shared_ptr<tt_metal::distributed::MeshDevice>> mcast_group_devices = {};
     mcast_group_devices.reserve(mcast_group_node_ids.size());
     for (auto mcast_node_id : mcast_group_node_ids) {
-        mcast_group_devices.push_back(DevicePool::instance().get_active_device(
-            control_plane.get_physical_chip_id_from_fabric_node_id(mcast_node_id)));
+        mcast_group_devices.push_back(
+            fixture->get_device(control_plane.get_physical_chip_id_from_fabric_node_id(mcast_node_id)));
     }
     // Test parameters
     auto worker_mem_map = generate_worker_mem_map(mcast_start_device);
@@ -455,7 +455,8 @@ void run_mcast_recv_step(
         worker_mem_map.test_results_address, worker_mem_map.test_results_size_bytes, target_address, false};
 
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
-    std::unordered_map<tt_metal::IDevice*, std::shared_ptr<tt_metal::Program>> recv_programs;
+    std::unordered_map<std::shared_ptr<tt_metal::distributed::MeshDevice>, std::shared_ptr<tt_metal::Program>>
+        recv_programs;
 
     recv_programs[mcast_start_device] =
         create_receiver_program(compile_time_args, receiver_runtime_args, receiver_logical_core);
@@ -463,11 +464,13 @@ void run_mcast_recv_step(
         recv_programs[dev] = create_receiver_program(compile_time_args, receiver_runtime_args, receiver_logical_core);
     }
     // Run the mcast receiver programs
+    // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, recv_program] : recv_programs) {
         log_debug(tt::LogTest, "Run receiver on: {}", dev->id());
         fixture->RunProgramNonblocking(dev, *recv_program);
     }
 
+    // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, recv_program] : recv_programs) {
         fixture->WaitForSingleProgramDone(dev, *recv_program);
     }
@@ -480,10 +483,11 @@ void run_mcast_recv_step(
         tt::tt_metal::distributed::multihost::Tag{0}              // exchange tests results over tag 0
     );
 
+    // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, _] : recv_programs) {
         std::vector<uint32_t> receiver_status;
         tt_metal::detail::ReadFromDeviceL1(
-            dev,
+            dev->get_devices()[0],
             receiver_logical_core,
             worker_mem_map.test_results_address,
             worker_mem_map.test_results_size_bytes,

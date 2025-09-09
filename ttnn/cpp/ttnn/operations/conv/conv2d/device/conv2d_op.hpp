@@ -166,7 +166,8 @@ enum class OptimizedConvOpParallelizationStrategy { MULTI_CORE, MULTI_CORE_REUSE
 struct OptimizedConvParallelizationConfig {
     CoreCoord grid_size;  // (x,y)
     uint32_t num_cores_nhw = 1;
-    uint32_t num_cores_c = 1;
+    uint32_t num_cores_c_in = 1;
+    uint32_t num_cores_c_out = 1;
     uint32_t per_core_out_matrix_height_ntile = 1;
     uint32_t per_core_out_matrix_width_ntile = 1;
 
@@ -244,7 +245,7 @@ struct OptimizedConvNew {
     bool enable_weights_double_buffer;
     bool full_inner_dim;
     bool enable_split_reader;
-    uint32_t pre_op_l1_allocation_size_bytes;
+    uint32_t pre_op_l1_allocation_size_bytes{};
     OptimizedConvNew(
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         uint32_t output_channels,

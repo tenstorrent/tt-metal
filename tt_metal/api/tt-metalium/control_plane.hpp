@@ -21,6 +21,13 @@
 #include <vector>
 
 namespace tt::tt_fabric {
+// TODO: remove this once UMD provides API for UBB ID
+ struct UbbId {
+     std::uint32_t tray_id;
+     std::uint32_t asic_id;
+ };
+
+ UbbId get_ubb_id(chip_id_t chip_id);
 
 class FabricContext;
 
@@ -171,9 +178,6 @@ public:
     // Check if a specific ethernet core is an intermesh link
     bool is_intermesh_eth_link(chip_id_t chip_id, CoreCoord eth_core) const;
 
-    // If the ethernet core is an intermesh link, probe to see if it is trained
-    bool is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord eth_core) const;
-
     // Returns set of logical active ethernet coordinates on chip
     // If skip_reserved_cores is true, will return cores that dispatch is not using,
     // intended for users to grab available eth cores for testing
@@ -280,7 +284,8 @@ private:
 
     // Helper to populate fabric connection info for both router and mux configurations
     void populate_fabric_connection_info(
-        tt::tt_fabric::fabric_connection_info_t& connection_info,
+        tt::tt_fabric::fabric_connection_info_t& worker_connection_info,
+        tt::tt_fabric::fabric_connection_info_t& dispatcher_connection_info,
         tt::tt_fabric::fabric_connection_info_t& tensix_connection_info,
         chip_id_t physical_chip_id,
         chan_id_t eth_channel_id,
@@ -296,10 +301,6 @@ private:
     // TODO: remove once UMD can provide all intermesh links
     // Initialize internal map of physical chip_id to intermesh ethernet links
     void initialize_intermesh_eth_links();
-
-    // TODO: remove once UMD can provide all intermesh links
-    // Check if intermesh links are available by reading SPI ROM config from first chip
-    bool is_intermesh_enabled() const;
 
     void assign_direction_to_fabric_eth_core(
         const FabricNodeId& fabric_node_id, const CoreCoord& eth_core, RoutingDirection direction);

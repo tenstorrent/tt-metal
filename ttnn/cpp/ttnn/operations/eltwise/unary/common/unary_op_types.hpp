@@ -103,6 +103,7 @@ enum class UnaryOpType {
     MAXIMUM,
     MINIMUM,
     TANHSHRINK,
+    THRESHOLD,
     SOFTSHRINK,
     HARDSHRINK,
     HARDTANH,
@@ -111,6 +112,7 @@ enum class UnaryOpType {
     WHERE_TSS,
     SOFTSIGN,
     CELU,
+    CLAMP_TSS,
 };
 
 enum class VecMode {

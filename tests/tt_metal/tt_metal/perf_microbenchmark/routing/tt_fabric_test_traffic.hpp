@@ -421,12 +421,12 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
             const auto max_chunks = NocUnicastScatterWriteFields::MAX_CHUNKS;
             const auto chunk_size = (this->parameters.payload_size_bytes + max_chunks - 1) / max_chunks;
 
-            std::array<uint32_t, max_chunks> dst_addresses;
+            std::array<uint32_t, max_chunks> dst_addresses{};
             for (uint32_t i = 0; i < max_chunks; i++) {
                 dst_addresses[i] = static_cast<uint32_t>(this->target_address + i * chunk_size);
             }
 
-            std::array<uint16_t, max_chunks - 1> chunk_sizes;
+            std::array<uint16_t, max_chunks - 1> chunk_sizes{};
             for (uint32_t i = 0; i < max_chunks - 1; i++) {
                 chunk_sizes[i] = static_cast<uint16_t>(chunk_size);
             }
@@ -493,12 +493,12 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
             const auto max_chunks = NocUnicastScatterWriteFields::MAX_CHUNKS;
             const auto chunk_size = (this->parameters.payload_size_bytes + max_chunks - 1) / max_chunks;
 
-            std::array<uint32_t, max_chunks> dst_addresses;
+            std::array<uint32_t, max_chunks> dst_addresses{};
             for (uint32_t i = 0; i < max_chunks; i++) {
                 dst_addresses[i] = static_cast<uint32_t>(this->target_address + i * chunk_size);
             }
 
-            std::array<uint16_t, max_chunks - 1> chunk_sizes;
+            std::array<uint16_t, max_chunks - 1> chunk_sizes{};
             for (uint32_t i = 0; i < max_chunks - 1; i++) {
                 chunk_sizes[i] = static_cast<uint16_t>(chunk_size);
             }

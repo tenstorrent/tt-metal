@@ -15,6 +15,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -69,13 +70,13 @@ static std::vector<uint32_t> GenerateInputTile(tt::DataFormat data_format) {
         for (int i = 0; i < float_vec.size(); i++) {
             float_vec[i] = 0.012345 * i * (i % 32 == 0 ? -1 : 1);  // Small increments and force negatives for testing
         }
-        u32_vec = pack_fp32_vec_as_bfp8_tiles(float_vec, true, false);
+        u32_vec = pack_as_bfp8_tiles(tt::stl::make_const_span(float_vec), true, false);
     } else if (data_format == tt::DataFormat::Bfp4_b) {
         std::vector<float> float_vec(elements_in_tile);
         for (int i = 0; i < float_vec.size(); i++) {
             float_vec[i] = 0.012345 * i * (i % 16 == 0 ? -1 : 1);  // Small increments and force negatives for testing
         }
-        u32_vec = pack_fp32_vec_as_bfp4_tiles(float_vec, true, false);
+        u32_vec = pack_as_bfp4_tiles(tt::stl::make_const_span(float_vec), true, false);
     } else if (data_format == tt::DataFormat::Int8) {
         std::vector<int8_t> int8_vec(elements_in_tile);
         for (int i = 0; i < int8_vec.size(); i++) {
@@ -220,41 +221,48 @@ static std::string GenerateGoldenOutput(tt::DataFormat data_format, std::vector<
     return expected;
 }
 
-static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data_format) {
+static void RunTest(
+    DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device, tt::DataFormat data_format) {
     // Set up program + CQ, run on just one core
     constexpr CoreCoord core = {0, 0};
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto& cq = mesh_device->mesh_command_queue();
 
     // Create an input CB with the right data format
     uint32_t tile_size = detail::TileSize(data_format);
     CircularBufferConfig cb_src0_config = CircularBufferConfig(tile_size, {{CBIndex::c_0, data_format}})
                                               .set_page_size(CBIndex::c_0, tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
     CircularBufferConfig cb_intermed_config =
         CircularBufferConfig(tile_size, {{CBIndex::c_1, data_format}}).set_page_size(CBIndex::c_1, tile_size);
-    tt_metal::CreateCircularBuffer(program, core, cb_intermed_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_intermed_config);
 
     // Dram buffer to send data to, device will read it out of here to print
-    tt_metal::InterleavedBufferConfig dram_config{
-        .device = device, .size = tile_size, .page_size = tile_size, .buffer_type = tt_metal::BufferType::DRAM};
-    auto src_dram_buffer = CreateBuffer(dram_config);
+    distributed::DeviceLocalBufferConfig dram_config{.page_size = tile_size, .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = tile_size};
+    auto src_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();
 
     // Create kernels on device
     KernelHandle brisc_print_kernel_id = CreateKernel(
-        program,
+        program_,
         tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/print_tile_brisc.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     KernelHandle ncrisc_print_kernel_id = CreateKernel(
-        program,
+        program_,
         tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/print_tile_ncrisc.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     KernelHandle trisc_print_kernel_id = CreateKernel(
-        program,
+        program_,
         tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/print_tile_trisc.cpp",
         core,
@@ -263,9 +271,9 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data
     // BRISC kernel needs dram info via rtargs, every risc needs to know if data is tilized
     bool is_tilized = (data_format == tt::DataFormat::Bfp8_b) || (data_format == tt::DataFormat::Bfp4_b);
     tt_metal::SetRuntimeArgs(
-        program, brisc_print_kernel_id, core, {dram_buffer_src_addr, (std::uint32_t)0, is_tilized});
-    tt_metal::SetRuntimeArgs(program, ncrisc_print_kernel_id, core, {is_tilized});
-    tt_metal::SetRuntimeArgs(program, trisc_print_kernel_id, core, {is_tilized});
+        program_, brisc_print_kernel_id, core, {dram_buffer_src_addr, (std::uint32_t)0, is_tilized});
+    tt_metal::SetRuntimeArgs(program_, ncrisc_print_kernel_id, core, {is_tilized});
+    tt_metal::SetRuntimeArgs(program_, trisc_print_kernel_id, core, {is_tilized});
 
     // Create input tile
     std::vector<uint32_t> u32_vec = GenerateInputTile(data_format);
@@ -277,78 +285,95 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data
     }*/
 
     // Send input tile to dram
-    if (fixture->IsSlowDispatch()) {
-        tt_metal::detail::WriteToBuffer(src_dram_buffer, u32_vec);
-    } else {
-        CommandQueue& cq = device->command_queue();
-        EnqueueWriteBuffer(cq, src_dram_buffer, u32_vec, true);
-    }
+    distributed::WriteShard(cq, src_dram_buffer, u32_vec, zero_coord);
 
     // Run the program
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(mesh_device, workload);
 
     // Check against expected prints
     std::string expected = GenerateGoldenOutput(data_format, u32_vec);
     // log_info(tt::LogTest, "Expected output:\n{}", expected);
-    EXPECT_TRUE(
-        FilesMatchesString(
-            DPrintFixture::dprint_file_name,
-            expected
-        )
-    );
+    EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, expected));
 }
 
-TEST_F(DPrintFixture, TestPrintTilesFloat32) {
-    for (IDevice* device : this->devices_) {
+TEST_F(DPrintMeshFixture, TestPrintTilesFloat32) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, IDevice* device) { RunTest(fixture, device, tt::DataFormat::Float32); }, device);
+            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, tt::DataFormat::Float32);
+            },
+            mesh_device);
     }
 }
-TEST_F(DPrintFixture, TestPrintTilesFloat16_b) {
-    for (IDevice* device : this->devices_) {
+TEST_F(DPrintMeshFixture, TestPrintTilesFloat16_b) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, IDevice* device) { RunTest(fixture, device, tt::DataFormat::Float16_b); }, device);
+            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, tt::DataFormat::Float16_b);
+            },
+            mesh_device);
     }
 }
-TEST_F(DPrintFixture, TestPrintTilesBfp4_b) {
-    for (IDevice* device : this->devices_) {
+TEST_F(DPrintMeshFixture, TestPrintTilesBfp4_b) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, IDevice* device) { RunTest(fixture, device, tt::DataFormat::Bfp4_b); }, device);
+            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, tt::DataFormat::Bfp4_b);
+            },
+            mesh_device);
     }
 }
-TEST_F(DPrintFixture, TestPrintTilesBfp8_b) {
-    for (IDevice* device : this->devices_) {
+TEST_F(DPrintMeshFixture, TestPrintTilesBfp8_b) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, IDevice* device) { RunTest(fixture, device, tt::DataFormat::Bfp8_b); }, device);
+            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, tt::DataFormat::Bfp8_b);
+            },
+            mesh_device);
     }
 }
-TEST_F(DPrintFixture, TestPrintTilesInt8) {
-    for (IDevice* device : this->devices_) {
+TEST_F(DPrintMeshFixture, TestPrintTilesInt8) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, IDevice* device) { RunTest(fixture, device, tt::DataFormat::Int8); }, device);
+            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, tt::DataFormat::Int8);
+            },
+            mesh_device);
     }
 }
-TEST_F(DPrintFixture, TestPrintTilesInt32) {
-    for (IDevice* device : this->devices_) {
+TEST_F(DPrintMeshFixture, TestPrintTilesInt32) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, IDevice* device) { RunTest(fixture, device, tt::DataFormat::Int32); }, device);
+            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, tt::DataFormat::Int32);
+            },
+            mesh_device);
     }
 }
-TEST_F(DPrintFixture, TestPrintTilesUInt8) {
-    for (IDevice* device : this->devices_) {
+TEST_F(DPrintMeshFixture, TestPrintTilesUInt8) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, IDevice* device) { RunTest(fixture, device, tt::DataFormat::UInt8); }, device);
+            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, tt::DataFormat::UInt8);
+            },
+            mesh_device);
     }
 }
-TEST_F(DPrintFixture, TestPrintTilesUInt16) {
-    for (IDevice* device : this->devices_) {
+TEST_F(DPrintMeshFixture, TestPrintTilesUInt16) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, IDevice* device) { RunTest(fixture, device, tt::DataFormat::UInt16); }, device);
+            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, tt::DataFormat::UInt16);
+            },
+            mesh_device);
     }
 }
-TEST_F(DPrintFixture, TestPrintTilesUInt32) {
-    for (IDevice* device : this->devices_) {
+TEST_F(DPrintMeshFixture, TestPrintTilesUInt32) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [&](DPrintFixture* fixture, IDevice* device) { RunTest(fixture, device, tt::DataFormat::UInt32); }, device);
+            [&](DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, tt::DataFormat::UInt32);
+            },
+            mesh_device);
     }
 }

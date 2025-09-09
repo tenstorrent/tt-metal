@@ -3,13 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dev_msgs.h"
-#include <algorithm>
 #include <cstdint>
-#include <cstdlib>
-#include <vector>
 
 #include "assert.hpp"
-#include "core_config.h"
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
 #include "llrt_common/mailbox.hpp"
@@ -22,8 +18,17 @@
 #define GET_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_MAILBOX_BASE)->x))
 
 namespace tt::tt_metal::wormhole {
+
+// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
+#include "core_config.h"
+
+// This file is intended to be wrapped inside arch/core-specific namespace.
+namespace tensix_dev_msgs {
+#include "hal/generated/dev_msgs_impl.hpp"
+}
+
 HalCoreInfoType create_tensix_mem_map() {
-    std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
+    constexpr std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
     std::vector<DeviceAddr> mem_map_bases;
     const uint32_t default_l1_kernel_config_size = 69 * 1024;
@@ -141,7 +146,8 @@ HalCoreInfoType create_tensix_mem_map() {
         mem_map_sizes,
         fw_mailbox_addr,
         true /*supports_cbs*/,
-        true /*supports_receiving_multicast_cmds*/};
+        true /*supports_receiving_multicast_cmds*/,
+        tensix_dev_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::wormhole

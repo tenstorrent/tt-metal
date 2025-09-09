@@ -198,7 +198,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemesNoLoo
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemeSingle) {
     GTEST_SKIP() << "Skipping test";
 
-    uint32_t test_case_id = 110;
+    uint32_t test_case_id = 102;
 
     auto mesh_device = get_mesh_device();
 

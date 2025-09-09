@@ -18,7 +18,6 @@
 #include "ttnn/tensor/storage.hpp"
 
 #include "tt-metalium/mesh_device_view.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
@@ -92,27 +91,15 @@ Tensor::Tensor(
 }
 
 Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
-    Tensor(Storage(HostStorage(std::move(buffer))), std::move(tensor_spec), ReplicateTensor{}, TensorTopology{}) {}
+    Tensor(Storage(HostStorage(std::move(buffer))), std::move(tensor_spec), TensorTopology{}) {}
 
-Tensor::Tensor(
-    Storage storage,
-    TensorSpec tensor_spec,
-    DistributedTensorConfig distributed_tensor_config,
-    TensorTopology tensor_topology) {
-    init(
-        Storage(std::move(storage)),
-        std::move(tensor_spec),
-        std::move(distributed_tensor_config),
-        std::move(tensor_topology));
+Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) {
+    init(Storage(std::move(storage)), std::move(tensor_spec), std::move(tensor_topology));
 }
 
-void Tensor::init(
-    Storage storage,
-    TensorSpec tensor_spec,
-    DistributedTensorConfig distributed_tensor_config,
-    TensorTopology tensor_topology) {
-    tensor_attributes = std::make_shared<TensorAttributes>(
-        std::move(storage), std::move(tensor_spec), std::move(distributed_tensor_config), std::move(tensor_topology));
+void Tensor::init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) {
+    tensor_attributes =
+        std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology));
 
     if (auto* device_storage = std::get_if<DeviceStorage>(&tensor_attributes->get_storage());
         device_storage != nullptr && device_storage->mesh_buffer != nullptr) {
@@ -138,9 +125,7 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
     return *this;
 }
 
-Tensor::Tensor(const Tensor& other) : tensor_id(other.tensor_id), tensor_attributes(other.tensor_attributes) {
-    this->mesh_device_ = other.mesh_device_;
-}
+Tensor::Tensor(const Tensor& other) = default;
 
 Tensor::~Tensor() {
     ZoneScoped;
@@ -206,8 +191,10 @@ Tensor Tensor::from_span<float>(
             auto physical_data = tensor_impl::encode_tensor_data(buffer, spec, pad_value);
             std::vector<uint32_t> packed_block_floats =
                 spec.data_type() == DataType::BFLOAT8_B
-                    ? pack_fp32_vec_as_bfp8_tiles(physical_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile)
-                    : pack_fp32_vec_as_bfp4_tiles(physical_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
+                    ? pack_as_bfp8_tiles(
+                          tt::stl::make_const_span(physical_data), /*row_major_input=*/false, /*is_exp_a=*/false, tile)
+                    : pack_as_bfp4_tiles(
+                          tt::stl::make_const_span(physical_data), /*row_major_input=*/false, /*is_exp_a=*/false, tile);
 
             Tensor tensor(HostBuffer(std::move(packed_block_floats)), spec);
             if (device != nullptr) {
@@ -461,7 +448,10 @@ template uint8_t Tensor::item<uint8_t>(ttnn::QueueId cq_id) const;
 template uint16_t Tensor::item<uint16_t>(ttnn::QueueId cq_id) const;
 template uint32_t Tensor::item<uint32_t>(ttnn::QueueId cq_id) const;
 
-Tensor Tensor::to_device(distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id) const {
+Tensor Tensor::to_device(
+    distributed::MeshDevice* mesh_device,
+    ttsl::optional_reference<const MemoryConfig> mem_config,
+    QueueId cq_id) const {
     return tensor_ops::tensor_to_device(*this, mesh_device, mem_config, cq_id);
 }
 
@@ -612,7 +602,7 @@ void memcpy(
 
 void memcpy(void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
     ZoneScoped;
-    if (auto mesh_device = src.mesh_device()) {
+    if (auto mesh_device = src.device()) {
         memcpy(mesh_device->mesh_command_queue(), dst, src, region, blocking);
     } else {
         memcpy(src.device()->command_queue(), dst, src, region, blocking);
@@ -650,7 +640,7 @@ void memcpy(
 
 void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
     ZoneScoped;
-    if (auto mesh_device = dst.mesh_device()) {
+    if (auto mesh_device = dst.device()) {
         memcpy(mesh_device->mesh_command_queue(), dst, src, region);
     } else {
         memcpy(dst.device()->command_queue(), dst, src, region);
@@ -698,13 +688,13 @@ void memcpy(
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
     ZoneScoped;
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        if (auto mesh_device = src.mesh_device()) {
+        if (auto mesh_device = src.device()) {
             memcpy(mesh_device->mesh_command_queue(), dst, src, region);
         } else {
             memcpy(src.device()->command_queue(), dst, src, region);
         }
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        if (auto mesh_device = dst.mesh_device()) {
+        if (auto mesh_device = dst.device()) {
             memcpy(mesh_device->mesh_command_queue(), dst, src, region);
         } else {
             memcpy(dst.device()->command_queue(), dst, src, region);
@@ -723,20 +713,25 @@ Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::Mes
     }
     DeviceStorage device_storage(std::move(mesh_buffer), std::move(coords));
     // TODO (#25340): Implement correct logic and add test for this
-    return Tensor(std::move(device_storage), tensor_spec, ReplicateTensor{}, TensorTopology{});
+    return Tensor(std::move(device_storage), tensor_spec, TensorTopology{});
 }
 
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
-    auto distributed_host_buffer = DistributedHostBuffer::create(device->shape());
+    auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
+
+    std::vector<distributed::MeshCoordinate> coords;
+    coords.reserve(device->shape().mesh_size());
     for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
-        distributed_host_buffer.emplace_shard(coord, []() { return HostBuffer(); });
+        coords.push_back(coord);
     }
 
-    distributed_host_buffer = distributed_host_buffer.transform(
-        [&](const HostBuffer&) { return tensor_impl::allocate_host_buffer(tensor_spec); },
+    distributed_host_buffer.emplace_shards(
+        coords,
+        [&](const auto&) { return tensor_impl::allocate_host_buffer(tensor_spec); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+
     // TODO (#25340): Implement correct logic and add test for this
-    return Tensor(HostStorage(std::move(distributed_host_buffer)), tensor_spec, ReplicateTensor{}, TensorTopology{});
+    return Tensor(HostStorage(std::move(distributed_host_buffer)), tensor_spec, TensorTopology{});
 }
 
 void write_tensor(const Tensor& src, Tensor& dst, bool blocking, QueueId cq_id) {
@@ -813,10 +808,6 @@ const MemoryConfig& Tensor::memory_config() const { return tensor_spec().tensor_
 const std::optional<ShardSpec>& Tensor::shard_spec() const { return this->memory_config().shard_spec(); }
 
 const std::optional<NdShardSpec>& Tensor::nd_shard_spec() const { return this->memory_config().nd_shard_spec(); }
-
-const DistributedTensorConfig& Tensor::distributed_tensor_config() const {
-    return this->tensor_attributes->get_distributed_tensor_config();
-}
 
 const TensorTopology& Tensor::tensor_topology() const { return this->tensor_attributes->get_tensor_topology(); }
 

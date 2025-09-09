@@ -16,10 +16,12 @@
 #endif
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "risc_attribs.h"
-#include "fabric_edm_packet_header.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "fabric_edm_types.hpp"
-#include "edm_fabric_worker_adapters.hpp"
 #include "edm_fabric_flow_control_helpers.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
+
+#include "hostdevcommon/fabric_common.h"
 
 namespace tt::tt_fabric {
 
@@ -40,16 +42,14 @@ public:
     //                         |                |
     //                         |----------------|
 
-    EthChannelBuffer() : buffer_size_in_bytes(0), max_eth_payload_size_in_bytes(0) {}
+    explicit EthChannelBuffer() = default;
 
-    /*
-     * Expected that *buffer_index_ptr is initialized outside of this object
-     */
-    EthChannelBuffer(
-        size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes, uint8_t channel_id) :
-        buffer_size_in_bytes(buffer_size_bytes),
-        max_eth_payload_size_in_bytes(buffer_size_in_bytes),
-        channel_id(channel_id) {
+    FORCE_INLINE void init(
+        size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes, uint8_t channel_id_val) {
+        buffer_size_in_bytes = buffer_size_bytes;
+        max_eth_payload_size_in_bytes = buffer_size_in_bytes;
+        channel_id = channel_id_val;
+
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
             this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
 // need to avoid unrolling to keep code size within limits
@@ -58,7 +58,14 @@ public:
                 reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
             }
         }
-        set_cached_next_buffer_slot_addr(this->buffer_addresses[0]);
+        if constexpr (NUM_BUFFERS) {
+            set_cached_next_buffer_slot_addr(this->buffer_addresses[0]);
+        }
+    }
+
+    EthChannelBuffer(
+        size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes, uint8_t channel_id_val) {
+        init(channel_base_address, buffer_size_bytes, header_size_bytes, channel_id_val);
     }
 
     [[nodiscard]] FORCE_INLINE size_t get_buffer_address(const BufferIndex& buffer_index) const {
@@ -99,9 +106,9 @@ private:
     std::array<size_t, NUM_BUFFERS> buffer_addresses;
 
     // header + payload regions only
-    const std::size_t buffer_size_in_bytes;
+    std::size_t buffer_size_in_bytes;
     // Includes header + payload + channel_sync
-    const std::size_t max_eth_payload_size_in_bytes;
+    std::size_t max_eth_payload_size_in_bytes;
     std::size_t cached_next_buffer_slot_addr;
     uint8_t channel_id;
 };
@@ -110,6 +117,8 @@ private:
 template <typename HEADER_TYPE, size_t... BufferSizes>
 struct EthChannelBufferTuple {
     std::tuple<tt::tt_fabric::EthChannelBuffer<HEADER_TYPE, BufferSizes>...> channel_buffers;
+
+    explicit EthChannelBufferTuple() = default;
 
     void init(
         const size_t channel_base_address[],
@@ -120,7 +129,7 @@ struct EthChannelBufferTuple {
 
         std::apply(
             [&](auto&... chans) {
-                ((new (&chans) std::remove_reference_t<decltype(chans)>(
+                ((chans.init(
                       channel_base_address[idx],
                       buffer_size_bytes,
                       header_size_bytes,
@@ -226,7 +235,7 @@ struct EdmChannelWorkerInterface {
             worker_info.worker_teardown_semaphore_address);
 
         // Set connection to unused so it's available for next worker
-        *this->connection_live_semaphore = tt::tt_fabric::EdmToEdmSender<0>::unused_connection_value;
+        *this->connection_live_semaphore = tt::tt_fabric::connection_interface::unused_connection_value;
 
         this->copy_read_counter_to_worker_location_info();
 
@@ -245,11 +254,11 @@ struct EdmChannelWorkerInterface {
 
     [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const {
         invalidate_l1_cache();
-        return *connection_live_semaphore == tt::tt_fabric::EdmToEdmSender<0>::close_connection_request_value;
+        return *connection_live_semaphore == tt::tt_fabric::connection_interface::close_connection_request_value;
     }
     [[nodiscard]] FORCE_INLINE bool connection_is_live() const {
         invalidate_l1_cache();
-        return *connection_live_semaphore == tt::tt_fabric::EdmToEdmSender<0>::open_connection_value;
+        return *connection_live_semaphore == tt::tt_fabric::connection_interface::open_connection_value;
     }
 
     volatile tt_l1_ptr EDMChannelWorkerLocationInfo* worker_location_info_ptr;

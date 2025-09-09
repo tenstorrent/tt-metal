@@ -56,13 +56,13 @@ namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
 class ThreadPool;
-class TraceDescriptor;
+struct TraceDescriptor;
 
 namespace distributed {
 
 class MeshCommandQueue;
 class MeshDeviceView;
-class MeshTraceBuffer;
+struct MeshTraceBuffer;
 
 using DeviceIds = std::vector<int>;
 
@@ -106,6 +106,7 @@ private:
     // protected by api_mutex_. Operations that reconfigure global state (e.g. setting subdevices or enabling tracing)
     // on the device may not be thread safe.
     std::mutex api_mutex_;
+    bool is_internal_state_initialized = false;
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
@@ -207,9 +208,6 @@ public:
     std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
-
-    bool using_slow_dispatch() const override;
-    bool using_fast_dispatch() const override;
 
     // Initialization APIs
     bool initialize(

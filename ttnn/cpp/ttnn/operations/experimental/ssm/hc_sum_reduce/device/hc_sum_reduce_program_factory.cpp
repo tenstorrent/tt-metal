@@ -6,6 +6,7 @@
 
 #include "ttnn/common/queue_id.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::ssm::detail {
 
@@ -20,11 +21,9 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     const auto* input_buffer = a.buffer();
-    const bool input_is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     tt::tt_metal::Buffer* out_buffer = output.buffer();
     TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
-    const bool output_is_dram = out_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     const auto& ashape = a.padded_shape();
     auto num_output_blocks_total = a.padded_shape()[-1] / (TILE_WIDTH * TILE_WIDTH);
@@ -81,13 +80,14 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
 
     const bfloat16 bfloat_scaler_value = bfloat16(1.0f);
     const uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-    std::vector<uint32_t> reader_compile_time_args = {input_is_dram, packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
         intermed_cb_id1,
         intermed_cb_id2,
         output_cb_id,
-        output_is_dram,
     };
+    tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_compile_time_args);
     std::vector<uint32_t> compute_compile_time_args = {
         input_cb_id,
         scalar_cb_id,

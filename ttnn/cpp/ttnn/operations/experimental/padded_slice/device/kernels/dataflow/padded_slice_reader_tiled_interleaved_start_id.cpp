@@ -19,14 +19,13 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
     volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-
     constexpr uint32_t cb_id_in0 = 0;
 
     uint32_t src_stick_id = start_id;
     uint32_t tiles_read = 0;
     const uint32_t tile_size = get_tile_size(cb_id_in0);
-    const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = src_addr, .page_size = tile_size};
+    constexpr auto src_args = TensorAccessorArgs<0>();
+    const auto s0 = TensorAccessor(src_args, src_addr, tile_size);
 
 #ifdef DEBUG
     DPRINT << "src_addr: " << src_addr << ", num_dims: " << num_dims << ", start_id: " << start_id

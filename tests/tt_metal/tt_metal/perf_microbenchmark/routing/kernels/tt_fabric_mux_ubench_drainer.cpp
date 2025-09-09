@@ -4,11 +4,10 @@
 
 // clang-format off
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric.h"
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
 #include <cstddef>
@@ -25,28 +24,51 @@ constexpr size_t channel_base_address = get_compile_time_arg_val(7);
 constexpr size_t my_eth_channel_id = get_compile_time_arg_val(8);
 
 namespace tt::tt_fabric {
-using DrainerChannelBuffer = EthChannelBuffer<NUM_BUFFERS>;
+using DrainerChannelBuffer = EthChannelBuffer<PACKET_HEADER_TYPE, NUM_BUFFERS>;
 using DrainerChannelClientLocationInfo = EDMChannelWorkerLocationInfo;
-using DrainerChannelWorkerInterface = EdmChannelWorkerInterface<NUM_BUFFERS>;
+using DrainerChannelWorkerInterface = EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, NUM_BUFFERS>;
 using DrainerStatus = EDMStatus;
 }  // namespace tt::tt_fabric
 
 void kernel_main() {
     size_t rt_args_idx = 0;
     auto num_regions_to_clear = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t an_available_temporary_addr = 0;
     for (uint32_t i = 0; i < num_regions_to_clear; i++) {
         auto address = get_arg_val<uint32_t>(rt_args_idx++);
+        if (an_available_temporary_addr == 0) {
+            an_available_temporary_addr = address;
+        }
         auto size = get_arg_val<uint32_t>(rt_args_idx++);
         zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(address), size);
     }
 
+    auto mux_virtual_coord_x = get_arg_val<uint32_t>(rt_args_idx++);
+    auto mux_virtual_coord_y = get_arg_val<uint32_t>(rt_args_idx++);
     auto status_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(status_address);
     status_ptr[0] = tt::tt_fabric::DrainerStatus::STARTED;
 
     // This mirrors an EDM interface. The Worker -> EDM interface has the worker communicate to the EDM interface via a
     // autoinc stream register where the register holds #slots free.
-    constexpr uint32_t slots_free_stream_id =
-        tt::tt_fabric::WorkerToFabricMuxSender<0>::sender_channel_0_free_slots_stream_id;
+    tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
+        reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
+    const auto conn = &connection_info->read_only[1];
+    const uint32_t mux_dest_stream_id_addr =
+        reinterpret_cast<uint32_t>(conn) + offsetof(fabric_connection_info_t, worker_free_slots_stream_id);
+
+    auto mux_dest_stream_id_addr_aligned = mux_dest_stream_id_addr & ~0xF;
+    auto byte_offset = mux_dest_stream_id_addr - mux_dest_stream_id_addr_aligned;
+
+    noc_async_read(
+        get_noc_addr(mux_virtual_coord_x, mux_virtual_coord_y, mux_dest_stream_id_addr_aligned),
+        reinterpret_cast<uint32_t>(an_available_temporary_addr),
+        16);
+    noc_async_read_barrier();
+    uint32_t slots_free_stream_id = reinterpret_cast<volatile uint8_t*>(an_available_temporary_addr)[byte_offset];
+    for (size_t i = 0; i < 16; i++) {
+        reinterpret_cast<volatile uint8_t*>(an_available_temporary_addr)[i] = 0;
+    }
+
     init_ptr_val(slots_free_stream_id, NUM_BUFFERS);
 
     tt::tt_fabric::DrainerChannelBuffer drainer_channel(

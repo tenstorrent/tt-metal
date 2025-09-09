@@ -4,7 +4,6 @@
 
 #include "hostdevcommon/kernel_structs.h"
 #include "ttnn/common/constants.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
@@ -310,9 +309,29 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
             .set_page_size(cb_src0_index, aligned_stick_nbytes * stride_w * stride_h);
     CreateCircularBuffer(program, all_cores, src_cb_config);
 
+    bool is_l1_aligned = stick_nbytes == aligned_stick_nbytes;
+
+    uint32_t cb_src1_index = tt::CBIndex::c_1;
+    if (!is_l1_aligned) {
+        // If not L1 aligned, use a separate circular buffer for src1
+        log_debug(tt::LogOp, "Using intermediate L1 scratch buffer for src1");
+        auto src1_cb_config =
+            CircularBufferConfig(stick_nbytes * stride_w * stride_h, {{cb_src1_index, cb_data_format}})
+                .set_page_size(cb_src1_index, stick_nbytes * stride_w * stride_h);
+        CreateCircularBuffer(program, all_cores, src1_cb_config);
+    }
+
     // Create reader kernel
     std::vector<uint32_t> compile_time_args(
-        {stick_nbytes, cb_src0_index, aligned_stick_nbytes, stride_h, stride_w, input_width, patches_per_core});
+        {stick_nbytes,
+         cb_src0_index,
+         aligned_stick_nbytes,
+         stride_h,
+         stride_w,
+         input_width,
+         patches_per_core,
+         cb_src1_index,
+         is_l1_aligned});
     TensorAccessorArgs(*src0_buffer).append_to(compile_time_args);
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -352,7 +371,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
             src_col_offset = out_width * stride_w;
 
             src_idx = src_batch_offset + src_row_offset + src_col_offset;
-            dst_idx = output_offset * patch_size;
+            dst_idx = output_offset;
         }
 
         curr_patches += patches_per_core;

@@ -8,7 +8,7 @@
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_graph.hpp>                   // FabricType
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
-#include <tt-metalium/erisc_datamover_builder.hpp>
+#include "erisc_datamover_builder.hpp"
 #include <vector>
 #include <limits>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
@@ -43,7 +43,9 @@ public:
 
     tt::tt_fabric::FabricEriscDatamoverConfig& get_fabric_router_config(
         tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default,
-        tt::tt_fabric::FabricEriscDatamoverAxis fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short) const;
+        tt::tt_fabric::FabricEriscDatamoverAxis fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short,
+        tt::tt_fabric::FabricTensixConfig fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED,
+        eth_chan_directions direction = eth_chan_directions::EAST) const;
 
     // Get fabric tensix config for mux configuration
     tt::tt_fabric::FabricTensixDatamoverConfig& get_tensix_config() const;
@@ -71,7 +73,10 @@ private:
     size_t get_packet_header_size_bytes() const;
     size_t get_max_payload_size_bytes() const;
     std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType edm_type, tt::tt_fabric::FabricEriscDatamoverAxis edm_axis);
+        tt::tt_fabric::FabricEriscDatamoverType edm_type,
+        tt::tt_fabric::FabricEriscDatamoverAxis edm_axis,
+        tt::tt_fabric::FabricTensixConfig fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED,
+        eth_chan_directions direction = eth_chan_directions::EAST);
 
     bool initialized_ = false;
     tt::tt_fabric::FabricConfig fabric_config_{};
@@ -91,6 +96,9 @@ private:
     std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2> dateline_upstream_router_config_ = {};
     std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2> dateline_upstream_adjcent_router_config_ =
         {};
+
+    std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, eth_chan_directions::COUNT>
+        router_with_mux_config_ = {};  // for E W N S.
 
     // Tensix config for fabric mux configuration (same for all devices)
     std::unique_ptr<tt::tt_fabric::FabricTensixDatamoverConfig> tensix_config_;

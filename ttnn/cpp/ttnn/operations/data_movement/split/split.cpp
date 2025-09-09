@@ -70,7 +70,7 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
     std::vector<ttnn::Tensor> results;
     results.reserve(split_sizes.size());
 
-    const ttnn::SmallVector<const int32_t> steps(input_shape.rank(), 1);
+    const ttnn::SmallVector<int32_t> steps(input_shape.rank(), 1);
     ttnn::SmallVector<int32_t> begins(input_shape.rank(), 0), ends(input_shape.cbegin(), input_shape.cend());
     const tt::stl::Span<const int32_t> sbegins(begins), ssteps(steps), sends(ends);
 
@@ -132,14 +132,6 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
 }
 
 std::vector<ttnn::Tensor> SplitOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const SmallVector<int64_t>& split_sizes,
-    const int64_t dim = 0,
-    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
-    return SplitOperation::invoke(DefaultQueueId, input_tensor, split_sizes, dim, memory_config_arg);
-}
-
-std::vector<ttnn::Tensor> SplitOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const int64_t split_size,
@@ -152,14 +144,6 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
 
     const ttnn::SmallVector<int64_t> split_sizes(num_chunks, split_size);
     return SplitOperation::invoke(queue_id, input_tensor, split_sizes, dim, memory_config);
-}
-
-std::vector<ttnn::Tensor> SplitOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const int64_t split_size,
-    const int64_t dim = 0,
-    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
-    return SplitOperation::invoke(DefaultQueueId, input_tensor, split_size, dim, memory_config_arg);
 }
 
 }  // namespace ttnn::operations::data_movement

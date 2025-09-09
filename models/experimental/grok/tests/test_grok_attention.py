@@ -22,6 +22,7 @@ from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 
 @pytest.mark.skip(reason=LEGACY_CCL_SKIP)

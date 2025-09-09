@@ -12,7 +12,7 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool HAS_BASE_SCALING>
+template <bool FAST_APPROX, bool HAS_BASE_SCALING>
 sfpi_inline void calculate_log_body(const uint log_base_scale_factor) {
     ////////////////////////////
     // Load From dest + "normalize to calculation range"
@@ -61,19 +61,26 @@ sfpi_inline void calculate_log_body(const uint log_base_scale_factor) {
     }
     v_endif;
 
+    if constexpr (!FAST_APPROX) {
+        v_if(in < 0.0F) {
+            result = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
+        }
+        v_endif;
+    }
+
     dst_reg[0] = result;
 }
 
-template <bool APPROXIMATION_MODE, bool HAS_BASE_SCALING, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool HAS_BASE_SCALING, int ITERATIONS = 8>
 inline void calculate_log(uint log_base_scale_factor) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_log_body<HAS_BASE_SCALING>(log_base_scale_factor);
+        calculate_log_body<FAST_APPROX, HAS_BASE_SCALING>(log_base_scale_factor);
         dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool FAST_APPROX>
 inline void log_init() {
     vConstFloatPrgm0 = 0.692871f;  // ln2
 

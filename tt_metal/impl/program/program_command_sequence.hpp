@@ -50,7 +50,7 @@ struct ProgramCommandSequence {
     std::vector<LaunchMsgData> launch_messages;
     std::vector<CQDispatchWritePackedCmd*> launch_msg_write_packed_cmd_ptrs;
     std::vector<CQDispatchWritePackedCmd*> unicast_launch_msg_write_packed_cmd_ptrs;
-    CQDispatchGoSignalMcastCmd* mcast_go_signal_cmd_ptr;
+    CQDispatchGoSignalMcastCmd* mcast_go_signal_cmd_ptr{};
 
     bool prefetcher_cache_used = false;
     uint32_t kernel_bins_sizeB = 0;

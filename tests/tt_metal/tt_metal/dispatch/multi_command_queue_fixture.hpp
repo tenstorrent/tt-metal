@@ -6,7 +6,7 @@
 
 #include "fabric_types.hpp"
 #include "gtest/gtest.h"
-#include "dispatch_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/fabric.hpp>
@@ -20,7 +20,7 @@
 
 namespace tt::tt_metal {
 
-class UnitMeshMultiCQSingleDeviceFixture : public DispatchFixture {
+class UnitMeshMultiCQSingleDeviceFixture : public MeshDispatchFixture {
 protected:
     static void SetUpTestSuite() {}
     static void TearDownTestSuite() {}
@@ -83,8 +83,8 @@ protected:
     }
 
     std::shared_ptr<distributed::MeshDevice> device_;
-    tt::ARCH arch_;
-    uint8_t num_cqs_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
+    uint8_t num_cqs_{};
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
 };
@@ -111,7 +111,7 @@ protected:
         this->create_device(0 /* device_id */, trace_region_size);
     }
 };
-class UnitMeshMultiCQMultiDeviceFixture : public DispatchFixture {
+class UnitMeshMultiCQMultiDeviceFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
         this->slow_dispatch_ = false;

@@ -43,7 +43,7 @@ inline void rand(uint32_t from, uint32_t scale) {
 
         // Scale the float from [0, 1) to [from, from + scale)
         // lreg0 = lreg0 * scale + from
-        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 1);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
         TTI_SFPNOP;
 
         TTI_SFPSTORE(0, 3, 3, 0);

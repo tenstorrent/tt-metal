@@ -9,6 +9,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include "program/program_impl.hpp"
+#include "program/dispatch.hpp"
 
 namespace tt::tt_metal::distributed {
 using RuntimeArgsPerCore = std::vector<std::vector<RuntimeArgsData>>;
@@ -41,7 +42,7 @@ private:
     void set_finalized() { this->finalized_ = true; };
     ProgramBinaryStatus get_program_binary_status(std::size_t mesh_id) const;
     void set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status);
-    ProgramConfig& get_program_config(uint32_t index);
+    ProgramConfig& get_program_config(uint32_t index, bool using_fast_dispatch);
     ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program, uint64_t command_hash);
     void compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device);
     void finalize_offsets(MeshDevice* mesh_device);

@@ -8,18 +8,15 @@ void kernel_main() {
     uint32_t output_buffer_address = get_arg_val<uint32_t>(0);
     uint32_t num_rows_per_core = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
-    uint32_t output_unit_size = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t dst_cb_id = tt::CBIndex::c_16;
     constexpr uint32_t src_cb_id = tt::CBIndex::c_0;
-    constexpr bool output_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t output_unit_size = get_compile_time_arg_val(0);
+    constexpr auto dst_args = TensorAccessorArgs<1>();
 
     constexpr uint32_t onetile = 1;
 
-    const InterleavedAddrGen<output_is_dram> s = {
-        .bank_base_address = output_buffer_address,
-        .page_size = output_unit_size,
-    };
+    const auto s = TensorAccessor(dst_args, output_buffer_address, output_unit_size);
     for (uint32_t i = start_id; i < start_id + num_rows_per_core; i++) {
         cb_wait_front(src_cb_id, onetile);
 

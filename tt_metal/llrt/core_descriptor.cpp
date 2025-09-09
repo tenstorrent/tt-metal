@@ -40,12 +40,7 @@ inline YAML::Node string_to_yaml_node(const std::string& input) {
 inline std::string get_core_descriptor_file(
     const tt::ARCH& arch, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
-    std::string core_desc_dir;
-    if (getenv("TT_METAL_HOME")) {
-        core_desc_dir = getenv("TT_METAL_HOME");
-    } else {
-        core_desc_dir = "./";
-    }
+    std::string core_desc_dir = tt_metal::MetalContext::instance().rtoptions().get_root_dir();
     if (core_desc_dir.back() != '/') {
         core_desc_dir += "/";
     }
@@ -65,7 +60,7 @@ inline std::string get_core_descriptor_file(
                     "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
             case tt::ARCH::WORMHOLE_B0: return core_desc_dir + "wormhole_b0_versim_1x1_arch.yaml";
             case tt::ARCH::BLACKHOLE: return core_desc_dir + "blackhole_simulation_1x2_arch.yaml";
-            case tt::ARCH::QUASAR: TT_THROW("No core descriptor for Quasar"); break;
+            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_1x3_arch.yaml";
         };
     } else {
         // Check if fabric tensix is enabled based on fabric tensix config
@@ -93,7 +88,7 @@ inline std::string get_core_descriptor_file(
                 } else {
                     return core_desc_dir + "blackhole_140_arch.yaml";
                 }
-            case tt::ARCH::QUASAR: TT_THROW("No core descriptor for Quasar"); break;
+            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_1x3_arch.yaml";
         };
     }
     return "";

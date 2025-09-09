@@ -14,6 +14,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
 namespace ttnn::operations::conv {
@@ -311,9 +312,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     std::string weights_kernel_path =
         "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/weights_reader_width_sharded.cpp";
 
-    std::vector<uint32_t> activation_kernel_compile_args;
-    std::vector<uint32_t> weights_kernel_compile_args;
-    std::vector<uint32_t> compute_kernel_args;
     bool tilize_in0 = false;
 
     uint32_t act_mcast_sender_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, 0);    // 0==INVALID
@@ -407,7 +405,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     const bool partials_cb_uses_output = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
     const tt::tt_metal::CBHandle cb_partials = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).handle;
 
-    compute_kernel_args = {
+    std::vector<uint32_t> compute_kernel_args = {
         act_block_w_ntiles,                         // in0_block_w
         act_num_subblocks,                          // in0_num_sublocks
         act_block_num_tiles,                        // in0_block_num_tiles,
@@ -441,10 +439,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         0,
         partials_cb_uses_output,
         input_num_cores,  // in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
+        false};
 
-    };
-
-    activation_kernel_compile_args = {
+    std::vector<uint32_t> activation_kernel_compile_args = {
         (uint32_t)stride_w,
         (uint32_t)dilation_h,
         (uint32_t)dilation_w,
@@ -473,7 +470,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index};
 
-    weights_kernel_compile_args = {
+    std::vector<uint32_t> weights_kernel_compile_args = {
         get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,          // cb_id_weight
         act_block_w_ntiles / (filter_h * filter_w),                     // core_in_channels_ntiles
         filter_h * filter_w,                                            // window_size_hw
@@ -487,8 +484,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         input_num_cores,            // other_core_weight_height_blocks
         per_core_num_blocks_act_w,  // this_core_weight_height_blocks
         num_blocks_act_h_per_core,
-        get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
-        bias_in_dram};
+        get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index};
+    tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(weights_kernel_compile_args);
+    tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(weights_kernel_compile_args);
 
     auto act_kernel_id = CreateKernel(
         program,

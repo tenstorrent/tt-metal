@@ -57,9 +57,9 @@ public:
     bool IsSlowDispatch() { return this->slow_dispatch_; }
 
 protected:
-    tt::ARCH arch_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
-    bool slow_dispatch_;
+    bool slow_dispatch_{};
     const size_t l1_small_size_{DEFAULT_L1_SMALL_SIZE};
     const size_t trace_region_size_{DEFAULT_TRACE_REGION_SIZE};
 
@@ -90,8 +90,10 @@ protected:
         // closed all devices
         if (!id_to_device_.empty()) {
             for (auto [device_id, device] : id_to_device_) {
+                device->close();
                 device.reset();
             }
+
             id_to_device_.clear();
             devices_.clear();
         }

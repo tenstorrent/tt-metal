@@ -5,6 +5,8 @@
 #pragma once
 
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
 
 namespace ttnn {
 namespace experimental {
@@ -49,9 +51,9 @@ struct AllGatherFusedOpSignaler {
 
     void init_all_gather(
         tt::tt_metal::Program& program,
-        tt::tt_metal::IDevice const* device,
+        const tt::tt_metal::IDevice* device,
 
-        CoreRangeSet const& all_gather_workers,
+        const CoreRangeSet& all_gather_workers,
         std::vector<CoreCoord>& all_gather_worker_cores);
 
     void push_all_gather_fused_op_rt_args(
@@ -82,7 +84,7 @@ struct ReduceScatterFusedOpSignaler {
     void push_reduce_scatter_fused_op_rt_args(std::vector<uint32_t>& out_rt_args);
 };
 
-enum class MatmulFusedOpSignalerType { ALL_GATHER, REDUCE_SCATTER, EMPTY, LLAMA_REDUCE_SCATTER };
+enum class MatmulFusedOpSignalerType { ALL_GATHER, REDUCE_SCATTER, EMPTY, LLAMA_REDUCE_SCATTER, LLAMA_ALL_GATHER };
 
 // Used to propagate semaphore information from matmul to all_gather or reduce_scatter
 struct MatmulFusedOpSignaler {
@@ -117,13 +119,17 @@ struct MatmulFusedOpSignaler {
     CoreCoord privilaged_core;
     CoreCoord privilaged_core_physical;
 
+    /* Info for Llama All Gather*/
+    uint32_t start_cb_index = 0;
+
     bool initialized_all_gather = false;
     bool initialized_reduce_scatter = false;
     bool initialized_llama_reduce_scatter_part1 = false;
     bool initialized_llama_reduce_scatter = false;
     bool initialized_fused_op = false;
+    bool initialized_llama_all_gather = false;
 
-    MatmulFusedOpSignaler(MatmulFusedOpSignalerType signaler_type) { fused_op_type = signaler_type; }
+    MatmulFusedOpSignaler(MatmulFusedOpSignalerType signaler_type) : fused_op_type(signaler_type) {}
 
     void init_all_gather(
         uint32_t num_transfers,
@@ -134,6 +140,15 @@ struct MatmulFusedOpSignaler {
         bool is_clockwise_direction,
 
         uint32_t weight_tensor_width);
+
+    void init_llama_all_gather(
+        uint32_t num_transfers,
+        uint32_t ring_size,
+        uint32_t start_ring_index,
+        uint32_t tensor_slice_shape_width,
+        uint32_t output_page_offset,
+        uint32_t weight_tensor_width,
+        uint32_t cb_index_start);
 
     void init_reduce_scatter(
         const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
@@ -172,6 +187,7 @@ struct MatmulFusedOpSignaler {
     bool is_all_gather();
     bool is_reduce_scatter();
     bool is_llama_reduce_scatter();
+    bool is_llama_all_gather();
 
     void push_matmul_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args, uint32_t curr_worker_in0_idx, uint32_t curr_worker_in1_idx);

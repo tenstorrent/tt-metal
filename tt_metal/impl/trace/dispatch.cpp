@@ -98,7 +98,7 @@ void issue_trace_commands(
         dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SUBORDINATE;
     }
 
-    go_msg_t reset_launch_message_read_ptr_go_signal;
+    go_msg_t reset_launch_message_read_ptr_go_signal{};
     reset_launch_message_read_ptr_go_signal.signal = RUN_MSG_RESET_READ_PTR;
     reset_launch_message_read_ptr_go_signal.master_x = (uint8_t)dispatch_core.x;
     reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)dispatch_core.y;

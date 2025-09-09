@@ -846,6 +846,8 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     start_core=ttnn.CoreCoord(0, 0),
     sub_core_grids=None,
     q_layout=ttnn.TILE_LAYOUT,
+    is_cur_pos_sharded=False,
+    is_page_table_sharded=False,
 ):
     torch.manual_seed(1234)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -885,7 +887,6 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     paged_k = to_paged_cache(K, b, nkv, max_num_blocks_per_seq, block_size, d, s)
     paged_v = to_paged_cache(V, b, nkv, max_num_blocks_per_seq, block_size, d, s)
 
-    # We need a random permutation to shuffle pages in the cache
     permutation = torch.randperm(max_num_blocks)
     reverse_permutation = torch.argsort(permutation)
     page_table = reverse_permutation.reshape(b, max_num_blocks_per_seq)
@@ -942,12 +943,28 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     tt_V = ttnn.as_tensor(
         paged_v_shuffled, device=device, dtype=kv_dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg
     )
-    tt_page_table = ttnn.Tensor(page_table, ttnn.int32).to(device)
+
+    # We need a random permutation to shuffle pages in the cache
+    if is_page_table_sharded:
+        page_table = page_table.repeat(compute_sub_core_grids.num_cores(), 1)
+        page_table_shard_spec = ttnn.ShardSpec(
+            compute_sub_core_grids, (b, max_num_blocks_per_seq), ttnn.ShardOrientation.ROW_MAJOR
+        )
+        page_table_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, page_table_shard_spec
+        )
+        tt_page_table = ttnn.as_tensor(
+            page_table,
+            device=device,
+            dtype=ttnn.uint16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=page_table_memory_config,
+        )
+    else:
+        tt_page_table = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
     scale = d**-0.5
     start_indices = [cur_pos] * b
-
-    tt_page_table = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid_size,
@@ -966,7 +983,23 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         layout=q_layout,
         memory_config=Q_height_sharded_memcfg if sharded_in else dram_memcfg,
     )
-    start_indices_tt = ttnn.Tensor(torch.tensor(start_indices), ttnn.int32).to(device)
+
+    if is_cur_pos_sharded:
+        cur_pos_core_grids = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 0)),
+            ]
+        )
+        cur_pos_shard_spec = ttnn.ShardSpec(cur_pos_core_grids, (1, b), ttnn.ShardOrientation.ROW_MAJOR)
+        cur_pos_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec
+        )
+        start_indices_pt = torch.tensor([start_indices] * cur_pos_core_grids.num_cores())
+        start_indices_tt = ttnn.Tensor(start_indices_pt, ttnn.int32).to(device, mem_config=cur_pos_memory_config)
+    else:
+        start_indices_pt = torch.tensor(start_indices)
+        start_indices_tt = ttnn.Tensor(start_indices_pt, ttnn.int32).to(device)
 
     tt_back = ttnn.transformer.paged_scaled_dot_product_attention_decode(
         tt_Q,

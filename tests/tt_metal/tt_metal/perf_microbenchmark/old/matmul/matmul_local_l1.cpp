@@ -310,7 +310,7 @@ int main(int argc, char** argv) {
                 .math_approx_mode = false,
                 .compile_args = compute_kernel_args});
 
-        std::chrono::duration<double, std::nano> duration;
+        std::chrono::duration<double, std::nano> duration{};
         // took from run_operation.cpp
         auto start = std::chrono::high_resolution_clock::now();
         EnqueueProgram(device->command_queue(), program, false);

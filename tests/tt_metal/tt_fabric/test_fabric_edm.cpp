@@ -9,7 +9,7 @@
 #include <vector>
 
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "persistent_kernel_cache.hpp"
@@ -26,9 +26,9 @@ void signal_handler(int signum) { daemon_running = false; }
 struct TestParams {
     std::variant<WriteThroughputStabilityTestWithPersistentFabricParams, FullMeshTestParams> params;
     std::string message_noc_type;
-    size_t num_messages;
-    size_t packet_payload_size_bytes;
-    bool fabric_unicast;
+    size_t num_messages{};
+    size_t packet_payload_size_bytes{};
+    bool fabric_unicast{};
 };
 
 // noc_send_type, flush

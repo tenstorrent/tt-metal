@@ -340,7 +340,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCDiffer
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweepSameKernel) {
     // Test ID base
-    uint32_t test_id_base = 146;
+    uint32_t test_id_base = 144;
     bool same_kernel = true;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {0, 1};
@@ -356,7 +356,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweep
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweepDifferentKernels) {
     // Test ID base
-    uint32_t test_id_base = 150;
+    uint32_t test_id_base = 145;
     bool same_kernel = false;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {0, 1};
@@ -374,7 +374,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweep
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesSameKernel) {
     // Test ID
-    uint32_t test_id = 144;
+    uint32_t test_id = 146;
     bool same_kernel = true;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {1, 1};
@@ -385,7 +385,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesS
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesDifferentKernels) {
     // Test ID
-    uint32_t test_id = 145;
+    uint32_t test_id = 147;
     bool same_kernel = false;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {1, 1};
@@ -398,7 +398,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesD
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalCustom) {
     // Test ID
-    uint32_t test_id = 147;
+    uint32_t test_id = 148;
     bool same_kernel = true;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {0, 1};

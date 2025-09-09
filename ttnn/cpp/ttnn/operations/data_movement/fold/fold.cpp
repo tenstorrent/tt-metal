@@ -330,10 +330,13 @@ Tensor FoldOperation::invoke(
         auto in_channels = input_tensor.logical_shape()[3];
         auto output_tensor =
             ttnn::prim::fold(queue_id, input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
-        return ttnn::reshape(
-            output_tensor,
-            ttnn::Shape(
-                {batch_size, input_height / stride_h, input_width / stride_w, (in_channels)*stride_h * stride_w}));
+        if (input_tensor.layout() == Layout::TILE) {
+            return ttnn::reshape(
+                output_tensor,
+                ttnn::Shape(
+                    {batch_size, input_height / stride_h, input_width / stride_w, (in_channels)*stride_h * stride_w}));
+        }
+        return output_tensor;
     }
     return ttnn::prim::fold(queue_id, input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
 }

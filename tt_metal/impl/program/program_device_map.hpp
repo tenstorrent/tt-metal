@@ -41,7 +41,7 @@ struct kernel_bins_transfer_info {
 };
 
 struct ProgramTransferInfo {
-    std::uint32_t num_active_cores;
+    std::uint32_t num_active_cores{};
     std::vector<std::tuple<transfer_info_cores, std::uint32_t, kernel_bins_transfer_info>>
         kernel_bins;                         // noc_encoding, num_mcast_dests, transfer_info
     std::vector<std::uint32_t> binary_data;  // Holds binary data for all program kernels
