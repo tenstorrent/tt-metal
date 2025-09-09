@@ -53,10 +53,16 @@ tt::tt_metal::HostStorage transform_storage(
         return input_storage;
     } else if constexpr (std::is_same_v<DstType, bfloat4_tag> || std::is_same_v<DstType, bfloat8_tag>) {
         auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
-            tt::stl::Span<const SrcType> data = buffer.view_as<const SrcType>();
-            const bool row_major_input = input_tensor_spec.layout() == Layout::ROW_MAJOR;
+            ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
+            std::vector<SrcType> tilized_data;  // empty if `data` is already in tile layout.
+            if (input_tensor_spec.layout() == Layout::ROW_MAJOR) {
+                tilized_data = tt::tt_metal::tensor_impl::convert_layout_row_major_to_tile(
+                    input_tensor_spec.physical_shape(), input_tensor_spec.tile(), data);
+                data = ttsl::make_const_span(tilized_data);
+            }
 
             auto float_packed_data = [&]() {
+                constexpr bool row_major_input = false;
                 constexpr bool is_exp_a = false;
                 if constexpr (std::is_same_v<DstType, bfloat8_tag>) {
                     return pack_as_bfp8_tiles(data, row_major_input, is_exp_a);
@@ -146,11 +152,7 @@ Tensor ToDtype::invoke(const ttnn::Tensor& input_tensor, const ttnn::DataType& d
             input_tensor.logical_shape(),
             input_tensor.padded_shape()));
 
-    return Tensor(
-        tt::tt_metal::HostStorage(std::move(output_storage)),
-        output_spec,
-        input_tensor.distributed_tensor_config(),
-        input_tensor.tensor_topology());
+    return Tensor(tt::tt_metal::HostStorage(std::move(output_storage)), output_spec, input_tensor.tensor_topology());
 };
 
 }  // namespace ttnn::operations::core

@@ -8,6 +8,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/program.hpp>
@@ -17,6 +18,7 @@
 #include <tt-metalium/lightmetal_binary.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/kernel.hpp>
 
 /** @file */
 
@@ -44,7 +46,7 @@ class Program;
 class IDevice;
 class Trace;
 class CircularBuffer;
-class Event;
+struct Event;
 class Buffer;
 class GlobalSemaphore;
 
@@ -449,9 +451,6 @@ void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program&
 // ==================================================
 //           COMPILE & EXECUTE KENRNELS
 // ==================================================
-// clang-format on
-using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
-// clang-format off
 /**
  * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
  * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
@@ -513,47 +512,6 @@ void SetRuntimeArgs(
     KernelHandle kernel,
     const std::vector<CoreCoord>& core_spec,
     const std::vector<std::vector<uint32_t>>& runtime_args);
-
-// clang-format off
-/**
- * Set runtime args for a kernel that are sent to the specified cores using the command queue. This API must be used when Asynchronous Command Queue Mode is enabled.
- * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
- *
- * Return value: void
- *
- * | Argument     | Description                                                            | Type                                                   | Valid Range                                                                | Required |
- * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|----------------------------------------------------------------------------|----------|
- * | device       | The device that runtime args are being written to.                     | IDevice*                                               |                                                                            | Yes      |
- * | kernel       | The kernel that will receive these runtime args.                       | std::shared_ptr<Kernel>                                |                                                                            | Yes      |
- * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any set of logical Tensix core coordinates on which the kernel is placed   | Yes      |
- * | runtime_args | The runtime args to be written                                         | std::shared_ptr<RuntimeArgs>                           |                                                                            | Yes      |
-*/
-// clang-format on
-void SetRuntimeArgs(
-    IDevice* device,
-    const std::shared_ptr<Kernel>& kernel,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::shared_ptr<RuntimeArgs>& runtime_args);
-
-// clang-format off
-/**
- * Set multiple runtime arguments of a kernel using the command queue. Each core can have distinct arguments. This API must be used when Asynchronous Command Queue Mode is enabled.
- * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
- *
- * Return value: void
- * | Argument     | Description                                                            | Type                                                   | Valid Range                                                                | Required |
- * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|----------------------------------------------------------------------------|----------|
- * | device       | The device that runtime args are being written to.                     | IDevice*                                               |                                                                            | Yes      |
- * | kernel       | The kernel that will receive these runtime args.                       | std::shared_ptr<Kernel>                                |                                                                            | Yes      |
- * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::vector< CoreCoord > &                       | Any set of logical Tensix core coordinates on which the kernel is placed   | Yes      |
- * | runtime_args | The runtime args to be written                                         | const std::vector<std::shared_ptr<RuntimeArgs>>        | Outer vector size must be equal to size of core_spec vector                | Yes      |
- */
-// clang-format on
-void SetRuntimeArgs(
-    IDevice* device,
-    const std::shared_ptr<Kernel>& kernel,
-    const std::vector<CoreCoord>& core_spec,
-    const std::vector<std::shared_ptr<RuntimeArgs>>& runtime_args);
 
 // clang-format off
 /**
