@@ -95,7 +95,7 @@ private:
     std::unordered_map<uint16_t, tracy::MarkerDetails> hash_to_zone_src_locations;
 
     // Device-Core tracy context
-    std::unordered_map<std::pair<chip_id_t, CoreCoord>, std::unique_ptr<TracyTTCtx>, pair_hash<chip_id_t, CoreCoord>>
+    std::unordered_map<std::pair<chip_id_t, CoreCoord>, TracyTTCtx, pair_hash<chip_id_t, CoreCoord>>
         device_tracy_contexts;
 
     // (cpu time, device time, frequency) for sync propagated from root device

@@ -1616,8 +1616,8 @@ DeviceProfiler::~DeviceProfiler() {
     TT_ASSERT(this->thread_pool != nullptr);
 
     for (auto& [device_core, _] : device_tracy_contexts) {
-        this->thread_pool->enqueue(
-            [this, device_core]() { TracyTTDestroy(device_tracy_contexts.at(device_core).release()); });
+        TT_ASSERT(device_tracy_contexts.at(device_core) != nullptr);
+        this->thread_pool->enqueue([this, device_core]() { TracyTTDestroy(device_tracy_contexts.at(device_core)); });
     }
 
     this->thread_pool->wait();
@@ -1851,9 +1851,8 @@ void DeviceProfiler::initializeMissingTracyContexts(bool blocking) {
 
     for (const auto& [device_core, _] : device_tracy_contexts) {
         if (device_tracy_contexts.at(device_core) == nullptr) {
-            this->thread_pool->enqueue([this, device_core]() {
-                device_tracy_contexts.at(device_core) = std::unique_ptr<tracy::TTCtx>(TracyTTContext());
-            });
+            this->thread_pool->enqueue(
+                [this, device_core]() { device_tracy_contexts.at(device_core) = TracyTTContext(); });
         }
     }
 
@@ -1899,7 +1898,7 @@ void DeviceProfiler::updateTracyContext(const std::pair<chip_id_t, CoreCoord>& d
                 cpu_time);
         }
 
-        TracyTTCtx* tracyCtx = device_tracy_contexts.at(device_core).get();
+        TracyTTCtx tracyCtx = device_tracy_contexts.at(device_core);
 
         TracyTTContextPopulate(tracyCtx, cpu_time, device_time, frequency);
         TracyTTContextName(tracyCtx, tracyTTCtxName.c_str(), tracyTTCtxName.size());
@@ -1912,7 +1911,7 @@ void DeviceProfiler::updateTracyContext(const std::pair<chip_id_t, CoreCoord>& d
             double cpu_time = device_sync_info.cpu_time;
             double device_time = device_sync_info.device_time;
             double frequency = device_sync_info.frequency;
-            TracyTTCtx* tracyCtx = device_tracy_contexts.at(device_core).get();
+            TracyTTCtx tracyCtx = device_tracy_contexts.at(device_core);
             TracyTTContextCalibrate(tracyCtx, cpu_time, device_time, frequency);
             log_debug(
                 tt::LogMetal,
