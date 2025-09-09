@@ -662,8 +662,6 @@ private:
     }
 
     void trace_traffic_path(const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config) {
-        const auto& hops = config.hops;
-
         // Use proper topology detection from fixture
         if (fixture_->get_topology() == Topology::Ring) {
             // Ring topology - use ring traversal logic with boundary turning
@@ -794,7 +792,7 @@ private:
         log_debug(tt::LogTest, "Performance profiling results:");
         // Results are automatically sorted by device ID and core coordinates
         for (const auto& [device_id, core_cycles] : device_core_cycles_) {
-            for (const auto& [core, cycles] : core_cycles) {
+            for ([[maybe_unused]] const auto& [core, cycles] : core_cycles) {
                 log_debug(tt::LogTest, "Device {} Core ({},{}) Cycles: {}", device_id.chip_id, core.x, core.y, cycles);
             }
         }
@@ -1046,6 +1044,7 @@ private:
             }
             num_devices_str += "]";
 
+            // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
             std::string topology_str = enchantum::to_string(config.fabric_setup.topology).data();
             double tolerance = get_tolerance_percent(
                 config.name,
@@ -1073,6 +1072,7 @@ private:
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
 
         // Convert cluster type enum to lowercase string
+        // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
         std::string cluster_name = enchantum::to_string(cluster_type).data();
         std::transform(cluster_name.begin(), cluster_name.end(), cluster_name.begin(), ::tolower);
 
@@ -1194,6 +1194,7 @@ private:
             }
             num_devices_str += "]";
 
+            // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
             std::string topology_str = enchantum::to_string(config.fabric_setup.topology).data();
 
             // Find matching golden entry
