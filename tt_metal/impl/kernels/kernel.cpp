@@ -469,8 +469,8 @@ void Kernel::set_common_runtime_args_count(uint32_t count) {
 
 bool Kernel::is_idle_eth() const { return this->programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH; }
 
-KernelMeta Kernel::meta(IDevice* device) const {
-    KernelMeta res;
+detail::KernelMeta Kernel::meta(IDevice* device) const {
+    detail::KernelMeta res;
     res.name = this->kernel_full_name_;
     res.source = this->kernel_src_.source_;
     res.programmable_core_type = get_kernel_programmable_core_type();
