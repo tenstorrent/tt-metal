@@ -126,7 +126,7 @@ async function run() {
         } else {
           previousRuns = [];
         }
-        latestCachedDate = getLatestCachedDate(previousRuns);
+        // latestCachedDate = getLatestCachedDate(previousRuns);
       } catch (e) {
         core.warning('Could not parse previous cache, ignoring.');
       }
