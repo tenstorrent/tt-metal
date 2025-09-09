@@ -1,6 +1,6 @@
 # How to Add a New Eltwise Unary Operator Using Macros
 
-This document describes the recommended approach for adding a new elementwise unary operator in `tt-metal` using the macro system introduced in `llk_math_eltwise_unary_sfpu_macros.h`. This replaces the previous pattern of intermediate function wrappers and per-op header files.
+This document describes the recommended approach for adding a new eltwise unary operator in `tt-metal` using the macro system introduced in `llk_math_eltwise_unary_sfpu_macros.h`. This replaces the previous pattern of intermediate function wrappers and per-op header files.
 
 ## Why Macros?
 
@@ -70,7 +70,9 @@ namespace ckernel {
 ## FAQ
 
 **Q: What if my op needs a special function pointer or extra runtime parameters?**
+
 A: Use the most specific macro available or add a new one if needed and document it
 
 **Q: How do I migrate an old op to the new macro system?**
+
 A: Remove the intermediate header, replace the function calls with the appropriate macro.
