@@ -17,7 +17,6 @@ Checks: >
   -bugprone-forwarding-reference-overload,
   -bugprone-implicit-widening-of-multiplication-result,
   -bugprone-integer-division,
-  -bugprone-multi-level-implicit-pointer-conversion,
   -bugprone-narrowing-conversions,
   -bugprone-optional-value-conversion,
   -bugprone-sizeof-expression,
