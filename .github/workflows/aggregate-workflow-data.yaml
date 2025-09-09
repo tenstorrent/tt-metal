@@ -85,10 +85,16 @@ jobs:
               per_page: 100
             });
             const targetPath = '.github/workflows/aggregate-workflow-data.yaml';
-            const previous = res.data.workflow_runs
+            let selectedId = '';
+            const candidates = res.data.workflow_runs
               .filter(r => r.path === targetPath && r.run_number < currentRunNumber)
-              .sort((a, b) => b.run_number - a.run_number)[0];
-            core.setOutput('run_id', previous ? String(previous.id) : '');
+              .sort((a, b) => b.run_number - a.run_number);
+            for (const r of candidates) {
+              const arts = await github.rest.actions.listWorkflowRunArtifacts({ owner, repo, run_id: r.id, per_page: 100 });
+              const hasValid = arts.data.artifacts.some(a => a.name === 'workflow-data' && !a.expired && a.size_in_bytes > 0);
+              if (hasValid) { selectedId = String(r.id); break; }
+            }
+            core.setOutput('run_id', selectedId);
   #     - name: Install analyze-workflow-data dependencies
   #       shell: bash
   #       working-directory: .github/actions/analyze-workflow-data
@@ -100,6 +106,19 @@ jobs:
           name: workflow-data
           path: ${{ github.workspace }}/prev
           run-id: ${{ steps.prev.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: List artifacts for selected previous run (debug)
+        if: ${{ steps.prev.outputs.run_id != '' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const run_id = Number('${{ steps.prev.outputs.run_id }}');
+            const arts = await github.rest.actions.listWorkflowRunArtifacts({ owner, repo, run_id, per_page: 100 });
+            core.info(`Artifacts for run ${run_id}:`);
+            for (const a of arts.data.artifacts) {
+              core.info(`- name=${a.name} id=${a.id} expired=${a.expired} size=${a.size_in_bytes}`);
+            }
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       # FIXME: Remove this once we have a proper artifact retrieval mechanism
