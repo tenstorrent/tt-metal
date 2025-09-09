@@ -52,10 +52,10 @@ void py_module(py::module& module) {
         "in0_block_w", &MatmulMultiCoreReuseProgramConfig::in0_block_w, R"doc(
         Block width for both input tensors along the K dimension (shared inner dimension).
 
-        This parameter controls how the K dimension is divided into blocks for both input_tensor_a
-        and input_tensor_b, since they share this dimension in matrix multiplication. Must be a
-        divisor of the K dimension and affects memory usage and compute efficiency for both tensors.
-        Typically set to multiples of 32 for optimal tile alignment.
+        This parameter determines the granularity of data blocks by specifying how many tiles wide
+        each block is along the K dimension. It affects the size of data chunks processed together
+        and impacts memory usage and compute efficiency for both tensors. Must be a divisor of the
+        K dimension. Suggested to be a multiple of 32 for tile alignment.
     )doc");
     matmul_multi_core_reuse_program_config.def_readwrite(
         "out_subblock_h", &MatmulMultiCoreReuseProgramConfig::out_subblock_h, R"doc(
@@ -151,10 +151,10 @@ void py_module(py::module& module) {
         "in0_block_w", &MatmulMultiCoreReuseMultiCastProgramConfig::in0_block_w, R"doc(
         Block width for both input tensors along the K dimension (shared inner dimension).
 
-        Controls how the K dimension is divided into blocks for both input_tensor_a and
-        input_tensor_b in multicast operations. Must be a divisor of the K dimension.
-        Smaller blocks can improve load balancing but may increase communication overhead
-        in multicast scenarios.
+        Determines the data granularity by specifying how many tiles wide each block is along
+        the K dimension for both input_tensor_a and input_tensor_b in multicast operations.
+        Must be a divisor of the K dimension. Smaller blocks can improve load balancing but
+        may increase communication overhead in multicast scenarios.
     )doc");
     matmul_multi_core_reuse_multicast_program_config.def_readwrite(
         "out_subblock_h", &MatmulMultiCoreReuseMultiCastProgramConfig::out_subblock_h, R"doc(
@@ -302,10 +302,10 @@ void py_module(py::module& module) {
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::in0_block_w, R"doc(
             Block width for both input tensors along the K dimension (shared inner dimension).
 
-            Controls the blocking of both input_tensor_a and input_tensor_b along the inner
-            dimension. This parameter is crucial for 1D multicast performance as it determines
-            the granularity of data that is broadcast across cores and affects memory access
-            patterns for both tensors.
+            Determines the data granularity by specifying how many tiles wide each block is
+            along the inner dimension for both input_tensor_a and input_tensor_b. This parameter
+            impacts 1D multicast performance as it affects the size of data chunks that
+            are broadcast across cores and memory access patterns for both tensors.
         )doc")
         .def_readwrite("out_subblock_h", &MatmulMultiCoreReuseMultiCast1DProgramConfig::out_subblock_h, R"doc(
             Height of output subblocks in tiles.
@@ -407,10 +407,10 @@ void py_module(py::module& module) {
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::in0_block_w, R"doc(
             Block width for both input tensors along the K dimension (shared inner dimension).
 
-            Controls the blocking of both input_tensor_a and input_tensor_b along the inner
-            dimension for DRAM-sharded operations. This parameter must be carefully chosen to
-            align with the DRAM sharding strategy and optimize memory bandwidth utilization
-            for both tensors.
+            Determines the data granularity by specifying how many tiles wide each block is
+            along the inner dimension for both input_tensor_a and input_tensor_b in DRAM-sharded
+            operations. This parameter must be chosen to align with the DRAM sharding
+            strategy and optimize memory bandwidth utilization for both tensors.
         )doc")
         .def_readwrite("per_core_M", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::per_core_M, R"doc(
             Number of output tiles each core processes along the M dimension.
