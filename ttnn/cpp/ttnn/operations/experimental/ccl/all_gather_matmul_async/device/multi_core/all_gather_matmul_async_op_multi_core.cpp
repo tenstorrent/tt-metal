@@ -170,7 +170,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
             num_workers_per_direction_opt,
             num_buffers_per_channel,
             core_grid_offset,
-            false);  // backward = false by default
+            false);  // reverse_order = false by default
     const auto all_gather_override_runtime_arguments_callback =
         program_with_callbacks.override_runtime_arguments_callback;
 

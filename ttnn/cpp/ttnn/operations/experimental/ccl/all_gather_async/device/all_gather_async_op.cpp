@@ -151,6 +151,11 @@ std::vector<Tensor> AllGatherAsync::create_output_tensors(
 AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor) const {
     // Check for minimal sharded case
     if (this->use_all_gather_async_llama_sharded) {
+        TT_FATAL(
+            !this->reverse_order,
+            "Reversed all-gather (reverse_order=true) is not yet supported with llama-optimized variants "
+            "(use_all_gather_async_llama_sharded=true). Please use the regular all_gather_async API instead of "
+            "all_gather_async_reversed.");
         return AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED;
     } else {
         TT_FATAL(this->semaphore.size() == 2, "Default implementation requires 2 semaphores");
@@ -247,7 +252,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
                 this->chunks_per_sync,
                 this->num_workers_per_link,
                 this->num_buffers_per_channel,
-                this->backward);
+                this->reverse_order);
     }
 }
 
@@ -277,7 +282,7 @@ tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::ve
         this->num_buffers_per_channel,
         this->use_all_gather_async_llama_sharded,
         this->use_optimal_ccl_for_llama,
-        this->backward,
+        this->reverse_order,
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -301,7 +306,7 @@ Tensor all_gather_async_impl(
     bool use_all_gather_async_llama_sharded,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool backward) {
+    bool reverse_order) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "all_gather_async op is only supported for Fast Dispatch");
@@ -335,7 +340,7 @@ Tensor all_gather_async_impl(
                    std::nullopt,
                    std::nullopt,
                    std::nullopt,
-                   backward),
+                   reverse_order),
                {input_tensor})
         .at(0);
 }
@@ -357,7 +362,7 @@ Tensor all_gather_async_impl(
     const std::optional<uint32_t>& chunks_per_sync,
     const std::optional<uint32_t>& num_workers_per_link,
     const std::optional<uint32_t>& num_buffers_per_channel,
-    bool backward) {
+    bool reverse_order) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "all_gather_async op is only supported for Fast Dispatch");
@@ -404,7 +409,7 @@ Tensor all_gather_async_impl(
                    chunks_per_sync,
                    num_workers_per_link,
                    num_buffers_per_channel,
-                   backward),
+                   reverse_order),
                {input_tensor},
                {},
                optional_output_tensors)
@@ -425,7 +430,7 @@ Tensor all_gather_async_impl(
     bool use_all_gather_async_llama_sharded,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool backward) {
+    bool reverse_order) {
     const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
@@ -464,7 +469,7 @@ Tensor all_gather_async_impl(
                    std::nullopt,
                    std::nullopt,
                    std::nullopt,
-                   backward},
+                   reverse_order},
                {input_tensor},
                {},
                optional_output_tensors)
@@ -483,7 +488,7 @@ Tensor all_gather_async(
     bool use_optimal_ccl_for_llama,
     bool use_all_gather_async_llama_sharded,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool backward) {
+    bool reverse_order) {
     std::vector<IDevice*> devices;
     return all_gather_async_impl(
         input_tensor,
@@ -497,7 +502,7 @@ Tensor all_gather_async(
         use_all_gather_async_llama_sharded,
         use_optimal_ccl_for_llama,
         barrier_semaphore,
-        backward);
+        reverse_order);
 }
 
 Tensor all_gather_async(
@@ -516,7 +521,7 @@ Tensor all_gather_async(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    bool backward) {
+    bool reverse_order) {
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
 
     return all_gather_async_impl(
@@ -536,7 +541,7 @@ Tensor all_gather_async(
         chunks_per_sync,
         num_workers_per_link,
         num_buffers_per_channel,
-        backward);
+        reverse_order);
 }
 
 Tensor all_gather_async(
@@ -553,7 +558,7 @@ Tensor all_gather_async(
     bool use_all_gather_async_llama_sharded,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool backward) {
+    bool reverse_order) {
     return all_gather_async_impl(
         input_tensor,
         dim,
@@ -568,7 +573,7 @@ Tensor all_gather_async(
         use_all_gather_async_llama_sharded,
         use_optimal_ccl_for_llama,
         barrier_semaphore,
-        backward);
+        reverse_order);
 }
 
 }  // namespace ccl
