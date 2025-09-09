@@ -28,15 +28,16 @@ struct Pool2D {
         MemoryConfig memory_config_;
         bool count_include_pad_;
         std::optional<int32_t> divisor_override_;
+        bool return_indices_;
         uint32_t memory_used;
     };
 
     struct tensor_args_t {
-        const Tensor& input_tensor_;
+        const std::vector<Tensor>& input_tensors_;
     };
 
     using spec_return_value_t = TensorSpec;
-    using tensor_return_value_t = Tensor;
+    using tensor_return_value_t = std::vector<Tensor>;
 
     struct MultiCore {
         struct shared_variables_t {
@@ -44,7 +45,9 @@ struct Pool2D {
             tt::tt_metal::KernelHandle reader1_kernel{};
             tt::tt_metal::KernelHandle compute_kernel{};
             tt::tt_metal::CBHandle raw_in_cb{};
-            tt::tt_metal::CBHandle cb_out{};
+            tt::tt_metal::CBHandle raw_in_idx_cb{};
+            tt::tt_metal::CBHandle out_cb{};
+            tt::tt_metal::CBHandle out_idx_cb{};
             uint32_t ncores{};
             tt::tt_metal::DeviceStorage reader_indices_storage;
             tt::tt_metal::DeviceStorage scalar_config_storage;
@@ -69,19 +72,20 @@ struct Pool2D {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
-    static Tensor create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
-        const operation_attributes_t&, const tensor_args_t&, const Tensor&);
+        const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor,
+        const std::vector<Tensor>& input_tensors,
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         Pool2DType pool_type,
         DataType output_dtype,
         MemoryConfig memory_config,
         bool count_include_pad,
         std::optional<int32_t> divisor_override,
+        bool return_indices,
         uint32_t memory_used);
 };
 
