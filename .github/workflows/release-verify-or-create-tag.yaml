@@ -82,8 +82,8 @@ jobs:
                 });
                 return data; // { ref, node_id, url, object: { sha, type, url } }
               } catch (e) {
-                if (e.status === 404) return null;
-                core.error(`getRef failed: ${e.status} ${e.message}`);
+                if (e.response.status === 404) return null;
+                core.error(`getRef failed: ${e.response.status} ${e.response.data.message}`);
                 throw e;
               }
             }
