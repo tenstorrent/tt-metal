@@ -1,5 +1,5 @@
 name: "(Single-card) Demo tests"
-run-name: "(Single-card) Demo tests${{ github.event.schedule == '0 */4 * * 0,6' && ' (with perf runs)' || ' (no perf)' }}"
+run-name: "(Single-card) Demo tests${{ (inputs.run-perf-tests || (github.event_name != 'workflow_dispatch' && github.event.schedule == '0 */4 * * 0,6')) && ' (with perf runs)' || ' (no perf)' }}"
 
 on:
   workflow_dispatch:
