@@ -125,7 +125,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     TT_FATAL(param_in_data_format == tt::DataFormat::Float16_b, "Parameters input data format must be Float16_b");
 
     tt::DataFormat grad_data_format = datatype_to_dataformat_converter(grad.dtype());
-    TT_FATAL(grad_data_format == tt::DataFormat::Float32, "Gradient input data format must be Float32");
+    TT_FATAL(grad_data_format == tt::DataFormat::Float16_b, "Gradient input data format must be Float16_b");
 
     uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
     uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
@@ -169,7 +169,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         program, all_cores, kParamInCbIndex, param_in_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_grad = create_circular_buffer(
-        program, all_cores, kGradCbIndex, grad_data_format, float32_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kGradCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_output = create_circular_buffer(
         program, all_cores, kOutputCbIndex, param_in_data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
@@ -209,7 +209,6 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for fused sgd
     // -------------------------------------------------------------------------
-
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
         num_rows_per_core_group_1,  // per_core_block_cnt
@@ -275,6 +274,7 @@ void SGDFusedProgramFactory::override_runtime_arguments(
     auto& sgd_fused_writer_kernel_id = shared_variables.writer_kernel_id;
     auto& sgd_fused_compute_kernel_group_1_id = shared_variables.compute_kernel_group_1_id;
     auto& sgd_fused_compute_kernel_group_2_id = shared_variables.compute_kernel_group_2_id;
+    auto& core_group_1 = shared_variables.core_group_1;
     auto& core_group_2 = shared_variables.core_group_2;
 
     uint32_t num_cores = shared_variables.num_cores;
@@ -302,14 +302,14 @@ void SGDFusedProgramFactory::override_runtime_arguments(
             runtime_args[kParamInAddrIdx] = param_in_buffer->address();
             runtime_args[kGradAddrIdx] = grad_buffer->address();
         }
-
-        {
+        if (core_group_1.contains(core)) {
             auto& runtime_args = compute_group_1_runtime_args[core.x][core.y];
             runtime_args[kLrIdx] = std::bit_cast<uint32_t>(lr);
-        }
-        {
+        } else if (core_group_2.contains(core)) {
             auto& runtime_args = compute_group_2_runtime_args[core.x][core.y];
             runtime_args[kLrIdx] = std::bit_cast<uint32_t>(lr);
+        } else {
+            TT_THROW("Core not in specified core ranges.");
         }
         // Update output buffer for the writer kernel
         {
