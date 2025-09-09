@@ -33,7 +33,6 @@ void MAIN {
         for (uint32_t i = 0; i < num_single_transfer; ++i) {
             copy_block_matmul_partials(in_cb_id, i, i, 1);
         }
-        
         // Pack num_single_transfer tiles to out_cb
         pack_tile_block(0, out_cb_id, num_single_transfer);
 
