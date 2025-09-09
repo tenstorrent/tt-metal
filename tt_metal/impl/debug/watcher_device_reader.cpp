@@ -204,7 +204,8 @@ string get_noc_target_str(
 dev_msgs::launch_msg_t::ConstView get_valid_launch_message(dev_msgs::mailboxes_t::ConstView mbox_data) {
     uint32_t launch_msg_read_ptr = mbox_data.launch_msg_rd_ptr();
     if (mbox_data.launch()[launch_msg_read_ptr].kernel_config().enables() == 0) {
-        launch_msg_read_ptr = (launch_msg_read_ptr - 1 + launch_msg_buffer_num_entries) % launch_msg_buffer_num_entries;
+        launch_msg_read_ptr = (launch_msg_read_ptr - 1 + dev_msgs::launch_msg_buffer_num_entries) %
+                              dev_msgs::launch_msg_buffer_num_entries;
     }
     return mbox_data.launch()[launch_msg_read_ptr];
 }
@@ -545,15 +546,16 @@ void WatcherDeviceReader::Core::Dump() const {
     ValidateKernelIDs();
 
     // Whether or not watcher data is available depends on a flag set on the device.
-    if (mbox_data_.watcher().enable() != WatcherEnabled and mbox_data_.watcher().enable() != WatcherDisabled) {
+    if (mbox_data_.watcher().enable() != dev_msgs::WatcherEnabled and
+        mbox_data_.watcher().enable() != dev_msgs::WatcherDisabled) {
         TT_THROW(
             "Watcher read invalid watcher.enable on {}. Read {}, valid values are {} and {}.",
             core_str_,
             mbox_data_.watcher().enable(),
-            WatcherEnabled,
-            WatcherDisabled);
+            dev_msgs::WatcherEnabled,
+            dev_msgs::WatcherDisabled);
     }
-    bool enabled = (mbox_data_.watcher().enable() == WatcherEnabled);
+    bool enabled = (mbox_data_.watcher().enable() == dev_msgs::WatcherEnabled);
 
     if (enabled) {
         // Dump state only gathered if device is compiled w/ watcher
@@ -877,19 +879,19 @@ void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
 
 void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
     char code = 'U';
-    if (state == RUN_MSG_INIT) {
+    if (state == dev_msgs::RUN_MSG_INIT) {
         code = 'I';
-    } else if (state == RUN_MSG_GO) {
+    } else if (state == dev_msgs::RUN_MSG_GO) {
         code = 'G';
-    } else if (state == RUN_MSG_DONE) {
+    } else if (state == dev_msgs::RUN_MSG_DONE) {
         code = 'D';
-    } else if (state == RUN_MSG_RESET_READ_PTR) {
+    } else if (state == dev_msgs::RUN_MSG_RESET_READ_PTR) {
         code = 'R';
-    } else if (state == RUN_SYNC_MSG_LOAD) {
+    } else if (state == dev_msgs::RUN_SYNC_MSG_LOAD) {
         code = 'L';
-    } else if (state == RUN_SYNC_MSG_WAITING_FOR_RESET) {
+    } else if (state == dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET) {
         code = 'W';
-    } else if (state == RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
+    } else if (state == dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
         code = 'S';
     }
     if (code == 'U') {
@@ -898,11 +900,11 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
             "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, or {})",
             virtual_coord_.str(),
             state,
-            RUN_MSG_INIT,
-            RUN_MSG_GO,
-            RUN_MSG_DONE,
-            RUN_SYNC_MSG_LOAD,
-            RUN_SYNC_MSG_WAITING_FOR_RESET);
+            dev_msgs::RUN_MSG_INIT,
+            dev_msgs::RUN_MSG_GO,
+            dev_msgs::RUN_MSG_DONE,
+            dev_msgs::RUN_SYNC_MSG_LOAD,
+            dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET);
     } else {
         fprintf(reader_.f, "%c", code);
     }
@@ -935,7 +937,7 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
             virtual_coord_.str(),
             launch_msg_.kernel_config().brisc_noc_id());
     }
-    if (mbox_data_.go_message_index() < go_message_num_entries) {
+    if (mbox_data_.go_message_index() < dev_msgs::go_message_num_entries) {
         DumpRunState(mbox_data_.go_messages()[mbox_data_.go_message_index()].signal());
     } else {
         LogRunningKernels();
@@ -943,7 +945,7 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
             "Watcher data corruption, unexpected go message index on core {}: {} (expected < {})",
             virtual_coord_.str(),
             mbox_data_.go_message_index(),
-            go_message_num_entries);
+            dev_msgs::go_message_num_entries);
     }
 
     fprintf(reader_.f, "|");
