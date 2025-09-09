@@ -21,10 +21,12 @@ on:
         default: "config-t3000"
 
 jobs:
+  # create a template job that is not actually run hence the if: false
   profiler_job_template:
     if: false
+    # runs-on is required by GH even for template jobs. This is never used
     runs-on: ubuntu-latest
-    # Anchor the entire container block
+    # Anchor the container block
     container: &container-config
       image: ${{ inputs.docker-image }}
       env:
@@ -50,7 +52,7 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
 
-    # Anchor the entire sequence of steps
+    # Anchor the steps
     steps: &steps-sequence
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
@@ -97,4 +99,3 @@ jobs:
     container: *container-config
     defaults: *defaults-config
     steps: *steps-sequence
-    
