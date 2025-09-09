@@ -27,7 +27,7 @@ pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[1-pretrain
   ```
   models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution0-103-1-act_dtype0-weight_dtype0-device_params0]
   ```
-- For `640x640`, end-2-end perf is `56` FPS
+- For `640x640`, end-2-end perf is `75` FPS
   ```
   models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution1-46-1-act_dtype0-weight_dtype0-device_params0]
   ```
