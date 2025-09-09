@@ -1188,6 +1188,24 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     return sharded_input_top_left_indices;
 }
 
+std::vector<uint16_t> generate_core_starting_indices(
+    const std::vector<uint32_t>& op_trace_metadata, const std::vector<ShardBoundary>& shard_boundaries) {
+    std::vector<uint16_t> starting_indices;
+    for (const auto& item : shard_boundaries) {
+        const auto& [output_shard_start, output_shard_end] = item.output_range;
+        const auto& [input_shard_start, input_shard_end] = item.input_range;
+        if (output_shard_start >= op_trace_metadata.size()) {
+            // this core has no output
+            starting_indices.push_back(0);
+            continue;
+        }
+        TT_ASSERT(input_shard_start == op_trace_metadata[output_shard_start]);
+        starting_indices.push_back(op_trace_metadata[output_shard_start]);
+    }
+
+    return starting_indices;
+}
+
 std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input, uint32_t extend_with_zeroes) {
     std::vector<uint16_t> flattened_vector;
     for (auto sub_vec : input) {

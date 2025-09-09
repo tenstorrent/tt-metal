@@ -284,9 +284,48 @@ void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(34);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(35);
     constexpr bool return_indices = (bool)get_compile_time_arg_val(36);
-    constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
+    constexpr uint32_t pad_t = get_compile_time_arg_val(37);
+    constexpr uint32_t pad_l = get_compile_time_arg_val(38);
+    constexpr uint32_t in_h_padded = get_compile_time_arg_val(39);
 
-    // TODO this should go in the initialization condition below
+    constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
+
+    // since kernels can start in padded regions we need to have "indexes" in these regions
+    // we choose a paradigm where we padding indexes must satisfy the following conditions:
+    //   1. they are 1 less than the index to the right (whether it's padding or not)
+    //   2. they are in_w less than the index below (whether it's padding or not)
+    // this results in repeat indexes, negative indexes and other such effects, but since
+    // padding is never chosen as a max index, validity of the padding index is unimportant
+    // we only care that when they are incremented they result in the correct index which
+    // this paradigm guarantees
+    // Note we also use unsigned integers and allow wrapping for negatives to preserve range
+    // and since all negative values correspond to padding indexes which will never be a max
+    uint16_t init_index = 0;
+    if constexpr (reader_id == 0 && return_indices) {
+        const uint16_t start_index = (uint16_t)get_arg_val<uint32_t>(0);
+        const uint16_t start_mod_batch = start_index % (in_w_padded * in_h_padded);
+        const uint16_t start_row = start_mod_batch / in_w_padded;
+        const uint16_t start_col = start_mod_batch % in_w_padded;
+        if (start_row <= pad_t) {
+            // top left is in top padding, we increment from the padding index in the top left
+            // of the padded tensor
+            uint16_t global_top_left_pad_idx = -(uint16_t)pad_l - (uint16_t)pad_t * in_w;
+            init_index = global_top_left_pad_idx + start_col + start_row * in_w;
+        } else if (start_col <= pad_l) {
+            // top left is in left padding, we increment from the padding index in the leftmost
+            // column of the starting row of the padded tensor
+            uint16_t leftmost_valid_index = start_row * in_w;
+            uint16_t start_row_left_pad_idx = leftmost_valid_index - (uint16_t)pad_l;
+            init_index = start_row_left_pad_idx + start_col;
+        } else {
+            // top left is in valid region, we choose the valid index
+            init_index = (start_row - (uint16_t)pad_t) * in_w + (start_col - (uint16_t)pad_l);
+        }
+
+        DPRINT << " starting index: " << init_index << "\n";
+    }
+
+    constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
     if constexpr (last_tile_is_partial) {
         clear_out_tiles<in_cb_id, clear_value_cb_id>();
     }
@@ -349,8 +388,6 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_l1_addr);
     uint32_t config_l1_addr;
     volatile tt_l1_ptr uint16_t* config_ptr;
-
-    constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
 
     uint32_t segments_counter = 1;
     uint32_t counter = reader_id;

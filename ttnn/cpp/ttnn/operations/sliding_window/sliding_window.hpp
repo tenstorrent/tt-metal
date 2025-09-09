@@ -163,6 +163,9 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     uint32_t reader1_datums = 0,
     bool pad_cores = true);
 
+std::vector<uint16_t> generate_core_starting_indices(
+    const std::vector<uint32_t>& op_trace_metadata, const std::vector<ShardBoundary>& shard_boundaries);
+
 std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input, uint32_t extend_with_zeroes = 0);
 
 uint32_t get_repeat_factor_for_replicating_nhw_config_across_grid(const ParallelConfig& p_config);

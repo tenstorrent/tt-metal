@@ -229,6 +229,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t ceil_pad_w,
     bool ceil_mode,
     bool return_indices,
+    std::vector<uint16_t> core_starting_indices,
     bool count_include_pad,
     uint32_t dilation_h,
     uint32_t dilation_w,
@@ -239,18 +240,22 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     distributed::MeshDevice* device = inputs[0].device();
 
     const tt::tt_metal::DeviceStorage& reader_indices_storage = reader_indices.device_storage();
+    const bool is_block_sharded = inputs[0].memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
     // distributing out_hw across the grid
     const auto all_cores = inputs[0].shard_spec().value().grid;
     const uint32_t ncores = all_cores.num_cores();
+    const uint32_t num_cores_x = device->compute_with_storage_grid_size().x;
+    const uint32_t rectangular_x = is_block_sharded ? all_cores.ranges()[0].end_coord.x + 1 : num_cores_x;
     const uint32_t out_nhw_per_core = outputs[0].shard_spec()->shape[0];
 
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
     FactoryParameters params =
         get_factory_parameters(num_shards_c, inputs[0], kernel_h, kernel_w, in_c, pool_type, return_indices);
-    uint32_t pad_h = pad_t + pad_b;
-    uint32_t pad_w = pad_l + pad_r;
+    const uint32_t pad_h = pad_t + pad_b;
+    const uint32_t pad_w = pad_l + pad_r;
+    const uint32_t in_h_padded = in_h + pad_h + ceil_pad_h;
     const bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
 
@@ -409,6 +414,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         tt::tt_metal::create_cb(
             tile_idx_tmp_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", tile_idx_tmp_cb_id, params.index_nbytes * tile_elems, 1);
+
+        // compute increments for index tile population
+        uint32_t right_inc = stride_w;
+        uint32_t down_left_wrap_inc = in_w * stride_h + (1 - out_w) * stride_w;
+        uint32_t init_top_left_idx = -pad_l - pad_t * in_w;
     }
 
     // output of reduce == writer to write
@@ -537,7 +547,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         stride_w,                       // 33
         dilation_h,                     // 34
         dilation_w,                     // 35
-        (uint32_t)return_indices};      // 36
+        (uint32_t)return_indices,       // 36
+        pad_t,                          // 37
+        pad_l,                          // 38
+        in_h_padded};                   // 39
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
@@ -557,6 +570,21 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         .compile_args = reader1_ct_args};
     auto reader1_kernel =
         params.split_reader ? CreateKernel(program, reader_kernel_fname, all_cores, reader1_config) : 0;
+
+    // set the starting indices for each core as runtime args
+    if (return_indices) {
+        printf("ncores: %d\n", ncores);
+        printf("core_starting_indices size: %zu\n", core_starting_indices.size());
+        TT_FATAL(core_starting_indices.size() == ncores, "core starting indices size should match number of cores");
+        for (uint32_t core_i = 0; core_i < ncores; core_i++) {
+            uint32_t core_x_i = core_i % rectangular_x;
+            uint32_t core_y_i = core_i / rectangular_x;
+            CoreRange core(CoreCoord(core_x_i, core_y_i), CoreCoord(core_x_i, core_y_i));
+
+            std::vector<uint32_t> reader_rt_args0 = {(uint32_t)(core_starting_indices[core_i])};
+            SetRuntimeArgs(program, reader0_kernel, core, reader_rt_args0);
+        }
+    }
 
     /**
      * Compute Kernel: input cb -> tilize_block -> input tiles -> reduce_h max -> output tiles -> untilize_block ->
@@ -735,6 +763,10 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
     std::vector<std::vector<uint16_t>> top_left_indices =
         sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, stride_w);
+    std::vector<uint16_t> core_starting_indices;
+    if (return_indices) {
+        core_starting_indices = sliding_window::generate_core_starting_indices(op_trace_metadata, shard_boundaries);
+    }
 
     Tensor reader_indices = sliding_window::construct_on_host_config_tensor(top_left_indices, parallel_config);
     Tensor reader_indices_on_device =
@@ -765,6 +797,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         ceil_pad_w,
         ceil_mode,
         return_indices,
+        core_starting_indices,
         count_include_pad,
         dilation_h,
         dilation_w,
