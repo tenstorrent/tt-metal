@@ -138,7 +138,6 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
         const auto& src_device = devices[src_idx];
         auto src_fabric_node_id =
             control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_devices()[0]->id());
-        uint32_t src_fabric_chip_id = src_fabric_node_id.chip_id;
 
         std::vector<uint32_t> result_data;
         tt::tt_metal::distributed::ReadShard(
@@ -854,13 +853,6 @@ TEST_F(Fabric2DDynamicFixture, TestGetNextHopRouterDirection1MeshAllToAll) {
 
 // Multi-Mesh Test - Using parameterized test with connected mesh descriptor
 TEST_P(T3kCustomMeshGraphFabric2DDynamicFixture, TestGetNextHopRouterDirectionMultiMesh) {
-    auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
-    CustomMeshGraphFabric2DDynamicFixture::SetUp(
-        mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
-    RunGetNextHopRouterDirectionTest(this, true);
-}
-
-TEST_P(T3kCustomMeshGraphFabric2DDynamicFixture, TestGetNextHopRouterDirectionDisjointMultiMesh) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
     CustomMeshGraphFabric2DDynamicFixture::SetUp(
         mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));

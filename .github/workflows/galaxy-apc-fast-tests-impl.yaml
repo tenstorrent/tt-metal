@@ -1,4 +1,4 @@
-name: "[internal] TG demo all post commit"
+name: "[internal] Galaxy APC fast tests"
 
 on:
   workflow_call:
@@ -19,10 +19,15 @@ on:
       topology:
         required: false
         type: string
-        default: "config-tg"
+        default: "topology-6u"
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        required: false
+        type: boolean
 
 jobs:
-  tg-demo-all-post-commit-tests:
+  galaxy-apc-fast-tests:
     strategy:
       fail-fast: false
       matrix:
@@ -39,8 +44,6 @@ jobs:
     runs-on:
       - arch-wormhole_b0
       - ${{ inputs.topology }}
-      - bare-metal
-      - pipeline-functional
       - ${{ inputs.runner-label }}
     container:
         image: ${{ inputs.docker-image }}
@@ -66,6 +69,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
       - name: Run TG all-post-commit tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |

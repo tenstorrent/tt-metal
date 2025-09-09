@@ -231,8 +231,7 @@ FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
         this->is_receiver_channel_serviced_);
 }
 
-FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
-    this->topology = topology;
+FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topology(topology) {
     const bool is_2D_routing = FabricContext::is_2D_topology(topology);
     uint32_t num_sender_channels = get_sender_channel_count(is_2D_routing);
     uint32_t num_downstream_edms = get_downstream_edm_count(is_2D_routing);
@@ -1662,8 +1661,8 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm_impl(
         [this, &vc1_edm_builder](auto&& builder_ref) {
             auto& builder = builder_ref.get();
 
-            const auto ds_noc_x = builder.get_noc_x();
-            const auto ds_noc_y = builder.get_noc_y();
+            [[maybe_unused]] const auto ds_noc_x = builder.get_noc_x();
+            [[maybe_unused]] const auto ds_noc_y = builder.get_noc_y();
             eth_chan_directions ds_dir = builder.get_direction();
 
             log_debug(

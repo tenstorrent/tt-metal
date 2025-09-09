@@ -89,7 +89,8 @@ def gen_func_with_cast_tt(gen_func, dtype):
             x = x.to(torch.int32)
 
         elif is_dtype(dtype, ttnn.float32, getattr(DataType, "FLOAT32", None)):
-            x = x.to(torch.float32)
+            if x.dtype != torch.float32:
+                x = x.to(torch.float32)
 
         else:
             logger.warning(f"Unknown dtype {dtype} passed to gen_func_with_cast_tt")

@@ -41,7 +41,6 @@ from models.common.utility_functions import (
     nearest_32,
     nearest_y,
     pad_activation,
-    pad_and_fold_conv_activation_for_unity_stride,
     pad_and_fold_conv_filters_for_unity_stride,
     pad_by_zero,
     pad_weight,

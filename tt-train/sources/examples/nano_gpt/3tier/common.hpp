@@ -5,7 +5,10 @@
 #include <ttnn/distributed/create_socket.hpp>
 
 #include "core/distributed/distributed.hpp"
+#include "models/distributed/gpt2.hpp"
+#include "models/distributed/llama.hpp"
 #include "models/gpt2.hpp"
+#include "models/llama.hpp"
 
 // namespace name can't start with a digit
 namespace three_tier_arch {
@@ -34,7 +37,7 @@ struct TrainingConfig {
     std::string tokenizer_path = std::string(DATA_FOLDER) + gpt2_tokenizer_file_name;
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
-    ttml::models::gpt2::TransformerConfig transformer_config;
+    std::variant<ttml::models::gpt2::TransformerConfig, ttml::models::llama::LlamaConfig> transformer_config;
 
     bool enable_mpi = false;
     uint32_t num_mh_workers = 1U;
