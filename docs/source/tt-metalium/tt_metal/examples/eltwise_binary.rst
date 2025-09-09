@@ -9,7 +9,7 @@ Although looking trivial, this example introduces essential concepts that are us
 
 We'll go through any new code section by section. This builds on top of
 previous examples. Note that we have this exact, full example program is located under
-``tt_metal/programming_examples/eltwise_binary``, so you can follow along.
+``tt_metal/programming_examples/metal_example_eltwise_binary``, so you can follow along.
 
 To build and execute, you may use the following commands. Note that we include
 the necessary environment variables here, but you may possibly need more
@@ -20,7 +20,7 @@ depending on the most up-to-date installation methods.
     export TT_METAL_HOME=</path/to/tt-metal>
     ./build_metal.sh --build-programming-examples
     # To run the example
-    ./build/programming_examples/eltwise_binary
+    ./build/programming_examples/metal_example_eltwise_binary
 
 Program setup
 -------------

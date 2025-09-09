@@ -9,14 +9,14 @@ This example is similar to the previous example of adding two vectors using the 
 
 We'll go through this code section by section. The fully source code for this example is available under the ``tt_metal/programming_examples/eltwise_sfpu`` directory.
 
-Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``eltwise_sfpu`` executable in the ``build/programming_examples`` directory. For example:
+Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``metal_example_eltwise_sfpu`` executable in the ``build/programming_examples`` directory. For example:
 
 
 .. code-block:: bash
 
     export TT_METAL_HOME=</path/to/tt-metal>
     ./build_metal.sh
-    ./build/programming_examples/eltwise_sfpu
+    ./build/programming_examples/metal_example_eltwise_sfpu
 
 Program setup
 -------------
