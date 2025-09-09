@@ -26,7 +26,9 @@ check_cols = ["Inference Time (sec)"]
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Merge device performance CSV reports and validate key results. Use 'REPORT' to generate the merged report, 'CHECK' to validate results, or leave empty to do both.")
+    parser = argparse.ArgumentParser(
++        description="Merge device performance CSV reports and validate key results. Use 'REPORT' to generate the merged report, 'CHECK' to validate results, or leave empty to do both."
++    )
     parser.add_argument(
         "modelperf",
         type=Path,
