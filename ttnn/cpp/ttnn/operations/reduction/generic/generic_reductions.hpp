@@ -9,6 +9,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/pool/pool_utils.hpp"
 
 namespace ttnn {
 namespace operations::reduction {
@@ -36,13 +37,13 @@ struct Reduce {
 
 // Entry point for pool op, which uses non-standard tensors that cannot be padded.
 [[deprecated]]
-Tensor pool_sum(
+Tensor pool(
+    const pool::Pool2DType pool_type,
     const Tensor& input_tensor_arg,
-    int dim_arg,
+    int dim,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar);
-
 }  // namespace operations::reduction
 
 // Generic reductions
