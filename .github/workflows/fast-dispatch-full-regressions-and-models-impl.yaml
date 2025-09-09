@@ -76,7 +76,7 @@ jobs:
 
           # Stable set (CIv2)
           STABLE_CIv2='[
-            # {"model":"yolov8s"},
+            {"model":"yolov8s"},
             # {"model":"vadv2"}
           ]'
 
