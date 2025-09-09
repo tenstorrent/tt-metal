@@ -93,6 +93,12 @@ TEST(BigMeshDualRankTest, LocalRankBinding) {
 
     EXPECT_THAT(translated_ranks, ElementsAre(0, 1));
     EXPECT_NE(MetalContext::instance().global_distributed_context().id(), mesh_subcontext->id());
+
+    const auto local_subcontext = control_plane.get_host_local_context();
+    ASSERT_NE(local_subcontext, nullptr);
+    EXPECT_EQ(local_subcontext->rank(), multihost::Rank(0));
+    EXPECT_EQ(local_subcontext->size(), multihost::Size(1));
+    EXPECT_NE(MetalContext::instance().global_distributed_context().id(), local_subcontext->id());
 }
 
 TEST_P(BigMeshDualRankMeshShapeSweepFixture, MeshDeviceValidation) { EXPECT_EQ(mesh_device_->shape(), GetParam()); }
