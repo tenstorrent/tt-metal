@@ -19,6 +19,7 @@
 #include "memcpy.hpp"
 #include "command_queue_common.hpp"
 #include "system_memory_cq_interface.hpp"
+#include <tt-logger/tt-logger.hpp>
 // #include <umd/device/driver_atomics.h> - Should be included as it is used here, but the file is missing include
 // guards
 #include <umd/device/tt_io.hpp>
@@ -26,6 +27,7 @@
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/xy_pair.h>
 #include <tracy/Tracy.hpp>
+#include <utils.hpp>
 
 enum class CoreType;
 
@@ -396,12 +398,38 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     uint32_t write_toggle;
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
-    do {
+    // Body of the operation to be timed out
+    auto wait_operation_body =
+        [this, cq_id, &exit_condition, &write_ptr_and_toggle, &write_ptr, &write_toggle, &cq_interface]() -> uint32_t {
         write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
-    } while (cq_interface.completion_fifo_rd_ptr == write_ptr and
-             cq_interface.completion_fifo_rd_toggle == write_toggle and not exit_condition.load());
+
+        if (exit_condition.load()) {
+            return write_ptr_and_toggle;
+        }
+
+        return write_ptr_and_toggle;
+    };
+
+    // Condition to check if the operation should continue
+    auto wait_condition = [&cq_interface, &write_ptr, &write_toggle]() -> bool {
+        return cq_interface.completion_fifo_rd_ptr == write_ptr and
+               cq_interface.completion_fifo_rd_toggle == write_toggle;
+    };
+
+    // Handler for the timeout
+    auto on_timeout = [&exit_condition]() {
+        exit_condition.store(true);
+        TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
+    };
+
+    tt::utils::loop_and_wait_with_timeout(
+        wait_operation_body,
+        wait_condition,
+        on_timeout,
+        tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations());
+
     return write_ptr_and_toggle;
 }
 
