@@ -158,12 +158,10 @@ void set_or_update_runtime_arguments(
             }
 
             // Initialize dimensions for TTS
-            const auto out_rank = output.logical_shape().rank();
             bND = extract_nD_dims(value_true_tensor.value(), out_rank);  // value_true nD
 
             // Extract shape dimensions for value_true (b) - TTS specific
             const auto value_true_shape = value_true_tensor.value().padded_shape();
-            const auto& tile = output.tensor_spec().tile();
 
             // Get shape dims for value_true (b) - TTS specific
             bD = value_true_shape.rank() >= 5 ? value_true_shape[-5] : 1;
