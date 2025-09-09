@@ -9,17 +9,18 @@ ChipSpec: {
 }
 
 Board: [
-  { name: P150,
+  { name: 4x_P150,
     type: Mesh,
     topology: [1, 4]}
-]
+ ]
 
+# Big-Mesh of 4x4 P150s
 Mesh: [
 {
   id: 0,
-  board: P150,
-  device_topology: [1, 4],
-  host_topology: [1, 1],
+  board: 4x_P150,
+  device_topology: [4, 4],
+  host_topology: [4, 1],
 }
 ]
 

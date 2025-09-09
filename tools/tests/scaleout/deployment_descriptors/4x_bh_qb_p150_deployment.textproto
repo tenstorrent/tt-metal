@@ -4,7 +4,7 @@ hosts: {
   rack: 1
   shelf_u: 10
   node_type: "p150_qb_node"
-  host: "bh-qb-01"
+  host: "tt-quietbox-2"
 }
 hosts: {
   hall: "SC_Floor_1"
@@ -12,7 +12,7 @@ hosts: {
   rack: 1
   shelf_u: 20
   node_type: "p150_qb_node"
-  host: "bh-qb-02"
+  host: "tt-quietbox-3"
 }
 hosts: {
   hall: "SC_Floor_1"
@@ -20,7 +20,7 @@ hosts: {
   rack: 1
   shelf_u: 30
   node_type: "p150_qb_node"
-  host: "bh-qb-03"
+  host: "tt-quietbox-4"
 }
 hosts: {
   hall: "SC_Floor_1"
@@ -28,5 +28,5 @@ hosts: {
   rack: 1
   shelf_u: 40
   node_type: "p150_qb_node"
-  host: "bh-qb-04"
+  host: "tt-quietbox-5"
 }

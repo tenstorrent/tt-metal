@@ -519,6 +519,11 @@ void PhysicalSystemDescriptor::validate_graphs() {
                     src_host != dst_host,
                     "Physical Discovery Error: Hostnames for connections marked as global should be different. "
                     "Please reset the system and try again.");
+                std::cout << "Ethernet Connections between " << src_host << " and " << dst_host << std::endl;
+                for (const auto& eth_conn : eth_conns) {
+                    std::cout << "Ethernet Connection: " << +eth_conn.src_chan << " -> " << +eth_conn.dst_chan
+                              << std::endl;
+                }
 
                 // Validate each global ethernet connection.
                 for (const auto& eth_conn : eth_conns) {

@@ -517,6 +517,7 @@ const MeshContainer<MeshHostRankId>& MeshGraph::get_host_ranks(MeshId mesh_id) c
 std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
     tt::tt_metal::ClusterType cluster_type, const std::string& root_dir) {
     auto it = cluster_type_to_mesh_graph_descriptor.get().find(cluster_type);
+    log_debug(tt::LogFabric, "Getting mesh graph descriptor for cluster type {}: {}", cluster_type, it->second);
     if (it != cluster_type_to_mesh_graph_descriptor.get().end()) {
         return std::filesystem::path(root_dir) / MESH_GRAPH_DESCRIPTOR_DIR / it->second;
     }
