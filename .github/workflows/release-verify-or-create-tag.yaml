@@ -30,6 +30,8 @@ jobs:
   verify-create-new-tag:
     permissions: write-all
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     outputs:
       version: ${{ steps.get-tag-version.outputs.version }}
     steps:
