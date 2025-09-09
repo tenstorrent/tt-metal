@@ -406,7 +406,6 @@ install(
         COMPONENT metalium-runtime
     FILE_SET
     toolchain
-        DESTINATION DESTINATION
-        ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium
         COMPONENT metalium-runtime
 )
