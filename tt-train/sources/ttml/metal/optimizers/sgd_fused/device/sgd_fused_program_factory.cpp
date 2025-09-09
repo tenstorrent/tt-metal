@@ -38,8 +38,6 @@ constexpr auto kParamInCbIndex = tt::CBIndex::c_0;
 constexpr auto kGradCbIndex = tt::CBIndex::c_1;
 constexpr auto kLrCbIndex = tt::CBIndex::c_2;
 
-constexpr auto kComputeCbIndex = tt::CBIndex::c_8;
-
 constexpr auto kOutputCbIndex = tt::CBIndex::c_16;
 
 }  // namespace
