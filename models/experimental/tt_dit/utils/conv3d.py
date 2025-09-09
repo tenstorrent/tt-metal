@@ -4,6 +4,8 @@ from loguru import logger
 import collections
 from itertools import repeat
 
+ALIGNMENT = 32
+
 
 def _ntuple(x, n):
     if isinstance(x, collections.abc.Iterable):
@@ -15,21 +17,23 @@ def _ntuple(x, n):
 def get_conv3d_config(in_channels, out_channels, kernel_size, stride, padding, padding_mode, grid_size):
     config_to_blocking = {
         # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
-        (96, 32, (3, 3, 3)): ...,
+        (96, 32, (3, 3, 3)): (96, 32, 1, 32, 2),
         (192, 96, (1, 3, 3)): (192, 96, 1, 4, 4),
         (96, 96, (3, 3, 3)): (96, 96, 1, 32, 2),
         (384, 192, (1, 3, 3)): (192, 96, 1, 16, 1),
-        (192, 192, (3, 3, 3)): ...,
-        (16, 384, (3, 3, 3)): ...,
-        (192, 384, (3, 3, 3)): ...,
-        (384, 384, (3, 3, 3)): ...,
+        (192, 192, (3, 3, 3)): (96, 96, 1, 64, 1),
+        (32, 384, (3, 3, 3)): (32, 384, 1, 8, 8),
+        # (16, 384, (3, 3, 3)): (16, 32, 1, 1, 1),
+        (192, 384, (3, 3, 3)): (96, 128, 1, 32, 1),
+        (384, 384, (3, 3, 3)): (128, 128, 1, 16, 2),
+        (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
     }
-    # blocking = shape_to_blocking.get(in_channels, None)
-    blocking = None
+
+    blocking = config_to_blocking.get((in_channels, out_channels, kernel_size), None)
     if blocking is None:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = in_channels, 32, 1, 1, 1
         logger.warning(
-            f"No blocking found for input shape {in_channels}. Using default blocking: {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}"
+            f"No blocking found for {(in_channels, out_channels, kernel_size)}. Using default blocking: {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}"
         )
     else:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
@@ -111,13 +115,28 @@ def count_convs(obj):
     return count
 
 
-def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=16):
+def conv_pad_in_channels(tensor):
+    C_in = tensor.shape[-1]
+    padded_C_in = aligned_channels(C_in)
+    if padded_C_in != C_in:
+        tensor = torch.nn.functional.pad(tensor, (0, padded_C_in - C_in))
+    return tensor
+
+
+def aligned_channels(channels):
+    ALIGN_PAD = ALIGNMENT - channels % ALIGNMENT
+    if channels % ALIGNMENT != 0:
+        channels = channels + ALIGN_PAD
+    return channels
+
+
+def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=ALIGNMENT):
     """Prepare weights and bias for TTNN."""
     C_in = weight.shape[1]
     w = weight.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
-    ALIGN_PAD = ALIGNMENT - C_in % ALIGNMENT
-    if C_in % ALIGNMENT != 0:
-        w = torch.nn.functional.pad(w, (0, 0, 0, ALIGN_PAD))
+    padded_C_in = aligned_channels(C_in)
+    if padded_C_in != C_in:
+        w = torch.nn.functional.pad(w, (0, 0, 0, padded_C_in - C_in))
 
     # Reshape weights so that num_C_in_blocks is the first dimension
     kD, kH, kW, C_in_aligned, out_channels = w.shape
