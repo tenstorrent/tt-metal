@@ -57,7 +57,7 @@ uint32_t finding_scatter_dim(const ttnn::Shape& input_tensor_padded_shape, const
 Tensor strided_reduce(
     const ttnn::Tensor& gathered_tensor,
     int reduce_dim,
-    int num_devices,
+    uint32_t num_devices,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
     const auto& input_shape = gathered_tensor.logical_shape();
     int rank = input_shape.size();
