@@ -385,10 +385,7 @@ class TtNeck:
         output_tensor = self.conv7_2(outDowSample5)
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
-        if self.parameters.resolution[0] == 320:
-            output_tensor_upsample_1 = ttnn.add(output_tensor_upsample_1, 0.0, dtype=ttnn.bfloat8_b)
-        if self.parameters.resolution[0] == 640:
-            output_tensor_upsample_1 = ttnn.add(output_tensor_upsample_1, 0.0, dtype=ttnn.bfloat8_b)
+        output_tensor_upsample_1 = ttnn.add(output_tensor_upsample_1, 0.0, dtype=ttnn.bfloat8_b)
         output_tensor = ttnn.concat(
             [output_tensor, output_tensor_upsample_1], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG
         )
@@ -498,10 +495,7 @@ class TtNeck:
         output_tensor = self.conv9_2(outDowSample3)
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
-        if self.parameters.resolution[0] == 320:
-            output_tensor_upsample_2 = ttnn.add(output_tensor_upsample_2, 0.0, dtype=ttnn.bfloat8_b)
-        if self.parameters.resolution[0] == 640:
-            output_tensor_upsample_2 = ttnn.add(output_tensor_upsample_2, 0.0, dtype=ttnn.bfloat8_b)
+        output_tensor_upsample_2 = ttnn.add(output_tensor_upsample_2, 0.0, dtype=ttnn.bfloat8_b)
         output_tensor = ttnn.concat(
             [output_tensor, output_tensor_upsample_2], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG
         )
