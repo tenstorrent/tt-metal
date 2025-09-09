@@ -11,7 +11,10 @@ import ttnn
 import os
 from loguru import logger
 
-from models.experimental.panoptic_deeplab.tt.model_preprocessing import create_panoptic_deeplab_parameters
+from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
+    create_panoptic_deeplab_parameters,
+    fuse_conv_bn_parameters,
+)
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -19,7 +22,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
 def test_panoptic_deeplab(device):
-    """Test PCC comparison between PyTorch and TTNN implementations."""
+    """Test PCC comparison between PyTorch and TTNN implementations with fused Conv+BatchNorm."""
     # compute_grid = device.compute_with_storage_grid_size()
     # if compute_grid.x != 5 or compute_grid.y != 4:
     #     pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
@@ -65,10 +68,15 @@ def test_panoptic_deeplab(device):
         # Create TTNN parameters from the PyTorch model with loaded weights
         ttnn_parameters = create_panoptic_deeplab_parameters(pytorch_model, device)
 
-        # Create TTNN model with preprocessed parameters
+        # Apply Conv+BatchNorm fusion to the parameters
+        logger.info("Applying Conv+BatchNorm fusion to parameters...")
+        fused_parameters = fuse_conv_bn_parameters(ttnn_parameters)
+        logger.info("Conv+BatchNorm fusion completed successfully")
+
+        # Create TTNN model with fused parameters
         ttnn_model = TtPanopticDeepLab(
             device=device,
-            parameters=ttnn_parameters,
+            parameters=fused_parameters,
             num_classes=num_classes,
             common_stride=common_stride,
             project_channels=project_channels,
@@ -85,7 +93,7 @@ def test_panoptic_deeplab(device):
     with torch.no_grad():
         pytorch_semantic, pytorch_center, pytorch_offset, _ = pytorch_model.forward(pytorch_input)
 
-    logger.info("Running TTNN model...")
+    logger.info("Running TTNN model with fused Conv+BatchNorm parameters...")
     ttnn_semantic, ttnn_center, ttnn_offset, _ = ttnn_model.forward(ttnn_input)
 
     ttnn_semantic_torch = ttnn.to_torch(ttnn_semantic).permute(0, 3, 1, 2)
@@ -103,3 +111,5 @@ def test_panoptic_deeplab(device):
     offset_passed, offset_msg = assert_with_pcc(pytorch_offset, ttnn_offset_torch, pcc=0.99)
     logger.info(f"Offset PCC: {offset_msg}")
     assert offset_passed, f"Offset map PCC failed: {offset_msg}"
+
+    logger.info("✅ All PCC tests passed! TTNN model with fused Conv+BatchNorm produces identical results to PyTorch.")

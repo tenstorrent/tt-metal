@@ -85,7 +85,9 @@ class TtPanopticDeepLab:
 
         # Initialize backbone with unified parameters
         logger.debug("Initializing ResNet backbone with preprocessed parameters")
-        self.backbone = TtResNet(parameters=parameters.backbone, device=device, dtype=ttnn.bfloat16)
+        # Handle both dict and object parameter formats
+        backbone_params = parameters["backbone"] if isinstance(parameters, dict) else parameters.backbone
+        self.backbone = TtResNet(parameters=backbone_params, device=device, dtype=ttnn.bfloat16)
         logger.debug("ResNet backbone initialization complete")
 
         # Define feature map specifications based on ResNet output
@@ -100,8 +102,10 @@ class TtPanopticDeepLab:
         #     shared_weight_tensor_kernel1_output5 = torch.randn(256, 1280, 1, 1, dtype=torch.bfloat16)
 
         # Create default weights if not provided
+        # Handle both dict and object parameter formats
+        semantic_params = parameters["semantic_head"] if isinstance(parameters, dict) else parameters.semantic_head
         self.semantic_head = TtPanopticDeepLabSemSegHead(
-            parameters=parameters.semantic_head,
+            parameters=semantic_params,
             device=device,
             # Prosljeđujemo sve potrebne konfiguracione parametre
             input_shape=self.input_shape,
@@ -119,8 +123,10 @@ class TtPanopticDeepLab:
 
         # 3. Inicijalizacija Instance Head-a sa 'parameters' objektom
         logger.debug("Initializing instance embedding head from parameters")
+        # Handle both dict and object parameter formats
+        instance_params = parameters["instance_head"] if isinstance(parameters, dict) else parameters.instance_head
         self.instance_head = TtPanopticDeepLabInsEmbedHead(
-            parameters=parameters.instance_head,
+            parameters=instance_params,
             device=device,
             # Prosljeđujemo sve potrebne konfiguracione parametre
             input_shape=self.input_shape,

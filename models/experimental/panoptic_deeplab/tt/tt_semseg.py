@@ -3,7 +3,7 @@ from torch import nn
 import ttnn
 from loguru import logger
 
-from models.experimental.panoptic_deeplab.tt.tt_aspp import TtASPP, get_ttnn_norm, get_ttnn_activation
+from models.experimental.panoptic_deeplab.tt.tt_aspp import TtASPP, get_ttnn_activation
 
 from models.experimental.panoptic_deeplab.tt.tt_conv2d_wrapper import TtConv2d, TtConv2dParameters
 from models.experimental.panoptic_deeplab.tt.tt_upsample_wrapper import TtUpsample
@@ -64,6 +64,13 @@ class TtDeepLabV3PlusHead(nn.Module):
                 else:
                     pool_kernel_size = None
 
+                # Handle both dict and object parameter formats
+                feature_params = (
+                    parameters[feature_name] if isinstance(parameters, dict) else getattr(parameters, feature_name)
+                )
+                project_conv_params = (
+                    feature_params["project_conv"] if isinstance(feature_params, dict) else feature_params.project_conv
+                )
                 project_conv = TtASPP(
                     in_channels=in_channel,
                     out_channels=aspp_channels,
@@ -73,7 +80,7 @@ class TtDeepLabV3PlusHead(nn.Module):
                     norm=norm,
                     activation="relu",
                     dropout=aspp_dropout,
-                    parameters=parameters[feature_name].project_conv,
+                    parameters=project_conv_params,
                 )
                 decoder_stage["project_conv"] = project_conv
                 decoder_stage["fuse_conv_0"] = None
@@ -88,13 +95,15 @@ class TtDeepLabV3PlusHead(nn.Module):
                 # Koristimo 'in' operator za provjeru postojanja ključa
 
                 # Project Conv
-                proj_conv_path = base_path.project_conv
+                # Handle both dict and object parameter formats
+                proj_conv_path = base_path["project_conv"] if isinstance(base_path, dict) else base_path.project_conv
                 proj_bias = proj_conv_path.bias if "bias" in proj_conv_path else None
                 proj_params = TtConv2dParameters(weight=proj_conv_path.weight, bias=proj_bias, device=self.device)
                 project_conv = TtConv2d.create(proj_params, stride=(1, 1), padding=(0, 0))
 
                 # Fuse Conv 0
-                fuse0_path = base_path.fuse_conv[0]
+                fuse_conv_params = base_path["fuse_conv"] if isinstance(base_path, dict) else base_path.fuse_conv
+                fuse0_path = fuse_conv_params[0]
                 fuse0_bias = fuse0_path.bias if "bias" in fuse0_path else None
                 fuse0_params = TtConv2dParameters(weight=fuse0_path.weight, bias=fuse0_bias, device=self.device)
 
@@ -104,7 +113,7 @@ class TtDeepLabV3PlusHead(nn.Module):
                 )
 
                 # Fuse Conv 1
-                fuse1_path = base_path.fuse_conv[1]
+                fuse1_path = fuse_conv_params[1]
                 fuse1_bias = fuse1_path.bias if "bias" in fuse1_path else None
                 fuse1_params = TtConv2dParameters(weight=fuse1_path.weight, bias=fuse1_bias, device=self.device)
 
@@ -113,18 +122,12 @@ class TtDeepLabV3PlusHead(nn.Module):
                     fuse1_params, num_slices=2, stride=(1, 1), padding=(1, 1)
                 )
 
-                proj_norm_params = base_path.project_conv.norm if "norm" in base_path.project_conv else None
-                fuse0_norm_params = base_path.fuse_conv[0].norm if "norm" in base_path.fuse_conv[0] else None
-                fuse1_norm_params = base_path.fuse_conv[1].norm if "norm" in base_path.fuse_conv[1] else None
-
+                # With fused Conv+BN, we no longer need separate normalization layers
                 decoder_stage["project_conv"] = project_conv
-                decoder_stage["project_norm"] = get_ttnn_norm(norm, proj_out_ch, device, norm_params=proj_norm_params)
                 decoder_stage["fuse_conv_0_no_slice"] = fuse_conv_0_no_slice
                 decoder_stage["fuse_conv_0_height_slice"] = fuse_conv_0_height_slice
-                decoder_stage["fuse_norm_0"] = get_ttnn_norm(norm, fuse_out_ch, device, norm_params=fuse0_norm_params)
                 decoder_stage["fuse_conv_1_no_slice"] = fuse_conv_1_no_slice
                 decoder_stage["fuse_conv_1_height_slice"] = fuse_conv_1_height_slice
-                decoder_stage["fuse_norm_1"] = get_ttnn_norm(norm, fuse_out_ch, device, norm_params=fuse1_norm_params)
 
             self.decoder[feature_name] = decoder_stage
 
@@ -165,7 +168,7 @@ class TtDeepLabV3PlusHead(nn.Module):
             x = features[f_key]
             stage = self.decoder[f_key]
             proj_x = stage["project_conv"](x)
-            proj_x = stage["project_norm"](proj_x)
+            # BatchNorm is now fused into project_conv weights
             proj_x = self.activation(proj_x)
             proj_x = ttnn.to_memory_config(proj_x, ttnn.DRAM_MEMORY_CONFIG)
             logger.debug(f"TtDeepLabV3PlusHead fusion stage {i+1} projection complete, shape: {proj_x.shape}")
@@ -198,11 +201,9 @@ class TtDeepLabV3PlusHead(nn.Module):
             else:
                 y_conv0 = stage["fuse_conv_0_height_slice"](y)
             ttnn.deallocate(y)
-            y_norm0 = stage["fuse_norm_0"](y_conv0)
-            #            ttnn.deallocate(y_conv0)
-
-            y_act0 = self.activation(y_norm0)
-            ttnn.deallocate(y_norm0)
+            # BatchNorm is now fused into fuse_conv_0 weights
+            y_act0 = self.activation(y_conv0)
+            ttnn.deallocate(y_conv0)
 
             ttnn.to_memory_config(y_act0, ttnn.DRAM_MEMORY_CONFIG)
             # Choose the appropriate conv based on iteration index
@@ -210,11 +211,9 @@ class TtDeepLabV3PlusHead(nn.Module):
                 y_conv1 = stage["fuse_conv_1_no_slice"](y_act0)
             else:
                 y_conv1 = stage["fuse_conv_1_height_slice"](y_act0)
-            y_norm1 = stage["fuse_norm_1"](y_conv1)
-            #           ttnn.deallocate(y_conv1)
-
-            y = self.activation(y_norm1)
-            ttnn.deallocate(y_norm1)
+            # BatchNorm is now fused into fuse_conv_1 weights
+            y = self.activation(y_conv1)
+            ttnn.deallocate(y_conv1)
 
         logger.debug(f"TtDeepLabV3PlusHead layers complete - final output shape: {y.shape}")
         return y
@@ -243,8 +242,10 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         common_stride: int,
         train_size: Optional[Tuple],
     ):
+        # Handle both dict and object parameter formats
+        decoder_params = parameters["decoder"] if isinstance(parameters, dict) else parameters.decoder
         super().__init__(
-            parameters=parameters.decoder,
+            parameters=decoder_params,
             device=device,
             input_shape=input_shape,
             norm=norm,
@@ -267,7 +268,9 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         # MORAMO da koristimo punu putanju `parameters.semantic_head...`
 
         # Head 0
-        head0_path = parameters.head[0]
+        # Handle both dict and object parameter formats
+        head_params = parameters["head"] if isinstance(parameters, dict) else parameters.head
+        head0_path = head_params[0]
         head0_bias = head0_path.bias if "bias" in head0_path else None
         head0_params = TtConv2dParameters(
             weight=head0_path.weight,
@@ -275,13 +278,10 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             device=self.device,
         )
         self.head_0 = TtConv2d.create_with_height_slicing(head0_params, num_slices=2, stride=(1, 1), padding=(1, 1))
+        # BatchNorm is now fused into head_0 weights
 
-        head0_norm_params = head0_path.norm if "norm" in head0_path else None
-        self.head_norm_0 = get_ttnn_norm(norm, decoder_out_ch, device, norm_params=head0_norm_params)
-
-        # --- ISPRAVKA OVDJE ---
         # Head 1
-        head1_path = parameters.head[1]
+        head1_path = head_params[1]
         head1_bias = head1_path.bias if "bias" in head1_path else None
         head1_params = TtConv2dParameters(
             weight=head1_path.weight,
@@ -289,13 +289,12 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             device=self.device,
         )
         self.head_1 = TtConv2d.create_with_height_slicing(head1_params, num_slices=2, stride=(1, 1), padding=(1, 1))
-
-        head1_norm_params = head1_path.norm if "norm" in head1_path else None
-        self.head_norm_1 = get_ttnn_norm(norm, head_channels, device, norm_params=head1_norm_params)
+        # BatchNorm is now fused into head_1 weights
 
         # --- ISPRAVKA OVDJE ---
         # Predictor
-        predictor_path = parameters.predictor
+        predictor_params = parameters["predictor"] if isinstance(parameters, dict) else parameters.predictor
+        predictor_path = predictor_params
         predictor_bias = predictor_path.bias if "bias" in predictor_path else None
         predictor_params = TtConv2dParameters(
             weight=predictor_path.weight,
@@ -322,11 +321,11 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         y = super().layers(features)
 
         y = self.head_0(y)
-        y = self.head_norm_0(y)
+        # BatchNorm is now fused into head_0 weights
         y = self.activation(y)
 
         y = self.head_1(y)
-        y = self.head_norm_1(y)
+        # BatchNorm is now fused into head_1 weights
         y = self.activation(y)
 
         y = self.predictor(y)
