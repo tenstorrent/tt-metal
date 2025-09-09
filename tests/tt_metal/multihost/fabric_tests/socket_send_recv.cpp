@@ -113,7 +113,7 @@ using MultiHostSocketTestSplitT3K = MultiHostSocketTest<MeshDeviceSplit2x2Fixtur
 using MultiHostSocketTestDualT3K = MultiHostSocketTest<MeshDeviceDual2x4Fixture>;
 using MeshDeviceNanoExabox2x4Fixture = MultiHostSocketTest<MeshDeviceNanoExabox2x4Fixture>;
 using MeshDeviceNanoExabox1x8Fixture = MultiHostSocketTest<MeshDeviceNanoExabox1x8Fixture>;
-using MeshDeviceExaboxFixture = MultiHostSocketTest<MeshDeviceExaboxFixture>;
+using MultiHostSocketTestExabox = MultiHostSocketTest<MeshDeviceExaboxFixture>;
 
 TEST_P(MultiHostSocketTestSplitT3K, SocketTests) { RunTest(); }
 
@@ -123,7 +123,7 @@ TEST_P(MeshDeviceNanoExabox2x4Fixture, SocketTests) { RunTest(); }
 
 TEST_P(MeshDeviceNanoExabox1x8Fixture, SocketTests) { RunTest(); }
 
-TEST_P(MeshDeviceExaboxFixture, SocketTests) { RunTest(); }
+TEST_P(MultiHostSocketTestExabox, SocketTests) { RunTest(); }
 
 INSTANTIATE_TEST_SUITE_P(
     MultiHostSocketTestsSplitT3K,
@@ -149,10 +149,10 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::ValuesIn(generate_socket_test_configs(SystemConfig::NANO_EXABOX)),
     generate_multihost_socket_test_name<MultiHostSocketTestDualT3K::ParamType>);
 INSTANTIATE_TEST_SUITE_P(
-    MeshDeviceExaboxFixture,
-    MeshDeviceExaboxFixture,
+    MultiHostSocketTestsExabox,
+    MultiHostSocketTestExabox,
     ::testing::ValuesIn(generate_socket_test_configs(SystemConfig::EXABOX)),
-    generate_multihost_socket_test_name<MultiHostSocketTestDualT3K::ParamType>);
+    generate_multihost_socket_test_name<MultiHostSocketTestExabox::ParamType>);
 
 TEST_F(MeshDeviceNanoExabox2x4Fixture, MultiContextSocketHandshake) {
     std::vector<int> sender_node_ranks_ctx0 = {0, 2, 3, 4};
