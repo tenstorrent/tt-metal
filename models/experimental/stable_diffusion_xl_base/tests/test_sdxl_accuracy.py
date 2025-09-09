@@ -199,8 +199,6 @@ def test_accuracy_sdxl(
         ],
     }
 
-    print(f"Test results: {data}")
-
     os.makedirs(OUT_ROOT, exist_ok=True)
     trace_flag = "with_trace" if capture_trace else "no_trace"
     vae_flag = "device_vae" if vae_on_device else "host_vae"
