@@ -63,4 +63,20 @@ TEST(Cluster, TestFactorySystemDescriptor5WHGalaxyYTorus) {
         std::runtime_error);
 }
 
+TEST(Cluster, TestFactorySystemDescriptor4xBHQBP150) {
+    // Create the cabling generator with file paths
+    CablingGenerator cabling_generator(
+        "tools/tests/scaleout/cabling_descriptors/4x_bh_qb_p150.textproto",
+        "tools/tests/scaleout/deployment_descriptors/4x_bh_qb_p150_deployment.textproto");
+
+    // Generate the FSD (textproto format)
+    cabling_generator.emit_factory_system_descriptor("fsd/factory_system_descriptor_4x_bh_qb_p150.textproto");
+
+    // Note: No validation against GSD as the physical descriptor doesn't exist yet
+    // Once the physical descriptor is available, uncomment the following:
+    // validate_fsd_against_gsd(
+    //     "fsd/factory_system_descriptor_4x_bh_qb_p150.textproto",
+    //     "tools/tests/scaleout/global_system_descriptors/4x_bh_qb_p150_physical_desc.yaml");
+}
+
 }  // namespace tt::scaleout_tools

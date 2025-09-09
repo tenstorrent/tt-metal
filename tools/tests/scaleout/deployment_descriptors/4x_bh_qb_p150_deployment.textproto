@@ -1,0 +1,32 @@
+hosts: {
+  hall: "SC_Floor_1"
+  aisle: "A"
+  rack: 1
+  shelf_u: 10
+  node_type: "p150_qb_node"
+  host: "bh-qb-01"
+}
+hosts: {
+  hall: "SC_Floor_1"
+  aisle: "A"
+  rack: 1
+  shelf_u: 20
+  node_type: "p150_qb_node"
+  host: "bh-qb-02"
+}
+hosts: {
+  hall: "SC_Floor_1"
+  aisle: "A"
+  rack: 1
+  shelf_u: 30
+  node_type: "p150_qb_node"
+  host: "bh-qb-03"
+}
+hosts: {
+  hall: "SC_Floor_1"
+  aisle: "A"
+  rack: 1
+  shelf_u: 40
+  node_type: "p150_qb_node"
+  host: "bh-qb-04"
+}

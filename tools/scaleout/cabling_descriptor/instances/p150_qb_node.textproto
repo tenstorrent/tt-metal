@@ -1,0 +1,68 @@
+boards {
+  board {
+    tray_id: 1
+    board_type: "P150"
+  }
+  board {
+    tray_id: 2
+    board_type: "P150"
+  }
+  board {
+    tray_id: 3
+    board_type: "P150"
+  }
+  board {
+    tray_id: 4
+    board_type: "P150"
+  }
+}
+port_type_connections {
+  key: "QSFP"
+  value {
+    # Internal QSFP connections within the node (blue lines in diagram)
+    # Card 1 to Card 2 connection
+    connections {
+      port_a {
+        tray_id: 1
+        port_id: 2
+      }
+      port_b {
+        tray_id: 2
+        port_id: 2
+      }
+    }
+    # Card 1 to Card 3 connection
+    connections {
+      port_a {
+        tray_id: 1
+        port_id: 3
+      }
+      port_b {
+        tray_id: 3
+        port_id: 3
+      }
+    }
+    # Card 2 to Card 4 connection
+    connections {
+      port_a {
+        tray_id: 2
+        port_id: 3
+      }
+      port_b {
+        tray_id: 4
+        port_id: 3
+      }
+    }
+    # Card 3 to Card 4 connection
+    connections {
+      port_a {
+        tray_id: 3
+        port_id: 2
+      }
+      port_b {
+        tray_id: 4
+        port_id: 2
+      }
+    }
+  }
+}
