@@ -21,7 +21,8 @@ on:
         default: "config-t3000"
 
 jobs:
-  .profiler-job-template:
+  profiler_job_template:
+    if: false
     runs-on: ubuntu-latest
     # Anchor the entire container block
     container: &container-config
