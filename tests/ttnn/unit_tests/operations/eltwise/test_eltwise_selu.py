@@ -143,4 +143,4 @@ def test_selu_atol(low, high, device):
 
     tt_result = ttnn.selu(tt_in)
     result = ttnn.to_torch(tt_result)
-    torch.allclose(golden, result, atol=0.008, rtol=1.0)
+    torch.allclose(golden, result, atol=0.008)
