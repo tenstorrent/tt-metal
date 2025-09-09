@@ -7,6 +7,7 @@
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "tt-train/sources/ttml/metal/ops/common/compute_utils.hpp"
 
 namespace NAMESPACE {
 
@@ -20,7 +21,7 @@ constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t Wt = get_compile_time_arg_val(2);
 
-void MAIN() {
+void MAIN {
     uint32_t runtime_args_counter = 0;
     uint32_t lr = get_arg_val<uint32_t>(runtime_args_counter++);
 
