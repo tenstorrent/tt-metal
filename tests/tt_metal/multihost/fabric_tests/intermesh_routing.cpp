@@ -227,9 +227,10 @@ TEST_F(IntermeshExaboxFabricFixture, RandomizedIntermeshUnicastBwd) {
 
     constexpr uint32_t sender_rank = 1;
     constexpr uint32_t num_iterations = 100;
+    std::uint32_t world_size = *distributed_context->size();
 
+    std::vector<uint32_t> recv_node_ranks = {0, 2, 3, 4, 5};
     if (*(distributed_context->rank()) == sender_rank) {
-        std::vector<uint32_t> recv_node_ranks = {0, 2, 3};  // TODO: add back support for 4,5
         log_info(tt::LogTest, "{} rank starting unicast to all receivers", sender_rank);
         for (uint32_t i = 0; i < num_iterations; i++) {
             for (auto recv_rank : recv_node_ranks) {
@@ -238,11 +239,14 @@ TEST_F(IntermeshExaboxFabricFixture, RandomizedIntermeshUnicastBwd) {
         }
         log_info(tt::LogTest, "{} rank completed unicast to all receivers", sender_rank);
     } else {
-        log_info(tt::LogTest, "{} rank processing unicasts", *(distributed_context->rank()));
-        for (uint32_t i = 0; i < num_iterations; i++) {
-            multihost_utils::run_unicast_recv_step(this, tt::tt_metal::distributed::multihost::Rank{sender_rank});
+        if (std::find(recv_node_ranks.begin(), recv_node_ranks.end(), *(distributed_context->rank())) !=
+            recv_node_ranks.end()) {
+            log_info(tt::LogTest, "{} rank processing unicasts", *(distributed_context->rank()));
+            for (uint32_t i = 0; i < num_iterations; i++) {
+                multihost_utils::run_unicast_recv_step(this, tt::tt_metal::distributed::multihost::Rank{sender_rank});
+            }
+            log_info(tt::LogTest, "{} rank done processing unicasts", *(distributed_context->rank()));
         }
-        log_info(tt::LogTest, "{} rank done processing unicasts", *(distributed_context->rank()));
     }
     distributed_context->barrier();
 }
@@ -253,8 +257,9 @@ TEST_F(IntermeshExaboxFabricFixture, RandomizedIntermeshUnicastFwd) {
     constexpr uint32_t recv_rank = 1;
     constexpr uint32_t num_iterations = 100;
 
+    std::vector<uint32_t> sender_node_ranks = {0, 2, 3, 4, 5};
     if (*(distributed_context->rank()) == recv_rank) {
-        std::vector<uint32_t> sender_node_ranks = {0, 2, 3};  // TODO: add back support for 4,5
+        std::uint32_t world_size = *distributed_context->size();
         log_info(tt::LogTest, "{} rank starting processing unicasts from all senders", recv_rank);
         for (uint32_t i = 0; i < num_iterations; i++) {
             for (auto sender_rank : sender_node_ranks) {
@@ -263,11 +268,14 @@ TEST_F(IntermeshExaboxFabricFixture, RandomizedIntermeshUnicastFwd) {
         }
         log_info(tt::LogTest, "{} rank completed processing unicasts from all senders", recv_rank);
     } else {
-        log_info(tt::LogTest, "{} rank starting unicast to receiver", *(distributed_context->rank()));
-        for (uint32_t i = 0; i < num_iterations; i++) {
-            multihost_utils::run_unicast_sender_step(this, tt::tt_metal::distributed::multihost::Rank{recv_rank});
+        if (std::find(sender_node_ranks.begin(), sender_node_ranks.end(), *(distributed_context->rank())) !=
+            sender_node_ranks.end()) {
+            log_info(tt::LogTest, "{} rank starting unicast to receiver", *(distributed_context->rank()));
+            for (uint32_t i = 0; i < num_iterations; i++) {
+                multihost_utils::run_unicast_sender_step(this, tt::tt_metal::distributed::multihost::Rank{recv_rank});
+            }
+            log_info(tt::LogTest, "{} rank completed unicast to receiver", *(distributed_context->rank()));
         }
-        log_info(tt::LogTest, "{} rank completed unicast to receiver", *(distributed_context->rank()));
     }
     distributed_context->barrier();
 }

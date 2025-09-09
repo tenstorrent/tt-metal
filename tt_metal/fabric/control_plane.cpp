@@ -448,7 +448,6 @@ void ControlPlane::init_control_plane(
     std::optional<std::reference_wrapper<const std::map<FabricNodeId, chip_id_t>>>
         logical_mesh_chip_id_to_physical_chip_id_mapping) {
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
-    this->routing_table_generator_->print_routing_tables();
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
     this->initialize_distributed_contexts();
@@ -634,7 +633,6 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
             const auto& physical_chip_ids = this->get_mesh_physical_chip_ids(mesh_container, nw_chip_physical_id);
             std::uint32_t i = 0;
             for (const auto& [_, fabric_chip_id] : mesh_container) {
-                auto candidate_ubb_id = get_ubb_id(physical_chip_ids[i]);
                 logical_mesh_chip_id_to_physical_chip_id_mapping.emplace(
                     FabricNodeId(mesh_id, fabric_chip_id), physical_chip_ids[i]);
                 i++;

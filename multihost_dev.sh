@@ -14,7 +14,7 @@ MACHINES=(
     wh-glx-a03u14
     wh-glx-a04u02
     wh-glx-a04u08
-   # wh-glx-a04u14
+    wh-glx-a04u14
 )
 
 DOCKER_CMD="sudo docker run -it \

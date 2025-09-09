@@ -11,6 +11,12 @@ rank_bindings:
   - rank: 3
     mesh_id: 3
     mesh_host_rank: 0
+  - rank: 4
+    mesh_id: 4
+    mesh_host_rank: 0
+  - rank: 5
+    mesh_id: 5
+    mesh_host_rank: 0
 
 global_env:
   TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT: "0"
