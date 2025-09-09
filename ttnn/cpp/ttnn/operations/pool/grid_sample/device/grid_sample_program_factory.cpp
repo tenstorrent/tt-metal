@@ -113,9 +113,9 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
     // CB2: Scalar buffer (holds 4 bilinear interpolation weights)
     const uint32_t scalar_cb_num_pages = buffering_factor;
-    const uint32_t scalar_cb_page_size = tile_size(grid_cb_data_format);  // 4 scalars, aligned
+    const uint32_t scalar_cb_page_size = tile_size(input_cb_data_format);  // 4 scalars, aligned
     const auto [scalar_cb_index, scalar_cb_handle] = tt::tt_metal::create_cb(
-        next_cb_index++, program, all_cores, scalar_cb_page_size, scalar_cb_num_pages, grid_cb_data_format);
+        next_cb_index++, program, all_cores, scalar_cb_page_size, scalar_cb_num_pages, input_cb_data_format);
 
     // CB3: Output buffer
     const uint32_t out_ntiles_c = (uint32_t)std::ceil((float)output_shape[-1] / tt::constants::FACE_WIDTH);
@@ -136,6 +136,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
         (std::uint32_t)input_width,
         (std::uint32_t)(output_height * output_width),  // output_hw_size at index 13
         (std::uint32_t)grid_batching_factor,            // number of grids per spatial position
+        (std::uint32_t)grid_tensor.dtype(),             // grid data type
     };
 
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
@@ -148,10 +149,10 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const bool split_reader = false;                      // No split reader for grid sample
     const uint32_t channels_per_shard = input_shape[-1];  // All channels in one "shard"
     const uint32_t in_nblocks_c = (uint32_t)std::ceil(
-        (float)in_ntiles_c / MAX_TILES_PER_REDUCTION);    // For now 1, will add wide reduction support later
-    const uint32_t max_rows_for_reduction = 4;            // 4 corner values
-    const bool one_scalar_per_core = false;               // Scalars change during computation
-    const uint32_t dummy_cb_id = 32;                      // Unused CB for split reader
+        (float)in_ntiles_c / MAX_TILES_PER_REDUCTION);  // For now 1, will add wide reduction support later
+    const uint32_t max_rows_for_reduction = 4;          // 4 corner values
+    const bool one_scalar_per_core = false;             // Scalars change during computation
+    const uint32_t dummy_cb_id = 32;                    // Unused CB for split reader
 
     // Create compute kernels for different work loads
     // We'll create kernels for cores with same work amount together
@@ -170,11 +171,16 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             max_rows_for_reduction,                              // 6: Max rows
             input_cb_index,                                      // 7: Input CB
             dummy_cb_id,                                         // 8: Input CB 1 (unused)
-            scalar_cb_index,                                     // 9: Scalar CB
-            dummy_cb_id,                                         // 10: Scalar CB 1 (unused)
-            output_cb_index,                                     // 11: Output CB
-            one_scalar_per_core,                                 // 12: Scalar mode
-            out_ntiles_c                                         // 13: Tiles per channel (for CB space reservation)
+            dummy_cb_id,                                         // 9: Index Input CB (unused)
+            dummy_cb_id,                                         // 10: Index Input CB 1 (unused)
+            scalar_cb_index,                                     // 11: Scalar CB
+            dummy_cb_id,                                         // 12: Scalar CB 1 (unused)
+            dummy_cb_id,                                         // 13: Tile Temp CB (unused)
+            dummy_cb_id,                                         // 14: Index Tile Temp CB (unused)
+            output_cb_index,                                     // 15: Output CB
+            dummy_cb_id,                                         // 16: Index Output CB (unused)
+            one_scalar_per_core,                                 // 17: Scalar mode
+            false,                                               // 18: Return Indices (unused)
         };
 
         compute_kernel_group_1 = tt::tt_metal::CreateKernel(
@@ -195,17 +201,22 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             in_ntiles_c,                                         // 0: Input tiles per channel
             reduction_size,                                      // 1: Reduction size (4 for bilinear)
             split_reader,                                        // 2: Split reader flag
-            grid_batching_factor * num_sticks_per_core_group_2,  // 3: Total grid interpolations per core for group 2
+            grid_batching_factor * num_sticks_per_core_group_2,  // 3:  Total grid interpolations per core for group 1
             channels_per_shard,                                  // 4: Channels per shard
             in_nblocks_c,                                        // 5: Channel blocks
             max_rows_for_reduction,                              // 6: Max rows
             input_cb_index,                                      // 7: Input CB
             dummy_cb_id,                                         // 8: Input CB 1 (unused)
-            scalar_cb_index,                                     // 9: Scalar CB
-            dummy_cb_id,                                         // 10: Scalar CB 1 (unused)
-            output_cb_index,                                     // 11: Output CB
-            one_scalar_per_core,                                 // 12: Scalar mode
-            out_ntiles_c                                         // 13: Tiles per channel (for CB space reservation)
+            dummy_cb_id,                                         // 9: Index Input CB (unused)
+            dummy_cb_id,                                         // 10: Index Input CB 1 (unused)
+            scalar_cb_index,                                     // 11: Scalar CB
+            dummy_cb_id,                                         // 12: Scalar CB 1 (unused)
+            dummy_cb_id,                                         // 13: Tile Temp CB (unused)
+            dummy_cb_id,                                         // 14: Index Tile Temp CB (unused)
+            output_cb_index,                                     // 15: Output CB
+            dummy_cb_id,                                         // 16: Index Output CB (unused)
+            one_scalar_per_core,                                 // 17: Scalar mode
+            false,                                               // 18: Return Indices (unused)
         };
 
         compute_kernel_group_2 = tt::tt_metal::CreateKernel(

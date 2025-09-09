@@ -120,4 +120,5 @@ enum class SfpuType {
     where,
     softsign,
     celu,
+    max_pool_with_indices,
 };
