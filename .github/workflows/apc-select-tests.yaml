@@ -25,10 +25,10 @@ on:
       tests-json:
         description: |
           JSON object specifying which tests to run.
-          Example: {"sd-unit-tests":true,"fast-dispatch-unit-tests":true,"fabric-unit-tests":true,"cpp-unit-tests":true,"ttnn-unit-tests":true,"models-unit-tests":true,"tt-train-cpp-unit-tests":true,"run-profiler-regression":true,"t3000-fast-tests":true,"test-ttnn-tutorials":true}
+          Example: {"sd-unit-tests":true,"fast-dispatch-unit-tests":true,"fabric-unit-tests":true,"cpp-unit-tests":true,"ttnn-unit-tests":true,"models-unit-tests":true,"tt-train-cpp-unit-tests":true,"run-profiler-regression":true,"t3000-apc-fast-tests":true,"test-ttnn-tutorials":true}
         required: false
         type: string
-        default: '{"sd-unit-tests":true,"fast-dispatch-unit-tests":true,"fabric-unit-tests":true,"cpp-unit-tests":true,"ttnn-unit-tests":true,"models-unit-tests":true,"tt-train-cpp-unit-tests":true,"run-profiler-regression":true,"t3000-fast-tests":true,"test-ttnn-tutorials":true}'
+        default: '{"sd-unit-tests":true,"fast-dispatch-unit-tests":true,"fabric-unit-tests":true,"cpp-unit-tests":true,"ttnn-unit-tests":true,"models-unit-tests":true,"tt-train-cpp-unit-tests":true,"run-profiler-regression":true,"t3000-apc-fast-tests":true,"test-ttnn-tutorials":true}'
       commit:
         required: false
         type: string
@@ -237,11 +237,11 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
 
-  t3000-fast-tests:
+  t3000-apc-fast-tests:
     needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 't3000-fast-tests') }}
+    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 't3000-apc-fast-tests') }}
     secrets: inherit
-    uses: ./.github/workflows/t3000-fast-tests-impl.yaml
+    uses: ./.github/workflows/t3000-apc-fast-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
