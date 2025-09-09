@@ -816,9 +816,9 @@ def test_demo_text(
                 profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
-            # Always print perf after every iteration
+            # Print perf after every iteration (skip in CI to avoid performance overhead)
             tokens_per_second_per_user = 1 / decode_iteration_time
-            logger.info(
+            logger.debug(
                 f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({global_batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
             )
 
@@ -841,13 +841,12 @@ def test_demo_text(
                             users_decoding = False
 
             # Print out generated outputs for each user at the end of every iteration
-            if not is_ci_env:
-                for user in range(global_batch_size):
-                    text = "".join(tokenizer.decode(all_outputs[user]))
-                    if len(text) > 100:
-                        text = "..." + text[-97:]
-                    text = text.replace("\n", " ")
-                    logger.info("[User {}] {}".format(user, text))
+            for user in range(global_batch_size):
+                text = "".join(tokenizer.decode(all_outputs[user]))
+                if len(text) > 100:
+                    text = "..." + text[-97:]
+                text = text.replace("\n", " ")
+                logger.debug("[User {}] {}".format(user, text))
 
             iteration += 1
 
@@ -855,32 +854,30 @@ def test_demo_text(
             if iteration >= max_generated_tokens:
                 users_decoding = False
 
-            # Final print
-            if not users_decoding:
-                profiler.start(f"log_saving_file", iteration=batch_idx)
-                logger.info("Finished decoding, printing the final outputs...\n")
-                for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
-                    text = tokenizer.decode(output)
-                    prompt_including_assistant_tags = tokenizer.decode(
-                        model_args[0].encode_prompt(prompt, instruct=instruct)
+        # Final print
+        if not users_decoding:
+            profiler.start(f"log_saving_file", iteration=batch_idx)
+            logger.info("Finished decoding, printing the final outputs...\n")
+            for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
+                text = tokenizer.decode(output)
+                prompt_including_assistant_tags = tokenizer.decode(
+                    model_args[0].encode_prompt(prompt, instruct=instruct)
+                )
+                text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
+                if print_to_file:
+                    with open(output_filename, "a") as f:
+                        f.write(f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n")
+                else:
+                    # Strip leading newlines from output when sent to terminal
+                    short_prompt = (
+                        (prompt[:100] + "\n<long prompt not printed in full>\n" + prompt[-100:])
+                        if len(prompt) > 200
+                        else prompt
                     )
-                    text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
-                    if print_to_file:
-                        with open(output_filename, "a") as f:
-                            f.write(
-                                f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n"
-                            )
-                    else:
-                        # Strip leading newlines from output when sent to terminal
-                        short_prompt = (
-                            (prompt[:100] + "\n<long prompt not printed in full>\n" + prompt[-100:])
-                            if len(prompt) > 200
-                            else prompt
-                        )
-                        logger.info(
-                            f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
-                        )
-                profiler.end(f"log_saving_file", iteration=batch_idx)
+                    logger.info(
+                        f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
+                    )
+            profiler.end(f"log_saving_file", iteration=batch_idx)
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
 
@@ -1078,7 +1075,7 @@ def test_demo_text(
         )
 
         # check measurements against CI performance targets -- for batch size 32
-        if global_batch_size == 32:
+        if "performance" in test_id and "ci-32" in test_id:
             logger.info(
                 f"Checking measurements against CI performance targets for batch size 32 of {model_name} on {tt_device_name}"
             )
@@ -1089,14 +1086,14 @@ def test_demo_text(
                 "N150_Llama-3.2-1B": 26,
                 "N150_Llama-3.2-3B": 57,
                 "N150_Llama-3.1-8B": 112,
-                # "N150_Mistral-7B": 106, # https://github.com/tenstorrent/tt-metal/issues/24963
+                "N150_Mistral-7B": 106,
                 # N300 targets
-                # "N300_Qwen2.5-7B": 150,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
+                "N300_Qwen2.5-7B": 90,
                 # T3K targets
                 "T3K_Llama-3.1-70B": 204,
-                # "T3K_Qwen2.5-Coder-32B": 180,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
-                # "T3K_Qwen2.5-72B": 211,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
-                # "T3K_Qwen3-32B": 250, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
+                "T3K_Qwen2.5-Coder-32B": 173,  # `f10cs08`
+                "T3K_Qwen2.5-72B": 240,
+                "T3K_Qwen3-32B": 166.5,
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
@@ -1105,12 +1102,12 @@ def test_demo_text(
                 "N150_Llama-3.1-8B": 21,
                 "N150_Mistral-7B": 23,
                 # N300 targets
-                "N300_Qwen2.5-7B": 22,
+                "N300_Qwen2.5-7B": 22.8,
                 # T3K targets
                 "T3K_Llama-3.1-70B": 15,
-                # "T3K_Qwen2.5-72B": 13, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
+                "T3K_Qwen2.5-72B": 13.25,
                 "T3K_Qwen2.5-Coder-32B": 21,
-                # "T3K_Qwen3-32B": 20, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
+                "T3K_Qwen3-32B": 21,
             }
 
             # Only call verify_perf if the model_device_key exists in the targets

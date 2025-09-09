@@ -129,7 +129,7 @@ struct MatmulFusedOpSignaler {
     bool initialized_fused_op = false;
     bool initialized_llama_all_gather = false;
 
-    MatmulFusedOpSignaler(MatmulFusedOpSignalerType signaler_type) { fused_op_type = signaler_type; }
+    MatmulFusedOpSignaler(MatmulFusedOpSignalerType signaler_type) : fused_op_type(signaler_type) {}
 
     void init_all_gather(
         uint32_t num_transfers,
