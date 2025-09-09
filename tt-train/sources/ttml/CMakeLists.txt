@@ -443,3 +443,70 @@ if(NOT EXISTS "${TINYLLAMA_TOKENIZER_FILE}")
 else()
     message(STATUS "Tokenizer text file already exists at ${TINYLLAMA_TOKENIZER_FILE}, skipping download.")
 endif()
+
+if(WITH_PYTHON_BINDINGS)
+    add_library(_ttml SHARED)
+    add_library(TTML::PYTHON ALIAS _ttml)
+    target_compile_definitions(_ttml PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
+    # TT_ENABLE_UNITY_BUILD(_ttml)
+
+    set_target_properties(
+        _ttml
+        PROPERTIES
+            EXPORT_NAME
+                Python
+            BUILD_RPATH
+                "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/tt-train/sources/ttml"
+            INSTALL_RPATH
+                "${PROJECT_BINARY_DIR}/lib;$ORIGIN/build/lib;$ORIGIN" # FIXME: Install RPATH should not have a build path!
+            CXX_VISIBILITY_PRESET
+                "default" # FIXME: Export the symbols we want, and use hidden visibility instead of default
+            ADDITIONAL_CLEAN_FILES
+                "${PROJECT_SOURCE_DIR}/tt-train/sources/ttml/'${LIBRARY_NAME}'.so;${PROJECT_SOURCE_DIR}/tt-train/sources/ttml/'${LIBRARY_NAME}'.egg-info" # FIXME: Confirm this is a relic of the past and can be deleted; No generated files should land in the source tree!
+    )
+
+    set(SRC_PYBIND
+        ${CMAKE_CURRENT_SOURCE_DIR}/ttml-pybind/__init__.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/ttml-pybind/__init__.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/ttml-pybind/autograd.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/ttml-pybind/autograd.cpp
+    )
+    target_sources(_ttml PRIVATE ${SRC_PYBIND})
+    target_include_directories(
+        _ttml
+        PUBLIC
+            "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>"
+            "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/sources/ttml>"
+    )
+
+    target_link_libraries(
+        _ttml
+        PRIVATE
+            pybind11::module
+            Boost::algorithm
+            TT::Metalium
+    )
+    if(TT_INSTALL)
+        install(TARGETS _ttml EXPORT TT-ML LIBRARY COMPONENT _ttml-runtime)
+    endif()
+
+    # Install .so into src files for pybinds implementation
+    install(
+        TARGETS
+            _ttml
+        ARCHIVE
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            COMPONENT tar
+    )
+
+    install(
+        TARGETS
+            _ttml
+            DESTINATION
+            ${PROJECT_SOURCE_DIR}/tt-train/sources/ttml
+            COMPONENT
+            tt_pybinds
+    )
+endif()
