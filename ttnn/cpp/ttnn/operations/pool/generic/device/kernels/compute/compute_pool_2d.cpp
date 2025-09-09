@@ -157,7 +157,7 @@ void MAIN {
                     cb_pop_front(curr_in_idx_cb_id, 1);
                 } else {
                     {
-                        DeviceZoneScopedN("Unpack tilize");
+                        // DeviceZoneScopedN("Unpack tilize");
                         unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                             curr_in_cb_id,
                             curr_scalar_cb_id,

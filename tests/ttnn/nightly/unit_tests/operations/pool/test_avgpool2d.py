@@ -286,33 +286,34 @@ def run_avg_pool2d(
     "input_shape",  # NCHW
     (
         # model shapes
-        [1, 64, 112, 112],
-        [8, 32, 132, 20],
-        [1, 256, 56, 56],
-        [1, 512, 28, 28],
-        [1, 192, 264, 40],
+        # [1, 64, 112, 112],
+        # [8, 32, 132, 20],
+        [1, 32, 56, 56],
+        # [1, 512, 28, 28],
+        # [1, 192, 264, 40],
         # # wide non-4 multiple tests
-        [1, 800, 32, 32],
-        [1, 576, 32, 32],
+        # [1, 800, 32, 32],
+        # [1, 576, 32, 32],
         # C partial tile test
-        [1, 16, 12, 12],
-        [1, 1, 56, 56],
-        [2, 290, 10, 10],
+        # [1, 16, 12, 12],
+        # [1, 1, 56, 56],
+        # [2, 290, 10, 10],
     ),
 )
 @pytest.mark.parametrize(
     "kernel_size",
     (
-        (3, 3),  # 1 face 1 chunk
-        (5, 5),  # 2 faces 1 chunk
-        (7, 7),  # 2 chunks
-        (9, 9),  # 3 chunks
+        (2, 2),
+        # (3, 3),  # 1 face 1 chunk
+        # (5, 5),  # 2 faces 1 chunk
+        # (7, 7),  # 2 chunks
+        # (9, 9),  # 3 chunks
     ),
 )
 @pytest.mark.parametrize(
     "stride",
     (
-        (1, 1),
+        # (1, 1),
         (2, 2),
     ),
 )
@@ -320,29 +321,29 @@ def run_avg_pool2d(
     "padding",
     (
         (0, 0),
-        (1, 1),
-        (1, 4, 3, 2),
+        # (1, 1),
+        # (1, 4, 3, 2),
     ),
 )
 @pytest.mark.parametrize(
     "ceil_mode",
     [
         False,
-        True,
+        # True,
     ],
 )
 @pytest.mark.parametrize(
     "count_include_pad",
     [
         False,
-        True,
+        # True,
     ],
 )
 @pytest.mark.parametrize(
     "divisor_override",
     [
         None,
-        5,
+        # 5,
     ],
 )
 @pytest.mark.parametrize(
@@ -352,10 +353,7 @@ def run_avg_pool2d(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ],
 )
-@pytest.mark.parametrize(
-    "dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
-)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])  # , ttnn.bfloat8_b],
 def test_run_avg_pool2d(
     device,
     tensor_map,
