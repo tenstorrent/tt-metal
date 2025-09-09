@@ -455,20 +455,34 @@ Tensor Reduce<reduce_type>::invoke(
         input_tensor, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, non_height_width_dims);
 }
 
-Tensor pool_sum(
+Tensor pool(
+    const pool::Pool2DType pool_type,
     const Tensor& input_tensor_arg,
     int dim,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar) {
-    return reduce_impl<ReduceType::Sum>(
-        input_tensor_arg,
-        ttnn::SmallVector<int>({dim}),
-        /*keepdim=*/true,
-        memory_config_arg,
-        compute_kernel_config,
-        scalar,
-        /*non_height_width_dims=*/{});
+    if (pool_type == pool::Pool2DType::AVG_POOL2D) {
+        return reduce_impl<ReduceType::Sum>(
+            input_tensor_arg,
+            ttnn::SmallVector<int>({dim}),
+            /*keepdim=*/true,
+            memory_config_arg,
+            compute_kernel_config,
+            scalar,
+            /*non_height_width_dims=*/{});
+    } else if (pool_type == pool::Pool2DType::MAX_POOL2D) {
+        return reduce_impl<ReduceType::Max>(
+            input_tensor_arg,
+            ttnn::SmallVector<int>({dim}),
+            /*keepdim=*/true,
+            memory_config_arg,
+            compute_kernel_config,
+            scalar,
+            /*non_height_width_dims=*/{});
+    } else {
+        TT_THROW("Unsupported pool type");
+    }
 }
 
 template struct Reduce<ReduceType::Sum>;
