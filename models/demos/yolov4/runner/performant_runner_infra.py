@@ -11,7 +11,6 @@ from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs, get_regi
 from models.demos.yolov4.tt.model_preprocessing import create_yolov4_model_parameters
 from models.demos.yolov4.tt.yolov4 import TtYOLOv4
 from models.utility_functions import divup, is_wormhole_b0
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 class YOLOv4PerformanceRunnerInfra:
@@ -108,6 +107,7 @@ class YOLOv4PerformanceRunnerInfra:
         return tt_inputs_host, sharded_mem_config_DRAM, input_mem_config
 
     def validate(self, output_tensor=None):
+        from tests.ttnn.utils_for_testing import assert_with_pcc
         output_tensor = self.output_tensor if output_tensor is None else output_tensor
         result_boxes, result_confs = get_model_result(
             ttnn_output_tensor=output_tensor, resolution=self.resolution, mesh_composer=self.output_mesh_composer
