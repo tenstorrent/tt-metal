@@ -242,15 +242,15 @@ bool single_core_binary(
         temp_golden.begin(),
         [&](const bfloat16& lhs, const bfloat16& rhs) {
             if (test_config.binary_op == "add") {
-                return (lhs.to_float() + rhs.to_float());
+                return (static_cast<float>(lhs) + static_cast<float>(rhs));
             } else if (test_config.binary_op == "sub") {
-                return (lhs.to_float() - rhs.to_float());
+                return (static_cast<float>(lhs) - static_cast<float>(rhs));
             } else if (test_config.binary_op == "mul") {
                 return (
-                    bfloat16(std::bit_cast<uint32_t>(lhs.to_bits() & srca_fid_mask)).to_float() *
-                    bfloat16(std::bit_cast<uint32_t>(rhs.to_bits() & srcb_fid_mask)).to_float());
+                    static_cast<float>(bfloat16(std::bit_cast<uint32_t>(lhs.to_bits() & srca_fid_mask))) *
+                    static_cast<float>(bfloat16(std::bit_cast<uint32_t>(rhs.to_bits() & srcb_fid_mask))));
             } else if (test_config.binary_op.find("with_dest_reuse") != std::string::npos) {
-                return lhs.to_float();
+                return static_cast<float>(lhs);
             } else {
                 TT_THROW("Unsupported binary_op={}", test_config.binary_op);
                 return 0.0f;
@@ -262,13 +262,13 @@ bool single_core_binary(
         input2.begin(), input2.end(), temp_golden.begin(), golden.begin(), [&](const bfloat16& lhs, const float& rhs) {
             // acc_to_dest accumulates dest value with binary output, for all binary operations
             if (test_config.acc_to_dest || test_config.binary_op == "add_with_dest_reuse") {
-                return (lhs.to_float() + rhs);
+                return (static_cast<float>(lhs) + rhs);
             } else if (test_config.binary_op == "sub_with_dest_reuse") {
-                return (lhs.to_float() - rhs);
+                return (static_cast<float>(lhs) - rhs);
             } else if (test_config.binary_op == "mul_with_dest_reuse") {
                 return (
-                    bfloat16(std::bit_cast<uint32_t>(lhs.to_bits() & srca_fid_mask)).to_float() *
-                    bfloat16(std::bit_cast<uint32_t>(bfloat16(rhs).to_bits() & srcb_fid_mask)).to_float());
+                    static_cast<float>(bfloat16(std::bit_cast<uint32_t>(lhs.to_bits() & srca_fid_mask))) *
+                    static_cast<float>(bfloat16(std::bit_cast<uint32_t>(bfloat16(rhs).to_bits() & srcb_fid_mask))));
             } else {
                 return rhs;
             }

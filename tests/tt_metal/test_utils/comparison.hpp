@@ -30,8 +30,8 @@ bool is_close(const ValueType a, const ValueType b, float rtol = 0.01f, float at
         af = static_cast<float>(a);
         bf = static_cast<float>(b);
     } else {
-        af = a.to_float();
-        bf = b.to_float();
+        af = static_cast<float>(a);
+        bf = static_cast<float>(b);
     }
     // the idea is near zero we want absolute tolerance since relative doesn't make sense
     // (consider 1e-6f and 1.1e-6f)

@@ -174,18 +174,21 @@ std::vector<bfloat16> gold_broadcast(
 
             switch (op) {
                 case EltwiseOp::ADD: {
-                    golden[i * num_cols + j] = src_a[i * num_cols + j].to_float() + broadcast_value.to_float();
+                    golden[i * num_cols + j] =
+                        static_cast<float>(src_a[i * num_cols + j]) + static_cast<float>(broadcast_value);
                     break;
                 }
                 case EltwiseOp::SUB: {
-                    golden[i * num_cols + j] = src_a[i * num_cols + j].to_float() - broadcast_value.to_float();
+                    golden[i * num_cols + j] =
+                        static_cast<float>(src_a[i * num_cols + j]) - static_cast<float>(broadcast_value);
                     break;
                 }
                 case EltwiseOp::MUL: {
                     golden[i * num_cols + j] =
-                        bfloat16(std::bit_cast<uint32_t>(src_a[i * num_cols + j].to_bits() & srca_fid_mask))
-                            .to_float() *
-                        bfloat16(std::bit_cast<uint32_t>(broadcast_value.to_bits() & srcb_fid_mask)).to_float();
+                        static_cast<float>(
+                            bfloat16(std::bit_cast<uint32_t>(src_a[i * num_cols + j].to_bits() & srca_fid_mask))) *
+                        static_cast<float>(
+                            bfloat16(std::bit_cast<uint32_t>(broadcast_value.to_bits() & srcb_fid_mask)));
                     break;
                 }
                 default: {

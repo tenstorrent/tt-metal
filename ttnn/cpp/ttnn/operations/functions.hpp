@@ -462,8 +462,8 @@ static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layo
             output_buffer[index] = rand_value();
         }
     } else if constexpr (std::is_same_v<T, ::bfloat16>) {
-        auto rand_value =
-            std::bind(std::uniform_real_distribution<float>(low.to_float(), high.to_float()), RANDOM_GENERATOR);
+        auto rand_value = std::bind(
+            std::uniform_real_distribution<float>(static_cast<float>(low), static_cast<float>(high)), RANDOM_GENERATOR);
         for (auto index = 0; index < output_buffer.size(); index++) {
             output_buffer[index] = ::bfloat16(rand_value());
         }
@@ -499,7 +499,7 @@ inline bool nearly_equal(float a, float b, float epsilon = 1e-5f, float abs_thre
 
 template <typename... Args>
 static bool nearly_equal(::bfloat16 a, ::bfloat16 b, Args... args) {
-    return nearly_equal(a.to_float(), b.to_float(), args...);
+    return nearly_equal(static_cast<float>(a), static_cast<float>(b), args...);
 }
 }  // namespace detail
 

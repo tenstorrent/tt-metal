@@ -173,7 +173,7 @@ TEST(FloatVectorConversionTest, Float32Bfloat16Interop) {
         std::vector<float> input_ft;
         input_ft.reserve(input_bf16.size());
         std::transform(input_bf16.begin(), input_bf16.end(), std::back_inserter(input_ft), [](bfloat16 bf) {
-            return bf.to_float();
+            return static_cast<float>(bf);
         });
 
         auto output_bf16 =
