@@ -44,16 +44,16 @@ def test_expm1_arange_masking(device):
 
 
 @pytest.mark.parametrize(
-    "low, high",
+    "low, high, expected_atol",
     [
-        (-0.28515625, 0.69140625),
-        (-1.6 * 10**38, 1.6 * 10**38),  # bf16 range
+        (-0.28515625, 0.69140625, 0.004),
+        (-1.6 * 10**38, 88.5, 0.0),  # bf16 working range for expm1
     ],
 )
-def test_expm1_atol(low, high, device):
-    num_elements = torch.prod(torch.tensor(torch.Size([1, 2, 64, 120]))).item()
+def test_expm1_atol(low, high, expected_atol, device):
+    num_elements = torch.prod(torch.tensor(torch.Size([1, 3, 320, 320]))).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
-    torch_input = torch_input[:num_elements].reshape(torch.Size([1, 2, 64, 120]))
+    torch_input = torch_input[:num_elements].reshape(torch.Size([1, 3, 320, 320]))
 
     golden_function = ttnn.get_golden_function(ttnn.expm1)
     golden = golden_function(torch_input, device=device)
@@ -69,4 +69,4 @@ def test_expm1_atol(low, high, device):
     tt_result = ttnn.expm1(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    torch.allclose(golden, result, rtol=0.844, atol=3.91e-03)
+    torch.allclose(golden, result, atol=expected_atol)
