@@ -151,8 +151,7 @@ struct kernel_config_msg_t {
     volatile uint16_t sem_offset[NUM_PROGRAMMABLE_CORE_TYPES];
     volatile uint16_t local_cb_offset;
     volatile uint16_t remote_cb_offset;
-    rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
-    volatile uint8_t pad1[8];  // CODEGEN:skip
+    rta_offset_t rta_offset[NUM_PROCESSORS_PER_CORE_TYPE];
     volatile uint8_t mode;  // dispatch mode host/dev
     volatile uint8_t pad2[1];  // CODEGEN:skip
     volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
