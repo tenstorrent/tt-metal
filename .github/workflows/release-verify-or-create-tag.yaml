@@ -31,7 +31,7 @@ jobs:
     permissions: write-all
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     outputs:
       version: ${{ steps.get-tag-version.outputs.version }}
     steps:
