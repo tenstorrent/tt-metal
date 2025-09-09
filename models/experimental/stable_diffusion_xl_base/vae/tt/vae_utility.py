@@ -41,20 +41,29 @@ def get_DRAM_conv_config(module_path, idx):
         return None
     else:
         parts = module_path.split(".")
-        block_id = int(parts[parts.index("up_blocks") + 1])
+        if "down_blocks" in parts:
+            block_id = int(parts[parts.index("down_blocks") + 1])
+        else:
+            block_id = int(parts[parts.index("up_blocks") + 1])
 
         if block_id == 0:
-            if "upsamplers" not in module_path:
+            if "downsamplers" in module_path:
+                num_slices = 8
+            elif "upsamplers" not in module_path:
                 return None
             else:
                 num_slices = 2
         if block_id == 1:
-            if "upsamplers" not in module_path:
+            if "downsamplers" in module_path:
+                num_slices = 4
+            elif "upsamplers" not in module_path:
                 num_slices = 2
             else:
                 num_slices = 8
         if block_id == 2:
-            if "upsamplers" not in module_path:
+            if "downsamplers" in module_path:
+                num_slices = 2
+            elif "upsamplers" not in module_path:
                 if "resnets.0" in module_path and idx == 1:
                     num_slices = 8
                 else:
