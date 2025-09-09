@@ -288,7 +288,7 @@ public:
 
     void generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
 
-    std::vector<std::shared_ptr<Kernel>> kernels() const;
+    std::vector<KernelMeta> collect_kernel_meta(IDevice* device) const;
 
 private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;

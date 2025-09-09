@@ -16,6 +16,7 @@
 #include "jit_build/jit_build_settings.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include <enchantum/enchantum.hpp>
+#include "llrt.hpp"
 
 namespace tt::tt_metal {
 
@@ -83,6 +84,8 @@ public:
     virtual uint32_t get_binary_packed_size(IDevice* device, int index) const = 0;
 
     bool is_idle_eth() const;
+
+    KernelMeta meta(IDevice* device) const;
 
 protected:
     HalProgrammableCoreType programmable_core_type_;

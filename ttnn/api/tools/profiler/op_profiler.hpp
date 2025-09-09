@@ -213,7 +213,8 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
         device = tt::DevicePool::instance().get_active_device(device_id);
     }
 
-    for (const auto& kernel : program.kernels()) {
+    auto kernel_meta = detail::collect_kernel_meta(program, device);
+    for (const auto& kernel : kernel_meta) {
         json kernelObj;
         kernelObj["source"] = kernel.source;
         kernelObj["name"] = kernel.name;
@@ -243,21 +244,16 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
     kernelSizes["IDLE_ETH_DM_0_max_kernel_size"] = 0;
     kernelSizes["IDLE_ETH_DM_1_max_kernel_size"] = 0;
 
-    if (device != nullptr) {
-        for (const auto& kernel : program.kernels()) {
-            auto core_type = kernel.programmable_core_type;
-            auto core_type_name = enchantum::to_string(core_type);
-            auto processor_class_name = enchantum::to_string(kernel.processor_class);
+    for (const auto& kernel : kernel_meta) {
+        auto core_type = kernel.programmable_core_type;
+        auto core_type_name = enchantum::to_string(core_type);
+        auto processor_class_name = enchantum::to_string(kernel.processor_class);
 
-            for (auto const& binary_meta : kernel.binary_meta) {
-                auto key = fmt::format(
-                    "{}_{}_{}_max_kernel_size",
-                    core_type_name,
-                    processor_class_name,
-                    binary_meta.processor_type);
-                if (kernelSizes.value(key, 0) < binary_meta.packed_size) {
-                    kernelSizes[key] = binary_meta.packed_size;
-                }
+        for (auto const& binary_meta : kernel.binary_meta) {
+            auto key = fmt::format(
+                "{}_{}_{}_max_kernel_size", core_type_name, processor_class_name, binary_meta.processor_type);
+            if (kernelSizes.value(key, 0) < binary_meta.packed_size) {
+                kernelSizes[key] = binary_meta.packed_size;
             }
         }
     }

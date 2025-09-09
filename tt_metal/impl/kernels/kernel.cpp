@@ -470,6 +470,28 @@ void Kernel::set_common_runtime_args_count(uint32_t count) {
 
 bool Kernel::is_idle_eth() const { return this->programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH; }
 
+KernelMeta Kernel::meta(IDevice* device) const {
+    KernelMeta res;
+    res.name = this->kernel_full_name_;
+    res.source = this->kernel_src_.source_;
+    res.programmable_core_type = get_kernel_programmable_core_type();
+    res.processor_class = get_kernel_processor_class();
+    if (get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+        res.math_fidelity = std::get<ComputeConfig>(config()).math_fidelity;
+    }
+
+    if (device != nullptr) {
+        res.binary_meta.reserve(this->expected_num_binaries());
+        for (int i = 0; i < this->expected_num_binaries(); i++) {
+            res.binary_meta.push_back({
+                .processor_type = this->get_kernel_processor_type(i),
+                .packed_size = this->get_binary_packed_size(device, i),
+            });
+        }
+    }
+    return res;
+}
+
 uint32_t KernelImpl::get_binary_packed_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
     auto iter = binaries_.find(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
