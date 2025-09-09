@@ -147,6 +147,16 @@ void try_creating_more_than_max_num_semaphores(
     ASSERT_ANY_THROW(tt_metal::CreateSemaphore(program, core_range, val));
 }
 
+void try_creating_semaphores_out_of_bounds(
+    std::shared_ptr<distributed::MeshDevice> mesh_device, distributed::MeshWorkload& workload) {
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    CoreRange core_range({0, 0}, {0, 20});
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    auto& program = workload.get_programs().at(device_range);
+    constexpr static uint32_t val = 5;
+    ASSERT_ANY_THROW(tt_metal::CreateSemaphore(program, core_range, val));
+}
+
 }  // namespace unit_tests::initialize_semaphores
 
 namespace tt::tt_metal {
@@ -173,6 +183,7 @@ TEST_F(MeshDeviceFixture, TensixInitializeIllegalSemaphores) {
         CoreRange core_range({0, 0}, {1, 1});
         unit_tests::initialize_semaphores::try_creating_more_than_max_num_semaphores(
             devices_.at(id), workload, core_range);
+        unit_tests::initialize_semaphores::try_creating_semaphores_out_of_bounds(devices_.at(id), workload);
     }
 }
 
