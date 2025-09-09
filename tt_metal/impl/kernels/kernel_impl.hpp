@@ -110,6 +110,8 @@ public:
 
     bool is_idle_eth() const;
 
+    // Collects metadata of the kernel and the binaries within the kernel if device is non-null
+    // Note: device is nullable
     detail::KernelMeta meta(IDevice* device) const;
 
 protected:

@@ -287,6 +287,7 @@ public:
 
     void generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
 
+    // Dispatches detail::collect_kernel_meta, device is nullable
     std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
 
 private:
