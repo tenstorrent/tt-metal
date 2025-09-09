@@ -1013,6 +1013,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
+            log_info(tt::LogAlways, "Overriding runtime arguments for sdpa decode");
             const auto cur_pos_ids =
                 static_cast<const ttnn::operations::transformer::ScaledDotProductAttentionDecode*>(operation)->cur_pos;
 

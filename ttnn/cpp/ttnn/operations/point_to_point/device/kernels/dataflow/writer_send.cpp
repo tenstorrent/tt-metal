@@ -12,6 +12,7 @@ using tt::data_movement::common::round_up;
 using tt::data_movement::common::tt_memmove;
 
 void kernel_main() {
+    DPRINT << "Sender kernel started" << ENDL();
     constexpr uint32_t sender_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t packet_cb_id = get_compile_time_arg_val(2);
@@ -60,6 +61,7 @@ void kernel_main() {
 
     // wait for receiver to signal it is ready
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr);
+    DPRINT << "Sender semaphore address: " << receive_semaphore_addr << ENDL();
     noc_semaphore_wait(local_semaphore_ptr, 1);
     // clean up semaphore – needs to be done before the sender side semaphore increment if we're re-using the semaphore
     // in subsequent program cache hits

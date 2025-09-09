@@ -210,6 +210,7 @@ PointToPointOp::SendReceive::cached_mesh_workload_t PointToPointOp::SendReceive:
         TT_FATAL(it != coords.end(), "Tensor not present on coordinate: {}", c);
     }
 
+    log_info(tt::LogAlways, "Creating programs for sender {} and receiver {}", use_coords[0], use_coords[1]);
     for (const auto& coord : use_coords) {
         auto cached_workload = create_at(operation_attributes, coord, tensor_args, tensor_return_value, semaphore);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_workload.program));
@@ -228,10 +229,20 @@ cached_workload_t PointToPointOp::SendReceive::create_at(
     const auto& receive_coordinate = operation_attributes.receive_coord;
 
     if (mesh_coordinate == send_coordinate) {
+        log_info(
+            tt::LogAlways,
+            "For sender mesh coordinate {}, Global semaphore address: {}",
+            mesh_coordinate,
+            semaphore.address());
         return send_program_factory(
             tensor_args, operation_attributes, send_coordinate, receive_coordinate, tensor_return_value, semaphore);
 
     } else if (mesh_coordinate == receive_coordinate) {
+        log_info(
+            tt::LogAlways,
+            "For receiver mesh coordinate {}, Global semaphore address: {}",
+            mesh_coordinate,
+            semaphore.address());
         return receive_program_factory(operation_attributes, tensor_return_value, semaphore);
     }
 
@@ -246,6 +257,11 @@ void PointToPointOp::SendReceive::override_runtime_arguments(
     tensor_return_value_t& tensor_return_value) {
     const auto send_coord = operation_attributes.send_coord;
     const auto receive_coord = operation_attributes.receive_coord;
+    log_info(
+        tt::LogAlways,
+        "Overriding runtime arguments for send/receive at coordinates {} and {}",
+        send_coord,
+        receive_coord);
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& coord = range.start_coord();
@@ -257,6 +273,7 @@ void PointToPointOp::SendReceive::override_runtime_arguments(
         const auto& shared_variables = cached_workload.shared_variables.at(range);
 
         if (coord == send_coord) {
+            log_info(tt::LogAlways, "Overriding runtime arguments for send at coordinate {}", coord);
             const auto& send_unary_reader_kernel_id = shared_variables.send_unary_reader_kernel_id;
             const auto& send_unary_writer_kernel_id = shared_variables.send_unary_writer_kernel_id;
 
@@ -272,6 +289,7 @@ void PointToPointOp::SendReceive::override_runtime_arguments(
         }
 
         if (coord == receive_coord) {
+            log_info(tt::LogAlways, "Overriding runtime arguments for receive at coordinate {}", coord);
             const auto& receive_unary_reader_kernel_id = shared_variables.receive_unary_reader_kernel_id;
             const auto& receive_unary_writer_kernel_id = shared_variables.receive_unary_writer_kernel_id;
 

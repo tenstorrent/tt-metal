@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -216,13 +217,15 @@ class Model1D(SharedStateAddOn, AbstractModule):
         Returns:
             The tensor after transferring the row
         """
-
+        logger.info(f"Transferring row from {src_row_idx} to {dst_row_ix}")
         mesh_shape = cfg["mesh_shape"]
 
         src_row = get_mesh_coords(mesh_shape, src_row_idx)
         dst_row = get_mesh_coords(mesh_shape, dst_row_ix)
-
+        mesh_device = x.device()
+        # mesh_device.disable_and_clear_program_cache()
         for src_coord, dst_coord in zip(src_row, dst_row):
+            logger.info(f"Transferring from {src_coord} to {dst_coord}")
             ttnn.point_to_point(
                 x,
                 dst_coord,
@@ -230,7 +233,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
                 optional_output_tensor=x,
                 **cfg["transfer_row"],
             )
-
+        # mesh_device.enable_program_cache()
         return x
 
     @classmethod

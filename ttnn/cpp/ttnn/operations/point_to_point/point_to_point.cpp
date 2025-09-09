@@ -17,6 +17,7 @@ ttnn::Tensor ExecutePointToPoint::invoke(
     const ccl::Topology topology,
     const std::optional<ttnn::Tensor>& optional_output_tensor) {
     // first output tensor in list is intermediate and is discarded
+    log_info(tt::LogAlways, "Invoking point_to_point for sender {} and receiver {}", sender_coord, receiver_coord);
     return ttnn::prim::point_to_point(input_tensor, topology, receiver_coord, sender_coord, optional_output_tensor)
         .at(1);
 }

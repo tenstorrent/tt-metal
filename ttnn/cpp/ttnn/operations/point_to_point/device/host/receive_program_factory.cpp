@@ -111,6 +111,8 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         increment = std::min(increment, output_num_pages - page_idx_start);
         page_idx_end += increment;
 
+        log_info(
+            tt::LogAlways, "For mesh device {}, Global semaphore address: {}", mesh_device->id(), semaphore.address());
         std::vector<uint32_t> reader_runtime_args = {
             page_idx_start,
             page_idx_end,

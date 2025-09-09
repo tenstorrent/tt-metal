@@ -10,6 +10,7 @@
 using tt::data_movement::common::tt_memmove;
 
 void kernel_main() {
+    DPRINT << "Receiver kernel started" << ENDL();
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t packet_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t receiver_cb_id = get_compile_time_arg_val(2);
@@ -61,6 +62,7 @@ void kernel_main() {
     const uint64_t packet_l1_addr = get_write_ptr(packet_cb_id);
 
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
+    DPRINT << "Receiver semaphore address: " << sender_semaphore_addr << ENDL();
     noc_semaphore_wait(local_semaphore_ptr, 1);
 
     const uint32_t aligned_page_size_bytes = align(page_size_bytes, alignment);

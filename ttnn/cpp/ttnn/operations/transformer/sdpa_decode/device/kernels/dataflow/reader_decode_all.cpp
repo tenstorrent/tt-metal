@@ -11,6 +11,7 @@
 // #include "debug/dprint.h"
 
 void kernel_main() {
+    DPRINT << "Reader decode all kernel started" << ENDL();
     /*
     In DRAM, Q is (B, PNHt, DHt), K is (B, St, DHt), V is (B, St, DHt), mask is (B, PNHt, PSt)
     We want to read for a particular batch cur_batch, and sequence length up to padded layer length.

@@ -20,9 +20,6 @@ struct PointToPointOp {
         const MeshCoordinate& send_coord;
         const ::ttnn::ccl::Topology topology;
 
-        // put this in here to hash on tensor spec
-        const ttnn::TensorSpec _input_tensor_spec;
-
         static constexpr auto attribute_names = std::forward_as_tuple("send_coord", "receive_coord", "topology");
         auto attribute_values() const { return std::forward_as_tuple(send_coord, receive_coord, topology); };
     };
@@ -90,7 +87,6 @@ struct PointToPointOp {
     // Probably the same as on cache miss
     static void validate_on_program_cache_hit(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-        ;
         validate(operation_attributes, tensor_args);
     };
 
@@ -107,9 +103,27 @@ struct PointToPointOp {
         const MeshCoordinate& sender_coord,
         const std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
         return std::make_tuple(
-            operation_attributes_t{receiver_coord, sender_coord, topology, input_tensor.tensor_spec()},
+            operation_attributes_t{receiver_coord, sender_coord, topology},
             tensor_args_t{input_tensor, optional_output_tensor});
     };
+
+    static tt::stl::hash::hash_t compute_program_hash(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+        auto input_tensor = tensor_args.input_tensor;
+        auto input_shape = input_tensor.padded_shape();
+        auto input_memory_layout = input_tensor.layout();
+        auto input_dtype = input_tensor.dtype();
+        auto input_memory_config = input_tensor.memory_config();
+
+        return tt::tt_metal::operation::hash_operation<PointToPointOp>(
+            input_shape,
+            input_memory_layout,
+            input_dtype,
+            input_memory_config,
+            operation_attributes.topology,
+            operation_attributes.send_coord,
+            operation_attributes.receive_coord);
+    }
 
 private:
     static void validate(const operation_attributes_t&, const tensor_args_t&);
