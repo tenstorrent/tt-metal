@@ -425,7 +425,6 @@ def run_all_to_all_dispatch_test(
     first_failed_metadata_index = None
     failed_indices = []
     failed_metadata_indices = []
-    expected_pcc = get_pcc_threshold(dtype)
 
     for tensor_index in range(len(tt_out_tensor_list)):
         tt_torch_tensor = ttnn.to_torch(
@@ -461,23 +460,15 @@ def run_all_to_all_dispatch_test(
                     expert_id = tt_metadata_tensor[0, b, s, k]
                     for d in range(devices):
                         if torch_expert_mappings[tensor_index][0, 0, expert_id, d] == 1:
-                            eq, output_results = comp_pcc(
-                                tt_torch_tensor[d, b, s, :],
-                                output_tensor_goldens_list[tensor_index][d, b, s, :],
-                                expected_pcc,
-                            )
-                            is_all_close = torch.allclose(
-                                tt_torch_tensor[d, b, s, :], output_tensor_goldens_list[tensor_index][d, b, s, :]
-                            )
                             is_all_equal = torch.equal(
                                 tt_torch_tensor[d, b, s, :], output_tensor_goldens_list[tensor_index][d, b, s, :]
                             )
-                            if not is_all_close:
+                            if not is_all_equal:
                                 logger.info(
                                     f"Output tensor {tensor_index} mismatch at batch {b}, sequence {s}, expert {expert_id}, device {d}"
                                 )
 
-                            if not eq or not is_all_close or not is_all_equal:
+                            if not is_all_equal:
                                 passed = False
                                 first_failed_tensor_index = tensor_index
                                 first_failed_batch_index = b
