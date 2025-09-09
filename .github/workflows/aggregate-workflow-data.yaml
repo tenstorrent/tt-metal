@@ -94,6 +94,7 @@ jobs:
               const hasValid = arts.data.artifacts.some(a => a.name === 'workflow-data' && !a.expired && a.size_in_bytes > 0);
               if (hasValid) { selectedId = String(r.id); break; }
             }
+            core.info(`Selected previous run id: ${selectedId || 'none'}`);
             core.setOutput('run_id', selectedId);
   #     - name: Install analyze-workflow-data dependencies
   #       shell: bash
@@ -107,6 +108,9 @@ jobs:
           path: ${{ github.workspace }}/prev
           run-id: ${{ steps.prev.outputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Echo selected previous run id
+        run: |
+          echo "Selected previous run id: ${{ steps.prev.outputs.run_id }}"
       - name: List artifacts for selected previous run (debug)
         if: ${{ steps.prev.outputs.run_id != '' }}
         uses: actions/github-script@v7
