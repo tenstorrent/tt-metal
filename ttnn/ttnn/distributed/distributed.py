@@ -39,7 +39,6 @@ class TensorShardingInfo:
         self.mesh_rank = len(self.mesh_shape)
         self.distribution_rank = len(self.distribution_shape)
 
-        self.distribution_mode = self._compute_distribution_mode()
         self.coord_mapper, self.reverse_coord_mapper = self._create_coordinate_mapper()
         self.dim_to_axis = self._compute_dim_to_axis_mapping()
         self.global_tensor_shape = self._compute_global_tensor_shape()
@@ -58,55 +57,39 @@ class TensorShardingInfo:
                     mapping[tensor_dim] = axis
         return mapping
 
-    def _compute_distribution_mode(self):
-        """Determine if ROW_MAJOR or SUBMESH distribution mode is used."""
-        return ttnn.compute_distribution_mode_string(
+    def _create_coordinate_mapper(self):
+        """Create reverse mapping using C++ implementation for both SUBMESH and ROW_MAJOR modes."""
+        self.mesh_coords_ordered = ttnn.compute_distribution_to_mesh_mapping(
             ttnn.MeshShape(self.distribution_shape), ttnn.MeshShape(self.mesh_shape)
         )
 
-    def _create_coordinate_mapper(self):
-        """Create bidirectional mapping between distribution and mesh coordinates."""
-        if self.distribution_mode == "SUBMESH":
-            # For submesh, coordinates map directly
-            return lambda distribution_coord: distribution_coord, lambda mesh_coord: mesh_coord
-
-        # Create both forward and reverse mappings
-        distribution_coords = [
-            ttnn.MeshCoordinate([distribution_coord[i] for i in range(distribution_coord.dims())])
-            for distribution_coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(self.distribution_shape))
-        ]
-        distribution_to_mesh = {}
-        mesh_to_distribution = {}
+        # Create O(1) reverse mapping lookup
+        mesh_to_distribution_map = {}
         coord_idx = 0
-
         for distribution_coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(self.distribution_shape)):
-            if coord_idx < len(distribution_coords):
+            if coord_idx < len(self.mesh_coords_ordered):
                 distribution_key = ttnn.MeshCoordinate(
                     [distribution_coord[i] for i in range(distribution_coord.dims())]
                 )
-                mesh_key = distribution_coords[coord_idx]
-
-                distribution_to_mesh[distribution_key] = mesh_key
-                mesh_to_distribution[mesh_key] = distribution_key
+                mesh_to_distribution_map[self.mesh_coords_ordered[coord_idx]] = distribution_key
                 coord_idx += 1
 
-        def forward_mapper(distribution_coord):
-            return distribution_to_mesh.get(distribution_coord, distribution_coords[0] if distribution_coords else (0,))
-
         def reverse_mapper(mesh_coord):
-            return mesh_to_distribution.get(mesh_coord, mesh_coord)
+            return mesh_to_distribution_map.get(mesh_coord, mesh_coord)
 
-        return forward_mapper, reverse_mapper
+        return None, reverse_mapper
 
     def _mesh_to_distribution_coord(self, mesh_coord):
         """Convert mesh coordinate to distribution coordinate using O(1) reverse lookup."""
         return self.reverse_coord_mapper(mesh_coord)
 
     def _iter_distribution_to_mesh_coords(self):
-        """Generator that yields (distribution_coord, mesh_coord) pairs using the coord_mapper."""
+        """Generator that yields (distribution_coord, mesh_coord) pairs using C++ results directly."""
+        coord_idx = 0
         for distribution_coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(self.distribution_shape)):
-            mesh_coord = self.coord_mapper(distribution_coord)
-            yield distribution_coord, mesh_coord
+            if coord_idx < len(self.mesh_coords_ordered):
+                yield distribution_coord, self.mesh_coords_ordered[coord_idx]
+                coord_idx += 1
 
     def _compute_global_tensor_shape(self):
         """Compute the global tensor shape using distribution_shape for scaling."""
