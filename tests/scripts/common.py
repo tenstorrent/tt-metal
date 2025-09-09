@@ -272,12 +272,18 @@ def get_updated_device_params(device_params):
 
     dispatch_core_axis = new_device_params.pop("dispatch_core_axis", None)
     dispatch_core_type = new_device_params.pop("dispatch_core_type", None)
+    fabric_tensix_config = new_device_params.get("fabric_tensix_config", None)
 
-    if ttnn.device.is_blackhole() and dispatch_core_axis == ttnn.DispatchCoreAxis.ROW:
-        logger.warning("blackhole arch does not support DispatchCoreAxis.ROW, using DispatchCoreAxis.COL instead.")
-        dispatch_core_axis = ttnn.DispatchCoreAxis.COL
+    # If fabric_tensix_config is not specified but fabric_config is specified on Blackhole,
+    # default to MUX mode
+    if fabric_tensix_config is None and ttnn.device.is_blackhole():
+        fabric_config = new_device_params.get("fabric_config", None)
+        if fabric_config is not None:
+            fabric_tensix_config = ttnn.FabricTensixConfig.MUX
+            new_device_params["fabric_tensix_config"] = fabric_tensix_config
+            logger.info("Blackhole with fabric enabled, defaulting to fabric_tensix_config=MUX")
 
-    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
+    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis, fabric_tensix_config)
     new_device_params["dispatch_core_config"] = dispatch_core_config
 
     return new_device_params
