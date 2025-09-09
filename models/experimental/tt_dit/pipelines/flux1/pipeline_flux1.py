@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import time
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -1072,12 +1071,14 @@ def _get_t5_prompt_embeds(
         logger.warning("T5 input text was truncated")
 
     if isinstance(text_encoder, T5Encoder):
+        assert mesh_device is not None
+
         tt_tokens = ttnn.from_torch(
             tokens,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
             device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
         )
         tt_hidden_states = text_encoder(prompt=tt_tokens, device=mesh_device)
         tt_prompt_embeds = tt_hidden_states[-1]
