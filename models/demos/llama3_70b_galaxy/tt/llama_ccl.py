@@ -1222,15 +1222,20 @@ def tt_distributed_rmsnorm(
     use_2d_grid = False
 
     # Run distributed rmsnorm part 1
-    if program_config is not None and inp.dtype == ttnn.bfloat8_b:
-        core_grid_ln, grid_offset = (10, 2), ttnn.CoreCoord(1, 0)
-        # core_grid_ln, grid_offset = (4, 2), ttnn.CoreCoord(1, 0)
-        core_range = ttnn.CoreRange(
-            grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
-        )
-        inp = ttnn.to_memory_config(inp, ttnn.DRAM_MEMORY_CONFIG)
-        inp = ttnn.typecast(inp, ttnn.bfloat16, sub_core_grids=ttnn.CoreRangeSet({core_range}))
-        inp = ttnn.to_memory_config(inp, inp_mem_config)
+    # if program_config is not None and inp.dtype == ttnn.bfloat8_b:
+    #     core_grid_ln, grid_offset = (10, 2), ttnn.CoreCoord(1, 0)
+    #     # core_grid_ln, grid_offset = (4, 2), ttnn.CoreCoord(1, 0)
+    #     core_range = ttnn.CoreRange(
+    #         grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
+    #     )
+    #     inp_mem_config = inp.memory_config()
+    #     inp = ttnn.to_memory_config(inp, ttnn.DRAM_MEMORY_CONFIG)
+    #     inp = ttnn.typecast(inp, ttnn.bfloat16, sub_core_grids=ttnn.CoreRangeSet({core_range}))
+    #     inp = ttnn.to_memory_config(inp, inp_mem_config)
+    # elif program_config is None and inp.dtype == ttnn.bfloat8_b:
+    #     # inp_bf8 = inp
+    #     inp = ttnn.typecast(inp, ttnn.bfloat16)
+    #     # ttnn.deallocate(inp_bf8)
 
     tt_stats = (
         ttnn.rms_norm_pre_all_gather(
@@ -1254,7 +1259,8 @@ def tt_distributed_rmsnorm(
             tt_stats,
             dim=3,
             cluster_axis=1,
-            num_links=1,
+            # num_links=1,
+            num_links=tt_ccl.model_config["GALAXY_NUM_LINKS"],
             memory_config=tt_ccl.all_gather_buffers.get("LAYERNORM", None).memory_config(),
             buffer_key="LAYERNORM",
         )
