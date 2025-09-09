@@ -81,137 +81,142 @@ def test_resnet_block_2d_512x512(
     block_index,
     resnet_index,
 ):
-    load_from_disk = False
-    if not load_from_disk:
-        # setup pytorch model
-        pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
+    try:
+        load_from_disk = False
+        if not load_from_disk:
+            # setup pytorch model
+            pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
 
-        model = pipe.unet
-        model.eval()
-        config = model.config
+            model = pipe.unet
+            model.eval()
+            config = model.config
 
-        parameters = preprocess_model_parameters(
-            initialize_model=lambda: model, custom_preprocessor=custom_preprocessor, device=device
-        )
+            parameters = preprocess_model_parameters(
+                initialize_model=lambda: model, custom_preprocessor=custom_preprocessor, device=device
+            )
 
-        if block_name == "up":
-            parameters = parameters.up_blocks[block_index].resnets[resnet_index]
-            resnet = pipe.unet.up_blocks[block_index].resnets[resnet_index]
-        elif block_name == "down":
-            parameters = parameters.down_blocks[block_index].resnets[resnet_index]
-            resnet = pipe.unet.down_blocks[block_index].resnets[resnet_index]
+            if block_name == "up":
+                parameters = parameters.up_blocks[block_index].resnets[resnet_index]
+                resnet = pipe.unet.up_blocks[block_index].resnets[resnet_index]
+            elif block_name == "down":
+                parameters = parameters.down_blocks[block_index].resnets[resnet_index]
+                resnet = pipe.unet.down_blocks[block_index].resnets[resnet_index]
+            else:
+                parameters = parameters.mid_block.resnets[resnet_index]
+                resnet = pipe.unet.mid_block.resnets[resnet_index]
+            torch.save(resnet, "resnet.pt")
+            torch.save(config, "config.pt")
+
         else:
-            parameters = parameters.mid_block.resnets[resnet_index]
-            resnet = pipe.unet.mid_block.resnets[resnet_index]
-        torch.save(resnet, "resnet.pt")
-        torch.save(config, "config.pt")
+            resnet = torch.load("resnet.pt")
+            config = torch.load("config.pt")
+            parameters = preprocess_model_parameters(
+                initialize_model=lambda: resnet, custom_preprocessor=custom_preprocessor, device=device
+            )
 
-    else:
-        resnet = torch.load("resnet.pt")
-        config = torch.load("config.pt")
-        parameters = preprocess_model_parameters(
-            initialize_model=lambda: resnet, custom_preprocessor=custom_preprocessor, device=device
+        ttnn.dump_device_memory_state(device, prefix="GN_resnet_1_")
+
+        ############ start of residual block #############
+        temb_channels = 1280
+        groups = 32
+        time_embedding_norm = "default"
+        output_scale_factor = 1
+        ########## end of residual block #############
+        hidden_states_shape = [batch_size, in_channels, input_height, input_width]
+        temb_shape = [1, 1, 2, 1280]
+
+        input = torch.randn(hidden_states_shape)
+        temb = torch.randn(temb_shape)
+
+        torch_output = resnet(input, temb.squeeze(0).squeeze(0))
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
         )
-
-    ttnn.dump_device_memory_state(device, prefix="GN_resnet_1_")
-
-    ############ start of residual block #############
-    temb_channels = 1280
-    groups = 32
-    time_embedding_norm = "default"
-    output_scale_factor = 1
-    ########## end of residual block #############
-    hidden_states_shape = [batch_size, in_channels, input_height, input_width]
-    temb_shape = [1, 1, 2, 1280]
-
-    input = torch.randn(hidden_states_shape)
-    temb = torch.randn(temb_shape)
-
-    torch_output = resnet(input, temb.squeeze(0).squeeze(0))
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        math_approx_mode=True,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
-    resnet_block = resnetBlock2D(
-        device,
-        parameters,
-        batch_size,
-        input_height,
-        input_width,
-        group_norm_on_device=True,
-        compute_kernel_config=compute_kernel_config,
-    )
-
-    memory_config = None
-    if memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
-        memory_config = ttnn.MemoryConfig(
-            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=buffer_type,
-        )
-    else:
-        memory_config = ttnn.MemoryConfig(
-            memory_layout,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(
-                ttnn.CoreRangeSet(
-                    {
-                        ttnn.CoreRange(
-                            ttnn.CoreCoord(0, 0),
-                            ttnn.CoreCoord(shard_end_core[0], shard_end_core[1]),
-                        ),
-                    }
-                ),
-                shard_shape,
-                ttnn.ShardOrientation.ROW_MAJOR,
-            ),
-        )
-
-    input = preprocess_and_push_input_to_device(device, input, memory_config=memory_config)
-
-    temb = temb.permute(2, 0, 1, 3)  # pre-permute temb
-    temb = ttnn.from_torch(temb, ttnn.bfloat16)
-    temb = ttnn.to_layout(temb, ttnn.TILE_LAYOUT)
-    temb = ttnn.to_device(temb, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-    ttnn_output_ = resnet_block(
-        input,
-        temb=temb,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        temb_channels=temb_channels,
-        use_in_shortcut=use_in_shortcut,
-        eps=1e-6,
-        groups=groups,
-        time_embedding_norm=time_embedding_norm,
-        non_linearity="silu",
-        output_scale_factor=output_scale_factor,
-    )
-    ttnn_output = resnet_block(
-        input,
-        temb=temb,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        temb_channels=temb_channels,
-        use_in_shortcut=use_in_shortcut,
-        eps=1e-6,
-        groups=groups,
-        time_embedding_norm=time_embedding_norm,
-        non_linearity="silu",
-        output_scale_factor=output_scale_factor,
-    )
-    ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
-    ttnn_output = ttnn_to_torch(ttnn_output)
-    ttnn_output = torch.reshape(
-        ttnn_output,
-        (
+        resnet_block = resnetBlock2D(
+            device,
+            parameters,
             batch_size,
             input_height,
             input_width,
-            out_channels if out_channels is not None else in_channels,
-        ),
-    )
-    ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))
+            group_norm_on_device=True,
+            compute_kernel_config=compute_kernel_config,
+        )
 
-    assert_with_pcc(torch_output, ttnn_output, pcc=0.98)
+        memory_config = None
+        if memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+            memory_config = ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+                buffer_type=buffer_type,
+            )
+        else:
+            memory_config = ttnn.MemoryConfig(
+                memory_layout,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(
+                                ttnn.CoreCoord(0, 0),
+                                ttnn.CoreCoord(shard_end_core[0], shard_end_core[1]),
+                            ),
+                        }
+                    ),
+                    shard_shape,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+
+        input = preprocess_and_push_input_to_device(device, input, memory_config=memory_config)
+
+        temb = temb.permute(2, 0, 1, 3)  # pre-permute temb
+        temb = ttnn.from_torch(temb, ttnn.bfloat16)
+        temb = ttnn.to_layout(temb, ttnn.TILE_LAYOUT)
+        temb = ttnn.to_device(temb, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        ttnn_output_ = resnet_block(
+            input,
+            temb=temb,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            temb_channels=temb_channels,
+            use_in_shortcut=use_in_shortcut,
+            eps=1e-6,
+            groups=groups,
+            time_embedding_norm=time_embedding_norm,
+            non_linearity="silu",
+            output_scale_factor=output_scale_factor,
+        )
+        ttnn_output = resnet_block(
+            input,
+            temb=temb,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            temb_channels=temb_channels,
+            use_in_shortcut=use_in_shortcut,
+            eps=1e-6,
+            groups=groups,
+            time_embedding_norm=time_embedding_norm,
+            non_linearity="silu",
+            output_scale_factor=output_scale_factor,
+        )
+        ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn_output = ttnn_to_torch(ttnn_output)
+        ttnn_output = torch.reshape(
+            ttnn_output,
+            (
+                batch_size,
+                input_height,
+                input_width,
+                out_channels if out_channels is not None else in_channels,
+            ),
+        )
+        ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))
+
+        assert_with_pcc(torch_output, ttnn_output, pcc=0.98)
+        ttnn._ttnn.device.synchronize_device(device)
+    except Exception as e:
+        logger.error(f"Error in test_resnet_block_2d_512x512: {e}")
+        raise e
