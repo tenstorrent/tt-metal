@@ -136,48 +136,6 @@ public:
     virtual void TearDown() = 0;
 };
 
-class Fabric1DFixture : public BaseFabricFixture {
-public:
-    std::shared_ptr<MeshDeviceView> view_;
-    std::map<chip_id_t, IDevice*> physical_devices_;
-
-    void SetupDevices() override {
-        ValidateEnvironment();
-
-        const MeshShape cluster_shape = GetDeterminedMeshShape();
-
-        auto mapped_devices = SystemMesh::instance().get_mapped_devices(cluster_shape);
-
-        const std::vector<int> physical_device_ids = extract_locals(mapped_devices.device_ids);
-        TT_FATAL(physical_device_ids.size() == cluster_shape.mesh_size(), "Some of the devices are remote");
-        physical_devices_ = tt::tt_metal::detail::CreateDevices(physical_device_ids);
-
-        std::vector<IDevice*> devices;
-        devices.reserve(physical_device_ids.size());
-        for (auto device_id : physical_device_ids) {
-            devices.push_back(physical_devices_.at(device_id));
-        }
-
-        view_ = std::make_shared<MeshDeviceView>(cluster_shape, devices, mapped_devices.fabric_node_ids);
-        device_open = true;
-    }
-
-    void TearDown() override {
-        if (device_open) {
-            tt::tt_metal::detail::CloseDevices(physical_devices_);
-            device_open = false;
-        }
-    }
-
-    Fabric1DFixture() : BaseFabricFixture() { this->SetupDevices(); }
-
-    Fabric1DFixture(tt::tt_fabric::FabricConfig fabric_config) : BaseFabricFixture(fabric_config) {
-        this->SetupDevices();
-    }
-
-    ~Fabric1DFixture() override { TearDown(); }
-};
-
 class Fabric1DDeviceInitFixture {
 public:
     tt::ARCH arch_{tt::ARCH::Invalid};
@@ -344,18 +302,18 @@ Correctness run_output_check(CONTAINER_T const& inputs, CONTAINER_T output_buffe
     return pass ? Correctness::Correct : Correctness::Incorrect;
 };
 
-static SubdeviceInfo create_worker_subdevices(const std::vector<IDevice*>& devices) {
+static SubdeviceInfo create_worker_subdevices(const std::vector<std::shared_ptr<MeshDevice>>& devices) {
     SubdeviceInfo subdevice_info;
     std::unordered_map<chip_id_t, SubDeviceManagerId> sub_device_manager_ids;
     for (auto device : devices) {
         const auto& tensix_sub_device =
             tt_metal::SubDevice(std::array{device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0})});
         subdevice_info.sub_device_managers.insert(
-            {device->id(), device->create_sub_device_manager({tensix_sub_device}, 0)});
-        device->load_sub_device_manager(subdevice_info.sub_device_managers.at(device->id()));
+            {device->get_devices()[0]->id(), device->create_sub_device_manager({tensix_sub_device}, 0)});
+        device->load_sub_device_manager(subdevice_info.sub_device_managers.at(device->get_devices()[0]->id()));
         subdevice_info.worker_subdevice_id.insert(
-            {device->id(), device->get_sub_device_ids().at(TEST_WORKERS_SUBDEVICE_INDEX)});
-        device->set_sub_device_stall_group({{subdevice_info.worker_subdevice_id.at(device->id())}});
+            {device->get_devices()[0]->id(), device->get_sub_device_ids().at(TEST_WORKERS_SUBDEVICE_INDEX)});
+        device->set_sub_device_stall_group({{subdevice_info.worker_subdevice_id.at(device->get_devices()[0]->id())}});
     }
 
     return subdevice_info;
@@ -371,78 +329,21 @@ Correctness run_output_check(
     return run_output_check(inputs, readback_data_vec);
 };
 
-void run_programs(std::vector<Program>& programs, const std::vector<IDevice*>& devices) {
-    EXPECT_EQ(programs.size(), devices.size());
-    const size_t num_programs = programs.size();
-    try {
-        for (size_t i = 0; i < num_programs; i++) {
-            tt::tt_metal::detail::CompileProgram(devices.at(i), programs.at(i));
-        }
-    } catch (std::exception& e) {
-        log_error(tt::LogTest, "Failed compile: {}", e.what());
-        throw e;
-    }
+void run_workloads(
+    std::vector<tt::tt_metal::distributed::MeshWorkload>& workloads,
+    const std::vector<std::shared_ptr<MeshDevice>>& devices) {
+    EXPECT_EQ(workloads.size(), devices.size());
+    const size_t num_workloads = workloads.size();
 
     log_info(tt::LogTest, "Running...");
 
-    std::vector<std::thread> threads;
-    threads.reserve(num_programs);
-    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-        for (size_t i = 0; i < num_programs; i++) {
-            threads.emplace_back(std::thread([&] { tt_metal::detail::LaunchProgram(devices.at(i), programs.at(i)); }));
-        }
-
-        std::ranges::for_each(threads, [](std::thread& t) { t.join(); });
-    } else {
-        for (size_t i = 0; i < num_programs; i++) {
-            tt_metal::EnqueueProgram(devices.at(i)->command_queue(), programs.at(i), false);
-        }
-
-        log_debug(tt::LogTest, "Calling Finish");
-        for (size_t i = 0; i < num_programs; i++) {
-            tt_metal::Finish(devices.at(i)->command_queue());
-        }
+    for (size_t i = 0; i < num_workloads; i++) {
+        tt_metal::distributed::EnqueueMeshWorkload(devices.at(i)->mesh_command_queue(), workloads.at(i), false);
     }
-}
 
-std::tuple<std::shared_ptr<Buffer>, std::vector<uint32_t>> build_input_buffer(
-    IDevice* first_device, size_t tensor_size_bytes, const BankedConfig& test_config) {
-    auto inputs = std::vector<uint32_t>(tensor_size_bytes / sizeof(uint32_t), 0);
-    std::iota(inputs.begin(), inputs.end(), 0);
-
-    // Input buffer
-    auto local_input_buffer = CreateBuffer(InterleavedBufferConfig{
-        first_device, test_config.size_bytes, test_config.page_size_bytes, test_config.input_buffer_type});
-    tt_metal::detail::WriteToBuffer(local_input_buffer, inputs);
-    return {local_input_buffer, inputs};
-}
-
-static void build_and_enqueue(
-    const std::vector<IDevice*>& devices, std::vector<Program>& programs, bool enqueue_only = false) {
-    TT_FATAL(
-        devices.size() == programs.size(),
-        "Number of devices must match number of programs when calling build_and_enqueue in test");
-    if (!enqueue_only) {
-        for (size_t i = 0; i < devices.size(); i++) {
-            tt::tt_metal::detail::CompileProgram(devices[i], programs[i]);
-        }
-    }
-    for (size_t i = 0; i < devices.size(); i++) {
-        tt_metal::EnqueueProgram(devices[i]->command_queue(), programs[i], false);
-    }
-}
-static void build_and_enqueue(
-    const std::vector<IDevice*>& devices, std::vector<Program*>& program_ptrs, bool enqueue_only = false) {
-    TT_FATAL(
-        devices.size() == program_ptrs.size(),
-        "Number of devices must match number of programs when calling build_and_enqueue in test");
-    if (!enqueue_only) {
-        for (size_t i = 0; i < devices.size(); i++) {
-            tt::tt_metal::detail::CompileProgram(devices[i], *program_ptrs[i]);
-        }
-    }
-    for (size_t i = 0; i < devices.size(); i++) {
-        tt_metal::EnqueueProgram(devices[i]->command_queue(), *program_ptrs[i], false);
+    log_debug(tt::LogTest, "Calling Finish");
+    for (size_t i = 0; i < num_workloads; i++) {
+        tt_metal::distributed::Finish(devices.at(i)->mesh_command_queue());
     }
 }
 
@@ -506,8 +407,7 @@ bool RunPipelinedWorkersTest(
 
     const auto cb_index = tt::CB::c_in0;
 
-    auto programs = std::vector<Program>(1);
-    Program& program = programs[0];
+    Program program = tt::tt_metal::CreateProgram();
 
     MeshFabric1DFixture test_fixture;
     auto full_mesh_device = test_fixture.mesh_device_;
@@ -713,8 +613,8 @@ bool RunPipelinedWorkersTest(
                             next_worker_xy.x,
                             next_worker_xy.y);
                         writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::local_chip_noc_semaphore_inc(
-                            device->worker_core_from_logical_core(next_worker_xy).x,
-                            device->worker_core_from_logical_core(next_worker_xy).y,
+                            mesh_device->worker_core_from_logical_core(next_worker_xy).x,
+                            mesh_device->worker_core_from_logical_core(next_worker_xy).y,
                             input_tensor_semaphores[stage + 1][slice_actual],
                             1));
                     }
@@ -725,7 +625,7 @@ bool RunPipelinedWorkersTest(
                 reader_kernels[stage],
                 {&device_tensors[stage]},
                 {page_size_bytes},
-                device,
+                mesh_device->get_devices()[0],
                 0,  // link = 0, don't care, since we aren't specifying connections
                 cb_packet_size_in_pages,
                 {worker_cores.at(worker)},
@@ -738,7 +638,7 @@ bool RunPipelinedWorkersTest(
                 writer_kernels[stage],
                 {&device_tensors[stage + 1]},
                 {page_size_bytes},
-                device,
+                mesh_device->get_devices()[0],
                 0,  // link = 0, don't care, since we aren't specifying connections
                 cb_packet_size_in_pages,
                 {worker_cores.at(worker)},
@@ -748,8 +648,11 @@ bool RunPipelinedWorkersTest(
                 std::nullopt);
         }
     }
+    std::vector<tt::tt_metal::distributed::MeshWorkload> mesh_workloads(1);
+    tt::tt_metal::distributed::AddProgramToMeshWorkload(
+        mesh_workloads[0], std::move(program), tt::tt_fabric::MeshCoordinateRange({0, 0}, {0, 0}));
 
-    run_programs(programs, {device});
+    run_workloads(mesh_workloads, {mesh_device});
 
     bool pass = true;
     constexpr bool enable_check = true;
@@ -783,13 +686,17 @@ bool RunPipelinedWorkersTest(
 #include <tt-metalium/bfloat16.hpp>
 
 static void wait_for_worker_program_completion(
-    const std::vector<IDevice*>& devices, const std::optional<SubdeviceInfo>& subdevice_managers = std::nullopt) {
+    const std::vector<std::shared_ptr<MeshDevice>>& devices,
+    const std::optional<SubdeviceInfo>& subdevice_managers = std::nullopt) {
     if (subdevice_managers) {
-        std::ranges::for_each(devices, [&](IDevice* d) {
-            tt_metal::Finish(d->command_queue(), {{subdevice_managers->worker_subdevice_id.at(d->id())}});
+        std::ranges::for_each(devices, [&](std::shared_ptr<MeshDevice> d) {
+            tt_metal::distributed::Finish(
+                d->mesh_command_queue(), {{subdevice_managers->worker_subdevice_id.at(d->get_devices()[0]->id())}});
         });
     } else {
-        std::ranges::for_each(devices, [&](IDevice* d) { tt_metal::Finish(d->command_queue(), {}); });
+        std::ranges::for_each(devices, [&](std::shared_ptr<MeshDevice> d) {
+            tt_metal::distributed::Finish(d->mesh_command_queue(), {});
+        });
     }
 }
 
@@ -809,11 +716,11 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
-    std::vector<IDevice*> devices = {
-        view.get_device(MeshCoordinate(0, 0)),
-        view.get_device(MeshCoordinate(0, 1)),
-        view.get_device(MeshCoordinate(0, 2)),
-        view.get_device(MeshCoordinate(0, 3))};
+    std::vector<std::shared_ptr<MeshDevice>> devices = {
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0)),
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1)),
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 2)),
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 3))};
     const size_t num_devices = devices.size();
     TT_FATAL(
         test_expected_num_devices == num_devices,
@@ -881,7 +788,15 @@ void run_ring_all_gather_with_persistent_fabric(
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
-    std::vector<IDevice*> devices = test_fixture.mesh_device_->get_devices();
+    std::vector<std::shared_ptr<MeshDevice>> devices = {
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0)),
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1)),
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 2)),
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 3)),
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 4)),
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 5)),
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 6)),
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 7))};
     const size_t num_devices = devices.size();
     TT_FATAL(
         test_expected_num_devices == num_devices,

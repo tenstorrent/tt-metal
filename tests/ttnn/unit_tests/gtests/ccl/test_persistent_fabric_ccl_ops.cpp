@@ -54,11 +54,11 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
-    std::vector<IDevice*> devices = {
-        view.get_device(MeshCoordinate(0, 1)),
-        view.get_device(MeshCoordinate(1, 1)),
-        view.get_device(MeshCoordinate(1, 2)),
-        view.get_device(MeshCoordinate(0, 2))};
+    std::vector<std::shared_ptr<MeshDevice>> devices = {
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0)),
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1)),
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 2)),
+        test_fixture.mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 3))};
     const size_t num_devices = devices.size();
     TT_FATAL(
         test_expected_num_devices == num_devices,
@@ -107,12 +107,13 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
         tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         ttnn::ccl::Topology::Linear,
         num_links,
-        subdevice_managers->worker_subdevice_id.at(devices[0]->id()));
+        subdevice_managers->worker_subdevice_id.at(devices[0]->get_devices()[0]->id()));
 
     // wait for op completion
     log_info(tt::LogTest, "Waiting for Op finish");
-    std::ranges::for_each(devices, [&](IDevice* d) {
-        tt_metal::Finish(d->command_queue(), {{subdevice_managers->worker_subdevice_id.at(d->id())}});
+    std::ranges::for_each(devices, [&](std::shared_ptr<MeshDevice> d) {
+        tt_metal::distributed::Finish(
+            d->mesh_command_queue(), {{subdevice_managers->worker_subdevice_id.at(d->get_devices()[0]->id())}});
     });
 
     log_info(tt::LogTest, "Finished");
