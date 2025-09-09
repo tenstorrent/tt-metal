@@ -117,6 +117,8 @@ struct EthernetConfig {
     std::unordered_map<std::string, uint32_t> named_compile_args;
 };
 
+namespace detail {
+
 // These are only used in op_profiler
 
 struct KernelBinaryMeta {
@@ -141,5 +143,7 @@ struct KernelMeta {
     // Binary metadata:
     std::vector<KernelBinaryMeta> binary_meta;
 };
+
+}  // namespace detail
 
 }  // namespace tt::tt_metal
