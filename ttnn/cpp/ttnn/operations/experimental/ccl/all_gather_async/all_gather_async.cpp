@@ -16,7 +16,6 @@ namespace ttnn::operations::experimental::ccl {
 
 bool use_all_gather_async_llama_sharded(const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
     auto input_tensor_shape = input_tensor.padded_shape();
-    auto input_tensor_page_layout = input_tensor.layout();
     auto input_tensor_memory_config = input_tensor.memory_config();
     bool input_is_sharded = input_tensor_memory_config.shard_spec().has_value();
     bool output_is_sharded = output_mem_config.shard_spec().has_value();

@@ -4,7 +4,6 @@
 
 #include "hostdevcommon/kernel_structs.h"
 #include "ttnn/common/constants.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"

@@ -91,8 +91,6 @@ class PhysicalSystemDescriptor {
 public:
     PhysicalSystemDescriptor(bool run_discovery = true);
     void run_discovery(bool run_global_discovery = true);
-    void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt);
-
     // ASIC Topology Query APIs
     std::vector<AsicID> get_asic_neighbors(AsicID asic_id) const;
     std::vector<EthConnection> get_eth_connections(AsicID src_asic_id, AsicID dst_asic_id) const;
@@ -115,6 +113,7 @@ public:
     std::string my_host_name() const;
     uint32_t get_rank_for_hostname(const std::string& host_name) const;
 
+    // Generic Getters
     const PhysicalConnectivityGraph& get_system_graph() const { return system_graph_; }
     const std::unordered_map<AsicID, ASICDescriptor>& get_asic_descriptors() const { return asic_descriptors_; }
     const std::unordered_map<std::string, std::string>& get_host_mobo_name_map() const { return host_to_mobo_name_; }
@@ -126,6 +125,10 @@ public:
     std::unordered_map<std::string, std::string>& get_host_mobo_name_map() { return host_to_mobo_name_; }
     std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() { return host_to_rank_; }
     ExitNodeConnectionTable& get_exit_node_connection_table() { return exit_node_connection_table_; }
+
+    // Utility APIs to Print Physical System Descriptor
+    void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt);
+    void emit_to_text_proto(const std::optional<std::string>& path_to_text_proto = std::nullopt);
 
 private:
     void run_local_discovery();

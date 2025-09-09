@@ -18,6 +18,7 @@
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/profiler/profiler_state_manager.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/llrt/get_platform_architecture.hpp"
 #include "tt_metal/llrt/llrt.hpp"
@@ -54,6 +55,7 @@ void MetalContext::initialize(
     const BankMapping& l1_bank_remap,
     size_t worker_l1_size,
     bool minimal) {
+    ZoneScoped;
 
     if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
         TT_THROW(
@@ -121,6 +123,10 @@ void MetalContext::initialize(
     }
     watcher_server_ =
         std::make_unique<WatcherServer>();  // Watcher server always created, since we use it to register kernels
+
+    if (rtoptions_.get_profiler_enabled()) {
+        profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
+    }
 
     // Minimal setup, don't initialize FW/Dispatch/etc.
     if (minimal) {
@@ -194,6 +200,8 @@ void MetalContext::initialize(
 }
 
 void MetalContext::teardown() {
+    ZoneScoped;
+
     if (!initialized_) {
         return;
     }
@@ -216,6 +224,8 @@ void MetalContext::teardown() {
 
         cluster_->l1_barrier(device_id);
     }
+
+    profiler_state_manager_.reset();
 
     for (auto& mem_map : dispatch_mem_map_) {
         if (mem_map) {
