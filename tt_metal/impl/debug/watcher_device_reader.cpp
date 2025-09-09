@@ -27,7 +27,6 @@
 #include "control_plane.hpp"
 #include "core_descriptor.hpp"
 #include "debug_helpers.hpp"
-#include "dev_msgs.h"
 #include "llrt/hal.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
@@ -469,16 +468,18 @@ void WatcherDeviceReader::Dump(FILE* file) {
         // Clear all pause flags
         for (auto& [virtual_core, processor_index] : dump_data.paused_cores) {
             auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
-            uint64_t addr = hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::WATCHER) +
-                            hal.get_dev_msgs_factory(programmable_core_type)
-                                .offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::pause_status);
+            auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
+            auto pause_data = dev_msgs_factory.create<dev_msgs::debug_pause_msg_t>();
+            uint64_t addr =
+                hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::WATCHER) +
+                dev_msgs_factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::pause_status);
 
             // Clear only the one flag that we saved, in case another one was raised on device
-            auto pause_data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                device_id, virtual_core, addr, sizeof(debug_pause_msg_t));
-            auto pause_msg = reinterpret_cast<debug_pause_msg_t*>(&(pause_data[0]));
-            pause_msg->flags[processor_index] = 0;
-            tt::tt_metal::MetalContext::instance().get_cluster().write_core(device_id, virtual_core, pause_data, addr);
+            tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                pause_data.data(), pause_data.size(), {device_id, virtual_core}, addr);
+            pause_data.view().flags()[processor_index] = 0;
+            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                pause_data.data(), pause_data.size(), {device_id, virtual_core}, addr);
         }
     }
     fflush(f);
