@@ -13,91 +13,124 @@
 
 #include <tt-metalium/mesh_graph_descriptor.hpp>
 
+using namespace tt::tt_fabric;
+
 // Helper functions for hierarchy testing
 namespace {
-    void check_instance_count_by_type(const tt::tt_fabric::MeshGraphDescriptor& desc, const std::string& type, size_t expected_count) {
-        const auto& ids = desc.instances_by_type(type);
-        EXPECT_EQ(ids.size(), expected_count) << "Should have exactly " << expected_count << " " << type << " instances";
-    }
+void check_instance_count_by_type(const MeshGraphDescriptor& desc, const std::string& type, size_t expected_count) {
+    const auto& ids = desc.instances_by_type(type);
+    EXPECT_EQ(ids.size(), expected_count) << "Should have exactly " << expected_count << " " << type << " instances";
+}
 
-    void check_instance_exists_by_name(const tt::tt_fabric::MeshGraphDescriptor& desc, const std::string& name, size_t expected_count = 1) {
-        const auto& ids = desc.instances_by_name(name);
-        EXPECT_EQ(ids.size(), expected_count) << "Should have exactly " << expected_count << " instance(s) with name '" << name << "'";
-    }
+void check_instance_exists_by_name(const MeshGraphDescriptor& desc, const std::string& name, size_t expected_count = 1) {
+    const auto& ids = desc.instances_by_name(name);
+    EXPECT_EQ(ids.size(), expected_count) << "Should have exactly " << expected_count << " instance(s) with name '" << name << "'";
+}
 
-    void check_instance_type(const tt::tt_fabric::MeshGraphDescriptor& desc, uint32_t global_id, bool should_be_graph) {
-        const auto & inst = desc.get_instance(global_id);
-        if (should_be_graph) {
-            EXPECT_TRUE(desc.is_graph(inst)) << "Instance should be graph";
-        } else {
-            EXPECT_TRUE(desc.is_mesh(inst)) << "Instance should be mesh";
+void check_instance_type(const MeshGraphDescriptor& desc, uint32_t global_id, bool should_be_graph) {
+    const auto & inst = desc.get_instance(global_id);
+    if (should_be_graph) {
+        EXPECT_TRUE(desc.is_graph(inst)) << "Instance should be graph";
+    } else {
+        EXPECT_TRUE(desc.is_mesh(inst)) << "Instance should be mesh";
+    }
+}
+
+std::set<std::string> get_instance_names_by_type(const MeshGraphDescriptor& desc, const std::string& type) {
+    std::set<std::string> names;
+    auto ids = desc.instances_by_type(type);
+    for (uint32_t id : ids) {
+        const auto & inst = desc.get_instance(id);
+        names.insert(std::string(inst.name));
+    }
+    return names;
+}
+
+void check_instances_have_names(const MeshGraphDescriptor& desc, const std::string& type, const std::vector<std::string>& expected_names) {
+    auto names = get_instance_names_by_type(desc, type);
+    for (const auto& expected_name : expected_names) {
+        EXPECT_TRUE(names.find(expected_name) != names.end())
+            << "Should have " << type << " instance '" << expected_name << "'";
+    }
+}
+void check_sub_instances(const MeshGraphDescriptor& desc, const std::string& name, size_t expected_count, const std::unordered_set<std::string_view>& expected_names) {
+    auto ids = desc.get_instance(desc.instances_by_name(name)[0]).sub_instances;
+    EXPECT_EQ(ids.size(), expected_count) << "Should have exactly " << expected_count << " sub instances with name '" << name << "'";
+    for (const auto & id : ids) {
+        const auto & child = desc.get_instance(id);
+        EXPECT_TRUE(expected_names.contains(child.name))
+            << "Should have sub instance '" << child.name << "'";
+    }
+}
+
+void expect_hierarchy_names(const MeshGraphDescriptor& desc, const std::string& instance_name, const std::vector<std::string>& expected_names) {
+    const auto& ids = desc.instances_by_name(instance_name);
+    ASSERT_FALSE(ids.empty()) << "No instance found with name '" << instance_name << "'";
+    const auto & inst = desc.get_instance(ids[0]);
+    std::vector<std::string> actual_names;
+    actual_names.reserve(inst.hierarchy.size());
+    for (auto nid : inst.hierarchy) {
+        actual_names.emplace_back(std::string(desc.get_instance(nid).name));
+    }
+    EXPECT_EQ(actual_names, expected_names);
+}
+
+// Simple device checks for a mesh: only count and a few local IDs
+void check_mesh_devices_simple(
+    const MeshGraphDescriptor& desc,
+    const std::string& mesh_name,
+    size_t expected_devices,
+    const std::vector<uint32_t>& sample_local_ids
+) {
+    const auto & mesh_ids = desc.instances_by_name(mesh_name);
+    ASSERT_EQ(mesh_ids.size(), 1u) << "Expected exactly one instance named '" << mesh_name << "'";
+    const auto & mesh_inst = desc.get_instance(mesh_ids[0]);
+    ASSERT_TRUE(desc.is_mesh(mesh_inst)) << "'" << mesh_name << "' should be a mesh instance";
+
+    EXPECT_EQ(mesh_inst.sub_instances.size(), expected_devices)
+        << "Mesh '" << mesh_name << "' should have exactly " << expected_devices << " devices";
+
+    for (auto local_id : sample_local_ids) {
+        auto it = mesh_inst.sub_instances_local_id_to_global_id.find(local_id);
+        ASSERT_TRUE(it != mesh_inst.sub_instances_local_id_to_global_id.end())
+            << "Missing device local id " << local_id << " in mesh '" << mesh_name << "'";
+        const auto & dev = desc.get_instance(it->second);
+        EXPECT_EQ(dev.kind, MeshGraphDescriptor::NodeKind::Device);
+        EXPECT_EQ(std::string(dev.type), "DEVICE");
+        EXPECT_EQ(dev.local_id, local_id);
+    }
+}
+
+void check_connections(
+    MeshGraphDescriptor& desc,
+    const std::vector<MeshGraphDescriptor::ConnectionId>& connections,
+    const std::unordered_set<MeshGraphDescriptor::LocalNodeId>& expected_nodes,
+    uint32_t expected_channel_count,
+    bool expected_directional,
+    MeshGraphDescriptor::GlobalNodeId expected_parent_instance_id,
+    const std::unordered_set<std::string>& expected_node_names
+) {
+    for (size_t idx = 0; idx < connections.size(); ++idx) {
+        const auto connection_id = connections[idx];
+        const auto& connection = desc.get_connection(connection_id);
+
+        EXPECT_EQ(connection.count, expected_channel_count);
+        EXPECT_EQ(connection.directional, expected_directional);
+        EXPECT_EQ(connection.parent_instance_id, expected_parent_instance_id);
+
+        const auto& global_nodes = connection.nodes;
+
+
+        auto dst_nodes = std::vector<MeshGraphDescriptor::GlobalNodeId>(global_nodes.begin() + 1, global_nodes.end());
+        for (const auto& node : dst_nodes) {
+            auto & instance = desc.get_instance(node);
+            EXPECT_TRUE(expected_nodes.contains(instance.local_id))
+                << "Connection " << connection_id << " should have node " << instance.local_id;
+            EXPECT_TRUE(expected_node_names.contains(instance.name))
+                << "Connection " << connection_id << " should have node " << instance.name;
         }
     }
-
-    std::set<std::string> get_instance_names_by_type(const tt::tt_fabric::MeshGraphDescriptor& desc, const std::string& type) {
-        std::set<std::string> names;
-        auto ids = desc.instances_by_type(type);
-        for (uint32_t id : ids) {
-            const auto & inst = desc.get_instance(id);
-            names.insert(std::string(inst.name));
-        }
-        return names;
-    }
-
-    void check_instances_have_names(const tt::tt_fabric::MeshGraphDescriptor& desc, const std::string& type, const std::vector<std::string>& expected_names) {
-        auto names = get_instance_names_by_type(desc, type);
-        for (const auto& expected_name : expected_names) {
-            EXPECT_TRUE(names.find(expected_name) != names.end())
-                << "Should have " << type << " instance '" << expected_name << "'";
-        }
-    }
-    void check_sub_instances(const tt::tt_fabric::MeshGraphDescriptor& desc, const std::string& name, size_t expected_count, const std::unordered_set<std::string_view>& expected_names) {
-        auto ids = desc.get_instance(desc.instances_by_name(name)[0]).sub_instances;
-        EXPECT_EQ(ids.size(), expected_count) << "Should have exactly " << expected_count << " sub instances with name '" << name << "'";
-        for (const auto & id : ids) {
-            const auto & child = desc.get_instance(id);
-            EXPECT_TRUE(expected_names.contains(child.name))
-                << "Should have sub instance '" << child.name << "'";
-        }
-    }
-
-    void expect_hierarchy_names(const tt::tt_fabric::MeshGraphDescriptor& desc, const std::string& instance_name, const std::vector<std::string>& expected_names) {
-        const auto& ids = desc.instances_by_name(instance_name);
-        ASSERT_FALSE(ids.empty()) << "No instance found with name '" << instance_name << "'";
-        const auto & inst = desc.get_instance(ids[0]);
-        std::vector<std::string> actual_names;
-        actual_names.reserve(inst.hierarchy.size());
-        for (auto nid : inst.hierarchy) {
-            actual_names.emplace_back(std::string(desc.get_instance(nid).name));
-        }
-        EXPECT_EQ(actual_names, expected_names);
-    }
-
-    // Simple device checks for a mesh: only count and a few local IDs
-    void check_mesh_devices_simple(
-        const tt::tt_fabric::MeshGraphDescriptor& desc,
-        const std::string& mesh_name,
-        size_t expected_devices,
-        const std::vector<uint32_t>& sample_local_ids
-    ) {
-        const auto & mesh_ids = desc.instances_by_name(mesh_name);
-        ASSERT_EQ(mesh_ids.size(), 1u) << "Expected exactly one instance named '" << mesh_name << "'";
-        const auto & mesh_inst = desc.get_instance(mesh_ids[0]);
-        ASSERT_TRUE(desc.is_mesh(mesh_inst)) << "'" << mesh_name << "' should be a mesh instance";
-
-        EXPECT_EQ(mesh_inst.sub_instances.size(), expected_devices)
-            << "Mesh '" << mesh_name << "' should have exactly " << expected_devices << " devices";
-
-        for (auto local_id : sample_local_ids) {
-            auto it = mesh_inst.sub_instances_local_id_to_global_id.find(local_id);
-            ASSERT_TRUE(it != mesh_inst.sub_instances_local_id_to_global_id.end())
-                << "Missing device local id " << local_id << " in mesh '" << mesh_name << "'";
-            const auto & dev = desc.get_instance(it->second);
-            EXPECT_EQ(dev.kind, tt::tt_fabric::MeshGraphDescriptor::NodeKind::Device);
-            EXPECT_EQ(std::string(dev.type), "DEVICE");
-            EXPECT_EQ(dev.local_id, local_id);
-        }
-    }
+}
 }
 
 namespace tt::tt_fabric::fabric_router_tests {
@@ -477,39 +510,6 @@ TEST(MeshGraphDescriptorTests, TestInstanceCreation) {
     check_mesh_devices_simple(desc, "M2", 8 * 4, {0, 5, 31});
 
     desc.print_all_nodes();
-}
-
-namespace {
-    void check_connections(
-        MeshGraphDescriptor& desc,
-        const std::vector<MeshGraphDescriptor::ConnectionId>& connections,
-        const std::unordered_set<MeshGraphDescriptor::LocalNodeId>& expected_nodes,
-        uint32_t expected_channel_count,
-        bool expected_directional,
-        MeshGraphDescriptor::GlobalNodeId expected_parent_instance_id,
-        const std::unordered_set<std::string>& expected_node_names
-    ) {
-        for (size_t idx = 0; idx < connections.size(); ++idx) {
-            const auto connection_id = connections[idx];
-            const auto& connection = desc.get_connection(connection_id);
-
-            EXPECT_EQ(connection.count, expected_channel_count);
-            EXPECT_EQ(connection.directional, expected_directional);
-            EXPECT_EQ(connection.parent_instance_id, expected_parent_instance_id);
-
-            const auto& global_nodes = connection.nodes;
-
-
-            auto dst_nodes = std::vector<MeshGraphDescriptor::GlobalNodeId>(global_nodes.begin() + 1, global_nodes.end());
-            for (const auto& node : dst_nodes) {
-                auto & instance = desc.get_instance(node);
-                EXPECT_TRUE(expected_nodes.contains(instance.local_id))
-                    << "Connection " << connection_id << " should have node " << instance.local_id;
-                EXPECT_TRUE(expected_node_names.contains(instance.name))
-                    << "Connection " << connection_id << " should have node " << instance.name;
-            }
-        }
-    }
 }
 
 TEST(MeshGraphDescriptorTests, TestIntraMeshConnections) {
