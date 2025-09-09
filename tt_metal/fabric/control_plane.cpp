@@ -1201,15 +1201,14 @@ std::vector<chan_id_t> ControlPlane::get_valid_eth_chans_on_routing_plane(
 }
 
 eth_chan_directions ControlPlane::routing_direction_to_eth_direction(RoutingDirection direction) const {
-    eth_chan_directions dir;
     switch (direction) {
-        case RoutingDirection::N: dir = eth_chan_directions::NORTH; break;
-        case RoutingDirection::S: dir = eth_chan_directions::SOUTH; break;
-        case RoutingDirection::E: dir = eth_chan_directions::EAST; break;
-        case RoutingDirection::W: dir = eth_chan_directions::WEST; break;
+        case RoutingDirection::N: return eth_chan_directions::NORTH;
+        case RoutingDirection::S: return eth_chan_directions::SOUTH;
+        case RoutingDirection::E: return eth_chan_directions::EAST;
+        case RoutingDirection::W: return eth_chan_directions::WEST;
         default: TT_FATAL(false, "Invalid Routing Direction");
     }
-    return dir;
+    return eth_chan_directions::NORTH;
 }
 
 std::set<std::pair<chan_id_t, eth_chan_directions>> ControlPlane::get_active_fabric_eth_channels(
