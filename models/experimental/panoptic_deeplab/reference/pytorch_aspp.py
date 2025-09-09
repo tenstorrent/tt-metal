@@ -128,23 +128,22 @@ class ASPP(nn.Module):
                 )
             )
 
-        # Image pooling grana
-        # Dajemo joj ime 'aspp_pool' da bi se poklapalo sa hijerarhijom
-        self.aspp_pool = nn.Sequential(
+        # Image pooling branch - add to convs as index 4 to match pkl structure
+        pooling_branch = nn.Sequential(
             nn.AvgPool2d(kernel_size=pool_kernel_size, stride=1),
             Conv2d(
                 in_channels,
                 out_channels,
                 kernel_size=1,
-                bias=use_bias,
-                norm=get_norm(norm, out_channels),  # Norma se često dodaje i ovdje
+                bias=True,  # PKL file expects bias=True for pooling branch
+                norm=None,  # PKL file doesn't have normalization for pooling branch
                 activation=deepcopy(activation),
             ),
         )
+        self.convs.append(pooling_branch)
 
-        # Project conv to concatenate all branches
-        # Dajemo mu ime 'project_conv' i 'project_norm'
-        self.project_conv = Conv2d(
+        # Project conv to concatenate all branches - use 'project' name to match pkl
+        self.project = Conv2d(
             5 * out_channels,
             out_channels,
             kernel_size=1,
@@ -152,8 +151,6 @@ class ASPP(nn.Module):
             norm=get_norm(norm, out_channels),
             activation=deepcopy(activation),
         )
-        # Odvajamo normu da bi je preprocessor lakše našao
-        self.project_norm = self.project_conv.norm
 
     def forward(self, x):
         size = x.shape[-2:]
@@ -165,16 +162,18 @@ class ASPP(nn.Module):
                 )
         res = []
 
-        for conv in self.convs:
+        # Process first 4 convs (1x1 + 3 dilated convs)
+        for i, conv in enumerate(self.convs[:-1]):
             res.append(conv(x))
 
-        pool_out = self.aspp_pool(x)
+        # Process pooling branch (convs[4]) with interpolation
+        pool_out = self.convs[-1](x)
         pool_out = F.interpolate(pool_out, size=size, mode="bilinear", align_corners=False).to(x.dtype)
         res.append(pool_out)
 
         res = torch.cat(res, dim=1)
 
-        res = self.project_conv(res)
+        res = self.project(res)
 
         res = F.dropout(res, self.dropout, training=self.training) if self.dropout > 0 else res
 

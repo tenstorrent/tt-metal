@@ -27,8 +27,7 @@ def test_panoptic_deeplab(device):
     torch.manual_seed(0)
     current_dir = os.path.dirname(os.path.abspath(__file__))
 
-    backbone_weights_path = os.path.join(current_dir, "..", "weights", "R-52.pkl")
-    heads_weights_path = os.path.join(current_dir, "..", "weights", "model_final_bd324a.pkl")
+    complete_weights_path = os.path.join(current_dir, "..", "..", "weights", "model_final_bd324a.pkl")
 
     batch_size = 1
     num_classes = 19
@@ -58,21 +57,18 @@ def test_panoptic_deeplab(device):
             ins_embed_head_channels=ins_embed_head_channels,
             norm="",
             train_size=train_size,
+            weights_path=complete_weights_path,
         )
         pytorch_model = pytorch_model.to(dtype=torch.bfloat16)
         pytorch_model.eval()
 
-        backbone_state_dict = {
-            k.replace("backbone.", ""): v for k, v in pytorch_model.state_dict().items() if k.startswith("backbone.")
-        }
+        # Create TTNN parameters from the PyTorch model with loaded weights
+        ttnn_parameters = create_panoptic_deeplab_parameters(pytorch_model, device)
 
-        # b) Korišćenje preprocessor-a za glave na VEĆ UČITANOM PyTorch modelu
-        head_parameters = create_panoptic_deeplab_parameters(pytorch_model, device)
-
-        # 6. Create TTNN model with same weights
+        # Create TTNN model with preprocessed parameters
         ttnn_model = TtPanopticDeepLab(
             device=device,
-            parameters=head_parameters,
+            parameters=ttnn_parameters,
             num_classes=num_classes,
             common_stride=common_stride,
             project_channels=project_channels,
@@ -83,7 +79,7 @@ def test_panoptic_deeplab(device):
             train_size=train_size,
         )
     except FileNotFoundError:
-        pytest.fail("R-52.pkl file not found. Please place the weights file in the weights folder.")
+        pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
 
     logger.info("Running PyTorch model...")
     with torch.no_grad():
@@ -100,10 +96,10 @@ def test_panoptic_deeplab(device):
     logger.info(f"Semantic PCC: {sem_msg}")
     assert sem_passed, f"Semantic segmentation PCC failed: {sem_msg}"
 
-    center_passed, center_msg = assert_with_pcc(pytorch_center, ttnn_center_torch, pcc=0.91)
+    center_passed, center_msg = assert_with_pcc(pytorch_center, ttnn_center_torch, pcc=0.99)
     logger.info(f"Center PCC: {center_msg}")
     assert center_passed, f"Center heatmap PCC failed: {center_msg}"
 
-    offset_passed, offset_msg = assert_with_pcc(pytorch_offset, ttnn_offset_torch, pcc=0.98)
+    offset_passed, offset_msg = assert_with_pcc(pytorch_offset, ttnn_offset_torch, pcc=0.99)
     logger.info(f"Offset PCC: {offset_msg}")
     assert offset_passed, f"Offset map PCC failed: {offset_msg}"

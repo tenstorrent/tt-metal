@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import torch
 import ttnn
 from loguru import logger
 
@@ -24,59 +23,85 @@ class TtResNet(nn.Module):
 
     def __init__(
         self,
+        parameters,
         device: ttnn.MeshDevice,
-        state_dict: dict[str, torch.Tensor],
         dtype: ttnn.DataType = ttnn.bfloat16,
     ):
         super().__init__()
         self.device = device
 
-        logger.debug("Initializing TtResNet components")
+        logger.debug("Initializing TtResNet components with unified parameters")
 
-        # Initialize stem
-        stem_state = {k.replace("stem.", ""): v for k, v in state_dict.items() if k.startswith("stem.")}
-        self.stem = TtStem(device, stem_state, dtype)
+        # Initialize stem with preprocessed parameters
+        self.stem = TtStem(parameters=parameters["stem"], device=device, dtype=dtype)
         logger.debug("Stem initialization complete")
 
         # Initialize res2 (3 blocks, first has shortcut)
         self.res2 = nn.ModuleList()
         for i in range(3):
-            block_state = {k.replace(f"res2.{i}.", ""): v for k, v in state_dict.items() if k.startswith(f"res2.{i}.")}
+            block_params = parameters["res2"][i]
             has_shortcut = i == 0  # First block has shortcut
             stride = 1  # res2 uses stride=1 for all blocks
             dilation = 1  # res2 uses dilation=1 for all blocks
             shortcut_stride = 1  # res2 shortcut uses stride=1
             block_id = f"res2.{i}"  # Identifier for logging
             self.res2.append(
-                TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride, block_id)
+                TtBottleneck(
+                    parameters=block_params,
+                    device=device,
+                    dtype=dtype,
+                    has_shortcut=has_shortcut,
+                    stride=stride,
+                    dilation=dilation,
+                    shortcut_stride=shortcut_stride,
+                    block_id=block_id,
+                )
             )
         logger.debug("Res2 layer initialization complete (3 blocks)")
 
         # Initialize res3 (4 blocks, first has shortcut with stride=2)
         self.res3 = nn.ModuleList()
         for i in range(4):
-            block_state = {k.replace(f"res3.{i}.", ""): v for k, v in state_dict.items() if k.startswith(f"res3.{i}.")}
+            block_params = parameters["res3"][i]
             has_shortcut = i == 0  # First block has shortcut
             stride = 2 if i == 0 else 1  # First block uses stride=2, others use stride=1
             dilation = 1  # res3 uses dilation=1 for all blocks
             shortcut_stride = 2 if i == 0 else 1  # First block shortcut uses stride=2
             block_id = f"res3.{i}"  # Identifier for logging
             self.res3.append(
-                TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride, block_id)
+                TtBottleneck(
+                    parameters=block_params,
+                    device=device,
+                    dtype=dtype,
+                    has_shortcut=has_shortcut,
+                    stride=stride,
+                    dilation=dilation,
+                    shortcut_stride=shortcut_stride,
+                    block_id=block_id,
+                )
             )
         logger.debug("Res3 layer initialization complete (4 blocks)")
 
         # Initialize res4 (6 blocks, first has shortcut with stride=2)
         self.res4 = nn.ModuleList()
         for i in range(6):
-            block_state = {k.replace(f"res4.{i}.", ""): v for k, v in state_dict.items() if k.startswith(f"res4.{i}.")}
+            block_params = parameters["res4"][i]
             has_shortcut = i == 0  # First block has shortcut
             stride = 2 if i == 0 else 1  # First block uses stride=2, others use stride=1
             dilation = 1  # res4 uses dilation=1 for all blocks
             shortcut_stride = 2 if i == 0 else 1  # First block shortcut uses stride=2
             block_id = f"res4.{i}"  # Identifier for logging
             self.res4.append(
-                TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride, block_id)
+                TtBottleneck(
+                    parameters=block_params,
+                    device=device,
+                    dtype=dtype,
+                    has_shortcut=has_shortcut,
+                    stride=stride,
+                    dilation=dilation,
+                    shortcut_stride=shortcut_stride,
+                    block_id=block_id,
+                )
             )
         logger.debug("Res4 layer initialization complete (6 blocks)")
 
@@ -84,14 +109,23 @@ class TtResNet(nn.Module):
         self.res5 = nn.ModuleList()
         dilations = [2, 4, 8]  # Different dilation for each res5 block
         for i in range(3):
-            block_state = {k.replace(f"res5.{i}.", ""): v for k, v in state_dict.items() if k.startswith(f"res5.{i}.")}
+            block_params = parameters["res5"][i]
             has_shortcut = i == 0  # First block has shortcut
             stride = 1  # res5 uses stride=1 for all blocks
             dilation = dilations[i]  # Each block uses different dilation
             shortcut_stride = 1  # res5 shortcut uses stride=1
             block_id = f"res5.{i}"  # Identifier for logging
             self.res5.append(
-                TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride, block_id)
+                TtBottleneck(
+                    parameters=block_params,
+                    device=device,
+                    dtype=dtype,
+                    has_shortcut=has_shortcut,
+                    stride=stride,
+                    dilation=dilation,
+                    shortcut_stride=shortcut_stride,
+                    block_id=block_id,
+                )
             )
         logger.debug("Res5 layer initialization complete (3 blocks)")
         logger.debug("TtResNet initialization complete")
