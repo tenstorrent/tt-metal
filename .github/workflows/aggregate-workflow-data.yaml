@@ -87,9 +87,11 @@ jobs:
             const targetPath = '.github/workflows/aggregate-workflow-data.yaml';
             const all = res.data.workflow_runs || [];
             core.info(`Total runs fetched: ${all.length}`);
+            const uniquePaths = Array.from(new Set(all.map(r => r.path))).join(', ');
+            core.info(`Workflow paths seen: ${uniquePaths}`);
             let selectedId = '';
             const candidates = all
-              .filter(r => r.path === targetPath && r.run_number < currentRunNumber && r.conclusion === 'success')
+              .filter(r => r.path === targetPath && r.run_number < currentRunNumber)
               .sort((a, b) => b.run_number - a.run_number);
             core.info(`Candidates after filter: ${candidates.length}`);
             for (const r of candidates) {
