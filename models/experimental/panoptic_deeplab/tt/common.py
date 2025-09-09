@@ -8,10 +8,7 @@ This module provides functions used across the Panoptic DeepLab model.
 """
 
 import torch
-import pickle
-import os
 import ttnn
-from loguru import logger
 
 
 def from_torch_fast(
@@ -71,94 +68,5 @@ def from_torch_fast(
     return tensor
 
 
-def load_resnet_weights_from_pickle(pickle_path: str = None) -> dict:
-    """
-    Load ResNet weights from R-52.pkl file.
-
-    Args:
-        pickle_path: Path to the pickle file. If None, uses default path relative to this file.
-
-    Returns:
-        Dictionary containing the ResNet state dict.
-    """
-    if pickle_path is None:
-        # Default path relative to this file
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        pickle_path = os.path.join(current_dir, "..", "weights", "R-52.pkl")
-
-    if not os.path.exists(pickle_path):
-        raise FileNotFoundError(f"Pickle file not found at: {pickle_path}")
-
-    logger.debug(f"Loading ResNet weights from: {pickle_path}")
-
-    with open(pickle_path, "rb") as f:
-        data = pickle.load(f)
-
-    if "model" not in data:
-        raise ValueError("Pickle file does not contain 'model' key")
-
-    model_state = data["model"]
-    logger.debug(f"Loaded {len(model_state)} weight tensors from pickle file")
-
-    # Convert to bfloat16 to match the random weight functions
-    state_dict = {}
-    for key, value in model_state.items():
-        if isinstance(value, torch.Tensor):
-            # Convert to bfloat16 and ensure it's on CPU
-            state_dict[key] = value.to(dtype=torch.bfloat16, device="cpu")
-        elif hasattr(value, "shape") and hasattr(value, "dtype"):
-            # Handle numpy arrays by converting to torch tensor first
-            import numpy as np
-
-            if isinstance(value, np.ndarray):
-                tensor = torch.from_numpy(value.copy())
-                state_dict[key] = tensor.to(dtype=torch.bfloat16, device="cpu")
-            else:
-                state_dict[key] = value
-        else:
-            # Keep non-tensor values as-is (like num_batches_tracked)
-            state_dict[key] = value
-
-    logger.debug("Converted all tensors to bfloat16")
-    return state_dict
-
-
-def create_resnet_state_dict(pickle_path: str = None) -> dict:
-    """
-    Create ResNet state dict using weights from R-52.pkl file.
-
-    Args:
-        pickle_path: Path to the pickle file. If None, uses default path.
-
-    Returns:
-        Dictionary containing the ResNet state dict.
-    """
-    state_dict = load_resnet_weights_from_pickle(pickle_path)
-
-    # Add missing bias terms that are expected by the model but not present in weights
-    # ResNet typically doesn't use bias in conv layers when using batch normalization,
-    # but the TtResNet implementation expects them to be zero
-
-    # Get all weight keys to determine what bias terms we need
-    weight_keys = [k for k in state_dict.keys() if k.endswith(".weight") and "norm" not in k]
-
-    for weight_key in weight_keys:
-        bias_key = weight_key.replace(".weight", ".bias")
-        if bias_key not in state_dict:
-            # Create zero bias with the appropriate size (number of output channels)
-            weight_tensor = state_dict[weight_key]
-            if len(weight_tensor.shape) == 4:  # Conv2d weight: [out_channels, in_channels, H, W]
-                out_channels = weight_tensor.shape[0]
-                state_dict[bias_key] = torch.zeros(out_channels, dtype=torch.bfloat16)
-
-    # Remove any keys that shouldn't be there
-    keys_to_remove = [
-        k
-        for k in state_dict.keys()
-        if k.startswith("stem.fc.") or k.endswith(".num_batches_tracked")  # FC layer not used in our model
-    ]  # Not needed by TtResNet
-    for key in keys_to_remove:
-        del state_dict[key]
-
-    logger.debug(f"Added missing bias terms and cleaned up state dict. Final keys: {len(state_dict)}")
-    return state_dict
+# Note: Legacy weight loading functions have been removed.
+# Use the unified preprocess_model_parameters system in model_preprocessing.py instead.

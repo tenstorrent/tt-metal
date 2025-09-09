@@ -75,6 +75,42 @@ class TtConv2dParameters:
             slice_config=slice_config,
         )
 
+    @classmethod
+    def from_preprocessed_parameters(
+        cls,
+        parameters,
+        *,
+        device: ttnn.MeshDevice,
+        dtype: ttnn.DataType | None = None,
+        slice_config: SliceConfig | None = None,
+    ) -> TtConv2dParameters:
+        """
+        Create TtConv2dParameters from preprocessed TTNN parameters.
+
+        Args:
+            parameters: Preprocessed parameters containing TTNN tensors
+            device: TTNN device
+            dtype: Data type (not used since tensors are already preprocessed)
+            slice_config: Slicing configuration
+
+        Returns:
+            TtConv2dParameters instance
+        """
+        if slice_config is None:
+            slice_config = SliceConfig()
+
+        # Extract weight and bias directly as they're already TTNN tensors
+        weight = parameters["weight"]
+        bias = parameters.get("bias", None)
+
+        return cls(
+            weight=weight,
+            bias=bias,
+            device=device,
+            dilation=(1, 1),  # Default, can be overridden
+            slice_config=slice_config,
+        )
+
     @property
     def in_channels(self) -> int:
         return self.weight.shape[1]

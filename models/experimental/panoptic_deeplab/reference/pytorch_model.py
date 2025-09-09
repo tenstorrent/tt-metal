@@ -9,14 +9,15 @@ structure for numerical consistency validation.
 """
 
 import torch
+import pickle
 from typing import Dict, List, Optional, Tuple, Any, Set
 from torch import nn
+from loguru import logger
 
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import PanopticDeepLabSemSegHead, ShapeSpec
 from models.experimental.panoptic_deeplab.reference.pytorch_insemb import PanopticDeepLabInsEmbedHead
 from models.experimental.panoptic_deeplab.reference.pytorch_postprocessing import get_panoptic_segmentation
 from models.experimental.panoptic_deeplab.reference.pytorch_resnet import ResNet
-from models.experimental.panoptic_deeplab.tt.common import create_resnet_state_dict
 
 
 class PytorchPanopticDeepLab(nn.Module):
@@ -35,27 +36,25 @@ class PytorchPanopticDeepLab(nn.Module):
         common_stride: int = 4,
         # Head configuration
         sem_seg_head_channels: int = 256,
-        ins_embed_head_channels: int = 128,
+        ins_embed_head_channels: int = 32,
         # Decoder configuration
-        project_channels: List[int] = [48, 48],
+        project_channels: List[int] = [32, 64],
         aspp_dilations: List[int] = [6, 12, 18],
         aspp_dropout: float = 0.1,
-        decoder_channels: List[int] = [256, 256, 256],
+        decoder_channels: List[int] = [128, 128, 128],
         # Normalization and activation
         norm: str = "SyncBN",
         # Training configuration
         train_size: Optional[Tuple[int, int]] = None,
         # Weight initialization
         use_real_weights: bool = True,
-        backbone_weights_path: Optional[str] = None,
-        heads_weights_path: Optional[str] = None,
+        weights_path: Optional[str] = None,
     ):
         """
         Initialize the PyTorch Panoptic-DeepLab model.
 
         Args:
-            backbone_weights_path: Path to ResNet backbone weights
-            heads_weights_path: Path to instance and semantic head weights
+            weights_path: Path to complete model weights (e.g., model_final_bd324a.pkl)
             **kwargs: Same arguments as TtPanopticDeepLab for consistency
         """
         super().__init__()
@@ -79,7 +78,7 @@ class PytorchPanopticDeepLab(nn.Module):
             project_channels=project_channels,
             aspp_dilations=aspp_dilations,
             aspp_dropout=aspp_dropout,
-            decoder_channels=decoder_channels,
+            decoder_channels=[256, 256, 256],  # Semantic head uses 256 channels
             common_stride=common_stride,
             train_size=train_size,
             use_depthwise_separable_conv=False,
@@ -92,11 +91,11 @@ class PytorchPanopticDeepLab(nn.Module):
         # Initialize instance embedding head
         self.instance_head = PanopticDeepLabInsEmbedHead(
             input_shape=self.input_shape,
-            head_channels=ins_embed_head_channels,
+            head_channels=32,  # Final output channels for predictors
             project_channels=project_channels,
             aspp_dilations=aspp_dilations,
             aspp_dropout=aspp_dropout,
-            decoder_channels=decoder_channels,
+            decoder_channels=[128, 128, 256],  # Instance head: [res2, res3, res5] = [128, 128, 256]
             common_stride=common_stride,
             norm=norm,
             train_size=train_size,
@@ -104,20 +103,10 @@ class PytorchPanopticDeepLab(nn.Module):
             center_loss_weight=200.0,
             offset_loss_weight=0.01,
         )
-        # 2. Učitavanje težina iz odvojenih fajlova
-        if backbone_weights_path:
-            logger.info(f"Loading ResNet weights from: {backbone_weights_path}")
-            self._load_resnet_weights(backbone_weights_path)
-        if heads_weights_path:
-            logger.info(f"Loading heads weights from: {heads_weights_path}")
-            heads_state_dict = torch.load(heads_weights_path, map_location="cpu")
-            if "model" in heads_state_dict:
-                heads_state_dict = heads_state_dict["model"]
-
-            # Učitavamo ove težine u model. Pošto ResNet težine već postoje,
-            # strict=False će dozvoliti da se učitaju samo ključevi koji se poklapaju
-            # (oni za glave), a da se ignorišu oni koji ne postoje u ovom fajlu (oni za backbone).
-            self.load_state_dict(heads_state_dict, strict=False)
+        # Load complete model weights from single file
+        if weights_path:
+            logger.info(f"Loading complete model weights from: {weights_path}")
+            self.load_model_weights(weights_path, strict=False)
 
     def _create_input_shape_spec(self) -> Dict[str, ShapeSpec]:
         """Create input shape specifications for ResNet feature maps."""
@@ -144,34 +133,58 @@ class PytorchPanopticDeepLab(nn.Module):
         """
         logger.info(f"Loading complete model weights from {weights_path}")
         try:
-            state_dict = torch.load(weights_path, map_location="cpu")
+            with open(weights_path, "rb") as f:
+                state_dict = pickle.load(f)
             # Provjeravamo da li je state_dict unutar 'model' ključa, što je česta praksa
             if "model" in state_dict:
                 state_dict = state_dict["model"]
 
-            self.load_state_dict(state_dict, strict=strict)
+            # Convert NumPy arrays to PyTorch tensors and remap keys
+            converted_state_dict = {}
+
+            # Define key mappings from pkl file names to model names
+            key_mappings = {
+                # Semantic head mappings
+                "sem_seg_head.": "semantic_head.",
+                # Instance head mappings
+                "ins_embed_head.": "instance_head.",
+            }
+
+            # Keys to ignore (extra keys in pkl file that model doesn't need)
+            ignore_keys = {"pixel_mean", "pixel_std"}
+
+            for key, value in state_dict.items():
+                # Skip ignored keys
+                if key in ignore_keys:
+                    logger.debug(f"Ignoring key: {key}")
+                    continue
+
+                # Apply key mappings
+                mapped_key = key
+                for old_prefix, new_prefix in key_mappings.items():
+                    if key.startswith(old_prefix):
+                        mapped_key = key.replace(old_prefix, new_prefix, 1)
+                        logger.debug(f"Remapped key: {key} -> {mapped_key}")
+                        break
+
+                # Convert NumPy arrays to PyTorch tensors
+                if hasattr(value, "shape"):  # Check if it's array-like (NumPy or Tensor)
+                    if not isinstance(value, torch.Tensor):
+                        # Convert NumPy array to PyTorch tensor
+                        converted_state_dict[mapped_key] = torch.from_numpy(value)
+                        logger.debug(f"Converted {mapped_key} from NumPy to PyTorch tensor")
+                    else:
+                        converted_state_dict[mapped_key] = value
+                else:
+                    converted_state_dict[mapped_key] = value
+
+            # Load with strict=False to ignore missing keys (like num_batches_tracked)
+            self.load_state_dict(converted_state_dict, strict=False)
+            logger.info(f"Loaded {len(converted_state_dict)} parameters into model")
             logger.info("Model weights loaded successfully.")
         except Exception as e:
             logger.error(f"Failed to load weights from {weights_path}: {e}")
             raise
-
-    def _load_resnet_weights(self, weights_path: Optional[str] = None):
-        """Load ResNet weights into the backbone."""
-        # Create state dict using weights from R-52.pkl
-        state_dict = create_resnet_state_dict(weights_path)
-
-        # Convert TTNN-style state dict to PyTorch format
-        pytorch_state_dict = {}
-        for key, value in state_dict.items():
-            # Skip bias parameters since PyTorch ResNet model has bias=False for conv layers
-            if ".bias" in key and not ".norm.bias" in key:
-                continue  # Skip conv bias parameters
-
-            # Keys should be compatible between TTNN and PyTorch models
-            pytorch_state_dict[key] = value
-
-        # Load the weights into the backbone
-        self.backbone.load_state_dict(pytorch_state_dict)
 
     def forward(
         self, x, return_features: bool = False
@@ -274,7 +287,7 @@ class PytorchPanopticDeepLab(nn.Module):
 
 
 def create_pytorch_panoptic_deeplab_model(
-    num_classes: int = 19, use_real_weights: bool = True, **kwargs
+    num_classes: int = 19, use_real_weights: bool = True, weights_path: Optional[str] = None, **kwargs
 ) -> PytorchPanopticDeepLab:
     """
     Factory function to create a PyTorch Panoptic-DeepLab model with default configuration.
@@ -282,9 +295,12 @@ def create_pytorch_panoptic_deeplab_model(
     Args:
         num_classes: Number of semantic classes
         use_real_weights: Whether to use pre-trained weights
+        weights_path: Path to complete model weights (e.g., model_final_bd324a.pkl)
         **kwargs: Additional model configuration parameters
 
     Returns:
         Configured PytorchPanopticDeepLab model
     """
-    return PytorchPanopticDeepLab(num_classes=num_classes, use_real_weights=use_real_weights, **kwargs)
+    return PytorchPanopticDeepLab(
+        num_classes=num_classes, use_real_weights=use_real_weights, weights_path=weights_path, **kwargs
+    )
