@@ -22,11 +22,11 @@ class TtnnC3k2:
         self.parameter = parameter
         self.cv1_a = TtnnConv(
             device, parameter.cv1, conv_pt.cv1.a, reshard=reshard, split_weights=True, core_count=None
-        )
+        )  # matmul
         self.cv1_b = TtnnConv(
             device, parameter.cv1, conv_pt.cv1.b, reshard=reshard, split_weights=True, core_count=None
-        )
-        self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)
+        )  # matmul
+        self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)  # matmul
         if is_bk_enabled:
             self.k = TtnnBottleneck(device, parameter[0], conv_pt.m[0])
         else:
@@ -37,8 +37,8 @@ class TtnnC3k2:
         cv1_a = self.cv1_a(device, x)
         cv1_b = self.cv1_b(device, x)
         print("outputs are", cv1_a.shape, cv1_b.shape)
-        p(cv1_a, "c3k2 cv1_a")
-        p(cv1_b, "c3k2 cv1_b")
+        # p(cv1_a, "c3k2 cv1_a")
+        # p(cv1_b, "c3k2 cv1_b")
         # x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
         # x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         # y1 = x[:, :, :, : x.shape[-1] // 2]
@@ -56,10 +56,10 @@ class TtnnC3k2:
         if y3.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
             y3 = ttnn.to_layout(y3, ttnn.ROW_MAJOR_LAYOUT)
         if use_shard_concat:
-            to_interleaved = True if (cv1_a.shape[3] < tile_shape) else False
-            p(cv1_a, "1st")
-            p(cv1_b, "2nd")
-            p(y3, "3rd")
+            to_interleaved = (False,)  # True if (cv1_a.shape[3] < tile_shape) else False
+            # p(cv1_a, "1st")
+            # p(cv1_b, "2nd")
+            # p(y3, "3rd")
             x = sharded_concat([cv1_a, cv1_b, y3], to_interleaved=to_interleaved)
         else:
             cv1_a = ttnn.sharded_to_interleaved(cv1_a, ttnn.L1_MEMORY_CONFIG)
