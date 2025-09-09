@@ -184,6 +184,10 @@ private:
     // Initialize tracy contexts that haven't been initialized yet
     void initializeMissingTracyContexts(bool blocking = true);
 
+    // Update tracy contexts
+    void updateTracyContexts(
+        const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec);
+
     // Update tracy context for the core
     void updateTracyContext(const std::pair<chip_id_t, CoreCoord>& device_core);
 

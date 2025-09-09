@@ -40,17 +40,16 @@ public:
     }
 
     uint32_t calculate_optimal_num_threads_for_device_profiler_thread_pool() const {
-        // Multiply by 0.75 to account for other programs that are running on the CPU
-        const uint32_t num_threads_available = std::thread::hardware_concurrency() * 0.75;
+        const uint32_t num_threads_available = std::thread::hardware_concurrency();
 
         if (num_threads_available == 0 || this->device_profiler_map.size() > num_threads_available) {
             // If hardware_concurrency() is unable to determine the number of threads supported by the CPU, or the
             // number of device profilers is greater than the max number of threads, return 2
             return 2;
         } else {
-            // Otherwise, return min(16, number of threads available / number of device profilers)
-            // Empirically, 16 threads per device profiler seems to result in optimal performance
-            return std::min(16U, static_cast<uint32_t>(num_threads_available / this->device_profiler_map.size()));
+            // Otherwise, return min(8, number of threads available / number of device profilers)
+            // Empirically, 8 threads per device profiler seems to result in optimal performance
+            return std::min(8U, static_cast<uint32_t>(num_threads_available / this->device_profiler_map.size()));
         }
     }
 

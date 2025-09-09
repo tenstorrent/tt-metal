@@ -1796,26 +1796,7 @@ void DeviceProfiler::pushTracyDeviceResults(
         }
     }
 
-    // Tracy contexts must be updated in order of their first timestamps
-    std::unordered_set<std::pair<chip_id_t, CoreCoord>, pair_hash<chip_id_t, CoreCoord>> device_cores_to_update;
-    device_cores_to_update.reserve(device_tracy_contexts.size());
-
-    for (const auto& [device_core, _] : device_tracy_contexts) {
-        device_cores_to_update.insert(device_core);
-    }
-
-    for (const auto& marker_ref : device_markers_vec) {
-        const tracy::TTDeviceMarker& marker = marker_ref.get();
-        auto device_core_it = device_cores_to_update.find({marker.chip_id, {marker.core_x, marker.core_y}});
-        if (device_core_it != device_cores_to_update.end()) {
-            updateTracyContext(*device_core_it);
-            device_cores_to_update.erase(device_core_it);
-        }
-
-        if (device_cores_to_update.empty()) {
-            break;
-        }
-    }
+    updateTracyContexts(device_markers_vec);
 
     for (auto& marker_ref : device_markers_vec) {
         std::reference_wrapper<const tracy::TTDeviceMarker>& marker_to_push_ref = marker_ref;
@@ -1870,6 +1851,32 @@ void DeviceProfiler::initializeMissingTracyContexts(bool blocking) {
 
     if (blocking) {
         this->thread_pool->wait();
+    }
+#endif
+}
+
+void DeviceProfiler::updateTracyContexts(
+    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec) {
+#if defined(TRACY_ENABLE)
+    std::unordered_set<std::pair<chip_id_t, CoreCoord>, pair_hash<chip_id_t, CoreCoord>> device_cores_to_update;
+    device_cores_to_update.reserve(device_tracy_contexts.size());
+
+    for (const auto& [device_core, _] : device_tracy_contexts) {
+        device_cores_to_update.insert(device_core);
+    }
+
+    // Tracy contexts must be updated in order of their first timestamps
+    for (const auto& marker_ref : device_markers_vec) {
+        const tracy::TTDeviceMarker& marker = marker_ref.get();
+        auto device_core_it = device_cores_to_update.find({marker.chip_id, {marker.core_x, marker.core_y}});
+        if (device_core_it != device_cores_to_update.end()) {
+            updateTracyContext(*device_core_it);
+            device_cores_to_update.erase(device_core_it);
+        }
+
+        if (device_cores_to_update.empty()) {
+            break;
+        }
     }
 #endif
 }
