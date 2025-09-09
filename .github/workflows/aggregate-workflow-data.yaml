@@ -14,7 +14,7 @@ on:
 
 jobs:
   fetch-data:
-    # if: ${{ false }} # FIXME: Remove this once we have a proper artifact retrieval mechanism
+    if: ${{ false }} # FIXME: Remove this once we have a proper artifact retrieval mechanism
     runs-on: ubuntu-latest
     outputs:
       cache-path: ${{ steps.fetch.outputs.cache-path }}
@@ -62,7 +62,7 @@ jobs:
         run: ls -l ${{ github.workspace }}/workflow-data.json || echo "File not found"
 
   analyze-data:
-    needs: fetch-data
+    # needs: fetch-data
     runs-on: ubuntu-latest
     outputs:
       failed_workflows: ${{ steps.analyze.outputs.failed_workflows }}
@@ -91,7 +91,7 @@ jobs:
             core.info(`Workflow paths seen: ${uniquePaths}`);
             const candidates = all
               .filter(r => r.path === targetPath && r.run_number < currentRunNumber)
-              .sort((a, b) => b.run_number - a.run_number);
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
             core.info(`Candidates after filter: ${candidates.length}`);
             const selected = candidates[0];
             const selectedId = selected ? String(selected.id) : '';
@@ -139,48 +139,48 @@ jobs:
       #     retention-days: 1
 
 
-      - name: Download workflow data
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 #@v4
-        with:
-          name: workflow-data
-          path: ${{ github.workspace }}
-      - name: Analyze workflow data
-        id: analyze
-        uses: ./.github/actions/analyze-workflow-data
-        with:
-          days: ${{ github.event.inputs.days || 15 }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          cache-path: ${{ github.workspace }}/workflow-data.json
-          previous-cache-path: ${{ github.workspace }}/prev/workflow-data.json
-          workflow_configs: |
-            [
-              {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
-              {"display": "Blackhole post-commit tests", "wkflw_name": "Blackhole post-commit tests"},
-              {"display": "(Blackhole) prefix", "wkflw_prefix": "(Blackhole)"},
-              {"display": "(TG) prefix", "wkflw_prefix": "(TG)"},
-              {"display": "Galaxy prefix", "wkflw_prefix": "Galaxy"},
-              {"display": "(T3K) prefix", "wkflw_prefix": "(T3K)"},
-              {"display": "(Single-card) prefix", "wkflw_prefix": "(Single-card)"},
-              {"display": "Nightly tt-metal L2 tests", "wkflw_name": "Nightly tt-metal L2 tests"},
-              {"display": "ttnn - Run sweeps", "wkflw_name": "ttnn - Run sweeps"},
-              {"display": "vLLM nightly tests", "wkflw_name": "vLLM nightly tests"},
-              {"display": "Metal microbenchmarks", "wkflw_name": "metal - Run microbenchmarks"},
-              {"display": "APC nightly debug run", "wkflw_name": "apc nightly debug run"}
-            ]
-      - name: Upload status changes artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
-        with:
-          name: workflow-status-changes
-          path: ${{ steps.analyze.outputs.status_changes_path }}
-          retention-days: 1
+  #     - name: Download workflow data
+  #       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 #@v4
+  #       with:
+  #         name: workflow-data
+  #         path: ${{ github.workspace }}
+  #     - name: Analyze workflow data
+  #       id: analyze
+  #       uses: ./.github/actions/analyze-workflow-data
+  #       with:
+  #         days: ${{ github.event.inputs.days || 15 }}
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #         cache-path: ${{ github.workspace }}/workflow-data.json
+  #         previous-cache-path: ${{ github.workspace }}/prev/workflow-data.json
+  #         workflow_configs: |
+  #           [
+  #             {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
+  #             {"display": "Blackhole post-commit tests", "wkflw_name": "Blackhole post-commit tests"},
+  #             {"display": "(Blackhole) prefix", "wkflw_prefix": "(Blackhole)"},
+  #             {"display": "(TG) prefix", "wkflw_prefix": "(TG)"},
+  #             {"display": "Galaxy prefix", "wkflw_prefix": "Galaxy"},
+  #             {"display": "(T3K) prefix", "wkflw_prefix": "(T3K)"},
+  #             {"display": "(Single-card) prefix", "wkflw_prefix": "(Single-card)"},
+  #             {"display": "Nightly tt-metal L2 tests", "wkflw_name": "Nightly tt-metal L2 tests"},
+  #             {"display": "ttnn - Run sweeps", "wkflw_name": "ttnn - Run sweeps"},
+  #             {"display": "vLLM nightly tests", "wkflw_name": "vLLM nightly tests"},
+  #             {"display": "Metal microbenchmarks", "wkflw_name": "metal - Run microbenchmarks"},
+  #             {"display": "APC nightly debug run", "wkflw_name": "apc nightly debug run"}
+  #           ]
+  #     - name: Upload status changes artifact
+  #       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+  #       with:
+  #         name: workflow-status-changes
+  #         path: ${{ steps.analyze.outputs.status_changes_path }}
+  #         retention-days: 1
 
-  handle-failures:
-    needs: analyze-data
-    if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Handle failed workflows
-        run: |
-          echo "The following workflows have failed:"
-          echo '${{ needs.analyze-data.outputs.failed_workflows }}' | jq -r '.[]'
-          # Add any additional failure handling steps here
+  # handle-failures:
+  #   needs: analyze-data
+  #   if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Handle failed workflows
+  #       run: |
+  #         echo "The following workflows have failed:"
+  #         echo '${{ needs.analyze-data.outputs.failed_workflows }}' | jq -r '.[]'
+  #         # Add any additional failure handling steps here
