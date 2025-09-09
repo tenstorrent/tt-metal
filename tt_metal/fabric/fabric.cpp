@@ -18,7 +18,6 @@
 #include <optional>
 #include <set>
 #include <vector>
-#include <tt-metalium/kernel.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"

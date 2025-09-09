@@ -6,7 +6,6 @@
 #include <device.hpp>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
-#include <kernel.hpp>
 #include <kernel_types.hpp>
 #include <enchantum/enchantum.hpp>
 #include <utils.hpp>
