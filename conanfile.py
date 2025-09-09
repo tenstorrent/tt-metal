@@ -138,4 +138,4 @@ class TTMetaliumConan(ConanFile):
         self.cpp_info.components["ttnn"].libs = ["ttnn"]
         self.cpp_info.components["ttnn"].requires = ["tt-metalium"]
 
-        self.runenv_info.define("TT_METAL_HOME", str(self.package_folder))
+        self.runenv_info.define("TT_METAL_HOME", str(self.package_folder) + "/bin/tt-metalium/")
