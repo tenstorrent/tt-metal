@@ -100,7 +100,7 @@ RUN umask 000 && python3 -m pip config set global.extra-index-url https://downlo
 
 COPY /scripts/install_debugger.sh /opt/tt_metal_infra/scripts/install_debugger.sh
 COPY /scripts/ttexalens_ref.txt /opt/tt_metal_infra/scripts/ttexalens_ref.txt
-RUN /bin/bash /opt/tt_metal_infra/scripts/install_debugger.sh
+RUN /opt/tt_metal_infra/scripts/install_debugger.sh
 
 #############################################################
 
