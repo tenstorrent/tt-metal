@@ -119,13 +119,13 @@ def test_selu_arange(device):
 
 
 @pytest.mark.parametrize(
-    "low, high",
+    "low, high, expected_Atol",
     [
-        (-0.30859375, 1.1663108012064884e-38),
-        (-1.6 * 10**38, 1.6 * 10**38),  # bf16 range
+        (-0.30859375, 1.1663108012064884e-38, 0.004),
+        (-1.6 * 10**38, 1.6 * 10**38, 0),  # bf16 range
     ],
 )
-def test_selu_atol(low, high, device):
+def test_selu_atol(low, high, expected_Atol, device):
     num_elements = torch.prod(torch.tensor(torch.Size([1, 3, 320, 320]))).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
     torch_input = torch_input[:num_elements].reshape(torch.Size([1, 3, 320, 320]))
@@ -143,4 +143,4 @@ def test_selu_atol(low, high, device):
 
     tt_result = ttnn.selu(tt_in)
     result = ttnn.to_torch(tt_result)
-    torch.allclose(golden, result, atol=0.008)
+    torch.allclose(golden, result, atol=expected_Atol)
