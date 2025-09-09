@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from ...layers.normalization import DistributedLayerNorm, LayerNorm
+from ...layers.normalization import LayerNorm
 from ...layers.linear import ColParallelLinear, Linear
 from ...layers.feedforward import ParallelFeedForward
 from ...layers.embeddings import SD35CombinedTimestepTextProjEmbeddings, PatchEmbed
@@ -46,14 +46,14 @@ class SD35TransformerBlock:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             init=init,
         )
-        self.norm1_norm = DistributedLayerNorm(
+        self.norm1_norm = LayerNorm(
             dim,
             norm_eps=1e-6,
             norm_elementwise_affine=False,
             bias=False,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            # mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
+            # ccl_manager=ccl_manager,
             init=init,
         )
 
@@ -67,14 +67,14 @@ class SD35TransformerBlock:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             init=init,
         )
-        self.norm1_context_norm = DistributedLayerNorm(
+        self.norm1_context_norm = LayerNorm(
             dim,
             norm_eps=1e-6,
             norm_elementwise_affine=False,
             bias=False,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            # mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
+            # ccl_manager=ccl_manager,
             init=init,
         )
 
@@ -93,14 +93,14 @@ class SD35TransformerBlock:
             padding_config=padding_config,
         )
 
-        self.norm2 = DistributedLayerNorm(
+        self.norm2 = LayerNorm(
             dim,
             norm_eps=1e-6,
             norm_elementwise_affine=False,
             bias=False,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            # mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
+            # ccl_manager=ccl_manager,
             init=init,
         )
 
@@ -118,14 +118,14 @@ class SD35TransformerBlock:
         self.ff_context = None
 
         if not context_pre_only:
-            self.norm2_context = DistributedLayerNorm(
+            self.norm2_context = LayerNorm(
                 dim,
                 norm_eps=1e-6,
                 norm_elementwise_affine=False,
                 bias=False,
-                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                # mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 mesh_device=mesh_device,
-                ccl_manager=ccl_manager,
+                # ccl_manager=ccl_manager,
                 init=init,
             )
             self.ff_context = ParallelFeedForward(
