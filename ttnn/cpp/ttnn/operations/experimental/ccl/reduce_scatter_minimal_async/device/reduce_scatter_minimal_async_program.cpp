@@ -62,7 +62,7 @@ uint32_t default_workers(
     ttnn::SmallVector<uint32_t> candidate_worker_counts;
     double data_moved_per_link_bytes = double(input_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
                                        (topology == ttnn::ccl::Topology::Ring ? 2 : 1);
-    log_info(tt::LogAlways, "DEBUG: data_moved_per_link_bytes: {}", data_moved_per_link_bytes);
+    log_trace(tt::LogOp, "DEBUG: data_moved_per_link_bytes: {}", data_moved_per_link_bytes);
     // Heuristic values are based on the sweep test:
     // tests/ttnn/multidevice_perf_tests/test_reduce_scatter_hyperparameter_sweep_perf_galaxy.py
     if (topology == ttnn::ccl::Topology::Ring) {
@@ -326,7 +326,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
             ring_size,
             num_directions_per_link,
             num_mux_cores_per_direction_per_link));
-    log_info(tt::LogAlways, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
+    log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 
     uint32_t num_cores_per_link = operations::experimental::ccl::detail::reduce_scatter_minimal_async_core_count(
@@ -524,7 +524,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 uint32_t chunks_per_sync_val =
                     chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
                         topology, tiles_to_read, tiles_read, tile_granularity));
-                log_info(tt::LogAlways, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
+                log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 std::vector<uint32_t> sender_reader_compile_args = {
                     ring_index,              // my_chip_id
@@ -844,7 +844,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             ring_size,
             num_directions_per_link,
             num_mux_cores_per_direction_per_link));
-    log_info(tt::LogAlways, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
+    log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 
     log_trace(
@@ -1081,7 +1081,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 uint32_t chunks_per_sync_val =
                     chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
                         topology, tiles_to_read, tiles_read, tile_granularity));
-                log_info(tt::LogAlways, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
+                log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 // Reader
                 std::vector<uint32_t> sender_reader_compile_args = {
