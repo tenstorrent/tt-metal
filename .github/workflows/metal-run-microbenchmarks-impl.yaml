@@ -59,7 +59,7 @@ jobs:
           }, # Ata Tuzuner
           {
             arch: blackhole,
-            runs-on: ["BH", "pipeline-perf", "in-service"],
+            runs-on: ["BH", "pipeline-perf", "in-service", "P150"],
             name: "BH P150 PCIe Performance",
             cmd: build/tools/mem_bench --benchmark_filter="Device (Reading|Writing) Host"
           } # Nigel Huang
