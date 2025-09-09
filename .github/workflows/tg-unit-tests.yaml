@@ -17,7 +17,7 @@ jobs:
   TG-Unit-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/tg-unit-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

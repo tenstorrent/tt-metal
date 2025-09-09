@@ -12,6 +12,7 @@ import ttnn
 from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block import DecoderBlock
 from models.demos.deepseek_v3.tt.embedding_1d import Embedding1D
+from models.demos.deepseek_v3.tt.lm_head import LMHead
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import PointToPointConfig, ReshardConfig
@@ -41,6 +42,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
         state_dict: dict[str, torch.Tensor],
         output_path: Path,
         mesh_device: ttnn.MeshDevice,
+        state_dict_prefix: str = "",
     ) -> WeightConfig:
         """Convert weights for the 1D model."""
 
@@ -54,7 +56,9 @@ class Model1D(SharedStateAddOn, AbstractModule):
 
         mlp_decoder_block_state_dicts = [
             [
-                sub_state_dict(state_dict, f"layers.{layer_idx}.") if layer_idx is not None else None
+                sub_state_dict(state_dict, state_dict_prefix + f"layers.{layer_idx}.")
+                if layer_idx is not None
+                else None
                 for layer_idx in mapping
             ]
             for mapping in mlp_meta_layer_mapping
@@ -62,7 +66,10 @@ class Model1D(SharedStateAddOn, AbstractModule):
 
         return {
             "embedding": Embedding1D.convert_weights(
-                hf_config, [sub_state_dict(state_dict, "embed_tokens.")], output_path / "embedding", mesh_device
+                hf_config,
+                [sub_state_dict(state_dict, state_dict_prefix + "embed_tokens.")],
+                output_path / "embedding",
+                mesh_device,
             ),
             "mlp_decoder_block": [
                 DecoderBlock.convert_weights(
@@ -71,7 +78,13 @@ class Model1D(SharedStateAddOn, AbstractModule):
                 for ml in range(cls.NUM_MLP_META_LAYERS)
             ],
             "norm": DistributedRMSNorm.convert_weights(
-                hf_config, [sub_state_dict(state_dict, "norm.")] * mesh_shape[0], output_path / "norm", mesh_device
+                hf_config,
+                [sub_state_dict(state_dict, state_dict_prefix + "norm.")] * mesh_shape[0],
+                output_path / "norm",
+                mesh_device,
+            ),
+            "lm_head": LMHead.convert_weights(
+                hf_config, [sub_state_dict(state_dict, "lm_head.")], output_path / "lm_head", mesh_device
             ),
         }
 
@@ -165,6 +178,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
             ),
             "norm_reshard": ReshardConfig(memory_config=norm_config["input_memory_config"]),
             "norm": norm_config,
+            "lm_head": LMHead.decode_model_config(hf_config, mesh_device, 0),
         }
 
     @classmethod
@@ -197,6 +211,7 @@ class Model1D(SharedStateAddOn, AbstractModule):
                 for _ in range(cls.NUM_MLP_META_LAYERS)
             ],
             "norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
+            "lm_head": LMHead.create_state(hf_config, mesh_device, ccl),
         }
 
     @classmethod
@@ -263,6 +278,9 @@ class Model1D(SharedStateAddOn, AbstractModule):
 
         x = ttnn.to_memory_config(x, **cfg["norm_reshard"])
         x = DistributedRMSNorm.forward_decode(x, cfg["norm"])
+        x = ttnn.experimental.all_gather_async(x, **cfg["lm_head"]["all_gather"])
+        x = ttnn.to_memory_config(x, cfg["lm_head"]["input_memory_config"])
+        x = LMHead.forward_decode(x, cfg["lm_head"])
 
         return x
 

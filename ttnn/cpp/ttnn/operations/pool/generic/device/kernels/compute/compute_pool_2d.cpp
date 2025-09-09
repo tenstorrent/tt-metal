@@ -57,11 +57,11 @@ void MAIN {
     constexpr uint32_t index_dst_idx = 2;
 
     constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT && !return_indices ? window_size_hw : FACE_HEIGHT;
-    constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0 && in_c % TILE_WIDTH <= FACE_WIDTH;
+    constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
     constexpr uint32_t num_faces_in_input_tile =
         (max_sticks_for_reduction < TILE_HEIGHT || window_size_hw <= FACE_HEIGHT) && !return_indices ? 2 : 4;
     constexpr uint32_t num_faces_in_output_tile = 2;
-    constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial ? 1 : 2;
+    constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
     constexpr uint32_t num_out_sticks = 1;
 
     constexpr bool is_avg_pool = REDUCE_OP == PoolType::SUM;

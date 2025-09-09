@@ -359,7 +359,6 @@ void custom_test(
     uint32_t pages_per_transaction,
     uint32_t num_virtual_channels) {
     auto device = mesh_device->get_device(0);
-    NOC noc_id = NOC::NOC_0;
 
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =

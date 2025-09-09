@@ -44,11 +44,6 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(
     auto expert_mask_buffer = expert_mask_tensor.buffer();
     auto out_buffer = out_tensor.buffer();
 
-    bool input_is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool topk_mask_is_dram = topk_mask_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool expert_mask_is_dram = expert_mask_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool out_is_dram = out_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     uint32_t num_out_tiles = out_tensor.physical_volume() / tt::constants::TILE_HW;
     uint32_t scale_tiles = 1;
 

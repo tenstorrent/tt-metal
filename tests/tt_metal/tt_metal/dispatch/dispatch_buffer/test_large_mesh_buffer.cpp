@@ -60,8 +60,6 @@ protected:
 bool validate_interleaved_test_inputs(size_t size, MeshDevice& mesh_device) {
     const size_t num_dram_channels = mesh_device.num_dram_channels();
     const size_t dram_size_per_channel = mesh_device.dram_size_per_channel();
-    const size_t dram_size = num_dram_channels * dram_size_per_channel;
-    const auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
     const DeviceAddr bank_offset = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
 
     bool result{true};

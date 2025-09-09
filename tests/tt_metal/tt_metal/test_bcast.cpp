@@ -267,8 +267,6 @@ int main(int argc, char** argv) {
                 uint32_t dram_buffer_src1_addr = src1_dram_buffer->address();
                 tt_metal::detail::WriteToBuffer(src1_dram_buffer, bcast_tiled_u32);
 
-                bool src0_is_dram = true;
-                bool src1_is_dram = true;
                 std::vector<uint32_t> reader_compile_time_args;
                 tt::tt_metal::TensorAccessorArgs(src0_dram_buffer).append_to(reader_compile_time_args);
                 tt::tt_metal::TensorAccessorArgs(src1_dram_buffer).append_to(reader_compile_time_args);

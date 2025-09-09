@@ -207,7 +207,8 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
         std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
     this->increment_num_entries_in_completion_queue();
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
-    reads_processed_cv_.wait(lock, [this] { return num_outstanding_reads_.load() == 0; });
+    reads_processed_cv_.wait(
+        lock, [this] { return num_outstanding_reads_.load() == 0 || thread_exception_state_.load(); });
 }
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
@@ -410,6 +411,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScoped;
+
     auto lock = lock_api_function_();
     if (!mesh_device_->is_local(address.device_coord)) {
         return;
@@ -483,10 +485,23 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
     auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
 
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
-    reads_processed_cv_.wait(lock, [this] { return num_outstanding_reads_.load() == 0; });
+    reads_processed_cv_.wait(
+        lock, [this] { return num_outstanding_reads_.load() == 0 || thread_exception_state_.load(); });
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         sub_device_cq_owner[*sub_device_id].finished(this->id_);
+    }
+
+    if (should_handle_exception_.load()) {
+        std::lock_guard<std::mutex> exception_lock(exception_mutex_);
+        if (auto exception_ptr = thread_exception_ptr_) {
+            thread_exception_ptr_ = nullptr;
+            should_handle_exception_.store(false);
+            num_outstanding_reads_.store(0);
+            reads_processed_cv_.notify_all();
+            lock.unlock();
+            std::rethrow_exception(exception_ptr);
+        }
     }
 }
 
@@ -626,6 +641,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
     const std::optional<MeshCoordinateRange>& device_range) {
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
+
     auto& sysmem_manager = this->reference_sysmem_manager();
     auto event = MeshEvent(
         sysmem_manager.get_next_event(id_),
@@ -702,35 +718,55 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
 }
 
 void FDMeshCommandQueue::read_completion_queue() {
-    while (true) {
-        {
-            std::unique_lock<std::mutex> lock(reader_thread_cv_mutex_);
-            reader_thread_cv_.wait(lock, [this] { return num_outstanding_reads_ or exit_condition_; });
-        }
-        if (exit_condition_) {
-            return;
-        } else {
+    while (thread_exception_state_.load() == false) {
+        try {
+            {
+                std::unique_lock<std::mutex> lock(reader_thread_cv_mutex_);
+                reader_thread_cv_.wait(lock, [this] { return num_outstanding_reads_ or exit_condition_; });
+            }
+            if (exit_condition_) {
+                return;
+            }
+
             uint32_t num_reads = num_outstanding_reads_.load();
             for (uint32_t i = 0; i < num_reads; i++) {
+                auto mesh_read_descriptor = *(completion_queue_reads_.pop());
                 std::visit(
-                    ttsl::overloaded{
-                        [this](MeshBufferReadDescriptor& mesh_read_descriptor) {
-                            copy_buffer_data_to_user_space(mesh_read_descriptor);
-                        },
-                        [this](MeshReadEventDescriptor& mesh_read_descriptor) {
-                            read_completion_queue_event(mesh_read_descriptor);
-                        },
-                        [this](MeshCoreDataReadDescriptor& mesh_read_descriptor) {
-                            read_l1_data_from_completion_queue(mesh_read_descriptor);
-                        },
+                    [&](auto&& mesh_read_descriptor) {
+                        using T = std::decay_t<decltype(mesh_read_descriptor)>;
+                        if constexpr (std::is_same_v<T, MeshBufferReadDescriptor>) {
+                            this->copy_buffer_data_to_user_space(mesh_read_descriptor);
+                        } else if constexpr (std::is_same_v<T, MeshReadEventDescriptor>) {
+                            this->read_completion_queue_event(mesh_read_descriptor);
+                        } else {
+                            this->read_l1_data_from_completion_queue(mesh_read_descriptor);
+                        }
                     },
-                    *completion_queue_reads_.pop());
+                    mesh_read_descriptor);
             }
             std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
             num_outstanding_reads_.fetch_sub(num_reads);
             if (num_outstanding_reads_ == 0) {
                 reads_processed_cv_.notify_one();
             }
+        } catch (const std::runtime_error& e) {
+            // Just to clarify, this is a weird case and it is an unrecoverable error.
+            // If we are here, its likely the device is hung, meaning that the whole program is stuck.
+            // We don't have a recovery mechanism for this, so we just need to clean up the state and let the main
+            // thread handle it.
+            {
+                std::lock_guard<std::mutex> exception_lock(exception_mutex_);
+                thread_exception_ptr_ = std::current_exception();
+                should_handle_exception_.store(true);
+            }
+
+            thread_exception_state_.store(true);
+            exit_condition_.store(true);
+            num_outstanding_reads_.store(0);
+            reads_processed_cv_.notify_all();
+            completion_queue_reads_.clear();
+            reader_thread_cv_.notify_all();
+            return;
         }
     }
 }

@@ -16,8 +16,6 @@
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "risc_attribs.h"
 
-#include "debug/assert.h"
-
 namespace tt::tt_fabric {
 
 using BufferIndex = NamedType<uint8_t, struct BufferIndexType>;
