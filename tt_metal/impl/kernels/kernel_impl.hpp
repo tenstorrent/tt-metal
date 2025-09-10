@@ -44,10 +44,10 @@ struct KernelSource {
 };
 
 
-using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
-
 class Kernel {
 public:
+    using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
+
     virtual ~Kernel() = default;
 
     std::string name() const;
